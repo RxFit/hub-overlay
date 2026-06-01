@@ -115,7 +115,7 @@ export function TasksSection({ onInjectChat }: { onInjectChat: (msg: string) => 
 
   if (isLoading) {
     return (
-      <CollapsibleSection title="Tasks" protocolNum="01" defaultOpen>
+      <CollapsibleSection title="Tasks" protocolNum="03" defaultOpen>
         <SkeletonBlock lines={4} />
       </CollapsibleSection>
     )
@@ -124,7 +124,7 @@ export function TasksSection({ onInjectChat }: { onInjectChat: (msg: string) => 
   const isAuthError = error && (error as any)?.status === 401
   if (isAuthError) {
     return (
-      <CollapsibleSection title="Tasks" protocolNum="01" defaultOpen>
+      <CollapsibleSection title="Tasks" protocolNum="03" defaultOpen>
         <SectionMessage message="Session expired — please sign in again" type="error" />
       </CollapsibleSection>
     )
@@ -132,7 +132,7 @@ export function TasksSection({ onInjectChat }: { onInjectChat: (msg: string) => 
 
   if (error) {
     return (
-      <CollapsibleSection title="Tasks" protocolNum="01" defaultOpen>
+      <CollapsibleSection title="Tasks" protocolNum="03" defaultOpen>
         <SectionMessage message="Unable to load tasks — try refreshing or check your connection" type="error" />
       </CollapsibleSection>
     )
@@ -140,7 +140,7 @@ export function TasksSection({ onInjectChat }: { onInjectChat: (msg: string) => 
 
   if (tasks.length === 0) {
     return (
-      <CollapsibleSection title="Tasks" protocolNum="01" defaultOpen>
+      <CollapsibleSection title="Tasks" protocolNum="03" defaultOpen>
         <SectionMessage message="No pending tasks" type="empty" />
       </CollapsibleSection>
     )
@@ -426,7 +426,7 @@ export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string)
   }
 
   return (
-    <CollapsibleSection title="Documents" protocolNum="03" defaultOpen={false}>
+    <CollapsibleSection title="Documents" protocolNum="04" defaultOpen={false}>
       {/* Filter tabs */}
       <div className="doc-filter-tabs" role="tablist" aria-label="Document filters">
         {DOC_FILTERS.map((f) => (
@@ -515,7 +515,7 @@ export function KPISection({
 
   if (isLoading) {
     return (
-      <CollapsibleSection title="KPIs" protocolNum="04" defaultOpen>
+      <CollapsibleSection title="KPIs" protocolNum="01" defaultOpen>
         <SkeletonBlock lines={4} />
       </CollapsibleSection>
     )
@@ -523,14 +523,14 @@ export function KPISection({
 
   if (kpis.length === 0 && !isLoading) {
     return (
-      <CollapsibleSection title="KPIs" protocolNum="04" defaultOpen>
+      <CollapsibleSection title="KPIs" protocolNum="01" defaultOpen>
         <SectionMessage message="No KPI data available" type="empty" />
       </CollapsibleSection>
     )
   }
 
   return (
-    <CollapsibleSection title="KPIs" protocolNum="04" defaultOpen>
+    <CollapsibleSection title="KPIs" protocolNum="01" defaultOpen>
       <div className="kpi-grid" role="list" aria-label="Key performance indicators">
         {kpis.map((kpi: LiveKPI, i: number) => {
           const trendClass =

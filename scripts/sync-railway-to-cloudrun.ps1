@@ -293,7 +293,7 @@ foreach ($company in $railwayCompanies) {
         role            = $agentRole
         instructions    = $soul
         canCreateAgents = $canCreate
-        adapterType     = "gemini_cli"
+        adapterType     = "gemini_local"
         adapterConfig   = @{
           baseUrl = "https://rxfit-llm-proxy-6r2wdzwkoq-uc.a.run.app"
         }

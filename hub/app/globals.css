@@ -3210,8 +3210,10 @@ a:hover .rx-arrow {
    ============================================================================ */
 
 .settings-page {
-  min-height: 100vh;
-  min-height: 100dvh;
+  height: 100vh;
+  height: 100dvh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   background: var(--bg-void);
   color: var(--text-primary);
   max-width: 800px;

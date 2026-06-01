@@ -11,7 +11,7 @@ import { BrandedHeader } from '@/app/components/BrandedHeader'
 import { AnimatedNumber } from '@/app/components/AnimatedNumber'
 import { OnboardingCard, shouldShowOnboardingCard } from '@/app/components/OnboardingCard'
 import { OnboardingBanner } from '@/app/components/OnboardingBanner'
-import { GoogleChatPanel, ChatBottomBar } from '@/app/components/GoogleChatPanel'
+import { GoogleChatPanel } from '@/app/components/GoogleChatPanel'
 import { InfoPopover } from '@/app/components/InfoPopover'
 import { useKPIData } from '@/app/hooks/useKPIData'
 import { useSpaces, useUnreadCounts } from '@/app/hooks/useGoogleChat'
@@ -62,8 +62,8 @@ function LeftPanel({ isOpen, onClose, onInjectChat, panelRef, style, activeProje
 
       <div className="panel-content">
         <KPISection activeProject={activeProject} onInjectChat={onInjectChat} />
-        <TasksSection onInjectChat={onInjectChat} />
         <CalendarSection onInjectChat={onInjectChat} />
+        <TasksSection onInjectChat={onInjectChat} />
         <DocumentsSection onInjectChat={onInjectChat} />
       </div>
     </aside>
@@ -168,7 +168,7 @@ function RightPanel({ isOpen, onClose, onInjectChat, panelRef, style, projects }
    MAIN PAGE
    ══════════════════════════════════════════════════════════════════════════════ */
 
-type MobileTab = 'chat' | 'command' | 'execution'
+type MobileTab = 'chat' | 'command' | 'execution' | 'google_chat'
 type ChatMsg = { id: string; role: 'user' | 'assistant'; content: string; timestamp?: string }
 
 export default function HubPage() {
@@ -262,18 +262,26 @@ export default function HubPage() {
     if (tab === 'command') {
       setMobileLeftOpen(true)
       setMobileRightOpen(false)
+      setChatPanelOpen(false)
     } else if (tab === 'execution') {
       setMobileRightOpen(true)
       setMobileLeftOpen(false)
+      setChatPanelOpen(false)
+    } else if (tab === 'google_chat') {
+      setMobileLeftOpen(false)
+      setMobileRightOpen(false)
+      setChatPanelOpen(true)
     } else {
       setMobileLeftOpen(false)
       setMobileRightOpen(false)
+      setChatPanelOpen(false)
     }
   }
 
   const handleClosePanels = () => {
     setMobileLeftOpen(false)
     setMobileRightOpen(false)
+    setChatPanelOpen(false)
     setMobileTab('chat')
   }
 
@@ -1006,16 +1014,10 @@ export default function HubPage() {
         )}
       </div>
 
-      {/* Google Chat bottom bar — sits above the mobile nav */}
-      <ChatBottomBar
-        unreadCount={chatTotalUnread}
-        onOpen={() => setChatPanelOpen(true)}
-      />
-
       {/* Google Chat panel overlay */}
       <GoogleChatPanel
         isOpen={chatPanelOpen}
-        onClose={() => setChatPanelOpen(false)}
+        onClose={handleClosePanels}
       />
 
       {/* Mobile: Glassmorphism Bottom Navigation Bar */}
@@ -1031,14 +1033,23 @@ export default function HubPage() {
           <span className="mobile-nav-label">Tasks</span>
         </button>
         <button
-          className={`mobile-nav-btn mobile-nav-btn--center ${mobileTab === 'chat' ? 'active' : ''}`}
-          onClick={() => handleMobileTab('chat')}
-          aria-label="Chat"
+          className={`mobile-nav-btn mobile-nav-btn--center ${mobileTab === 'google_chat' ? 'active' : ''}`}
+          onClick={() => handleMobileTab('google_chat')}
+          aria-label={`Google Chat${chatTotalUnread > 0 ? `, ${chatTotalUnread} unread` : ''}`}
           role="tab"
-          aria-selected={mobileTab === 'chat'}
+          aria-selected={mobileTab === 'google_chat'}
         >
-          <span className="mobile-nav-icon mobile-nav-icon--chat" aria-hidden="true">✦</span>
-          <span className="mobile-nav-label">Chat</span>
+          <span className="mobile-nav-icon mobile-nav-icon--chat" aria-hidden="true" style={{ position: 'relative' }}>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{marginTop: '4px'}}>
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            </svg>
+            {chatTotalUnread > 0 && (
+              <span style={{ position: 'absolute', top: '-6px', right: '-8px', background: 'var(--accent)', color: 'var(--btn-text)', fontSize: '10px', padding: '2px 6px', borderRadius: '12px', fontWeight: 'bold' }} aria-label={`${chatTotalUnread} unread`}>
+                {chatTotalUnread > 99 ? '99+' : chatTotalUnread}
+              </span>
+            )}
+          </span>
+          <span className="mobile-nav-label">Google Chat</span>
         </button>
         <button
           className={`mobile-nav-btn ${mobileTab === 'execution' ? 'active' : ''}`}

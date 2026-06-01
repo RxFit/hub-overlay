@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { getToken } from 'next-auth/jwt'
 import { authOptions } from '@/lib/auth'
-import { listUpcomingEvents, createCalendarEvent } from '@/lib/google'
+import { listUpcomingEvents, createCalendarEvent, listCalendars, GoogleCalendarEvent } from '@/lib/google'
 
 export const runtime = 'nodejs'
 
@@ -23,10 +23,34 @@ export async function GET(req: NextRequest) {
   const calendarId = searchParams.get('calendarId') ?? undefined
 
   try {
-    const events = await listUpcomingEvents(accessToken, {
-      maxResults: maxResults ? parseInt(maxResults, 10) : undefined,
-      calendarId,
-    })
+    const maxResNum = maxResults ? parseInt(maxResults, 10) : 10
+    let events: GoogleCalendarEvent[] = []
+
+    if (calendarId) {
+      events = await listUpcomingEvents(accessToken, { maxResults: maxResNum, calendarId })
+    } else {
+      const cals = await listCalendars(accessToken)
+      // Only fetch from selected calendars to avoid overwhelming API / returning too much
+      const selectedCals = cals.filter(c => c.selected || c.primary)
+      
+      const allEvents = await Promise.all(
+        selectedCals.map(cal => 
+          listUpcomingEvents(accessToken, { maxResults: maxResNum, calendarId: cal.id }).catch(() => [])
+        )
+      )
+      
+      events = allEvents.flat()
+      // Sort by start time
+      events.sort((a, b) => {
+        const aTime = new Date(a.start.dateTime || a.start.date || 0).getTime()
+        const bTime = new Date(b.start.dateTime || b.start.date || 0).getTime()
+        return aTime - bTime
+      })
+      // Slice to maxResults so we don't return 100 events
+      if (events.length > maxResNum) {
+        events = events.slice(0, maxResNum)
+      }
+    }
     return NextResponse.json({ events })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error'

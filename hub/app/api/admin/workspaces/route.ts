@@ -126,7 +126,7 @@ export async function POST(req: NextRequest) {
           role: template.role,
           instructions: template.instructions(companyName.trim()),
           canCreateAgents: template.canCreateAgents,
-          adapterType: 'gemini_cli',
+          adapterType: 'gemini_local',
           adapterConfig: {
             baseUrl: 'https://rxfit-llm-proxy-6r2wdzwkoq-uc.a.run.app',
           },

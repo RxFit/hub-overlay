@@ -6,49 +6,6 @@ import type { ChatSpace, ChatMessage, SpaceMember } from '@/app/hooks/useGoogleC
 import { MentionPicker, useMentionTrigger } from '@/app/components/MentionPicker'
 import { InfoPopover } from '@/app/components/InfoPopover'
 
-/* ══════════════════════════════════════════
-   CHAT BOTTOM BAR — always-visible pill
-   ══════════════════════════════════════════ */
-
-export function ChatBottomBar({
-  unreadCount,
-  onOpen,
-}: {
-  unreadCount: number
-  onOpen: () => void
-}) {
-  return (
-    <div className="chat-bottom-bar" aria-label="Google Chat" role="complementary">
-      <button
-        id="chat-bottom-bar-btn"
-        className="chat-bottom-bar__pill"
-        onClick={onOpen}
-        aria-label={`Open Google Chat${unreadCount > 0 ? `, ${unreadCount} unread` : ''}`}
-      >
-        {/* Chat bubble icon */}
-        <svg
-          aria-hidden="true"
-          width="18"
-          height="18"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-        </svg>
-        <span className="chat-bottom-bar__label">Chat</span>
-        {unreadCount > 0 && (
-          <span className="chat-bottom-bar__badge" aria-label={`${unreadCount} unread`}>
-            {unreadCount > 99 ? '99+' : unreadCount}
-          </span>
-        )}
-      </button>
-    </div>
-  )
-}
 
 /* ══════════════════════════════════════════
    SPACES LIST — left column

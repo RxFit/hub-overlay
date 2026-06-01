@@ -129,6 +129,21 @@ export interface GoogleCalendarEvent {
   attendees?: { email: string; responseStatus: string }[]
 }
 
+export interface GoogleCalendarListEntry {
+  id: string
+  summary: string
+  selected?: boolean
+  primary?: boolean
+}
+
+export async function listCalendars(accessToken: string): Promise<GoogleCalendarListEntry[]> {
+  const data = await googleFetch<{ items?: GoogleCalendarListEntry[] }>(
+    `${CALENDAR_BASE}/users/me/calendarList`,
+    accessToken
+  )
+  return data.items ?? []
+}
+
 /** List upcoming events from the user's primary calendar */
 export async function listUpcomingEvents(
   accessToken: string,
