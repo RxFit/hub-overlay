@@ -511,7 +511,11 @@ export function KPISection({
   activeProject?: string
   onInjectChat: (msg: string) => void
 }) {
-  const { kpis, isLoading, error } = useKPIData(activeProject)
+  const { kpis: allKpis, isLoading } = useKPIData(activeProject)
+
+  // Mandate: Left Panel = Google ecosystem + business metrics only.
+  // Paperclip orchestration metrics belong on the Right Panel.
+  const kpis = allKpis.filter(kpi => kpi.source !== 'paperclip')
 
   if (isLoading) {
     return (
@@ -521,17 +525,17 @@ export function KPISection({
     )
   }
 
-  if (kpis.length === 0 && !isLoading) {
+  if (kpis.length === 0) {
     return (
       <CollapsibleSection title="KPIs" protocolNum="01" defaultOpen>
-        <SectionMessage message="No KPI data available" type="empty" />
+        <SectionMessage message="No business KPIs configured — add a Google Sheet in Settings" type="empty" />
       </CollapsibleSection>
     )
   }
 
   return (
-    <CollapsibleSection title="KPIs" protocolNum="01" defaultOpen>
-      <div className="kpi-grid" role="list" aria-label="Key performance indicators">
+    <CollapsibleSection title="Business KPIs" protocolNum="01" defaultOpen>
+      <div className="kpi-grid" role="list" aria-label="Business KPIs">
         {kpis.map((kpi: LiveKPI, i: number) => {
           const trendClass =
             kpi.trendDirection === 'up'
@@ -539,7 +543,6 @@ export function KPISection({
               : kpi.trendDirection === 'down'
                 ? 'kpi-trend-down'
                 : 'kpi-trend-neutral'
-          const sourceBadge = kpi.source === 'paperclip' ? '⚡' : kpi.source === 'sheet' ? '📊' : '✦'
 
           return (
             <button
@@ -551,7 +554,6 @@ export function KPISection({
             >
               <div className="kpi-label">
                 {kpi.label}
-                <span className="kpi-source-badge" title={kpi.source}>{sourceBadge}</span>
               </div>
               <div className="kpi-value">
                 <AnimatedNumber value={String(kpi.value)} delay={i * 120} />
@@ -600,7 +602,7 @@ export function ProjectHealthSection({
       <div className="project-health-list" role="list" aria-label="Project health status">
         {projects.map((p) => {
           const statusColor = HEALTH_COLORS[p.health] ?? 'var(--text-muted)'
-          const abbr = p.identifier.slice(0, 3).toUpperCase()
+          const abbr = (p.identifier ?? p.companyName ?? '??').slice(0, 3).toUpperCase()
           return (
             <div
               key={p.companyId}

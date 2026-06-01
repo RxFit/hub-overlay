@@ -523,6 +523,22 @@ export default function SettingsPage() {
     }
   }, [settings])
 
+  /* ── Google Chat Spaces state (must be above early returns — Rules of Hooks) ── */
+  const { allSpaces, isLoading: spacesLoading, missingScope } = useSpaces()
+  const [pinnedSpaces, setPinnedSpacesState] = useState<string[] | null>(null)
+  const [chatSaveStatus, setChatSaveStatus] = useState<'idle' | 'saved'>('idle')
+
+  useEffect(() => {
+    const current = getPinnedSpaces()
+    setPinnedSpacesState(current)
+  }, [])
+
+  useEffect(() => {
+    if (allSpaces.length > 0 && pinnedSpaces === null) {
+      setPinnedSpacesState(allSpaces.map(s => s.name))
+    }
+  }, [allSpaces, pinnedSpaces])
+
   /* ── Loading / Auth guard ── */
   if (status === 'loading') {
     return (
@@ -538,22 +554,6 @@ export default function SettingsPage() {
   const isAdmin = userRole === 'admin' || userRole === 'superadmin'
 
   const visibleRows = settings.rows.filter(r => r.visible)
-
-  /* ── Google Chat Spaces state ── */
-  const { allSpaces, isLoading: spacesLoading, missingScope } = useSpaces()
-  const [pinnedSpaces, setPinnedSpacesState] = useState<string[] | null>(null)
-  const [chatSaveStatus, setChatSaveStatus] = useState<'idle' | 'saved'>('idle')
-
-  useEffect(() => {
-    const current = getPinnedSpaces()
-    setPinnedSpacesState(current)
-  }, [])
-
-  useEffect(() => {
-    if (allSpaces.length > 0 && pinnedSpaces === null) {
-      setPinnedSpacesState(allSpaces.map(s => s.name))
-    }
-  }, [allSpaces, pinnedSpaces])
 
   const toggleChatSpace = (spaceName: string) => {
     setChatSaveStatus('idle')

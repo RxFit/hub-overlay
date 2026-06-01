@@ -62,10 +62,8 @@ function FeedCard({
   const icon = TYPE_ICONS[feedType]
   const label = TYPE_LABELS[feedType]
   const relTime = formatRelativeTimestamp(item.timestamp)
-  const truncatedDesc =
-    item.description.length > 80
-      ? item.description.slice(0, 77) + '…'
-      : item.description
+  const desc = item.description ?? ''
+  const truncatedDesc = desc.length > 80 ? desc.slice(0, 77) + '…' : desc
 
   return (
     <button
