@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth'
 import { getToken } from 'next-auth/jwt'
 import { authOptions } from '@/lib/auth'
 import { streamGeminiChat, buildSystemPrompt } from '@/lib/gemini'
-import { getCompanies, getIssues, getRuns } from '@/lib/paperclip'
+import { getCompanies, getIssues } from '@/lib/paperclip'
 import { fetchUrlContent, fetchDriveDocContent } from '@/lib/content-fetch'
 import { searchSemanticBrain } from '@/lib/vertex'
 import { searchWeb, fetchUrlWithExa } from '@/lib/exa'
@@ -18,24 +18,34 @@ export const maxDuration = 60
  */
 function needsExternalSearch(message: string): boolean {
   const lower = message.toLowerCase()
+
+  // Skip if clearly about internal data
+  const internalSignals = [
+    'our ', 'my ', 'kpi', 'paperclip', 'workspace',
+    'project status', 'team ', 'sprint', 'issue ',
+    'casa trejo', 'rxfit',
+  ]
+  if (internalSignals.some(s => lower.includes(s))) return false
+
   const externalSignals = [
-    // Explicit web/research signals
-    'search for', 'look up', 'find out', 'google', 'research',
-    'what is', 'who is', 'what are', 'how to', 'how does',
+    // Explicit web/research intent
+    'search for', 'search the web', 'look up', 'find out about',
+    'google ', 'research ',
+    // Knowledge questions
+    'what is a ', 'who is ', 'what are ', 'how to ', 'how does ',
     // Competitor/market signals
-    'competitor', 'market', 'industry', 'trend', 'pricing',
-    'benchmark', 'comparison', 'compare',
-    // News/current events
-    'news', 'latest', 'recent', 'update', 'announce', 'launch',
-    'today', 'this week', 'this month',
+    'competitor', 'market ', 'industry ', 'trend',
+    'benchmark', 'comparison', 'compare with',
+    // News/current events (multi-word to avoid false positives)
+    'in the news', 'latest news', 'recent announcement',
     // Technical/external docs
-    'documentation', 'docs', 'api', 'tutorial', 'guide',
-    'best practice', 'standard', 'specification',
-    // Named external entities (common patterns)
-    'http://', 'https://', '.com', '.io', '.org', '.ai',
+    'documentation for', 'docs for', 'tutorial', 'guide for',
+    'best practice', 'specification',
+    // Named external entities (URLs)
+    'http://', 'https://',
     // Analysis that needs outside data
     'seo', 'rankings', 'traffic', 'social media',
-    'reviews', 'feedback', 'public opinion',
+    'reviews', 'public opinion',
   ]
   return externalSignals.some(signal => lower.includes(signal))
 }
@@ -121,12 +131,12 @@ export async function POST(req: NextRequest) {
               numResults: 5,
               useAutoprompt: true,
             })
-            if (exaResults && exaResults.length > 0) {
+            if (exaResults.length > 0) {
               const exaContext = exaResults
                 .map(r => {
-                  let entry = `**${r.title}** — [${r.url}]`
+                  let entry = `**${r.title ?? 'Untitled'}** — [${r.url}]`
                   if (r.publishedDate) entry += ` (${r.publishedDate.split('T')[0]})`
-                  entry += `\n${r.snippet}`
+                  if (r.snippet) entry += `\n${r.snippet}`
                   return entry
                 })
                 .join('\n\n---\n\n')
@@ -159,13 +169,13 @@ export async function POST(req: NextRequest) {
           )
         } else if (att.type === 'url' && att.url) {
           // Try Exa.AI first (handles JS-heavy pages), fall back to raw fetch
-          let urlText: string | null = null
+          let urlText: string | undefined
           try {
             urlText = await fetchUrlWithExa(att.url)
           } catch {
-            // Exa unavailable
+            // Exa unavailable or failed
           }
-          if (!urlText) {
+          if (!urlText?.trim()) {
             urlText = await fetchUrlContent(att.url)
           }
           resolvedParts.push(

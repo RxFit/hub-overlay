@@ -31,9 +31,24 @@ function htmlToText(html: string): string {
     .trim()
 }
 
+/* ── SSRF guard — block internal/private IP ranges ── */
+
+const BLOCKED_URL_PATTERNS = [
+  /^https?:\/\/(127\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+)/i,
+  /^https?:\/\/(172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)/i,
+  /^https?:\/\/(0\.0\.0\.0|localhost|\[::1\]|\[::0\])/i,
+  /^https?:\/\/169\.254\.\d+\.\d+/i,  // Cloud metadata endpoint
+  /^https?:\/\/metadata\.google\.internal/i,
+]
+
 /* ── Fetch URL content (server-side only) ── */
 
 export async function fetchUrlContent(url: string): Promise<string> {
+  // Block internal/private URLs to prevent SSRF
+  if (BLOCKED_URL_PATTERNS.some(p => p.test(url))) {
+    return '[Blocked: requests to internal or private network addresses are not allowed]'
+  }
+
   try {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 10_000)
