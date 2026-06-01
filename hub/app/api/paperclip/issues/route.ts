@@ -16,7 +16,7 @@ export async function POST(req: Request) {
   }
 
   const user = session.user as unknown as HubUser
-  const userRole = (user as Record<string, unknown>).role as string
+  const userRole = (session.user as unknown as Record<string, unknown>).role as string
 
   let body: { title?: string; description?: string; priority?: string; companyId?: string }
   try {
