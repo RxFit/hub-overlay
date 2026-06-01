@@ -6,10 +6,39 @@ import { streamGeminiChat, buildSystemPrompt } from '@/lib/gemini'
 import { getCompanies, getIssues, getRuns } from '@/lib/paperclip'
 import { fetchUrlContent, fetchDriveDocContent } from '@/lib/content-fetch'
 import { searchSemanticBrain } from '@/lib/vertex'
+import { searchWeb, fetchUrlWithExa } from '@/lib/exa'
 import type { ChatMessage, ChatAttachment } from '@/types'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
+
+/**
+ * Detect if a user message likely needs external web data.
+ * Returns true for queries about public info, competitors, news, markets, etc.
+ */
+function needsExternalSearch(message: string): boolean {
+  const lower = message.toLowerCase()
+  const externalSignals = [
+    // Explicit web/research signals
+    'search for', 'look up', 'find out', 'google', 'research',
+    'what is', 'who is', 'what are', 'how to', 'how does',
+    // Competitor/market signals
+    'competitor', 'market', 'industry', 'trend', 'pricing',
+    'benchmark', 'comparison', 'compare',
+    // News/current events
+    'news', 'latest', 'recent', 'update', 'announce', 'launch',
+    'today', 'this week', 'this month',
+    // Technical/external docs
+    'documentation', 'docs', 'api', 'tutorial', 'guide',
+    'best practice', 'standard', 'specification',
+    // Named external entities (common patterns)
+    'http://', 'https://', '.com', '.io', '.org', '.ai',
+    // Analysis that needs outside data
+    'seo', 'rankings', 'traffic', 'social media',
+    'reviews', 'feedback', 'public opinion',
+  ]
+  return externalSignals.some(signal => lower.includes(signal))
+}
 
 export async function POST(req: NextRequest) {
   // Auth check
@@ -54,6 +83,65 @@ export async function POST(req: NextRequest) {
     projectContext = 'Paperclip API unavailable — using cached context'
   }
 
+  // ── Intelligent Search Routing ──
+  // Vertex AI → internal data (Google Drive, Gmail, Chat)
+  // Exa.AI   → external data (web, competitors, news, public URLs)
+  const lastUserMsg = messages.filter(m => m.role === 'user').pop()
+  let searchContext = ''
+
+  if (lastUserMsg) {
+    const query = lastUserMsg.content
+
+    // Run searches in parallel based on query intent
+    const searchPromises: Promise<void>[] = []
+
+    // Always try Vertex AI for internal context (lightweight, always useful)
+    searchPromises.push(
+      (async () => {
+        try {
+          const vertexResults = await searchSemanticBrain(query)
+          if (vertexResults && vertexResults.length > 0) {
+            const vertexContext = vertexResults
+              .map(r => `**${r.title}** ${r.uri ? `(${r.uri})` : ''}\n${r.snippet}`)
+              .join('\n\n---\n\n')
+            searchContext += `## Internal Knowledge (Vertex AI — Google Drive/Workspace)\n\n${vertexContext}\n\n`
+          }
+        } catch (err) {
+          console.warn('[chat] Vertex AI search failed:', err)
+        }
+      })()
+    )
+
+    // Use Exa.AI for external queries
+    if (needsExternalSearch(query)) {
+      searchPromises.push(
+        (async () => {
+          try {
+            const exaResults = await searchWeb(query, {
+              numResults: 5,
+              useAutoprompt: true,
+            })
+            if (exaResults && exaResults.length > 0) {
+              const exaContext = exaResults
+                .map(r => {
+                  let entry = `**${r.title}** — [${r.url}]`
+                  if (r.publishedDate) entry += ` (${r.publishedDate.split('T')[0]})`
+                  entry += `\n${r.snippet}`
+                  return entry
+                })
+                .join('\n\n---\n\n')
+              searchContext += `## External Web Research (Exa.AI)\n\n${exaContext}\n\n`
+            }
+          } catch (err) {
+            console.warn('[chat] Exa.AI search failed:', err)
+          }
+        })()
+      )
+    }
+
+    await Promise.all(searchPromises)
+  }
+
   // Resolve attachments into text context
   let attachmentContext = ''
   if (attachments && attachments.length > 0) {
@@ -70,17 +158,24 @@ export async function POST(req: NextRequest) {
             `### Attached Text: "${att.label}"\n\n${att.content.slice(0, 16_000)}`
           )
         } else if (att.type === 'url' && att.url) {
-          // Fetch URL content server-side
-          const urlText = await fetchUrlContent(att.url)
+          // Try Exa.AI first (handles JS-heavy pages), fall back to raw fetch
+          let urlText: string | null = null
+          try {
+            urlText = await fetchUrlWithExa(att.url)
+          } catch {
+            // Exa unavailable
+          }
+          if (!urlText) {
+            urlText = await fetchUrlContent(att.url)
+          }
           resolvedParts.push(
             `### Attached URL: ${att.url}\n\n${urlText}`
           )
         } else if (att.type === 'document' && att.fileId) {
-          // Hybrid: try Vertex AI semantic search first, fall back to Drive API
+          // Vertex AI semantic search first (token-efficient), Drive API fallback
           let docText: string | null = null
 
-          // Attempt Vertex AI semantic search (token-efficient)
-          const lastUserMsg = messages.filter(m => m.role === 'user').pop()
+          // Attempt Vertex AI semantic search for the document
           if (lastUserMsg) {
             const vertexResults = await searchSemanticBrain(
               `${lastUserMsg.content} ${att.label}`,
@@ -116,10 +211,13 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Combine all injected context
+  const allInjectedContext = [searchContext, attachmentContext].filter(Boolean).join('\n\n')
+
   const systemPrompt = buildSystemPrompt({
     projects: projectContext,
     agentActivity,
-    injectedContext: attachmentContext || undefined,
+    injectedContext: allInjectedContext || undefined,
   })
 
   // Stream response
