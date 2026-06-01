@@ -23,6 +23,9 @@ const GOOGLE_SCOPES = [
   'https://www.googleapis.com/auth/chat.spaces.readonly',
   'https://www.googleapis.com/auth/chat.messages',
   'https://www.googleapis.com/auth/chat.messages.create',
+  // Google Chat — member listing (for @mentions) + read state (for unread badges)
+  'https://www.googleapis.com/auth/chat.memberships.readonly',
+  'https://www.googleapis.com/auth/chat.users.readstate.readonly',
 ].join(' ')
 
 /* ── Token refresh helper ── */

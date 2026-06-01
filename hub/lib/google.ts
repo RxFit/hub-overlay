@@ -350,3 +350,60 @@ export async function sendChatMessage(
   )
 }
 
+/* ── Space Members (for @mentions) ── */
+
+export interface SpaceMember {
+  name: string               // "spaces/xxx/members/yyy"
+  member: {
+    name: string             // "users/123456"
+    displayName: string
+    domainId?: string
+    type: 'HUMAN' | 'BOT'
+    email?: string
+  }
+  role: 'ROLE_MEMBER' | 'ROLE_MANAGER' | 'ROLE_UNSPECIFIED'
+  state: 'MEMBER_JOINED' | 'MEMBER_INVITED' | 'MEMBER_NOT_A_MEMBER'
+  createTime?: string
+}
+
+interface SpaceMembersResponse {
+  memberships: SpaceMember[]
+  nextPageToken?: string
+}
+
+/** List members of a Google Chat space (for @mention picker) */
+export async function listSpaceMembers(
+  accessToken: string,
+  spaceId: string,
+  pageSize = 100
+): Promise<SpaceMember[]> {
+  const spaceName = spaceId.startsWith('spaces/') ? spaceId : `spaces/${spaceId}`
+  const params = new URLSearchParams({
+    pageSize: String(pageSize),
+    filter: 'member.type = "HUMAN"',
+  })
+  const data = await googleFetch<SpaceMembersResponse>(
+    `${CHAT_BASE}/${spaceName}/members?${params}`,
+    accessToken
+  )
+  return (data.memberships ?? []).filter(m => m.state === 'MEMBER_JOINED')
+}
+
+/* ── Space Read State (for unread badges) ── */
+
+export interface SpaceReadState {
+  name: string               // "users/me/spaces/xxx/spaceReadState"
+  lastReadTime: string       // ISO timestamp
+}
+
+/** Get the authenticated user's read state for a space */
+export async function getSpaceReadState(
+  accessToken: string,
+  spaceId: string
+): Promise<SpaceReadState> {
+  const spaceName = spaceId.startsWith('spaces/') ? spaceId : `spaces/${spaceId}`
+  return googleFetch<SpaceReadState>(
+    `${CHAT_BASE}/users/me/${spaceName}/spaceReadState`,
+    accessToken
+  )
+}

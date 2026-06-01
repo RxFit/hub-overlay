@@ -45,6 +45,14 @@ export function BrandedHeader({
   // User display info
   const userName = session?.user?.name || 'User'
   const userEmail = session?.user?.email || ''
+  const userRole = (session?.user as Record<string, unknown>)?.role as string | undefined
+  const ROLE_LABELS: Record<string, string> = {
+    superadmin: 'Super Admin',
+    admin: 'Admin',
+    staff: 'Staff',
+    onboarding: 'Member',
+  }
+  const userRoleLabel = userRole ? (ROLE_LABELS[userRole] ?? userRole) : 'Member'
   const userInitials = userName
     .split(' ')
     .map(w => w[0])
@@ -125,7 +133,7 @@ export function BrandedHeader({
               <div className="header-dropdown-user-info">
                 <div className="header-dropdown-user-name">{userName}</div>
                 <div className="header-dropdown-user-email">{userEmail}</div>
-                <div className="header-dropdown-user-role">{tenant.name} · Admin</div>
+                <div className="header-dropdown-user-role">{tenant.name} · {userRoleLabel}</div>
               </div>
 
               {/* Menu items */}

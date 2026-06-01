@@ -226,7 +226,7 @@ export default function SettingsPage() {
   if (!session) return null
 
   const userRole = (session.user as Record<string, unknown>)?.role as string | undefined
-  const isAdmin = userRole === 'admin'
+  const isAdmin = userRole === 'admin' || userRole === 'superadmin'
 
   const visibleRows = settings.rows.filter(r => r.visible)
 

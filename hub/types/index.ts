@@ -207,3 +207,36 @@ export interface ActionSpec {
   targetSystems: string[]
   summary: string
 }
+
+/* ── Multi-Tenant KPI Types ── */
+
+export type KPISource = 'paperclip' | 'sheet' | 'derived'
+export type KPIScope = 'global' | 'project'
+export type KPIVisibility = 'public' | 'admin' | 'staff'
+
+export interface LiveKPI {
+  id: string
+  label: string
+  value: string | number
+  unit?: string
+  trend: string
+  trendDirection: 'up' | 'down' | 'neutral'
+  source: KPISource
+  scope: KPIScope
+  companyId?: string
+  visibility: KPIVisibility
+  updatedAt: string
+}
+
+export interface ProjectKPI {
+  companyId: string
+  companyName: string
+  identifier: string
+  health: 'healthy' | 'at-risk' | 'critical'
+  openIssues: number
+  completedThisWeek: number
+  completionRate: number
+  activeAgents: number
+  failedRuns: number
+  lastActivity: string
+}
