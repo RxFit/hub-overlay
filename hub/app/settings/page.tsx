@@ -1,11 +1,12 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { useSession, signOut } from 'next-auth/react'
+import { useSession, signOut, signIn } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useSpaces, setPinnedSpaces, getPinnedSpaces } from '@/app/hooks/useGoogleChat'
 import type { ChatSpace } from '@/app/hooks/useGoogleChat'
+import { InfoPopover } from '@/app/components/InfoPopover'
 
 /* ── Types ── */
 
@@ -323,7 +324,19 @@ export default function SettingsPage() {
         </p>
 
         <div className="settings-input-group">
-          <label className="settings-label" htmlFor="sheet-id">Sheet ID</label>
+          <label className="settings-label" htmlFor="sheet-id">
+            Sheet ID
+            <InfoPopover
+              content={
+                <>
+                  <p>The unique identifier of your Google Sheet.</p>
+                  <p>You can find this in your spreadsheet URL:</p>
+                  <code>https://docs.google.com/spreadsheets/d/<b>[SHEET_ID]</b>/edit</code>
+                </>
+              }
+            />
+          </label>
+          <span className="rx-comment-label" style={{ fontSize: '10px', marginBottom: '8px', display: 'block' }}>// Extract ID from the URL of your Google Sheet</span>
           <input
             id="sheet-id"
             type="text"
@@ -336,7 +349,19 @@ export default function SettingsPage() {
 
         <div className="settings-input-row">
           <div className="settings-input-group">
-            <label className="settings-label" htmlFor="tab-name">Tab Name</label>
+            <label className="settings-label" htmlFor="tab-name">
+              Tab Name
+              <InfoPopover
+                content={
+                  <>
+                    <p>The name of the sheet tab containing your data.</p>
+                    <p>Examples: <code>KPIs</code>, <code>Sheet1</code>, or <code>Metrics</code>.</p>
+                    <p>Make sure this matches the tab name exactly (case-sensitive).</p>
+                  </>
+                }
+              />
+            </label>
+            <span className="rx-comment-label" style={{ fontSize: '10px', marginBottom: '8px', display: 'block' }}>// Tab/sheet name (case-sensitive)</span>
             <input
               id="tab-name"
               type="text"
@@ -347,7 +372,20 @@ export default function SettingsPage() {
             />
           </div>
           <div className="settings-input-group">
-            <label className="settings-label" htmlFor="cell-range">Cell Range</label>
+            <label className="settings-label" htmlFor="cell-range">
+              Cell Range
+              <InfoPopover
+                content={
+                  <>
+                    <p>The cell bounds enclosing your KPI rows.</p>
+                    <p>Expects a 4-column table format:</p>
+                    <code>Label | Value | Trend | Direction</code>
+                    <p>Example: <code>A2:D10</code></p>
+                  </>
+                }
+              />
+            </label>
+            <span className="rx-comment-label" style={{ fontSize: '10px', marginBottom: '8px', display: 'block' }}>// Table boundaries (e.g. A2:D10)</span>
             <input
               id="cell-range"
               type="text"
@@ -405,10 +443,16 @@ export default function SettingsPage() {
 
         {missingScope ? (
           <div className="settings-scope-warning">
-            <span>🔐</span>
+            <span style={{ fontSize: '1.5rem' }}>🔐</span>
             <div>
               <strong>Google Chat not yet authorized.</strong>
-              <p>Sign out and back in to grant Chat access permissions.</p>
+              <p style={{ margin: '4px 0 12px 0', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>To view and send messages to your Google Chat spaces, please grant Chat permissions.</p>
+              <button
+                className="settings-auth-btn"
+                onClick={() => signIn('google', { callbackUrl: '/settings' }, { prompt: 'consent' })}
+              >
+                Authorize Google Chat
+              </button>
             </div>
           </div>
         ) : spacesLoading ? (

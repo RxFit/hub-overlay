@@ -12,6 +12,7 @@ import { AnimatedNumber } from '@/app/components/AnimatedNumber'
 import { OnboardingCard, shouldShowOnboardingCard } from '@/app/components/OnboardingCard'
 import { OnboardingBanner } from '@/app/components/OnboardingBanner'
 import { GoogleChatPanel, ChatBottomBar } from '@/app/components/GoogleChatPanel'
+import { InfoPopover } from '@/app/components/InfoPopover'
 import { useKPIData } from '@/app/hooks/useKPIData'
 import { useSpaces, useUnreadCounts } from '@/app/hooks/useGoogleChat'
 import {
@@ -987,7 +988,19 @@ export default function HubPage() {
           <aside className="panel-right panel-right--onboarding" aria-hidden="true">
             <div className="onboarding-right-placeholder">
               <span className="onboarding-right-placeholder__icon">⚡</span>
-              <span className="onboarding-right-placeholder__text">Execution Feed unlocks after role assignment</span>
+              <span className="onboarding-right-placeholder__text" style={{ display: 'inline-flex', alignItems: 'center' }}>
+                Execution Feed unlocks after role assignment
+                <InfoPopover
+                  align="left"
+                  content={
+                    <>
+                      <p style={{ fontWeight: 600, color: 'var(--accent)' }}>⚡ Locked Panel Information</p>
+                      <p style={{ marginTop: '6px' }}>The <b>Execution Feed</b> displays running tasks, background operations, and AI agent output in real time.</p>
+                      <p><b>How to unlock:</b> Contact your hub administrator to assign your operational role (Staff/Admin) in the Hub Roles configuration.</p>
+                    </>
+                  }
+                />
+              </span>
             </div>
           </aside>
         )}

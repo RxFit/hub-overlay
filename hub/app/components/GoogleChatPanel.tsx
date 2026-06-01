@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { useSpaces, useMessages, useSendMessage, useSpaceMembers } from '@/app/hooks/useGoogleChat'
 import type { ChatSpace, ChatMessage, SpaceMember } from '@/app/hooks/useGoogleChat'
 import { MentionPicker, useMentionTrigger } from '@/app/components/MentionPicker'
+import { InfoPopover } from '@/app/components/InfoPopover'
 
 /* ══════════════════════════════════════════
    CHAT BOTTOM BAR — always-visible pill
@@ -303,6 +304,18 @@ function MessageThread({
           rows={1}
           disabled={isSending}
         />
+        <div style={{ marginBottom: '11px', flexShrink: 0 }}>
+          <InfoPopover
+            align="left"
+            content={
+              <>
+                <p style={{ fontWeight: 600, color: 'var(--accent)' }}>✦ Message Guidelines</p>
+                <p style={{ marginTop: '6px' }}><b>Mentions:</b> Type <code>@</code> to open the space members picker and mention someone.</p>
+                <p><b>Google Workspace:</b> Your message will sync directly with the Google Chat space in real time.</p>
+              </>
+            }
+          />
+        </div>
         <button
           id="chat-send-btn"
           className="chat-composer__send"

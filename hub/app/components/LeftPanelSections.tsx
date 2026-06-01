@@ -554,7 +554,7 @@ export function KPISection({
                 <span className="kpi-source-badge" title={kpi.source}>{sourceBadge}</span>
               </div>
               <div className="kpi-value">
-                <AnimatedNumber value={kpi.value} delay={i * 120} />
+                <AnimatedNumber value={String(kpi.value)} delay={i * 120} />
               </div>
               <div
                 className={`kpi-trend ${trendClass}`}

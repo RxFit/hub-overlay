@@ -5982,3 +5982,191 @@ a:hover .rx-arrow {
 .project-health-item--live .project-health-status-dot {
   animation: pulse-dot 2s ease-in-out infinite;
 }
+
+/* ============================================================================
+   GLASSMORPHIC INFO POPOVER & RE-AUTH (UI UX Pro Max)
+   ============================================================================ */
+
+.info-popover {
+  display: inline-block;
+  position: relative;
+  vertical-align: middle;
+  margin-left: 8px;
+}
+
+.info-popover__trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--accent-border);
+  background: var(--bg-primary);
+  color: var(--accent-bright);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+  padding: 0;
+  line-height: 1;
+}
+
+.info-popover__trigger:hover {
+  transform: translateY(-1px);
+  background: var(--bg-elevated);
+  border-color: var(--accent);
+  box-shadow: 0 0 8px var(--accent-glow);
+}
+
+.info-popover__trigger:active {
+  transform: scale(0.95);
+}
+
+.info-popover__trigger[aria-expanded="true"] {
+  background: var(--accent);
+  color: var(--bg-void);
+  border-color: var(--accent);
+}
+
+.info-popover__content {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  width: 280px;
+  padding: var(--space-4);
+  background: rgba(22, 27, 34, 0.88); /* Glassmorphic dark */
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xl), 0 0 20px rgba(197, 160, 89, 0.05);
+  z-index: 100;
+  text-align: left;
+}
+
+.info-popover__content--align-right {
+  left: 50%;
+  transform: translateX(-50%);
+  animation: popoverFadeInRight 0.25s var(--ease-out) forwards;
+}
+
+.info-popover__content--align-left {
+  right: 0;
+  animation: popoverFadeInLeft 0.25s var(--ease-out) forwards;
+}
+
+/* Arrow indicator */
+.info-popover__content::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  border: 6px solid transparent;
+}
+
+.info-popover__content--align-right::after {
+  left: 50%;
+  transform: translateX(-50%);
+  border-top-color: var(--accent-dim);
+}
+
+.info-popover__content--align-left::after {
+  right: 12px;
+  border-top-color: var(--accent-dim);
+}
+
+.info-popover__close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s ease;
+}
+
+.info-popover__close:hover {
+  color: var(--accent);
+}
+
+.info-popover__body {
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--text-secondary);
+  font-weight: 400;
+  white-space: normal;
+}
+
+.info-popover__body p {
+  margin: 0 0 var(--space-2) 0;
+}
+
+.info-popover__body p:last-child {
+  margin-bottom: 0;
+}
+
+.info-popover__body code {
+  background: rgba(255, 255, 255, 0.07);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 90%;
+  color: var(--accent-bright);
+}
+
+.settings-auth-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: 8px 16px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  margin-top: var(--space-3);
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.settings-auth-btn:hover {
+  background: rgba(197, 160, 89, 0.1);
+  box-shadow: 0 0 12px var(--accent-glow);
+  transform: translateY(-1px);
+}
+
+.settings-auth-btn:active {
+  transform: translateY(0);
+}
+
+@keyframes popoverFadeInRight {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 6px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+@keyframes popoverFadeInLeft {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
