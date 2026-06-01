@@ -1,0 +1,45 @@
+{
+  "project": "rxfit-wellness-app",
+  "primary_kpis": {
+    "marketing": {
+      "metric": "Monthly Qualified Leads",
+      "target": "Upward trend — targets set quarterly",
+      "target_cadence": "Reviewed and updated every quarter (Jan 1, Apr 1, Jul 1, Oct 1)",
+      "tracking_source": "WordPress form submissions on rxfit.co"
+    },
+    "technical": {
+      "metric": "New Features Shipped per Bugs Fixed (ratio metric)",
+      "target": "Upward trend — targets set quarterly",
+      "target_cadence": "Reviewed and updated every quarter (Jan 1, Apr 1, Jul 1, Oct 1)",
+      "tracking_source": "GitHub Issues + PRs"
+    },
+    "revenue": {
+      "metric": "MRR (Monthly Recurring Revenue)",
+      "target": "Positive MoM increase — specific targets set quarterly",
+      "target_cadence": "Reviewed and updated every quarter (Jan 1, Apr 1, Jul 1, Oct 1)",
+      "tracking_source": "Stripe"
+    }
+  },
+  "secondary_kpis": {
+    "marketing": {
+      "metric": "Organic Traffic to App Landing Page",
+      "target": "Upward trend — targets set quarterly",
+      "target_cadence": "Reviewed and updated every quarter (Jan 1, Apr 1, Jul 1, Oct 1)",
+      "tracking_source": "GA4"
+    },
+    "technical": {
+      "metric": "App Uptime",
+      "target": "99.9%",
+      "tracking_source": "Cloud Run metrics"
+    },
+    "revenue": {
+      "metric": "Active Paying Clients",
+      "target": "Upward trend — targets set quarterly",
+      "target_cadence": "Reviewed and updated every quarter (Jan 1, Apr 1, Jul 1, Oct 1)",
+      "tracking_source": "Stripe"
+    }
+  },
+  "ceo_generated_kpis": [],
+  "review_cadence": "monthly",
+  "last_updated": "2026-05-20"
+}

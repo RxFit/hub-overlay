@@ -1,18 +1,25 @@
 import type { Metadata, Viewport } from 'next'
 import './globals.css'
+import { getTenantConfig } from '@/lib/tenant'
+import { TenantProvider } from './components/TenantProvider'
+import { Providers } from './components/Providers'
+
+/* Static metadata — uses default tenant at build time.
+   TenantProvider updates document.title at runtime for white-label. */
+const defaultTenant = getTenantConfig()
 
 export const metadata: Metadata = {
-  title: 'RxFit Hub — Biological Performance Command Center',
-  description: 'Biological performance intelligence hub — real-time project tracking, AI chat, and agent orchestration for RxFit Austin.',
+  title: `${defaultTenant.name} Hub — ${defaultTenant.tagline}`,
+  description: `${defaultTenant.tagline} — real-time project tracking, AI chat, and agent orchestration for ${defaultTenant.name}.`,
   icons: {
     icon: '/favicon.svg',
   },
   openGraph: {
-    title: 'RxFit Hub — Biological Performance Command Center',
-    description: 'Operations intelligence hub for Casa Trejo — real-time project tracking, AI chat, and agent orchestration.',
-    siteName: 'RxFit Hub',
+    title: `${defaultTenant.name} Hub — ${defaultTenant.tagline}`,
+    description: `Operations intelligence hub — real-time project tracking, AI chat, and agent orchestration.`,
+    siteName: `${defaultTenant.name} Hub`,
     type: 'website',
-    url: 'https://hub.casatrejo.com',
+    url: `https://${defaultTenant.domain}`,
   },
   robots: {
     index: false,
@@ -21,7 +28,7 @@ export const metadata: Metadata = {
 }
 
 export const viewport: Viewport = {
-  themeColor: '#0a1128',
+  themeColor: defaultTenant.brandColors.bgPrimary,
   width: 'device-width',
   initialScale: 1,
   maximumScale: 1,
@@ -36,7 +43,11 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" dir="ltr" data-theme="dark">
-      <body>{children}</body>
+      <body>
+        <Providers>
+          <TenantProvider>{children}</TenantProvider>
+        </Providers>
+      </body>
     </html>
   )
 }

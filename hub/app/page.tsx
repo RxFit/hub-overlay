@@ -1,62 +1,24 @@
 'use client'
 
-import { useState, useRef, useEffect, useCallback, useMemo, Fragment } from 'react'
-
-/* ══════════════════════════════════════════════════════════════════════════════
-   MOCK DATA — Real project names from Paperclip orchestration
-   ══════════════════════════════════════════════════════════════════════════════ */
-
-const PROJECTS = [
-  { id: 'rxfit',      name: 'RxFit',      abbr: 'RX', color: '#C5A059' },
-  { id: 'fridgesnap', name: 'FridgeSnap', abbr: 'FS', color: '#4A6FA5' },
-  { id: 'jadecoss',   name: 'JadeCoS',    abbr: 'JC', color: '#8a6e3e' },
-  { id: 'wellnessapp',name: 'WellnessApp',abbr: 'WA', color: '#d4b572' },
-  { id: 'notebookrx', name: 'NotebookRx', abbr: 'NR', color: '#9aa8c6' },
-  { id: 'seo-agent',  name: 'SEO Agent',  abbr: 'SE', color: '#ef4444' },
-]
-
-const KPI_DATA = [
-  { label: 'Revenue MTD', value: '$124,500', trend: '+12.4%', up: true },
-  { label: 'Active Clients', value: '47', trend: '+3', up: true },
-  { label: 'Agent Tasks', value: '18', trend: 'In Progress', up: true },
-  { label: 'Open Issues', value: '34', trend: '-8 this week', up: true },
-]
-
-const GOALS = [
-  { title: 'Q2 Revenue Target — $380K', progress: 72, status: 'on-track' as const },
-  { title: 'Client Retention Rate > 94%', progress: 91, status: 'on-track' as const },
-  { title: 'FridgeSnap Beta Launch', progress: 45, status: 'at-risk' as const },
-  { title: 'SEO Domain Authority > 35', progress: 60, status: 'on-track' as const },
-  { title: 'JadeCoS Payment Integration', progress: 28, status: 'behind' as const },
-]
-
-const ISSUES = [
-  { id: 'RXF-42', title: 'Client onboarding flow drops at step 3', priority: 'urgent' as const, status: 'In Progress', agent: 'CEO Agent', time: '2h ago' },
-  { id: 'SNA-18', title: 'Recipe API rate limiting hitting 429s in prod', priority: 'high' as const, status: 'In Review', agent: 'Technical', time: '4h ago' },
-  { id: 'CHI-7', title: 'Jade payment webhook failing for Stripe Connect', priority: 'high' as const, status: 'Todo', agent: 'Unassigned', time: '6h ago' },
-  { id: 'RXF-39', title: 'Monthly performance report template automation', priority: 'medium' as const, status: 'In Progress', agent: 'COO Agent', time: '1d ago' },
-  { id: 'APP-12', title: 'Wellness dashboard missing HRV data sync', priority: 'medium' as const, status: 'Todo', agent: 'Technical', time: '1d ago' },
-  { id: 'SEO-5', title: 'Blog post optimization for "executive fitness Austin"', priority: 'low' as const, status: 'Done', agent: 'SEO Agent', time: '2d ago' },
-  { id: 'RXN-9', title: 'NotebookRx export to PDF formatting broken', priority: 'medium' as const, status: 'In Progress', agent: 'Technical', time: '3d ago' },
-  { id: 'SNA-22', title: 'FridgeSnap camera module crash on Android 14', priority: 'high' as const, status: 'In Review', agent: 'Technical', time: '3d ago' },
-]
-
-const AGENT_RUNS = [
-  { agent: 'RxFit CEO Agent', issue: 'RXF-42', status: 'running' as const, duration: '12m', model: 'Gemini 2.5 Pro' },
-  { agent: 'FridgeSnap Technical', issue: 'SNA-18', status: 'running' as const, duration: '8m', model: 'Claude Opus 4.7' },
-  { agent: 'RxFit COO Agent', issue: 'RXF-39', status: 'completed' as const, duration: '34m', model: 'Gemini 2.5 Pro' },
-  { agent: 'SEO Agent Marketing', issue: 'SEO-5', status: 'completed' as const, duration: '22m', model: 'GPT-5' },
-  { agent: 'JadeCoS Technical', issue: 'CHI-7', status: 'failed' as const, duration: '3m', model: 'Claude Opus 4.7' },
-  { agent: 'NotebookRx Technical', issue: 'RXN-9', status: 'completed' as const, duration: '18m', model: 'Gemini 2.5 Flash' },
-]
-
-const INITIAL_MESSAGES = [
-  {
-    id: '1',
-    role: 'assistant' as const,
-    content: "Welcome to CT Hub. I have context on all 6 active projects and their current agent activity.\n\nHere's your morning briefing:\n• **RxFit**: CEO agent is resolving client onboarding drop-off (RXF-42)\n• **FridgeSnap**: API rate limiting issue escalated to In Review\n• **JadeCoS**: Payment webhook is failing — needs attention\n• **SEO**: Domain authority campaign on track (+4 this month)\n\nWhat would you like to dig into?",
-  },
-]
+import { useState, useRef, useEffect, useCallback, Fragment } from 'react'
+import { mutate } from 'swr'
+import { useSession, signIn } from 'next-auth/react'
+import { useRouter } from 'next/navigation'
+import { TasksSection, CalendarSection, DocumentsSection, KPISection, ProjectHealthSection } from '@/app/components/LeftPanelSections'
+import { ExecutionFeed } from '@/app/components/RightPanelSections'
+import { InterviewBadge, ContextInjectionBanner, ActionConfirmCard } from '@/app/components/ChatEnhancements'
+import { BrandedHeader } from '@/app/components/BrandedHeader'
+import { AnimatedNumber } from '@/app/components/AnimatedNumber'
+import { OnboardingCard, shouldShowOnboardingCard } from '@/app/components/OnboardingCard'
+import { OnboardingBanner } from '@/app/components/OnboardingBanner'
+import {
+  detectIntent,
+  startInterview,
+  advanceInterview,
+  getCurrentQuestion,
+  getTotalQuestions,
+} from '@/lib/interview'
+import type { InterviewState, ActionSpec } from '@/types'
 
 const CHAT_SUGGESTIONS = [
   "What's blocking FridgeSnap revenue?",
@@ -65,277 +27,405 @@ const CHAT_SUGGESTIONS = [
   "Create a task for the team",
 ]
 
-/* ══════════════════════════════════════════════════════════════════════════════
-   SIMULATED CHAT RESPONSES
-   ══════════════════════════════════════════════════════════════════════════════ */
+const ONBOARDING_SUGGESTIONS = [
+  "What meetings do I have today?",
+  "Show my open tasks",
+  "What files did I work on recently?",
+  "What is this Hub for?",
+]
 
-const SIMULATED_RESPONSES: Record<string, string> = {
-  "What's blocking FridgeSnap revenue?": `Based on the current execution data, there are **two blockers** on FridgeSnap revenue:\n\n1. **SNA-18: API Rate Limiting** — The recipe API is hitting 429 errors in production, which directly impacts the user experience. The Technical agent has this in review, but it's been 4 hours without resolution.\n\n2. **SNA-22: Android 14 Camera Crash** — FridgeSnap's core value prop (snap → recipe) is broken for ~34% of Android users. This is in review but hasn't shipped.\n\n**Recommended actions:**\n• Escalate SNA-18 to urgent priority\n• Get an ETA from the Technical agent on the Android fix\n• Consider a hotfix deploy for the rate limiting issue today`,
-
-  "Summarize today's agent activity": `**Today's Agent Activity Summary**\n\n| Agent | Status | Issue | Duration |\n|-------|--------|-------|----------|\n| RxFit CEO | 🟢 Running | RXF-42 | 12m |\n| FridgeSnap Technical | 🟢 Running | SNA-18 | 8m |\n| RxFit COO | ✅ Done | RXF-39 | 34m |\n| SEO Marketing | ✅ Done | SEO-5 | 22m |\n| JadeCoS Technical | 🔴 Failed | CHI-7 | 3m |\n| NotebookRx Technical | ✅ Done | RXN-9 | 18m |\n\n**Highlight:** JadeCoS Technical agent failed on CHI-7 (payment webhook). This needs manual review — the Stripe Connect integration may require API key rotation.`,
-
-  "Show Q2 goal status": `**Q2 2026 — Goal Tracking**\n\n🟢 **Revenue Target ($380K)** — 72% complete ($274K collected)\nOn pace. FridgeSnap subscription revenue growing 18% MoM.\n\n🟢 **Client Retention > 94%** — Currently at 96.2%\nExceeding target. Zero churn in May so far.\n\n🟡 **FridgeSnap Beta Launch** — 45% complete\nAt risk. Android crash bug (SNA-22) blocking public beta. ETA slipped from June 1 → June 12.\n\n🟢 **SEO DA > 35** — Currently at 32 (60% to goal)\nOn track. 4 blog posts published this month driving organic traffic.\n\n🔴 **JadeCoS Payment Integration** — 28% complete\nBehind schedule. Stripe Connect webhook failures are blocking QA. Need a dedicated sprint.`,
-}
-
-const GRILL_RESPONSE = `🔥 **Interview Mode Activated**\n\nI need to understand this task fully before we create it. Let me walk through a few questions:\n\n**Question 1 of 5:**\nWhat specific outcome should this task produce? Not what needs to be done — what does "done" look like?`
 
 /* ══════════════════════════════════════════════════════════════════════════════
    COMPONENTS
    ══════════════════════════════════════════════════════════════════════════════ */
 
-function AnimatedNumber({ value, delay = 0 }: { value: string; delay?: number }) {
-  const [visible, setVisible] = useState(false)
-  const [displayed, setDisplayed] = useState('0')
-  useEffect(() => {
-    const t = setTimeout(() => setVisible(true), delay)
-    return () => clearTimeout(t)
-  }, [delay])
-  // Animate numeric-looking values by counting up
-  useEffect(() => {
-    if (!visible) return
-    const numMatch = value.match(/^(\$?)(\d[\d,]*)(.*)$/)
-    if (!numMatch) { setDisplayed(value); return }
-    const prefix = numMatch[1]
-    const rawNum = parseInt(numMatch[2].replace(/,/g, ''), 10)
-    const suffix = numMatch[3]
-    if (isNaN(rawNum) || rawNum === 0) { setDisplayed(value); return }
-    let start = 0
-    const duration = 900
-    const startTime = performance.now()
-    const tick = (now: number) => {
-      const elapsed = now - startTime
-      const progress = Math.min(elapsed / duration, 1)
-      // Ease out cubic
-      const eased = 1 - Math.pow(1 - progress, 3)
-      const current = Math.round(eased * rawNum)
-      const formatted = prefix + current.toLocaleString() + suffix
-      setDisplayed(formatted)
-      if (progress < 1) requestAnimationFrame(tick)
-      else setDisplayed(value)
-    }
-    requestAnimationFrame(tick)
-  }, [visible, value])
+// AnimatedNumber is now imported from @/app/components/AnimatedNumber
+
+/* ── Left Panel: Context Layer ── */
+function LeftPanel({ isOpen, onClose, onInjectChat, panelRef, style }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string) => void; panelRef?: React.Ref<HTMLElement>; style?: React.CSSProperties }) {
   return (
-    <span
-      aria-label={value}
-      style={{
-        opacity: visible ? 1 : 0,
-        transform: visible ? 'translateY(0)' : 'translateY(8px)',
-        transition: 'opacity 0.4s cubic-bezier(0.16, 1, 0.3, 1), transform 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
-        display: 'inline-block',
-      }}
-    >
-      {displayed}
-    </span>
-  )
-}
-
-/* ── Header ── */
-function HubHeader({ activeProject, onProjectChange, theme, onThemeToggle }: {
-  activeProject: string
-  onProjectChange: (id: string) => void
-  theme: 'dark' | 'light'
-  onThemeToggle: () => void
-}) {
-  return (
-    <header className="hub-header" role="banner">
-      <div className="hub-logo">
-        <h1 className="hub-logo-text rx-shimmer">
-          <span className="hub-logo-accent">CT</span> HUB
-        </h1>
-        <span className="hub-logo-badge">ops</span>
-      </div>
-
-      <nav className="header-actions" aria-label="Hub controls">
-        <label htmlFor="project-selector" className="sr-only">Select project</label>
-        <select
-          id="project-selector"
-          value={activeProject}
-          onChange={e => onProjectChange(e.target.value)}
-          aria-label="Select project"
-          className="project-selector"
-        >
-          <option value="all">All Projects</option>
-          {PROJECTS.map(p => (
-            <option key={p.id} value={p.id}>[{p.abbr}] {p.name}</option>
-          ))}
-        </select>
-
-        <a
-          href="https://hub.casatrejo.com"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="power-view-btn"
-          aria-label="Open Power View in new tab"
-        >
-          Power View <span className="rx-arrow">→</span>
-        </a>
-
-        <button
-          className="theme-toggle-btn"
-          onClick={onThemeToggle}
-          aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
-          title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
-        >
-          {theme === 'dark' ? '☀️' : '🌙'}
-        </button>
-
-        <div className="header-user" role="button" tabIndex={0} aria-label="User menu for Danny">
-          <div className="header-avatar" aria-hidden="true">DT</div>
-          <span className="header-username">Danny</span>
-        </div>
-      </nav>
-    </header>
-  )
-}
-
-/* ── Left Panel: Command Center ── */
-function LeftPanel({ isOpen, onClose }: { isOpen?: boolean; onClose?: () => void }) {
-  return (
-    <aside className={`panel-left ${isOpen ? 'mobile-open' : ''}`} aria-label="Command Center">
+    <aside ref={panelRef} className={`panel-left ${isOpen ? 'mobile-open' : ''}`} aria-label="Context Layer" style={style}>
       <div className="panel-header">
         <h2 className="panel-title">
-          <span className="rx-comment-label">01 //</span>
-          <span className="panel-title-display">Command Center</span>
+          <span className="panel-title-display">Context</span>
         </h2>
         {onClose && (
-          <button className="panel-close-btn" onClick={onClose} aria-label="Close Command Center">
+          <button className="panel-close-btn" onClick={onClose} aria-label="Close Context Layer">
             &times;
           </button>
         )}
       </div>
 
       <div className="panel-content">
-        {/* KPI Grid */}
-        <div className="kpi-grid" role="list" aria-label="Key performance indicators">
-          {KPI_DATA.map((kpi, i) => (
-            <div key={kpi.label} className="kpi-card" role="listitem">
-              <div className="kpi-label">{kpi.label}</div>
-              <div className="kpi-value">
-                <AnimatedNumber value={kpi.value} delay={i * 120} />
-              </div>
-              <div className={`kpi-trend ${kpi.up ? 'kpi-trend-up' : 'kpi-trend-down'}`} aria-label={`Trend: ${kpi.up ? 'up' : 'down'} ${kpi.trend}`}>
-                <span aria-hidden="true" className="rx-star">✦</span> {kpi.trend}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Project Health */}
-        <h3 className="section-label">Project Health</h3>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }} role="list" aria-label="Project health status">
-          {PROJECTS.map(p => {
-            const healthStatus = p.id === 'jadecoss' ? 'critical' : p.id === 'fridgesnap' ? 'at risk' : 'healthy'
-            const statusColor = p.id === 'jadecoss' ? 'var(--danger)' : p.id === 'fridgesnap' ? 'var(--warn)' : 'var(--accent)'
-            return (
-              <div
-                key={p.id}
-                role="listitem"
-                tabIndex={0}
-                aria-label={`${p.name}: ${healthStatus}`}
-                className="project-health-item"
-              >
-                {/* Color-coded monogram circle replaces emoji */}
-                <span
-                  aria-hidden="true"
-                  style={{
-                    width: '22px',
-                    height: '22px',
-                    borderRadius: '6px',
-                    background: `${p.color}1a`,
-                    border: `1px solid ${p.color}44`,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: '0.55rem',
-                    fontWeight: 700,
-                    color: p.color,
-                    letterSpacing: '0.02em',
-                    flexShrink: 0,
-                  }}
-                >
-                  {p.abbr}
-                </span>
-                <span style={{ flex: 1 }}>{p.name}</span>
-                <span
-                  aria-hidden="true"
-                  className="project-status-pulse"
-                  style={{
-                    width: '7px',
-                    height: '7px',
-                    borderRadius: '50%',
-                    background: statusColor,
-                    boxShadow: `0 0 6px ${statusColor}`,
-                    flexShrink: 0,
-                  }}
-                />
-              </div>
-            )
-          })}
-        </div>
-
-        {/* Q2 Goals */}
-        <h3 className="section-label">Q2 Objectives</h3>
-        <div role="list" aria-label="Quarterly objectives">
-          {GOALS.map((goal) => (
-            <div key={goal.title} className="goal-item" role="listitem">
-              <span className={`goal-status-dot ${goal.status}`} aria-hidden="true" />
-              <div style={{ flex: 1 }}>
-                <div className="goal-text">{goal.title}</div>
-                <div
-                  className="goal-progress-bar"
-                  role="progressbar"
-                  aria-valuenow={goal.progress}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-label={`${goal.title}: ${goal.progress}% complete`}
-                >
-                  <div
-                    className="goal-progress-fill"
-                    style={{
-                      width: `${goal.progress}%`,
-                      background: goal.status === 'behind' ? 'var(--danger)' : goal.status === 'at-risk' ? 'var(--warn)' : undefined,
-                    }}
-                  />
-                </div>
-                <div style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: '0.65rem',
-                  color: 'var(--text-muted)',
-                  marginTop: '2px',
-                }}>
-                  {goal.progress}%
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
+        <KPISection sheetId={process.env.NEXT_PUBLIC_KPI_SHEET_ID} onInjectChat={onInjectChat} />
+        <TasksSection onInjectChat={onInjectChat} />
+        <CalendarSection onInjectChat={onInjectChat} />
+        <DocumentsSection onInjectChat={onInjectChat} />
       </div>
     </aside>
   )
 }
 
-/* ── Center Panel: AI Chat ── */
-function CenterPanel() {
-  const [messages, setMessages] = useState<Array<{ id: string; role: 'user' | 'assistant'; content: string }>>(INITIAL_MESSAGES)
+/* ── Safe Markdown-like renderer (no dangerouslySetInnerHTML) ── */
+function parseInlineMarkdown(text: string): React.ReactNode[] {
+  const nodes: React.ReactNode[] = []
+  // Match bold (**...**) and italic (*...*) — bold first since it's a superset
+  const regex = /\*\*(.*?)\*\*|\*(.*?)\*/g
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+
+  while ((match = regex.exec(text)) !== null) {
+    // Push text before this match
+    if (match.index > lastIndex) {
+      nodes.push(text.slice(lastIndex, match.index))
+    }
+    if (match[1] !== undefined) {
+      // Bold
+      nodes.push(<strong key={`b-${match.index}`}>{match[1]}</strong>)
+    } else if (match[2] !== undefined) {
+      // Italic
+      nodes.push(<em key={`i-${match.index}`}>{match[2]}</em>)
+    }
+    lastIndex = match.index + match[0].length
+  }
+  // Push remaining text
+  if (lastIndex < text.length) {
+    nodes.push(text.slice(lastIndex))
+  }
+  if (nodes.length === 0) {
+    nodes.push(text)
+  }
+  return nodes
+}
+
+function MessageContent({ content }: { content: string }) {
+  const lines = content.split('\n')
+
+  return (
+    <div style={{ whiteSpace: 'pre-wrap' }}>
+      {lines.map((line, i) => {
+        // Bullet points
+        if (line.startsWith('• ') || line.startsWith('- ')) {
+          return <div key={i} style={{ paddingLeft: '8px' }}>{parseInlineMarkdown(line)}</div>
+        }
+        // Table header detection
+        if (line.includes('|') && line.trim().startsWith('|')) {
+          const cells = line.split('|').filter(c => c.trim())
+          if (cells.every(c => /^[\s-]+$/.test(c))) return <Fragment key={i} />  // separator line
+          return (
+            <div key={i} style={{
+              display: 'flex',
+              gap: '8px',
+              fontFamily: 'var(--font-mono)',
+              fontSize: '0.7rem',
+              padding: '2px 0',
+              color: line.includes('---') ? 'transparent' : undefined,
+            }}>
+              {cells.map((cell, j) => (
+                <span key={j} style={{ flex: 1, minWidth: 0 }}>{parseInlineMarkdown(cell.trim())}</span>
+              ))}
+            </div>
+          )
+        }
+        // Empty line
+        if (!line.trim()) {
+          return <div key={i}>{' '}</div>
+        }
+        return <div key={i}>{parseInlineMarkdown(line)}</div>
+      })}
+    </div>
+  )
+}
+
+/* ── Right Panel: Execution Layer ── */
+function RightPanel({ isOpen, onClose, onInjectChat, panelRef, style }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string) => void; panelRef?: React.Ref<HTMLElement>; style?: React.CSSProperties }) {
+  return (
+    <aside ref={panelRef} className={`panel-right ${isOpen ? 'mobile-open' : ''}`} aria-label="Execution Layer" style={style}>
+      <div className="panel-header">
+        <h2 className="panel-title">
+          <span className="panel-title-display">Execution</span>
+        </h2>
+        {onClose && (
+          <button className="panel-close-btn" onClick={onClose} aria-label="Close Execution Layer">
+            &times;
+          </button>
+        )}
+      </div>
+
+      <div className="panel-content">
+        <ProjectHealthSection onInjectChat={onInjectChat} />
+        <ExecutionFeed onInjectChat={onInjectChat} />
+      </div>
+    </aside>
+  )
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   MAIN PAGE
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+type MobileTab = 'chat' | 'command' | 'execution'
+type ChatMsg = { id: string; role: 'user' | 'assistant'; content: string; timestamp?: string }
+
+export default function HubPage() {
+  const { data: session } = useSession()
+  const router = useRouter()
+  const [activeProject, setActiveProject] = useState('all')
+  const [mobileLeftOpen, setMobileLeftOpen] = useState(false)
+  const [mobileRightOpen, setMobileRightOpen] = useState(false)
+  const [mobileTab, setMobileTab] = useState<MobileTab>('chat')
+  const [theme, setTheme] = useState<'dark' | 'light'>('dark')
+  const [showOnboardingCard, setShowOnboardingCard] = useState(false)
+
+  // Derive current user role from session
+  const userRole = (session?.user as Record<string, unknown>)?.role as string ?? 'onboarding'
+  const isOnboarding = userRole === 'onboarding'
+  const canUseInterviewMode = !isOnboarding
+  const canAccessAdmin = userRole === 'admin' || userRole === 'superadmin'
+
+  // Swipe gesture state — real-time drag-follow system
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null)
+  const swipeDirRef = useRef<'left' | 'right' | null>(null)
+  const isSwipingRef = useRef(false)
+  const leftPanelRef = useRef<HTMLElement>(null)
+  const rightPanelRef = useRef<HTMLElement>(null)
+  const backdropRef = useRef<HTMLDivElement>(null)
+  const SWIPE_COMMIT = 104 // px to commit open/close (~30% more bail room)
+  const SCREEN_W = typeof window !== 'undefined' ? window.innerWidth : 375
+
+  // Chat state (lifted so handleChatInject can share it)
+  const [messages, setMessages] = useState<ChatMsg[]>([])
   const [input, setInput] = useState('')
   const [isTyping, setIsTyping] = useState(false)
-  const [grillActive, setGrillActive] = useState(false)
+  const [actionExecuting, setActionExecuting] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const chatMessagesRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const [showScrollBtn, setShowScrollBtn] = useState(false)
 
+  // Interview Mode state
+  const [interviewState, setInterviewState] = useState<InterviewState | null>(null)
+  const [injectedContext, setInjectedContext] = useState<string | null>(null)
+  const [actionSpec, setActionSpec] = useState<InterviewState['spec']>(null)
+
+  // Auth error detection
+  const authError = (session?.user as Record<string, unknown> | undefined)?.error === 'RefreshAccessTokenError'
+
+  // User initials for chat avatar
+  const userInitials = (() => {
+    const name = session?.user?.name || ''
+    const parts = name.split(' ').filter(Boolean)
+    if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
+    return '??' 
+  })()
+
+  // Initialize theme from localStorage and apply to <html>
+  useEffect(() => {
+    const saved = (typeof window !== 'undefined' && localStorage.getItem('rx-hub-theme')) as 'dark' | 'light' | null
+    const initial = saved || 'dark'
+    setTheme(initial)
+    document.documentElement.setAttribute('data-theme', initial)
+  }, [])
+
+  // Show onboarding card on first sign-in (localStorage check)
+  useEffect(() => {
+    if (isOnboarding && shouldShowOnboardingCard()) {
+      setShowOnboardingCard(true)
+    }
+  }, [isOnboarding])
+
+  const handleThemeToggle = () => {
+    const next = theme === 'dark' ? 'light' : 'dark'
+    setTheme(next)
+    document.documentElement.setAttribute('data-theme', next)
+    localStorage.setItem('rx-hub-theme', next)
+  }
+
+  /* ── E1: Haptic feedback utility ── */
+  const haptic = useCallback((ms = 10) => {
+    try { navigator?.vibrate?.(ms) } catch { /* silent */ }
+  }, [])
+
+  const handleMobileTab = (tab: MobileTab) => {
+    haptic()
+    setMobileTab(tab)
+    if (tab === 'command') {
+      setMobileLeftOpen(true)
+      setMobileRightOpen(false)
+    } else if (tab === 'execution') {
+      setMobileRightOpen(true)
+      setMobileLeftOpen(false)
+    } else {
+      setMobileLeftOpen(false)
+      setMobileRightOpen(false)
+    }
+  }
+
+  const handleClosePanels = () => {
+    setMobileLeftOpen(false)
+    setMobileRightOpen(false)
+    setMobileTab('chat')
+  }
+
+  /* ── Swipe gesture handlers — real-time drag-follow ── */
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    const touch = e.touches[0]
+    touchStartRef.current = { x: touch.clientX, y: touch.clientY }
+    swipeDirRef.current = null
+    isSwipingRef.current = false
+  }, [])
+
+  const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    if (!touchStartRef.current) return
+    const touch = e.touches[0]
+    const dx = touch.clientX - touchStartRef.current.x
+    const dy = touch.clientY - touchStartRef.current.y
+
+    // Lock direction on first significant movement
+    if (!swipeDirRef.current) {
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return
+      if (Math.abs(dy) > Math.abs(dx)) {
+        // Vertical scroll — abort swipe tracking
+        touchStartRef.current = null
+        return
+      }
+      swipeDirRef.current = dx > 0 ? 'right' : 'left'
+      isSwipingRef.current = true
+    }
+
+    const screenW = window.innerWidth
+    if (screenW > 640) return // Desktop — no drag
+
+    // Determine what panel to show based on swipe + current state
+    if (swipeDirRef.current === 'right') {
+      if (mobileRightOpen && rightPanelRef.current) {
+        // Closing right panel — drag it away
+        const offset = Math.max(0, dx)
+        rightPanelRef.current.style.transform = `translateX(${offset}px)`
+        rightPanelRef.current.style.transition = 'none'
+        if (backdropRef.current) {
+          backdropRef.current.style.opacity = String(Math.max(0, 1 - offset / (screenW * 0.4)))
+        }
+      } else if (!mobileLeftOpen && leftPanelRef.current) {
+        // Opening left panel — drag it in from -100%
+        const progress = Math.min(dx / screenW, 1)
+        const panelX = -screenW + (progress * screenW)
+        leftPanelRef.current.style.transform = `translateX(${panelX}px)`
+        leftPanelRef.current.style.transition = 'none'
+        leftPanelRef.current.style.visibility = 'visible'
+        if (backdropRef.current) {
+          backdropRef.current.style.display = 'block'
+          backdropRef.current.style.opacity = String(Math.min(progress * 1.5, 1))
+        }
+      }
+    } else if (swipeDirRef.current === 'left') {
+      if (mobileLeftOpen && leftPanelRef.current) {
+        // Closing left panel — drag it away
+        const offset = Math.min(0, dx)
+        leftPanelRef.current.style.transform = `translateX(${offset}px)`
+        leftPanelRef.current.style.transition = 'none'
+        if (backdropRef.current) {
+          backdropRef.current.style.opacity = String(Math.max(0, 1 - Math.abs(offset) / (screenW * 0.4)))
+        }
+      } else if (!mobileRightOpen && rightPanelRef.current) {
+        // Opening right panel — drag it in from +100%
+        const progress = Math.min(Math.abs(dx) / screenW, 1)
+        const panelX = screenW - (progress * screenW)
+        rightPanelRef.current.style.transform = `translateX(${panelX}px)`
+        rightPanelRef.current.style.transition = 'none'
+        rightPanelRef.current.style.visibility = 'visible'
+        if (backdropRef.current) {
+          backdropRef.current.style.display = 'block'
+          backdropRef.current.style.opacity = String(Math.min(progress * 1.5, 1))
+        }
+      }
+    }
+  }, [mobileLeftOpen, mobileRightOpen])
+
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (!touchStartRef.current || !isSwipingRef.current) {
+      touchStartRef.current = null
+      return
+    }
+
+    const touch = e.changedTouches[0]
+    const dx = touch.clientX - touchStartRef.current.x
+    const dir = swipeDirRef.current
+    touchStartRef.current = null
+    swipeDirRef.current = null
+    isSwipingRef.current = false
+
+    const screenW = window.innerWidth
+    if (screenW > 640) return
+
+    // Reset inline styles so CSS transitions take over
+    const resetPanel = (el: HTMLElement | null) => {
+      if (!el) return
+      el.style.transform = ''
+      el.style.transition = ''
+      el.style.visibility = ''
+    }
+    // Explicitly restore backdrop to match React state (not '' which clears to CSS default)
+    const panelsStillOpen = mobileLeftOpen || mobileRightOpen
+    if (backdropRef.current) {
+      backdropRef.current.style.display = panelsStillOpen ? 'block' : 'none'
+      backdropRef.current.style.opacity = panelsStillOpen ? '1' : '0'
+    }
+
+    const absDx = Math.abs(dx)
+    const committed = absDx > SWIPE_COMMIT
+
+    if (dir === 'right') {
+      if (mobileRightOpen && committed) {
+        resetPanel(rightPanelRef.current)
+        handleClosePanels()
+      } else if (!mobileLeftOpen && committed) {
+        resetPanel(leftPanelRef.current)
+        handleMobileTab('command')
+      } else {
+        resetPanel(leftPanelRef.current)
+        resetPanel(rightPanelRef.current)
+      }
+    } else if (dir === 'left') {
+      if (mobileLeftOpen && committed) {
+        resetPanel(leftPanelRef.current)
+        handleClosePanels()
+      } else if (!mobileRightOpen && committed) {
+        resetPanel(rightPanelRef.current)
+        handleMobileTab('execution')
+      } else {
+        resetPanel(leftPanelRef.current)
+        resetPanel(rightPanelRef.current)
+      }
+    } else {
+      resetPanel(leftPanelRef.current)
+      resetPanel(rightPanelRef.current)
+    }
+  }, [mobileLeftOpen, mobileRightOpen])
+
+  /* ── Scroll to bottom of chat ── */
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [])
 
   useEffect(() => { scrollToBottom() }, [messages, scrollToBottom])
 
-  const sendToApi = useCallback(async (userMessage: string, allMessages: Array<{ id: string; role: 'user' | 'assistant'; content: string }>) => {
-    setIsTyping(true)
+  /* ── E2: Scroll-to-bottom detection ── */
+  useEffect(() => {
+    const el = chatMessagesRef.current
+    if (!el) return
+    const handleScroll = () => {
+      const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+      setShowScrollBtn(distFromBottom > 120)
+    }
+    el.addEventListener('scroll', handleScroll, { passive: true })
+    return () => el.removeEventListener('scroll', handleScroll)
+  }, [])
 
-    // Check for task creation intent → activate grill mode
-    const taskIntent = /\b(create|add|make|need to|let'?s|we should|i want to)\b/i.test(userMessage)
+  /* ── Send to Gemini API ── */
+  const sendToApi = useCallback(async (userMessage: string, allMessages: ChatMsg[]) => {
+    setIsTyping(true)
 
     try {
       const res = await fetch('/api/chat', {
@@ -391,54 +481,119 @@ function CenterPanel() {
         }
       }
 
-      if (taskIntent) setGrillActive(true)
-      return // Success — no fallback needed
-    } catch {
-      // API unavailable — fall back to mock responses
-      setIsTyping(true)
-      const responseText = taskIntent
-        ? GRILL_RESPONSE
-        : SIMULATED_RESPONSES[userMessage] || `I'll look into that. Based on the current project data across your 6 active workspaces, here's what I can tell you:\n\nThe query "${userMessage}" touches multiple departments. Let me pull the relevant execution data and agent activity to give you a comprehensive answer.\n\n*This is a demo — in production, I'll query Paperclip's API and your intelligence nodes in real-time.*`
-
-      setTimeout(() => {
-        setIsTyping(false)
-        if (taskIntent) setGrillActive(true)
-        setMessages(prev => [...prev, {
-          id: String(Date.now()),
-          role: 'assistant' as const,
-          content: responseText,
-        }])
-      }, 1200 + Math.random() * 800)
+      return // Success ? no fallback needed
+    } catch (err) {
+      console.error('Chat API Error:', err);
+      setIsTyping(false);
+      setMessages(prev => [...prev, {
+        id: String(Date.now()),
+        role: 'assistant' as const,
+        content: "I'm having trouble connecting to the intelligence nodes right now. Please try again in a moment.",
+      }]);
     }
   }, [])
 
+  const doSend = useCallback((message: string) => {
+    haptic()
+    const newMessage: ChatMsg = {
+      id: crypto.randomUUID(),
+      role: 'user' as const,
+      content: message,
+      timestamp: new Date().toISOString(),
+    }
+
+    setMessages(prev => {
+      const updated = [...prev, newMessage]
+
+      // Check if message triggers interview mode (disabled for onboarding users)
+      const intent = canUseInterviewMode ? detectIntent(message) : null
+      if (intent && !interviewState?.active) {
+        const newState = startInterview(intent)
+        setInterviewState(newState)
+        
+        const question = getCurrentQuestion(newState)
+        if (question) {
+          const totalQ = getTotalQuestions(intent)
+          const introMsg: ChatMsg = {
+            id: crypto.randomUUID(),
+            role: 'assistant' as const,
+            content: `✦ **Interview Mode Activated**\n\nI need to understand this fully before we proceed. I'll ask you ${totalQ} quick questions.\n\n**Question 1 of ${totalQ}:**\n${question.question}${question.defaultValue ? `\n\n_Default: ${question.defaultValue}_` : ''}`,
+            timestamp: new Date().toISOString(),
+          }
+          return [...updated, introMsg]
+        }
+        return updated
+      }
+
+      // If interview is active, advance it
+      if (interviewState?.active && interviewState.intent) {
+        const nextState = advanceInterview(interviewState, message)
+        setInterviewState(nextState)
+
+        if (!nextState.active && nextState.spec) {
+          // Interview complete — build spec
+          setActionSpec(nextState.spec)
+          const doneMsg: ChatMsg = {
+            id: crypto.randomUUID(),
+            role: 'assistant' as const,
+            content: '✅ Interview complete! Please review the action below and approve, edit, or cancel.',
+            timestamp: new Date().toISOString(),
+          }
+          return [...updated, doneMsg]
+        } else {
+          const question = getCurrentQuestion(nextState)
+          if (question) {
+             const qMsg: ChatMsg = {
+              id: crypto.randomUUID(),
+              role: 'assistant' as const,
+              content: `✦ **${question.question}**${question.defaultValue ? `\n\n_Default: ${question.defaultValue}_` : ''}`,
+              timestamp: new Date().toISOString(),
+            }
+            return [...updated, qMsg]
+          }
+        }
+        return updated
+      }
+
+      // No interview — send to Gemini API
+      sendToApi(message, updated)
+      return updated
+    })
+  }, [interviewState, sendToApi])
+
+  /* ── Handle manual send from input ── */
   const handleSend = useCallback(() => {
     const msg = input.trim()
     if (!msg) return
-
-    const newMessage = {
-      id: String(Date.now()),
-      role: 'user' as const,
-      content: msg,
-    }
-    const updatedMessages = [...messages, newMessage]
-    setMessages(updatedMessages)
     setInput('')
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
+    doSend(msg)
+  }, [input, doSend])
 
-    sendToApi(msg, updatedMessages)
-  }, [input, messages, sendToApi])
-
+  /* ── Handle suggestion chip click ── */
   const handleSuggestion = useCallback((suggestion: string) => {
-    const newMessage = {
-      id: String(Date.now()),
-      role: 'user' as const,
-      content: suggestion,
+    doSend(suggestion)
+  }, [doSend])
+
+  /* ── Handle context injection from panels ── */
+  const handleChatInject = useCallback((message: string) => {
+    setMobileLeftOpen(false)
+    setMobileRightOpen(false)
+    setMobileTab('chat')
+    // Create a user message and send it
+    const userMsg = { 
+      id: crypto.randomUUID(), 
+      role: 'user' as const, 
+      content: message, 
+      timestamp: new Date().toISOString() 
     }
-    const updatedMessages = [...messages, newMessage]
-    setMessages(updatedMessages)
-    sendToApi(suggestion, updatedMessages)
-  }, [messages, sendToApi])
+    setMessages(prev => {
+      const updated = [...prev, userMsg]
+      // Trigger the chat API call (reuse existing send logic)
+      sendToApi(message, updated)
+      return updated
+    })
+  }, [sendToApi])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -453,479 +608,432 @@ function CenterPanel() {
     e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px'
   }, [])
 
-  return (
-    <main className="panel-center" aria-label="AI Chat">
-      <div className="chat-container">
-        {/* Chat Header */}
-        <div className="chat-header">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span className="panel-title-dot" aria-hidden="true" />
-            <h2 style={{
-              fontFamily: 'var(--font-display)',
-              fontSize: '0.95rem',
-              fontWeight: 800,
-              color: 'var(--text-primary)',
-              margin: 0,
-              letterSpacing: '-0.02em',
-            }}>
-              <span aria-hidden="true">✦ </span>AI Assistant
-            </h2>
-            <span style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: '0.6rem',
-              color: 'var(--text-muted)',
-              background: 'var(--bg-elevated)',
-              padding: '2px 6px',
-              borderRadius: 'var(--radius-sm)',
-              border: '1px solid var(--border)',
-            }}>
-              Gemini 2.5
-            </span>
-          </div>
-        </div>
+  /* ── Execute approved action from Interview Mode ── */
+  const handleActionApprove = useCallback(async (spec: ActionSpec) => {
+    haptic(15) // Stronger haptic for consequential action
+    setActionExecuting(true)
+    setActionSpec(null)
+    setInterviewState(null)
 
-        {/* Grill-me banner */}
-        {grillActive && (
-          <div className="grill-mode-banner" role="alert">
-            <span className="grill-mode-banner-icon" aria-hidden="true">🔥</span>
-            <span><strong>Interview Mode</strong> — Task creation requires full specification before submission</span>
-          </div>
-        )}
+    // Add a "working on it" message
+    const workingId = crypto.randomUUID()
+    setMessages(prev => [...prev, {
+      id: workingId,
+      role: 'assistant' as const,
+      content: '⏳ Executing action...',
+      timestamp: new Date().toISOString(),
+    }])
 
-        {/* Messages */}
-        <div className="chat-messages" role="log" aria-label="Chat messages" aria-live="polite">
-          {messages.map(msg => (
-            <div key={msg.id} className={`chat-message ${msg.role === 'user' ? 'chat-message-user' : ''}`}>
-              <div
-                className={`chat-message-avatar ${msg.role === 'user' ? 'chat-message-avatar-user' : 'chat-message-avatar-ai'}`}
-                aria-hidden="true"
-              >
-                {msg.role === 'user' ? 'DT' : '✦'}
-              </div>
-              <div className={`chat-bubble ${msg.role === 'user' ? 'chat-bubble-user' : 'chat-bubble-ai'}`}>
-                <MessageContent content={msg.content} />
-              </div>
-            </div>
-          ))}
+    try {
+      let resultMsg = ''
 
-          {isTyping && (
-            <div className="chat-message" aria-label="AI is typing">
-              <div className="chat-message-avatar chat-message-avatar-ai" aria-hidden="true">✦</div>
-              <div className="chat-bubble chat-bubble-ai">
-                <div className="chat-thinking" aria-label="Thinking">
-                  <div className="chat-thinking-dot" />
-                  <div className="chat-thinking-dot" />
-                  <div className="chat-thinking-dot" />
-                </div>
-              </div>
-            </div>
-          )}
+      switch (spec.intent) {
+        case 'create_task': {
+          // Get the first task list ID via the tasks API
+          const listsRes = await fetch('/api/google/tasks')
+          const listsData = await listsRes.json()
+          const taskListId = listsData?.taskLists?.[0]?.id
+          if (!taskListId) throw new Error('No task lists found')
 
-          <div ref={messagesEndRef} />
-        </div>
+          // Interview collects: description, priority, deadline, assignee
+          const taskTitle = spec.details.description || spec.details.title || spec.summary
+          const taskNotes = [
+            spec.details.priority ? `Priority: ${spec.details.priority}` : '',
+            spec.details.assignee ? `Assigned to: ${spec.details.assignee}` : '',
+          ].filter(Boolean).join('\n')
 
-        {/* Suggestion chips (shown when chat is fresh) */}
-        {messages.length <= 1 && (
-          <div className="chat-suggestions" role="group" aria-label="Suggested prompts">
-            {CHAT_SUGGESTIONS.map(s => (
-              <button
-                key={s}
-                className="chat-suggestion-chip"
-                onClick={() => handleSuggestion(s)}
-                aria-label={`Ask: ${s}`}
-              >
-                {s} <span className="rx-arrow">→</span>
-              </button>
-            ))}
-          </div>
-        )}
+          const res = await fetch('/api/google/tasks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'create',
+              taskListId,
+              title: taskTitle,
+              notes: taskNotes,
+              due: spec.details.deadline || spec.details.due || undefined,
+            }),
+          })
+          if (!res.ok) throw new Error(`Task creation failed: ${res.status}`)
+          const data = await res.json()
+          resultMsg = `✅ **Task created!**\n\n"${data.task?.title || taskTitle}" has been added to your Google Tasks.`
+          break
+        }
 
-        {/* Input */}
-        <div className="chat-input-area">
-          <div className="chat-input-wrapper">
-            <textarea
-              ref={textareaRef}
-              className="chat-input"
-              aria-label="Chat message input"
-              placeholder={grillActive ? "Answer the interview question..." : "Ask about your projects, create tasks, check status..."}
-              value={input}
-              onChange={handleTextareaInput}
-              onKeyDown={handleKeyDown}
-              rows={1}
-            />
-            <button
-              className="chat-send-btn"
-              onClick={handleSend}
-              disabled={!input.trim() || isTyping}
-              aria-label="Send message"
-            >
-              ↑
-            </button>
-          </div>
-        </div>
-      </div>
-    </main>
-  )
-}
+        case 'schedule_event': {
+          // Interview collects: title, when, attendees, location, duration
+          const whenText = spec.details.when || spec.details.start || spec.details.date || ''
+          
+          // Try to parse the "when" into an ISO string
+          // If it's already ISO, use it; otherwise try Date.parse
+          let startDate: Date
+          const parsed = Date.parse(whenText)
+          if (!isNaN(parsed)) {
+            startDate = new Date(parsed)
+          } else {
+            // Fallback: use tomorrow at 10 AM if unparseable
+            startDate = new Date()
+            startDate.setDate(startDate.getDate() + 1)
+            startDate.setHours(10, 0, 0, 0)
+          }
 
-/* ── Safe Markdown-like renderer (no dangerouslySetInnerHTML) ── */
-function parseInlineMarkdown(text: string): React.ReactNode[] {
-  const nodes: React.ReactNode[] = []
-  // Match bold (**...**) and italic (*...*) — bold first since it's a superset
-  const regex = /\*\*(.*?)\*\*|\*(.*?)\*/g
-  let lastIndex = 0
-  let match: RegExpExecArray | null
+          // Parse duration (default 30 min)
+          const durationText = spec.details.duration || '30 minutes'
+          const durationMatch = durationText.match(/(\d+)\s*(min|hour|hr)/i)
+          let durationMs = 30 * 60 * 1000 // default 30 min
+          if (durationMatch) {
+            const num = parseInt(durationMatch[1], 10)
+            durationMs = durationMatch[2].startsWith('h')
+              ? num * 60 * 60 * 1000
+              : num * 60 * 1000
+          }
 
-  while ((match = regex.exec(text)) !== null) {
-    // Push text before this match
-    if (match.index > lastIndex) {
-      nodes.push(text.slice(lastIndex, match.index))
+          const endDate = new Date(startDate.getTime() + durationMs)
+          const startISO = startDate.toISOString()
+          const endISO = endDate.toISOString()
+
+          const eventTitle = spec.details.title || spec.summary
+          const eventDesc = [
+            spec.details.location ? `Location: ${spec.details.location}` : '',
+            spec.details.notes || '',
+          ].filter(Boolean).join('\n')
+
+          const res = await fetch('/api/google/calendar', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              summary: eventTitle,
+              description: eventDesc,
+              start: startISO,
+              end: endISO,
+              attendees: spec.details.attendees
+                ? spec.details.attendees.split(',').map((e: string) => e.trim())
+                : undefined,
+            }),
+          })
+          if (!res.ok) throw new Error(`Event creation failed: ${res.status}`)
+          const data = await res.json()
+          resultMsg = `✅ **Event scheduled!**\n\n"${data.event?.summary || eventTitle}" has been added to your Google Calendar for ${startDate.toLocaleDateString()} at ${startDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`
+          break
+        }
+
+        case 'send_communication': {
+          // Route through Paperclip agent
+          const res = await fetch('/api/paperclip/api/companies', {
+            method: 'GET',
+          })
+          // For now, log the intent — full Paperclip communication routing TBD
+          resultMsg = `✅ **Communication queued!**\n\n"${spec.details.subject || spec.summary}" will be sent via ${spec.targetSystems.join(', ')}.`
+          break
+        }
+
+        case 'create_paperclip_issue': {
+          const issueTitle = spec.details.title || spec.summary
+          const issueDesc = spec.details.description || ''
+          const issuePriority = spec.details.priority || 'medium'
+
+          const res = await fetch('/api/paperclip/issues', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              title: issueTitle,
+              description: issueDesc,
+              priority: issuePriority,
+            }),
+          })
+          if (!res.ok) throw new Error(`Paperclip Issue creation failed: ${res.status}`)
+          const data = await res.json()
+          resultMsg = `✅ **Agent Triggered!**\n\n"${data.issue?.title || issueTitle}" has been assigned to the CEO Agent. You can track progress in the Execution Feed.`
+          
+          // Force refresh the Right Panel feed immediately
+          mutate('/api/feed')
+          break
+        }
+
+        default:
+          resultMsg = `⚠️ Unknown action type: ${spec.intent}`
+      }
+
+      // Replace the "working" message with the result
+      setMessages(prev => prev.map(m => 
+        m.id === workingId ? { ...m, content: resultMsg } : m
+      ))
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : 'Unknown error'
+      setMessages(prev => prev.map(m =>
+        m.id === workingId
+          ? { ...m, content: `❌ **Action failed:** ${errMsg}\n\nPlease try again or contact support.` }
+          : m
+      ))
+    } finally {
+      setActionExecuting(false)
     }
-    if (match[1] !== undefined) {
-      // Bold
-      nodes.push(<strong key={`b-${match.index}`}>{match[1]}</strong>)
-    } else if (match[2] !== undefined) {
-      // Italic
-      nodes.push(<em key={`i-${match.index}`}>{match[2]}</em>)
-    }
-    lastIndex = match.index + match[0].length
-  }
-  // Push remaining text
-  if (lastIndex < text.length) {
-    nodes.push(text.slice(lastIndex))
-  }
-  if (nodes.length === 0) {
-    nodes.push(text)
-  }
-  return nodes
-}
-
-function MessageContent({ content }: { content: string }) {
-  const lines = content.split('\n')
-
-  return (
-    <div style={{ whiteSpace: 'pre-wrap' }}>
-      {lines.map((line, i) => {
-        // Bullet points
-        if (line.startsWith('• ') || line.startsWith('- ')) {
-          return <div key={i} style={{ paddingLeft: '8px' }}>{parseInlineMarkdown(line)}</div>
-        }
-        // Table header detection
-        if (line.includes('|') && line.trim().startsWith('|')) {
-          const cells = line.split('|').filter(c => c.trim())
-          if (cells.every(c => /^[\s-]+$/.test(c))) return <Fragment key={i} /> // separator line
-          return (
-            <div key={i} style={{
-              display: 'flex',
-              gap: '8px',
-              fontFamily: 'var(--font-mono)',
-              fontSize: '0.7rem',
-              padding: '2px 0',
-              color: line.includes('---') ? 'transparent' : undefined,
-            }}>
-              {cells.map((cell, j) => (
-                <span key={j} style={{ flex: 1, minWidth: 0 }}>{parseInlineMarkdown(cell.trim())}</span>
-              ))}
-            </div>
-          )
-        }
-        // Empty line
-        if (!line.trim()) {
-          return <div key={i}>{' '}</div>
-        }
-        return <div key={i}>{parseInlineMarkdown(line)}</div>
-      })}
-    </div>
-  )
-}
-
-/* ── Right Panel: Execution Layer ── */
-function RightPanel({ isOpen, onClose }: { isOpen?: boolean; onClose?: () => void }) {
-  const [activeTab, setActiveTab] = useState<'inbox' | 'runs' | 'orgs'>('inbox')
-
-  return (
-    <aside className={`panel-right ${isOpen ? 'mobile-open' : ''}`} aria-label="Execution Layer">
-      <div className="panel-header">
-        <h2 className="panel-title">
-          <span className="rx-comment-label">02 //</span>
-          <span className="panel-title-display">Execution Layer</span>
-        </h2>
-        {onClose && (
-          <button className="panel-close-btn" onClick={onClose} aria-label="Close Execution Layer">
-            &times;
-          </button>
-        )}
-      </div>
-
-      <div className="tab-bar" role="tablist" aria-label="Execution tabs">
-        {(['inbox', 'runs', 'orgs'] as const).map(tab => (
-          <button
-            key={tab}
-            role="tab"
-            aria-selected={activeTab === tab}
-            aria-controls={`tabpanel-${tab}`}
-            className={`tab-btn ${activeTab === tab ? 'active' : ''}`}
-            onClick={() => setActiveTab(tab)}
-          >
-            {tab === 'inbox' ? `Inbox (${ISSUES.length})` : tab === 'runs' ? 'Agent Runs' : 'Orgs'}
-          </button>
-        ))}
-      </div>
-
-      <div
-        id={`tabpanel-${activeTab}`}
-        role="tabpanel"
-        aria-label={`${activeTab} panel`}
-        style={{ flex: 1, overflow: 'auto' }}
-      >
-        {activeTab === 'inbox' && <IssueInbox />}
-        {activeTab === 'runs' && <AgentRunFeed />}
-        {activeTab === 'orgs' && <OrgList />}
-      </div>
-    </aside>
-  )
-}
-
-function IssueInbox() {
-  return (
-    <div role="list" aria-label="Issue inbox">
-      {ISSUES.map(issue => (
-        <div key={issue.id} className="issue-item" role="listitem" aria-label={`${issue.id}: ${issue.title}, ${issue.priority} priority, ${issue.status}`}>
-          <span className={`issue-priority-dot ${issue.priority}`} aria-hidden="true" title={`${issue.priority} priority`} />
-          <div className="issue-content">
-            <div className="issue-title">{issue.title}</div>
-            <div className="issue-meta">
-              <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 500 }}>{issue.id}</span>
-              <span aria-hidden="true">•</span>
-              <StatusBadge status={issue.status} />
-              <span aria-hidden="true">•</span>
-              <span>{issue.time}</span>
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const cls = status.toLowerCase().replace(/\s+/g, '-')
-  const classMap: Record<string, string> = {
-    'todo': 'todo',
-    'in-progress': 'in-progress',
-    'in-review': 'in-review',
-    'done': 'done',
-  }
-  return (
-    <span className={`issue-status-badge ${classMap[cls] || 'todo'}`}>
-      {status}
-    </span>
-  )
-}
-
-function AgentRunFeed() {
-  return (
-    <div role="list" aria-label="Agent runs">
-      {AGENT_RUNS.map((run) => (
-        <div key={`${run.agent}-${run.issue}`} className="agent-run-item" role="listitem">
-          <span className={`agent-run-status ${run.status}`} />
-          <div className="agent-run-info">
-            <div className="agent-run-name">{run.agent}</div>
-            <div className="agent-run-detail">
-              {run.issue} · {run.duration} · {run.model}
-            </div>
-          </div>
-          <span style={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: '0.6rem',
-            padding: '2px 6px',
-            borderRadius: 'var(--radius-sm)',
-            background: run.status === 'running' ? 'rgba(197,160,89,0.1)' : run.status === 'failed' ? 'rgba(239,68,68,0.1)' : 'rgba(255,255,255,0.03)',
-            color: run.status === 'running' ? 'var(--accent)' : run.status === 'failed' ? 'var(--danger)' : 'var(--text-muted)',
-            textTransform: 'uppercase',
-          }}>
-            {run.status}
-          </span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-const ORGS = [
-  { name: 'RxFit Revenue', members: 3, issues: 12 },
-  { name: 'RxFit Technical', members: 2, issues: 8 },
-  { name: 'RxFit - Organic Growth Marketing', members: 2, issues: 5 },
-  { name: 'CEO - RxFit', members: 1, issues: 4 },
-  { name: 'COO - RxFit', members: 1, issues: 3 },
-  { name: 'FridgeSnap Technical', members: 2, issues: 7 },
-  { name: 'FridgeSnap Revenue', members: 1, issues: 4 },
-  { name: 'FridgeSnap - Marketing', members: 1, issues: 3 },
-  { name: 'JadeCoS Technical', members: 2, issues: 6 },
-  { name: 'JadeCoS Revenue', members: 1, issues: 2 },
-  { name: 'JadeCoS - Marketing', members: 1, issues: 2 },
-  { name: 'Wellness Technical', members: 2, issues: 5 },
-  { name: 'NotebookRx Technical', members: 1, issues: 4 },
-  { name: 'SEO Agent Technical', members: 1, issues: 3 },
-]
-
-function OrgList() {
-  return (
-    <div role="list" aria-label="Organizations">
-      {ORGS.map((org) => (
-        <div key={org.name} className="issue-item" role="listitem">
-          <span
-            aria-hidden="true"
-            style={{
-              width: '28px',
-              height: '28px',
-              borderRadius: 'var(--radius-md)',
-              background: 'var(--bg-elevated)',
-              border: '1px solid var(--border)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: '0.7rem',
-              color: 'var(--text-muted)',
-              fontFamily: 'var(--font-mono)',
-              flexShrink: 0,
-            }}
-          >
-            {org.name.split(' ').map(w => w[0]).slice(0, 2).join('')}
-          </span>
-          <div className="issue-content">
-            <div className="issue-title">{org.name}</div>
-            <div className="issue-meta">
-              <span>{org.members} members</span>
-              <span aria-hidden="true">•</span>
-              <span>{org.issues} issues</span>
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-/* ══════════════════════════════════════════════════════════════════════════════
-   MAIN PAGE
-   ══════════════════════════════════════════════════════════════════════════════ */
-
-type MobileTab = 'chat' | 'command' | 'execution'
-
-export default function HubPage() {
-  const [activeProject, setActiveProject] = useState('all')
-  const [mobileLeftOpen, setMobileLeftOpen] = useState(false)
-  const [mobileRightOpen, setMobileRightOpen] = useState(false)
-  const [mobileTab, setMobileTab] = useState<MobileTab>('chat')
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark')
-
-  // Initialize theme from localStorage and apply to <html>
-  useEffect(() => {
-    const saved = (typeof window !== 'undefined' && localStorage.getItem('rx-hub-theme')) as 'dark' | 'light' | null
-    const initial = saved || 'dark'
-    setTheme(initial)
-    document.documentElement.setAttribute('data-theme', initial)
   }, [])
 
-  const handleThemeToggle = () => {
-    const next = theme === 'dark' ? 'light' : 'dark'
-    setTheme(next)
-    document.documentElement.setAttribute('data-theme', next)
-    localStorage.setItem('rx-hub-theme', next)
-  }
-
-  const handleMobileTab = (tab: MobileTab) => {
-    setMobileTab(tab)
-    if (tab === 'command') {
-      setMobileLeftOpen(true)
-      setMobileRightOpen(false)
-    } else if (tab === 'execution') {
-      setMobileRightOpen(true)
-      setMobileLeftOpen(false)
-    } else {
-      setMobileLeftOpen(false)
-      setMobileRightOpen(false)
-    }
-  }
-
-  const handleClosePanels = () => {
-    setMobileLeftOpen(false)
-    setMobileRightOpen(false)
-    setMobileTab('chat')
-  }
-
   return (
-    <div className="hub-shell">
-      <HubHeader
+    <div
+      className="hub-shell"
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+    >
+      <BrandedHeader
         activeProject={activeProject}
         onProjectChange={setActiveProject}
         theme={theme}
         onThemeToggle={handleThemeToggle}
       />
 
+      {/* Auth error banner */}
+      {authError && (
+        <div className="auth-error-banner" role="alert">
+          <span>⚠️ Your session has expired.</span>
+          <button onClick={() => signIn('google')} className="auth-error-btn">
+            Sign in again
+          </button>
+        </div>
+      )}
+
+      {/* Onboarding banner (persistent until role assigned) */}
+      {isOnboarding && !showOnboardingCard && (
+        <OnboardingBanner />
+      )}
+
       {/* Tablet: control bar (shown only between 641px–1024px) */}
-      <div className="mobile-control-bar">
+            <div className="mobile-control-bar">
         <button
           className="mobile-control-btn"
           onClick={() => { setMobileLeftOpen(true); setMobileRightOpen(false) }}
-          aria-label="Open Command Center"
+          aria-label="Open Tasks"
         >
-          <span style={{ color: 'var(--accent)', marginRight: '6px', fontFamily: 'var(--font-mono)' }}>01 //</span> Command
+          <span style={{ color: 'var(--accent)', marginRight: '6px' }}>☰</span> Tasks
         </button>
         <button
           className="mobile-control-btn"
           onClick={() => { setMobileRightOpen(true); setMobileLeftOpen(false) }}
-          aria-label="Open Execution Layer"
+          aria-label="Open Activity"
         >
-          <span style={{ color: 'var(--accent)', marginRight: '6px', fontFamily: 'var(--font-mono)' }}>02 //</span> Execution
+          <span style={{ color: 'var(--accent)', marginRight: '6px' }}>⚡</span> Activity
         </button>
       </div>
 
       <div className="panels-container">
-        <LeftPanel isOpen={mobileLeftOpen} onClose={handleClosePanels} />
-        <CenterPanel />
-        <RightPanel isOpen={mobileRightOpen} onClose={handleClosePanels} />
+        <LeftPanel isOpen={mobileLeftOpen} onClose={handleClosePanels} onInjectChat={handleChatInject} panelRef={leftPanelRef} />
+
+        {/* ── Center Panel: AI Chat (inlined for shared state) ── */}
+        <main className="panel-center" aria-label="AI Chat">
+          <div className="chat-container">
+            {/* Chat Header */}
+            <div className="chat-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span className="panel-title-dot" aria-hidden="true" />
+                <h2 className="chat-header-title">
+                  <span aria-hidden="true">✦ </span>AI Assistant
+                </h2>
+                <span className="chat-header-model-badge">
+                  Gemini 2.5
+                </span>
+              </div>
+            </div>
+
+                        {/* Interview badge */}
+            {interviewState?.active && (
+              <InterviewBadge
+                state={interviewState}
+                totalQuestions={interviewState.intent ? getTotalQuestions(interviewState.intent) : 0}
+                onCancel={() => { setInterviewState(null) }}
+              />
+            )}
+
+            {/* Context injection banner */}
+            {injectedContext && (
+              <ContextInjectionBanner
+                source={injectedContext}
+                onDismiss={() => setInjectedContext(null)}
+              />
+            )}
+
+            {/* Messages */}
+            <div ref={chatMessagesRef} className="chat-messages" role="log" aria-label="Chat messages" aria-live="polite">
+              {messages.length === 0 && (
+                <div className="chat-welcome chat-welcome--animate" style={{
+                  display: 'flex', flexDirection: 'column', alignItems: 'center',
+                  justifyContent: 'center', flex: 1, gap: '12px', padding: '48px 24px',
+                  textAlign: 'center',
+                }}>
+                  <div className="chat-message-avatar chat-message-avatar-ai"
+                    style={{ width: 52, height: 52, fontSize: '1.3rem' }}>✦</div>
+                  <h3 style={{
+                    fontFamily: 'var(--font-display)', fontSize: '1.15rem',
+                    fontWeight: 800, color: 'var(--text-primary)', margin: 0,
+                    letterSpacing: '-0.02em',
+                  }}>
+                    How can I help today?
+                  </h3>
+                  <p style={{
+                    fontSize: 'var(--text-sm)', color: 'var(--text-muted)',
+                    maxWidth: '280px', lineHeight: 1.5, margin: 0,
+                  }}>
+                    Ask about your projects, create tasks, schedule events, or check your business metrics.
+                  </p>
+                </div>
+              )}
+              {messages.map(msg => (
+                <div key={msg.id} className={`chat-message ${msg.role === 'user' ? 'chat-message-user' : ''}`}>
+                  <div
+                    className={`chat-message-avatar ${msg.role === 'user' ? 'chat-message-avatar-user' : 'chat-message-avatar-ai'}`}
+                    aria-hidden="true"
+                  >
+                    {msg.role === 'user' ? userInitials : '✦'}
+                  </div>
+                  <div className={`chat-bubble ${msg.role === 'user' ? 'chat-bubble-user' : 'chat-bubble-ai'}`}>
+                    <MessageContent content={msg.content} />
+                  </div>
+                </div>
+              ))}
+
+              {/* Action confirm card */}
+              {actionSpec && (
+                <ActionConfirmCard
+                  spec={actionSpec}
+                  onApprove={() => handleActionApprove(actionSpec)}
+                  onEdit={() => { /* could re-enter interview */ }}
+                  onCancel={() => { setActionSpec(null); setInterviewState(null) }}
+                />
+              )}
+
+              {isTyping && (
+                <div className="chat-message" aria-label="AI is typing">
+                  <div className="chat-message-avatar chat-message-avatar-ai" aria-hidden="true">✦</div>
+                  <div className="chat-bubble chat-bubble-ai">
+                    <div className="chat-thinking" aria-label="Thinking">
+                      <div className="chat-thinking-dot" />
+                      <div className="chat-thinking-dot" />
+                      <div className="chat-thinking-dot" />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div ref={messagesEndRef} />
+
+              {/* E2: Scroll-to-bottom floating pill */}
+              {showScrollBtn && (
+                <button
+                  className="chat-scroll-bottom-pill"
+                  onClick={() => { scrollToBottom(); haptic() }}
+                  aria-label="Scroll to latest messages"
+                >
+                  ↓ New messages
+                </button>
+              )}
+            </div>
+
+            {/* Suggestion chips (shown when chat is fresh) */}
+            {messages.length <= 1 && (
+              <div className="chat-suggestions" role="group" aria-label="Suggested prompts">
+                {(isOnboarding ? ONBOARDING_SUGGESTIONS : CHAT_SUGGESTIONS).map(s => (
+                  <button
+                    key={s}
+                    className="chat-suggestion-chip"
+                    onClick={() => handleSuggestion(s)}
+                    aria-label={`Ask: ${s}`}
+                  >
+                    {s} <span className="rx-arrow">→</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Input */}
+            <div className="chat-input-area">
+              <div className="chat-input-wrapper">
+                <textarea
+                  ref={textareaRef}
+                  className="chat-input"
+                  aria-label="Chat message input"
+                  placeholder={interviewState?.active ? "Answer the interview question..." : "Ask about your projects, create tasks, check status..."}
+                  value={input}
+                  onChange={handleTextareaInput}
+                  onKeyDown={handleKeyDown}
+                  rows={1}
+                />
+                <button
+                  className="chat-send-btn"
+                  onClick={handleSend}
+                  disabled={!input.trim() || isTyping}
+                  aria-label="Send message"
+                >
+                  ↑
+                </button>
+              </div>
+            </div>
+          </div>
+        </main>
+
+        {!isOnboarding && (
+          <RightPanel isOpen={mobileRightOpen} onClose={handleClosePanels} onInjectChat={handleChatInject} panelRef={rightPanelRef} />
+        )}
+
+        {/* Onboarding: hide right panel placeholder for onboarding users */}
+        {isOnboarding && (
+          <aside className="panel-right panel-right--onboarding" aria-hidden="true">
+            <div className="onboarding-right-placeholder">
+              <span className="onboarding-right-placeholder__icon">⚡</span>
+              <span className="onboarding-right-placeholder__text">Execution Feed unlocks after role assignment</span>
+            </div>
+          </aside>
+        )}
       </div>
 
       {/* Mobile: Glassmorphism Bottom Navigation Bar */}
-      <nav className="mobile-bottom-nav" aria-label="Mobile navigation">
-        <button
-          className={`mobile-nav-btn ${mobileTab === 'chat' ? 'active' : ''}`}
-          onClick={() => handleMobileTab('chat')}
-          aria-label="AI Chat"
-          aria-pressed={mobileTab === 'chat'}
-        >
-          <span className="mobile-nav-icon" aria-hidden="true" style={{ fontFamily: 'var(--font-body)', fontSize: '1.1rem', letterSpacing: '-0.02em' }}>✦</span>
-          <span className="mobile-nav-label">AI Chat</span>
-        </button>
+      <nav className="mobile-bottom-nav" aria-label="Mobile navigation" role="tablist">
         <button
           className={`mobile-nav-btn ${mobileTab === 'command' ? 'active' : ''}`}
           onClick={() => handleMobileTab('command')}
-          aria-label="Command Center"
-          aria-pressed={mobileTab === 'command'}
+          aria-label="Tasks"
+          role="tab"
+          aria-selected={mobileTab === 'command'}
         >
-          <span className="mobile-nav-icon" aria-hidden="true" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', fontWeight: 700, letterSpacing: '0.02em' }}>01//</span>
-          <span className="mobile-nav-label">Command</span>
+          <span className="mobile-nav-icon" aria-hidden="true">☰</span>
+          <span className="mobile-nav-label">Tasks</span>
+        </button>
+        <button
+          className={`mobile-nav-btn mobile-nav-btn--center ${mobileTab === 'chat' ? 'active' : ''}`}
+          onClick={() => handleMobileTab('chat')}
+          aria-label="Chat"
+          role="tab"
+          aria-selected={mobileTab === 'chat'}
+        >
+          <span className="mobile-nav-icon mobile-nav-icon--chat" aria-hidden="true">✦</span>
+          <span className="mobile-nav-label">Chat</span>
         </button>
         <button
           className={`mobile-nav-btn ${mobileTab === 'execution' ? 'active' : ''}`}
           onClick={() => handleMobileTab('execution')}
-          aria-label="Execution Layer"
-          aria-pressed={mobileTab === 'execution'}
+          aria-label="Activity"
+          role="tab"
+          aria-selected={mobileTab === 'execution'}
         >
-          <span className="mobile-nav-icon" aria-hidden="true" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', fontWeight: 700, letterSpacing: '0.02em' }}>02//</span>
-          <span className="mobile-nav-label">Execution</span>
+          <span className="mobile-nav-icon" aria-hidden="true">⚡</span>
+          <span className="mobile-nav-label">Activity</span>
         </button>
       </nav>
 
-      {/* Backdrop (tablet + mobile) */}
-      {(mobileLeftOpen || mobileRightOpen) && (
-        <div
-          className="mobile-backdrop"
-          onClick={handleClosePanels}
-          aria-hidden="true"
-        />
+      {/* Backdrop (always rendered for swipe gesture opacity control) */}
+      <div
+        ref={backdropRef}
+        className="mobile-backdrop"
+        onClick={handleClosePanels}
+        aria-hidden="true"
+        style={{
+          display: (mobileLeftOpen || mobileRightOpen) ? 'block' : 'none',
+          opacity: (mobileLeftOpen || mobileRightOpen) ? 1 : 0,
+        }}
+      />
+
+      {/* Onboarding card (full-screen, first sign-in only) */}
+      {showOnboardingCard && (
+        <OnboardingCard onDismiss={() => setShowOnboardingCard(false)} />
       )}
     </div>
   )

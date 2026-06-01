@@ -1,0 +1,26 @@
+{
+  "project": "NotebookRx",
+  "target_philosophy": "Positive Month-over-Month increase — specific targets set quarterly",
+  "target_cadence": "Reviewed and updated every quarter (Jan 1, Apr 1, Jul 1, Oct 1)",
+  "primary_kpis": {
+    "marketing": {
+      "metric": "Monthly Website Traffic",
+      "target": "Upward trend — specific targets set quarterly",
+      "tracking_source": "GA4"
+    },
+    "technical": {
+      "metric": "Uptime %",
+      "target": "99.9%",
+      "tracking_source": "Cloud Run metrics"
+    },
+    "revenue": {
+      "metric": "MRR Month-over-Month Increase",
+      "target": "Positive MoM increase — specific targets set quarterly",
+      "tracking_source": "Stripe"
+    }
+  },
+  "ceo_generated_kpis": [],
+  "review_cadence": "monthly",
+  "target_review_cadence": "quarterly",
+  "last_updated": "2026-05-20"
+}

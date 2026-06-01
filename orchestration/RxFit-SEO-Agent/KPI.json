@@ -1,0 +1,27 @@
+{
+  "project": "RxFit-SEO-Agent",
+  "target_philosophy": "Positive Month-over-Month increase — specific targets set quarterly",
+  "target_cadence": "Reviewed and updated every quarter (Jan 1, Apr 1, Jul 1, Oct 1)",
+  "primary_kpis": {
+    "marketing": {
+      "metric": "Monthly Webpage Traffic",
+      "target": "Upward trend — specific targets set quarterly",
+      "tracking_source": "Google Analytics GA4 + GSC"
+    },
+    "technical": {
+      "metric": "Uptime %",
+      "target": "99%",
+      "tracking_source": "Application logs + Cloud Run"
+    },
+    "revenue": {
+      "metric": "Monthly Tool Running Expenses",
+      "target": "Positive MoM decrease (cost efficiency) — specific targets set quarterly",
+      "notes": "Internal tool — revenue KPI is cost management. Tracks API usage (OpenAI/Gemini) + Cloud Run hosting. Compare against historical Pneuma Media agency spend.",
+      "tracking_source": "API cost tracking (OpenAI/Gemini usage) + Cloud Run hosting"
+    }
+  },
+  "ceo_generated_kpis": [],
+  "review_cadence": "monthly",
+  "target_review_cadence": "quarterly",
+  "last_updated": "2026-05-20"
+}

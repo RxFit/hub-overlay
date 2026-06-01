@@ -1,0 +1,192 @@
+{
+  "project_id": "rxfit",
+  "display_name": "RxFit Enterprise",
+  "version": "1.0.0",
+  "is_enterprise": true,
+  "has_real_employees": true,
+  "created": "2026-05-20",
+  "gcs_project": "Semantic-Brain-Desktop",
+  "vertex_engine_id": "${VERTEX_ENGINE_ID_RXFIT}",
+  "antigravity_project_folder": "RxFit",
+  "model_config": {
+    "paperclip": "gemini-auto",
+    "antigravity_escalation": "claude-sonnet-thinking",
+    "notes": "Paperclip handles standard agent workflows. Antigravity escalation uses claude-sonnet-thinking for complex strategic or architectural decisions."
+  },
+  "paperclip_workspaces": {
+    "marketing": "${PAPERCLIP_WS_RXFIT_MARKETING}",
+    "technical": "${PAPERCLIP_WS_RXFIT_TECHNICAL}",
+    "revenue": "${PAPERCLIP_WS_RXFIT_REVENUE}"
+  },
+  "heartbeat_cadences": {
+    "marketing_organic": {
+      "frequency": "daily",
+      "schedule": "weekdays",
+      "pillars": {
+        "monday": "SEO",
+        "tuesday": "AEO",
+        "wednesday": "GEO",
+        "thursday": "CRO",
+        "friday": "Local Map Pack"
+      },
+      "owner": "CMO Agent"
+    },
+    "marketing_paid": {
+      "frequency": "weekly",
+      "monitoring": "daily",
+      "day": "monday",
+      "owner": "CMO Agent"
+    },
+    "technical_liveness": {
+      "frequency": "daily",
+      "owner": "CTO Agent"
+    },
+    "technical_sprint": {
+      "frequency": "weekly",
+      "day": "monday",
+      "owner": "CTO Agent"
+    },
+    "revenue_margin": {
+      "frequency": "weekly",
+      "owner": "CFO Agent"
+    },
+    "revenue_pl": {
+      "frequency": "monthly",
+      "day": "first_monday",
+      "owner": "CFO Agent"
+    },
+    "global_error_correction": {
+      "frequency": "every_12_hours",
+      "owner": "Antigravity",
+      "notes": "NOT Paperclip — Antigravity handles global error correction"
+    },
+    "ceo_briefing": {
+      "frequency": "weekly",
+      "day": "monday",
+      "owner": "CEO Agent"
+    }
+  },
+  "data_sources": {
+    "stripe": true,
+    "gmail": true,
+    "gchat": true,
+    "gdrive": true,
+    "github": true,
+    "analytics": true,
+    "employees": true,
+    "clients": true,
+    "contracts": true,
+    "codebase": true
+  },
+  "semantic_buckets": {
+    "rxfit-stripe": {
+      "enabled": true,
+      "access": ["CFO Agent", "COO Agent", "CEO Agent"]
+    },
+    "rxfit-gmail": {
+      "enabled": true,
+      "access": ["COO Agent", "CEO Agent"]
+    },
+    "rxfit-gchat": {
+      "enabled": true,
+      "access": ["COO Agent", "CEO Agent"]
+    },
+    "rxfit-gdrive": {
+      "enabled": true,
+      "access": ["CMO Agent", "COO Agent", "CEO Agent"]
+    },
+    "rxfit-github": {
+      "enabled": true,
+      "access": ["CTO Agent", "CEO Agent"]
+    },
+    "rxfit-analytics": {
+      "enabled": true,
+      "access": ["CMO Agent", "CTO Agent", "CEO Agent", "COO Agent"]
+    },
+    "rxfit-employees": {
+      "enabled": true,
+      "access": ["COO Agent", "CEO Agent"],
+      "sensitivity": "high",
+      "notes": "Per-employee records. COO has full access. CEO read-only."
+    },
+    "rxfit-clients": {
+      "enabled": true,
+      "access": ["CMO Agent", "CFO Agent", "COO Agent", "CEO Agent"]
+    },
+    "rxfit-contracts": {
+      "enabled": true,
+      "access": ["COO Agent", "CFO Agent", "CEO Agent"]
+    },
+    "rxfit-codebase": {
+      "enabled": true,
+      "access": ["CTO Agent", "CEO Agent"]
+    }
+  },
+  "governance_gates": {
+    "external_comms": {
+      "enabled": true,
+      "description": "All messages to non-RxFit recipients require human approval. Route: Comms Agent → COO Agent → Antigravity → Human.",
+      "zero_exceptions": true
+    },
+    "billing": {
+      "enabled": true,
+      "description": "All billing outputs are STAGING ONLY. Human executes final Stripe charge.",
+      "threshold_for_explicit_confirmation": 500,
+      "zero_exceptions": true
+    },
+    "strategic_decisions": {
+      "enabled": true,
+      "description": "Any decision that materially changes pricing, hiring, product direction, or market position requires human approval via Antigravity escalation."
+    },
+    "employee_data_mutation": {
+      "enabled": true,
+      "description": "Writes to rxfit-employees (adding/modifying/removing records) require human approval."
+    }
+  },
+  "org_structure": {
+    "board_chair": {
+      "name": "Danny Trejo",
+      "role": "Founder & CEO (Human)",
+      "authority": "All strategic, financial, and external communication decisions"
+    },
+    "board_member_ai": {
+      "name": "Antigravity",
+      "role": "AI Board Member & Orchestration Layer",
+      "authority": "Escalation routing, global error correction, governance enforcement"
+    },
+    "c_suite_agents": {
+      "ceo": {
+        "reports_to": ["Antigravity", "Danny Trejo"],
+        "direct_reports": ["CMO Agent", "CTO Agent", "CFO Agent", "COO Agent"]
+      },
+      "cmo": {
+        "reports_to": "CEO Agent",
+        "direct_reports": ["SEO Agent", "AEO Agent", "GEO Agent", "CRO Agent", "Local Map Pack Agent", "Paid Ads Agent"]
+      },
+      "cto": {
+        "reports_to": "CEO Agent",
+        "direct_reports": ["Lead Engineer Agent", "QA Agent", "DevOps Agent", "Jules Integration"]
+      },
+      "cfo": {
+        "reports_to": "CEO Agent",
+        "direct_reports": ["Stripe Analyst Agent", "Billing Prep Agent"]
+      },
+      "coo": {
+        "reports_to": "CEO Agent",
+        "direct_reports": ["Comms Agent"],
+        "special_access": "full_all_data_stores"
+      }
+    }
+  },
+  "jules_integration": {
+    "enabled": true,
+    "cadence": "daily",
+    "github_label": "jules-audit",
+    "severity_routing": {
+      "low": "Paperclip task queue (CTO Agent)",
+      "medium": "Paperclip task queue (CTO Agent) + CEO Agent notification",
+      "high": "Antigravity escalation (human review required)",
+      "architectural": "Antigravity escalation (human review required)"
+    }
+  }
+}
