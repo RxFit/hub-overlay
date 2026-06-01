@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
+import { getPaperclipAuthHeaders, clearPaperclipSession } from '@/lib/paperclipSession'
 
 const PAPERCLIP_BASE = process.env.PAPERCLIP_BASE_URL || 'https://rxfit-paperclip-11747747730.us-central1.run.app'
-const PAPERCLIP_KEY = process.env.PAPERCLIP_API_KEY || ''
 
-// Allowed API path prefixes for the proxy
+// Allowed API path prefixes for the proxy — covers full Paperclip surface
 const ALLOWED_PREFIXES = [
-  '/api/companies',
-  '/api/health',
+  '/api/companies',         // list + detail + create
+  '/api/health',            // health check
 ]
 
 export async function GET(
@@ -23,6 +23,20 @@ export async function POST(
   { params }: { params: { path: string[] } }
 ) {
   return proxyRequest(req, params.path, 'POST')
+}
+
+export async function PATCH(
+  req: NextRequest,
+  { params }: { params: { path: string[] } }
+) {
+  return proxyRequest(req, params.path, 'PATCH')
+}
+
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: { path: string[] } }
+) {
+  return proxyRequest(req, params.path, 'DELETE')
 }
 
 async function proxyRequest(
@@ -61,18 +75,25 @@ async function proxyRequest(
     }
   }
 
-  // Forward request to Paperclip
+  // Forward request to Paperclip with session auth
   const url = `${PAPERCLIP_BASE}${apiPath}`
+  let authHeaders: Record<string, string>
+  try {
+    authHeaders = await getPaperclipAuthHeaders()
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Paperclip auth failed'
+    return NextResponse.json({ error: message }, { status: 502 })
+  }
+
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-  }
-  if (PAPERCLIP_KEY) {
-    headers['Authorization'] = `Bearer ${PAPERCLIP_KEY}`
+    ...authHeaders,
   }
 
   const fetchOpts: RequestInit = {
     method,
     headers,
+    signal: AbortSignal.timeout(10_000), // 10s timeout to prevent indefinite hangs
   }
 
   // Forward body for POST/PUT/PATCH
@@ -87,18 +108,27 @@ async function proxyRequest(
 
   try {
     const upstream = await fetch(url, fetchOpts)
+
+    // If Paperclip returns 401, clear session to force re-auth on next request
+    if (upstream.status === 401) {
+      clearPaperclipSession()
+    }
+
     const data = await upstream.text()
 
     // If the user is staff (not admin) and this is a companies list,
     // filter to only their assigned projects
-    if (apiPath === '/api/companies' && role !== 'admin') {
+    if (apiPath === '/api/companies' && role !== 'admin' && role !== 'superadmin') {
       try {
         const parsed = JSON.parse(data)
-        if (parsed.companies && Array.isArray(parsed.companies)) {
-          parsed.companies = parsed.companies.filter(
+        // Handle both array and wrapped responses
+        const companies = Array.isArray(parsed) ? parsed : parsed.companies
+        if (companies && Array.isArray(companies)) {
+          const filtered = companies.filter(
             (c: { id: string }) => assignedProjects.includes(c.id)
           )
-          return NextResponse.json(parsed, { status: upstream.status })
+          const result = Array.isArray(parsed) ? filtered : { ...parsed, companies: filtered }
+          return NextResponse.json(result, { status: upstream.status })
         }
       } catch {
         // Not JSON or parse error — return as-is

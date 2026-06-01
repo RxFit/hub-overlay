@@ -82,7 +82,7 @@ export async function POST(req: NextRequest) {
 
   // Check admin role
   const role = (session.user as Record<string, unknown>)?.role
-  if (role !== 'admin') {
+  if (role !== 'admin' && role !== 'superadmin') {
     return NextResponse.json({ error: 'Forbidden — admin access required' }, { status: 403 })
   }
 

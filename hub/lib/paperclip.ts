@@ -1,21 +1,28 @@
 import type { Company, Issue, Run, Agent } from '@/types'
+import { getPaperclipAuthHeaders, clearPaperclipSession } from '@/lib/paperclipSession'
 
 const PAPERCLIP_BASE = process.env.PAPERCLIP_BASE_URL || 'https://rxfit-paperclip-11747747730.us-central1.run.app'
-const PAPERCLIP_KEY = process.env.PAPERCLIP_API_KEY || ''
 
 async function paperclipFetch<T>(path: string, opts?: RequestInit): Promise<T> {
   const url = `${PAPERCLIP_BASE}${path}`
+  const authHeaders = await getPaperclipAuthHeaders()
   const res = await fetch(url, {
     ...opts,
+    signal: AbortSignal.timeout(10_000), // 10s timeout — prevent indefinite hangs on cold starts
     headers: {
       'Content-Type': 'application/json',
-      ...(PAPERCLIP_KEY ? { 'Authorization': `Bearer ${PAPERCLIP_KEY}` } : {}),
+      'Origin': PAPERCLIP_BASE, // Required by Paperclip CORS/auth
+      ...authHeaders,
       ...opts?.headers,
     },
     next: { revalidate: 30 }, // ISR: refresh every 30s
   })
 
   if (!res.ok) {
+    // If we get a 401, clear the session so next request re-authenticates
+    if (res.status === 401) {
+      clearPaperclipSession()
+    }
     const body = await res.text().catch(() => 'Unknown error')
     throw new Error(`Paperclip API error ${res.status}: ${body}`)
   }
@@ -26,12 +33,28 @@ async function paperclipFetch<T>(path: string, opts?: RequestInit): Promise<T> {
 /* ── Companies ── */
 
 export async function getCompanies(): Promise<Company[]> {
-  const data = await paperclipFetch<{ companies: Company[] }>('/api/companies')
+  const data = await paperclipFetch<{ companies: Company[] } | Company[]>('/api/companies')
+  // Handle both array and wrapped responses
+  if (Array.isArray(data)) return data
   return data.companies ?? []
 }
 
 export async function getCompany(companyId: string): Promise<Company> {
   return paperclipFetch<Company>(`/api/companies/${companyId}`)
+}
+
+export async function createCompany(data: {
+  name: string
+  description?: string
+}): Promise<Company> {
+  return paperclipFetch<Company>('/api/companies', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function deleteCompany(companyId: string): Promise<void> {
+  await paperclipFetch<unknown>(`/api/companies/${companyId}`, { method: 'DELETE' })
 }
 
 /* ── Issues ── */
@@ -50,6 +73,13 @@ export async function getIssues(
   return data.issues ?? []
 }
 
+export async function getIssue(companyId: string, issueId: string): Promise<Issue> {
+  const data = await paperclipFetch<{ issue: Issue }>(
+    `/api/companies/${companyId}/issues/${issueId}`
+  )
+  return data.issue
+}
+
 export async function createIssue(
   companyId: string,
   data: { title: string; description?: string; priority?: string; assigneeId?: string }
@@ -58,6 +88,21 @@ export async function createIssue(
     method: 'POST',
     body: JSON.stringify(data),
   })
+  return res.issue
+}
+
+export async function updateIssue(
+  companyId: string,
+  issueId: string,
+  data: { state?: string; priority?: string; assigneeId?: string; title?: string }
+): Promise<Issue> {
+  const res = await paperclipFetch<{ issue: Issue }>(
+    `/api/companies/${companyId}/issues/${issueId}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }
+  )
   return res.issue
 }
 
@@ -85,11 +130,57 @@ export async function getAgents(companyId: string): Promise<Agent[]> {
   return data.agents ?? []
 }
 
+export async function getAgent(companyId: string, agentId: string): Promise<Agent> {
+  const data = await paperclipFetch<{ agent: Agent }>(
+    `/api/companies/${companyId}/agents/${agentId}`
+  )
+  return data.agent
+}
+
+export async function createAgent(
+  companyId: string,
+  data: { name: string; role?: string; instructions?: string; adapterType?: string }
+): Promise<Agent> {
+  const res = await paperclipFetch<{ agent: Agent }>(
+    `/api/companies/${companyId}/agents`,
+    {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }
+  )
+  return res.agent
+}
+
+export async function updateAgent(
+  companyId: string,
+  agentId: string,
+  data: { name?: string; instructions?: string; status?: string }
+): Promise<Agent> {
+  const res = await paperclipFetch<{ agent: Agent }>(
+    `/api/companies/${companyId}/agents/${agentId}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }
+  )
+  return res.agent
+}
+
+export async function deleteAgent(companyId: string, agentId: string): Promise<void> {
+  await paperclipFetch<unknown>(
+    `/api/companies/${companyId}/agents/${agentId}`,
+    { method: 'DELETE' }
+  )
+}
+
 /* ── Health Check ── */
 
 export async function checkHealth(): Promise<boolean> {
   try {
-    const res = await fetch(`${PAPERCLIP_BASE}/api/health`, { next: { revalidate: 60 } })
+    const res = await fetch(`${PAPERCLIP_BASE}/api/health`, {
+      signal: AbortSignal.timeout(10_000),
+      next: { revalidate: 60 },
+    })
     return res.ok
   } catch {
     return false
