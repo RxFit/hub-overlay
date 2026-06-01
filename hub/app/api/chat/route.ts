@@ -15,14 +15,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  let body: { messages: ChatMessage[] }
+  let body: { messages: ChatMessage[]; useCase?: string }
   try {
     body = await req.json()
   } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
-  const { messages } = body
+  const { messages, useCase = 'deep_dive' } = body
   if (!messages || !Array.isArray(messages) || messages.length === 0) {
     return NextResponse.json({ error: 'Messages array required' }, { status: 400 })
   }
@@ -61,7 +61,7 @@ export async function POST(req: NextRequest) {
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        for await (const chunk of streamGeminiChat(messages, systemPrompt)) {
+        for await (const chunk of streamGeminiChat(messages, systemPrompt, useCase)) {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: chunk })}\n\n`))
         }
         controller.enqueue(encoder.encode('data: [DONE]\n\n'))

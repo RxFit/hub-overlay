@@ -46,7 +46,7 @@ const ONBOARDING_SUGGESTIONS = [
 // AnimatedNumber is now imported from @/app/components/AnimatedNumber
 
 /* ── Left Panel: Context Layer ── */
-function LeftPanel({ isOpen, onClose, onInjectChat, panelRef, style, activeProject }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string) => void; panelRef?: React.Ref<HTMLElement>; style?: React.CSSProperties; activeProject?: string }) {
+function LeftPanel({ isOpen, onClose, onInjectChat, panelRef, style, activeProject }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string, useCase?: string) => void; panelRef?: React.Ref<HTMLElement>; style?: React.CSSProperties; activeProject?: string }) {
   return (
     <aside ref={panelRef} className={`panel-left ${isOpen ? 'mobile-open' : ''}`} aria-label="Context Layer" style={style}>
       <div className="panel-header">
@@ -142,7 +142,7 @@ function MessageContent({ content }: { content: string }) {
 }
 
 /* ── Right Panel: Execution Layer ── */
-function RightPanel({ isOpen, onClose, onInjectChat, panelRef, style, projects }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string) => void; panelRef?: React.Ref<HTMLElement>; style?: React.CSSProperties; projects?: import('@/types').ProjectKPI[] }) {
+function RightPanel({ isOpen, onClose, onInjectChat, panelRef, style, projects }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string, useCase?: string) => void; panelRef?: React.Ref<HTMLElement>; style?: React.CSSProperties; projects?: import('@/types').ProjectKPI[] }) {
   return (
     <aside ref={panelRef} className={`panel-right ${isOpen ? 'mobile-open' : ''}`} aria-label="Execution Layer" style={style}>
       <div className="panel-header">
@@ -441,7 +441,7 @@ export default function HubPage() {
   }, [])
 
   /* ── Send to Gemini API ── */
-  const sendToApi = useCallback(async (userMessage: string, allMessages: ChatMsg[]) => {
+  const sendToApi = useCallback(async (userMessage: string, allMessages: ChatMsg[], useCase: string = 'deep_dive') => {
     setIsTyping(true)
 
     try {
@@ -455,6 +455,7 @@ export default function HubPage() {
             content: m.content,
             timestamp: new Date().toISOString(),
           })),
+          useCase,
         }),
       })
 
@@ -572,11 +573,17 @@ export default function HubPage() {
         return updated
       }
 
+      // Determine useCase
+      let useCase = 'deep_dive'
+      if (interviewState?.active || (canUseInterviewMode && detectIntent(message))) {
+        useCase = 'interview'
+      }
+
       // No interview — send to Gemini API
-      sendToApi(message, updated)
+      sendToApi(message, updated, useCase)
       return updated
     })
-  }, [interviewState, sendToApi])
+  }, [interviewState, sendToApi, canUseInterviewMode])
 
   /* ── Handle manual send from input ── */
   const handleSend = useCallback(() => {
@@ -593,7 +600,7 @@ export default function HubPage() {
   }, [doSend])
 
   /* ── Handle context injection from panels ── */
-  const handleChatInject = useCallback((message: string) => {
+  const handleChatInject = useCallback((message: string, useCase: string = 'recall') => {
     setMobileLeftOpen(false)
     setMobileRightOpen(false)
     setMobileTab('chat')
@@ -607,7 +614,7 @@ export default function HubPage() {
     setMessages(prev => {
       const updated = [...prev, userMsg]
       // Trigger the chat API call (reuse existing send logic)
-      sendToApi(message, updated)
+      sendToApi(message, updated, useCase)
       return updated
     })
   }, [sendToApi])
@@ -834,7 +841,7 @@ export default function HubPage() {
       </div>
 
       <div className="panels-container">
-        <LeftPanel isOpen={mobileLeftOpen} onClose={handleClosePanels} onInjectChat={handleChatInject} panelRef={leftPanelRef} activeProject={activeProject} />
+        <LeftPanel isOpen={mobileLeftOpen} onClose={handleClosePanels} onInjectChat={(msg) => handleChatInject(msg, 'recall')} panelRef={leftPanelRef} activeProject={activeProject} />
 
         {/* ── Center Panel: AI Chat (inlined for shared state) ── */}
         <main className="panel-center" aria-label="AI Chat">
@@ -988,7 +995,7 @@ export default function HubPage() {
         </main>
 
         {!isOnboarding && (
-          <RightPanel isOpen={mobileRightOpen} onClose={handleClosePanels} onInjectChat={handleChatInject} panelRef={rightPanelRef} projects={projects} />
+          <RightPanel isOpen={mobileRightOpen} onClose={handleClosePanels} onInjectChat={(msg) => handleChatInject(msg, 'execute')} panelRef={rightPanelRef} projects={projects} />
         )}
 
         {/* Onboarding: hide right panel placeholder for onboarding users */}
