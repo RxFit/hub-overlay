@@ -67,6 +67,9 @@ async function resolveUserRole(
 ): Promise<{ role: string; assignedProjects: string[] }> {
   const normalized = email.toLowerCase()
 
+  // TEMP DIAGNOSTIC LOG — remove after confirming superadmin
+  console.log(`[auth] resolveUserRole called: email="${email}" normalized="${normalized}" SUPERADMIN_EMAILS=${JSON.stringify(SUPERADMIN_EMAILS)} match=${SUPERADMIN_EMAILS.includes(normalized)}`)
+
   // Env var overrides always win — these are infra-level assignments
   if (SUPERADMIN_EMAILS.includes(normalized)) {
     return { role: 'superadmin', assignedProjects: ['*'] }
