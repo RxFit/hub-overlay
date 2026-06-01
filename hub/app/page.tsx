@@ -7,6 +7,7 @@ import { useRouter } from 'next/navigation'
 import { TasksSection, CalendarSection, DocumentsSection, KPISection, ProjectHealthSection } from '@/app/components/LeftPanelSections'
 import { ExecutionFeed } from '@/app/components/RightPanelSections'
 import { InterviewBadge, ContextInjectionBanner, ActionConfirmCard } from '@/app/components/ChatEnhancements'
+import { ContextAttachMenu, AttachmentChips } from '@/app/components/ContextAttachMenu'
 import { BrandedHeader } from '@/app/components/BrandedHeader'
 import { AnimatedNumber } from '@/app/components/AnimatedNumber'
 import { OnboardingCard, shouldShowOnboardingCard } from '@/app/components/OnboardingCard'
@@ -22,7 +23,7 @@ import {
   getCurrentQuestion,
   getTotalQuestions,
 } from '@/lib/interview'
-import type { InterviewState, ActionSpec } from '@/types'
+import type { InterviewState, ActionSpec, ChatAttachment } from '@/types'
 
 const CHAT_SUGGESTIONS = [
   "What's blocking FridgeSnap revenue?",
@@ -169,7 +170,7 @@ function RightPanel({ isOpen, onClose, onInjectChat, panelRef, style, projects }
    ══════════════════════════════════════════════════════════════════════════════ */
 
 type MobileTab = 'chat' | 'command' | 'execution' | 'google_chat'
-type ChatMsg = { id: string; role: 'user' | 'assistant'; content: string; timestamp?: string }
+type ChatMsg = { id: string; role: 'user' | 'assistant'; content: string; timestamp?: string; attachments?: ChatAttachment[] }
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
@@ -188,14 +189,18 @@ function CopyButton({ text }: { text: string }) {
       title="Copy message"
     >
       {copied ? (
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d="M20 6L9 17l-5-5" />
-        </svg>
+        <span className="rx-icon rx-icon--sm">
+          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+        </span>
       ) : (
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-        </svg>
+        <span className="rx-icon rx-icon--sm">
+          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+          </svg>
+        </span>
       )}
       <span style={{ fontSize: '10px', marginLeft: '4px' }}>{copied ? 'Copied!' : 'Copy'}</span>
     </button>
@@ -247,6 +252,18 @@ export default function HubPage() {
   const [interviewState, setInterviewState] = useState<InterviewState | null>(null)
   const [injectedContext, setInjectedContext] = useState<string | null>(null)
   const [actionSpec, setActionSpec] = useState<InterviewState['spec']>(null)
+
+  // Context attachments state
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([])
+
+  const handleAddAttachment = useCallback((att: Omit<ChatAttachment, 'id'>) => {
+    if (attachments.length >= 5) return  // Cap at 5
+    setAttachments(prev => [...prev, { ...att, id: crypto.randomUUID() }])
+  }, [attachments.length])
+
+  const handleRemoveAttachment = useCallback((id: string) => {
+    setAttachments(prev => prev.filter(a => a.id !== id))
+  }, [])
 
   // Auth error detection
   const authError = (session?.user as Record<string, unknown> | undefined)?.error === 'RefreshAccessTokenError'
@@ -472,7 +489,7 @@ export default function HubPage() {
   }, [])
 
   /* ── Send to Gemini API ── */
-  const sendToApi = useCallback(async (userMessage: string, allMessages: ChatMsg[], useCase: string = 'deep_dive') => {
+  const sendToApi = useCallback(async (userMessage: string, allMessages: ChatMsg[], useCase: string = 'deep_dive', msgAttachments?: ChatAttachment[]) => {
     setIsTyping(true)
 
     try {
@@ -487,6 +504,7 @@ export default function HubPage() {
             timestamp: new Date().toISOString(),
           })),
           useCase,
+          attachments: msgAttachments && msgAttachments.length > 0 ? msgAttachments : undefined,
         }),
       })
 
@@ -542,13 +560,14 @@ export default function HubPage() {
     }
   }, [])
 
-  const doSend = useCallback((message: string) => {
+  const doSend = useCallback((message: string, msgAttachments?: ChatAttachment[]) => {
     haptic()
     const newMessage: ChatMsg = {
       id: crypto.randomUUID(),
       role: 'user' as const,
       content: message,
       timestamp: new Date().toISOString(),
+      attachments: msgAttachments,
     }
 
     setMessages(prev => {
@@ -611,7 +630,7 @@ export default function HubPage() {
       }
 
       // No interview — send to Gemini API
-      sendToApi(message, updated, useCase)
+      sendToApi(message, updated, useCase, msgAttachments)
       return updated
     })
   }, [interviewState, sendToApi, canUseInterviewMode])
@@ -620,10 +639,12 @@ export default function HubPage() {
   const handleSend = useCallback(() => {
     const msg = input.trim()
     if (!msg) return
+    const currentAttachments = [...attachments]
     setInput('')
+    setAttachments([])
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
-    doSend(msg)
-  }, [input, doSend])
+    doSend(msg, currentAttachments)
+  }, [input, doSend, attachments])
 
   /* ── Handle suggestion chip click ── */
   const handleSuggestion = useCallback((suggestion: string) => {
@@ -944,6 +965,14 @@ export default function HubPage() {
                     <div className={`chat-bubble ${msg.role === 'user' ? 'chat-bubble-user' : 'chat-bubble-ai'}`} style={{ maxWidth: '100%' }}>
                       <MessageContent content={msg.content} />
                     </div>
+                    {/* Show attachment chips on sent user messages */}
+                    {msg.role === 'user' && msg.attachments && msg.attachments.length > 0 && (
+                      <AttachmentChips
+                        attachments={msg.attachments}
+                        onRemove={() => {}}
+                        readOnly
+                      />
+                    )}
                     {msg.role === 'assistant' && msg.content && <CopyButton text={msg.content} />}
                   </div>
                 </div>
@@ -1004,7 +1033,18 @@ export default function HubPage() {
 
             {/* Input */}
             <div className="chat-input-area">
+              {/* Attachment chips (shown above textarea when items are attached) */}
+              {attachments.length > 0 && (
+                <AttachmentChips
+                  attachments={attachments}
+                  onRemove={handleRemoveAttachment}
+                />
+              )}
               <div className="chat-input-wrapper">
+                <ContextAttachMenu
+                  onAttach={handleAddAttachment}
+                  disabled={isTyping}
+                />
                 <textarea
                   ref={textareaRef}
                   className="chat-input"
@@ -1018,7 +1058,7 @@ export default function HubPage() {
                 <button
                   className="chat-send-btn"
                   onClick={handleSend}
-                  disabled={!input.trim() || isTyping}
+                  disabled={(!input.trim() && attachments.length === 0) || isTyping}
                   aria-label="Send message"
                 >
                   ↑
@@ -1081,9 +1121,11 @@ export default function HubPage() {
           aria-selected={mobileTab === 'google_chat'}
         >
           <span className="mobile-nav-icon mobile-nav-icon--chat" aria-hidden="true" style={{ position: 'relative' }}>
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{marginTop: '4px'}}>
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-            </svg>
+            <span className="rx-icon" style={{marginTop: '4px'}}>
+              <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+            </span>
             {chatTotalUnread > 0 && (
               <span style={{ position: 'absolute', top: '-6px', right: '-8px', background: 'var(--accent)', color: 'var(--btn-text)', fontSize: '10px', padding: '2px 6px', borderRadius: '12px', fontWeight: 'bold' }} aria-label={`${chatTotalUnread} unread`}>
                 {chatTotalUnread > 99 ? '99+' : chatTotalUnread}

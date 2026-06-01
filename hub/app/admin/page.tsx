@@ -85,6 +85,15 @@ export default function AdminPage() {
     }
   }, [status, callerRole, fetchUsers])
 
+  // Auto-refresh every 60s while page is visible
+  useEffect(() => {
+    if (status !== 'authenticated' || (callerRole !== 'admin' && callerRole !== 'superadmin')) return
+    const interval = setInterval(() => {
+      if (!document.hidden) fetchUsers()
+    }, 60_000)
+    return () => clearInterval(interval)
+  }, [status, callerRole, fetchUsers])
+
   const handleSave = async (email: string) => {
     const row = rows.find(r => r.email === email)
     if (!row) return
@@ -187,7 +196,29 @@ export default function AdminPage() {
                 Pending Assignment
                 <span className="admin-section__count">{onboardingUsers.length}</span>
               </h2>
-              <p className="admin-section__sub">These users have signed in but have not been assigned a role yet.</p>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <p className="admin-section__sub">These users have signed in but have not been assigned a role yet.</p>
+                <button
+                  onClick={fetchUsers}
+                  disabled={loading}
+                  aria-label="Refresh pending users"
+                  title="Refresh"
+                  style={{
+                    background: 'none',
+                    border: '1px solid var(--border)',
+                    color: 'var(--text-muted)',
+                    borderRadius: '6px',
+                    padding: '3px 10px',
+                    fontSize: '0.7rem',
+                    cursor: loading ? 'wait' : 'pointer',
+                    fontFamily: 'var(--font-mono)',
+                    flexShrink: 0,
+                    transition: 'all 0.15s ease',
+                  }}
+                >
+                  {loading ? '⏳' : '↻'} Refresh
+                </button>
+              </div>
             </div>
             <UserTable
               rows={onboardingUsers}

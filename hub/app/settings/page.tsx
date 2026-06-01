@@ -35,6 +35,314 @@ const DEFAULT_SETTINGS: KPISettings = {
 
 const STORAGE_KEY = 'hub-kpi-settings'
 
+/* ── Onboarding Users Types ── */
+
+interface OnboardingUser {
+  email: string
+  role: string
+  assignedProjects: string[]
+  assignedAt: string
+  assignedBy: string
+}
+
+interface OnboardingUserRowState extends OnboardingUser {
+  pendingRole: string
+  saving: boolean
+  error: string | null
+}
+
+/* ── OnboardingUsersCard Component ── */
+
+const ONBOARDING_ROLE_LABELS: Record<string, string> = {
+  staff: 'Staff',
+  admin: 'Admin',
+}
+
+function OnboardingUsersCard({ callerRole }: { callerRole: string }) {
+  const [users, setUsers] = useState<OnboardingUserRowState[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
+
+  const fetchOnboardingUsers = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/admin/roles')
+      if (!res.ok) throw new Error(`Failed to load users (${res.status})`)
+      const data: { users: OnboardingUser[] } = await res.json()
+      const onboarding = data.users.filter(u => u.role === 'onboarding')
+      setUsers(onboarding.map(u => ({
+        ...u,
+        pendingRole: 'staff',
+        saving: false,
+        error: null,
+      })))
+      setLastRefresh(new Date())
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unknown error')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchOnboardingUsers()
+  }, [fetchOnboardingUsers])
+
+  const handlePromote = async (email: string) => {
+    const user = users.find(u => u.email === email)
+    if (!user) return
+
+    setUsers(prev => prev.map(u => u.email === email ? { ...u, saving: true, error: null } : u))
+
+    try {
+      const res = await fetch('/api/admin/roles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, role: user.pendingRole, assignedProjects: [] }),
+      })
+      if (!res.ok) {
+        const data = await res.json()
+        throw new Error(data.error || `Save failed (${res.status})`)
+      }
+      // Remove user from list on successful promote
+      setUsers(prev => prev.filter(u => u.email !== email))
+    } catch (err) {
+      setUsers(prev => prev.map(u =>
+        u.email === email
+          ? { ...u, saving: false, error: err instanceof Error ? err.message : 'Failed' }
+          : u
+      ))
+    }
+  }
+
+  // Role options scoped by caller's role
+  const roleOptions = callerRole === 'superadmin'
+    ? ['staff', 'admin'] as const
+    : ['staff'] as const
+
+  const isSuperadmin = callerRole === 'superadmin'
+
+  return (
+    <section className="settings-section" aria-label="Onboarding users">
+      <h2 className="settings-section-title">
+        <span className="rx-comment-label">03 //</span>{' '}
+        Onboarding Users
+        {users.length > 0 && (
+          <span style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginLeft: '10px',
+            background: 'var(--warning, #f59e0b)',
+            color: '#000',
+            borderRadius: '20px',
+            fontSize: '0.6rem',
+            fontWeight: 700,
+            padding: '2px 8px',
+            verticalAlign: 'middle',
+          }}>
+            {users.length} waiting
+          </span>
+        )}
+      </h2>
+      <p className="settings-section-desc">
+        {isSuperadmin
+          ? "Users across all workspaces who have signed in but haven't been assigned a role yet."
+          : "Users in your organization who have signed in but haven't been assigned a role yet."}
+      </p>
+
+      {/* Refresh row */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+        {isSuperadmin && (
+          <span style={{
+            fontSize: 'var(--text-xs)',
+            color: '#d4b572',
+            fontFamily: 'var(--font-mono)',
+            textTransform: 'uppercase',
+            letterSpacing: '0.06em',
+          }}>
+            ⬡ All Workspaces
+          </span>
+        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginLeft: 'auto' }}>
+          {lastRefresh && (
+            <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+              Updated {lastRefresh.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </span>
+          )}
+          <button
+            id="settings-refresh-onboarding-btn"
+            onClick={fetchOnboardingUsers}
+            disabled={loading}
+            style={{
+              background: 'none',
+              border: '1px solid var(--border)',
+              color: 'var(--text-secondary)',
+              borderRadius: '6px',
+              padding: '4px 10px',
+              fontSize: '0.7rem',
+              cursor: loading ? 'wait' : 'pointer',
+              fontFamily: 'var(--font-mono)',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            {loading ? '⏳' : '↻'} Refresh
+          </button>
+        </div>
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div className="settings-test-result settings-test-result--error" style={{ marginBottom: '12px' }}>
+          ⚠️ {error}
+        </div>
+      )}
+
+      {/* Loading skeleton */}
+      {loading && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {[1, 2].map(i => (
+            <div key={i} style={{
+              height: '54px',
+              borderRadius: '8px',
+              background: 'var(--surface-2, rgba(255,255,255,0.04))',
+              animation: 'pulse 1.5s ease-in-out infinite',
+            }} />
+          ))}
+        </div>
+      )}
+
+      {/* Empty state */}
+      {!loading && !error && users.length === 0 && (
+        <div className="settings-empty" style={{ padding: '20px 0', textAlign: 'center' }}>
+          <div style={{ fontSize: '1.5rem', marginBottom: '8px' }}>✓</div>
+          <div>No users waiting for role assignment.</div>
+        </div>
+      )}
+
+      {/* User list */}
+      {!loading && users.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
+          {users.map(user => (
+            <div
+              key={user.email}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '12px',
+                padding: '10px 14px',
+                borderRadius: '8px',
+                background: 'var(--surface-2, rgba(255,255,255,0.04))',
+                border: '1px solid var(--border)',
+                flexWrap: 'wrap',
+              }}
+            >
+              {/* Avatar */}
+              <div style={{
+                width: '32px',
+                height: '32px',
+                borderRadius: '50%',
+                background: 'rgba(107,114,128,0.2)',
+                color: '#6b7280',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                flexShrink: 0,
+              }}>
+                {user.email[0].toUpperCase()}
+              </div>
+
+              {/* Info */}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 'var(--text-sm)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {user.email}
+                </div>
+                <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginTop: '2px' }}>
+                  {user.assignedAt
+                    ? `Signed in ${new Date(user.assignedAt).toLocaleDateString()}`
+                    : 'Recently signed in'}
+                </div>
+              </div>
+
+              {/* Role selector */}
+              <select
+                className="admin-role-select"
+                value={user.pendingRole}
+                onChange={e => setUsers(prev => prev.map(u => u.email === user.email ? { ...u, pendingRole: e.target.value } : u))}
+                disabled={user.saving}
+                aria-label={`Assign role for ${user.email}`}
+                style={{ height: '34px', borderRadius: '6px', fontSize: 'var(--text-xs)', minWidth: '90px' }}
+              >
+                {roleOptions.map(r => (
+                  <option key={r} value={r}>{ONBOARDING_ROLE_LABELS[r]}</option>
+                ))}
+              </select>
+
+              {/* Promote button */}
+              <button
+                id={`settings-promote-btn-${user.email.replace(/[@.]/g, '-')}`}
+                onClick={() => handlePromote(user.email)}
+                disabled={user.saving}
+                style={{
+                  padding: '6px 14px',
+                  borderRadius: '6px',
+                  border: 'none',
+                  background: 'var(--accent, #C5A059)',
+                  color: '#060d1f',
+                  fontSize: '0.7rem',
+                  fontWeight: 700,
+                  fontFamily: 'var(--font-mono)',
+                  cursor: user.saving ? 'wait' : 'pointer',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.06em',
+                  transition: 'opacity 0.15s ease',
+                  opacity: user.saving ? 0.6 : 1,
+                  flexShrink: 0,
+                }}
+                aria-label={`Promote ${user.email} to ${user.pendingRole}`}
+              >
+                {user.saving ? '⏳' : '↑ Promote'}
+              </button>
+
+              {/* Error */}
+              {user.error && (
+                <span style={{ fontSize: '0.65rem', color: 'var(--error, #ef4444)', width: '100%', paddingLeft: '44px' }}>
+                  ⚠️ {user.error}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Link to full admin panel */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <Link
+          href="/admin"
+          style={{
+            fontSize: 'var(--text-xs)',
+            color: 'var(--accent, #C5A059)',
+            textDecoration: 'none',
+            fontFamily: 'var(--font-mono)',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '4px',
+            opacity: 0.8,
+            transition: 'opacity 0.15s ease',
+          }}
+          aria-label="Go to full admin role management panel"
+        >
+          Full Admin Panel →
+        </Link>
+      </div>
+    </section>
+  )
+}
+
 /* ══════════════════════════════════════════════════════════════════════════════
    SETTINGS PAGE
    ══════════════════════════════════════════════════════════════════════════════ */
@@ -618,11 +926,16 @@ export default function SettingsPage() {
         </button>
       </section>
 
+      {/* ── Onboarding Users (admin + superadmin only) ── */}
+      {isAdmin && (
+        <OnboardingUsersCard callerRole={userRole ?? 'admin'} />
+      )}
+
       {/* ── Preview ── */}
       {visibleRows.length > 0 && (
         <section className="settings-section">
           <h2 className="settings-section-title">
-            <span className="rx-comment-label">03 //</span> Preview
+            <span className="rx-comment-label">04 //</span> Preview
           </h2>
 
           <div className="settings-preview">

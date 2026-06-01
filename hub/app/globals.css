@@ -226,6 +226,46 @@ body::before {
   color: var(--btn-text);
 }
 
+/* ══════════════════════════════════════════════════════════════════════════════
+   ICON SYSTEM (Lucide Brutalist-Pro)
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+.rx-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+.rx-icon svg {
+  width: 100%;
+  height: 100%;
+  stroke: currentColor;
+  stroke-width: 2.5;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+  fill: none;
+}
+
+/* Modifier Sizes */
+.rx-icon--sm { width: 18px; height: 18px; }
+.rx-icon--lg { width: 32px; height: 32px; }
+.rx-icon--xl { width: 48px; height: 48px; }
+.nav-icon .rx-icon { width: 20px; height: 20px; }
+.loc-icon .rx-icon { width: 28px; height: 28px; }
+.service-icon .rx-icon { width: 36px; height: 36px; }
+.step-icon .rx-icon { width: 36px; height: 36px; }
+
+/* Filled Icons (like Socials) */
+.social-link .rx-icon svg {
+  stroke: none;
+  stroke-width: 0;
+  fill: currentColor;
+}
+
 /* Screen reader only utility */
 .sr-only {
   position: absolute;
@@ -814,6 +854,7 @@ a:hover {
 }
 
 .chat-input-wrapper {
+  position: relative;
   display: flex;
   align-items: flex-end;
   gap: var(--space-2);
@@ -5127,6 +5168,479 @@ a:hover .rx-arrow {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   CONTEXT ATTACH MENU (Chat + button)
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Trigger button ── */
+.context-attach-btn {
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  border-radius: 50%;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+.context-attach-btn:hover {
+  border-color: var(--accent-border);
+  color: var(--accent);
+  box-shadow: 0 0 12px rgba(197, 160, 89, 0.15);
+}
+
+.context-attach-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.context-attach-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.context-attach-btn__icon {
+  width: 18px;
+  height: 18px;
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.context-attach-btn--open .context-attach-btn__icon {
+  transform: rotate(45deg);
+}
+
+.context-attach-btn--open {
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
+/* ── Popover container ── */
+@keyframes contextAttachSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.context-attach-anchor {
+  position: relative;
+}
+
+.context-attach-popover {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  min-width: 240px;
+  background: rgba(22, 27, 34, 0.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xl);
+  z-index: 100;
+  padding: var(--space-1) 0;
+  animation: contextAttachSlideUp 0.2s var(--ease-out) forwards;
+  overflow: hidden;
+}
+
+/* ── Menu options ── */
+.context-attach-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+  text-align: left;
+}
+
+.context-attach-option:hover {
+  background: var(--bg-hover);
+}
+
+.context-attach-option:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.context-attach-option__icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.context-attach-option:hover .context-attach-option__icon {
+  color: var(--accent);
+}
+
+.context-attach-option__label {
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+}
+
+.context-attach-option__hint {
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+  margin-left: auto;
+  font-family: var(--font-mono);
+}
+
+/* ── Sub-views ── */
+.context-attach-subview {
+  padding: 0;
+  animation: contextAttachSlideUp 0.15s var(--ease-out) forwards;
+}
+
+.context-attach-subview__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.context-attach-subview__back {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  transition: color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out);
+  flex-shrink: 0;
+}
+
+.context-attach-subview__back:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.context-attach-subview__title {
+  font-family: var(--font-display);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+/* ── Document sub-view ── */
+.context-attach-search-input {
+  display: block;
+  width: 100%;
+  padding: var(--space-2) var(--space-4);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  outline: none;
+}
+
+.context-attach-search-input::placeholder {
+  color: var(--text-muted);
+}
+
+.context-attach-search-input:focus {
+  border-bottom-color: var(--accent-border);
+}
+
+.context-attach-file-list {
+  max-height: 280px;
+  overflow-y: auto;
+  padding: var(--space-1) 0;
+}
+
+.context-attach-file-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.context-attach-file-list::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 2px;
+}
+
+.context-attach-file-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-4);
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+  text-align: left;
+}
+
+.context-attach-file-row:hover {
+  background: var(--bg-hover);
+}
+
+.context-attach-file-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.context-attach-file-row__icon {
+  font-size: 1rem;
+  flex-shrink: 0;
+  width: 20px;
+  text-align: center;
+}
+
+.context-attach-file-row__info {
+  flex: 1;
+  min-width: 0;
+}
+
+.context-attach-file-row__name {
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.context-attach-file-row__meta {
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.context-attach-file-loading,
+.context-attach-file-empty {
+  padding: var(--space-4);
+  text-align: center;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.context-attach-search-hint {
+  padding: var(--space-1) var(--space-4);
+  font-size: var(--text-2xs);
+  color: var(--accent-dim);
+  letter-spacing: 0.02em;
+}
+
+/* ── URL sub-view ── */
+.context-attach-url-input {
+  display: block;
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  outline: none;
+}
+
+.context-attach-url-input::placeholder {
+  color: var(--text-muted);
+  font-family: var(--font-body);
+}
+
+.context-attach-url-input:focus {
+  border-bottom-color: var(--accent-border);
+}
+
+.context-attach-url-error {
+  padding: var(--space-2) var(--space-4) 0;
+  font-size: var(--text-2xs);
+  color: var(--danger);
+}
+
+/* ── Text sub-view ── */
+.context-attach-textarea {
+  display: block;
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  outline: none;
+  resize: none;
+  line-height: 1.5;
+}
+
+.context-attach-textarea::placeholder {
+  color: var(--text-muted);
+}
+
+.context-attach-textarea:focus {
+  border-bottom-color: var(--accent-border);
+}
+
+.context-attach-char-count {
+  padding: var(--space-1) var(--space-4);
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  text-align: right;
+}
+
+.context-attach-char-count--over {
+  color: var(--danger);
+}
+
+/* ── Submit button (used in URL + Text sub-views) ── */
+.context-attach-submit-btn {
+  display: block;
+  width: calc(100% - var(--space-4) * 2);
+  margin: var(--space-2) var(--space-4) var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-md);
+  background: rgba(197, 160, 89, 0.1);
+  color: var(--accent);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.context-attach-submit-btn:hover {
+  background: rgba(197, 160, 89, 0.18);
+  box-shadow: 0 0 12px rgba(197, 160, 89, 0.15);
+}
+
+.context-attach-submit-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.context-attach-submit-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── Attachment Chips ── */
+.attachment-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-bottom: 6px;
+}
+
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  font-family: var(--font-body);
+  font-size: var(--text-2xs);
+  color: var(--text-secondary);
+  max-width: 200px;
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.attachment-chip:hover {
+  border-color: var(--accent-border);
+}
+
+.attachment-chip__icon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+.attachment-chip__icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.attachment-chip__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
+}
+
+.attachment-chip__remove {
+  width: 16px;
+  height: 16px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 10px;
+  line-height: 1;
+  padding: 0;
+  flex-shrink: 0;
+  transition: color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out);
+}
+
+.attachment-chip__remove:hover {
+  color: var(--danger);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.attachment-chip--readonly {
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+/* ── Light theme overrides ── */
+[data-theme="light"] .context-attach-popover {
+  background: rgba(255, 255, 255, 0.95);
+  border-color: var(--border);
+  box-shadow: var(--shadow-lg);
+}
+
+[data-theme="light"] .context-attach-btn:hover {
+  box-shadow: 0 0 12px rgba(197, 160, 89, 0.1);
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════

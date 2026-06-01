@@ -240,3 +240,15 @@ export interface ProjectKPI {
   failedRuns: number
   lastActivity: string
 }
+
+/* ── Chat Attachment Types ── */
+
+export interface ChatAttachment {
+  id: string
+  type: 'document' | 'url' | 'text'
+  label: string           // Display name (file name, URL, "Pasted text")
+  content?: string        // For 'text' type or pre-resolved content
+  fileId?: string         // For 'document' type (Google Drive file ID)
+  url?: string            // For 'url' type
+  mimeType?: string       // For document type
+}
