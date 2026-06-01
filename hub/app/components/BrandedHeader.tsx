@@ -76,8 +76,8 @@ export function BrandedHeader({
           ))}
         </select>
 
-        {/* Settings gear — admin only */}
-        {(session?.user as Record<string, unknown>)?.role === 'admin' && (
+        {/* Settings gear — all authenticated users */}
+        {session && (
           <Link
             href="/settings"
             className="theme-toggle-btn"
@@ -87,6 +87,7 @@ export function BrandedHeader({
             ⚙️
           </Link>
         )}
+
 
         <button
           className="theme-toggle-btn"

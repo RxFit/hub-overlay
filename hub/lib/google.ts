@@ -245,3 +245,108 @@ export async function readSheetValues(
     accessToken
   )
 }
+
+/* ══════════════════════════════════════════
+   Google Chat  —  https://chat.googleapis.com/v1
+   ══════════════════════════════════════════ */
+
+const CHAT_BASE = 'https://chat.googleapis.com/v1'
+
+export interface ChatSpace {
+  name: string                    // "spaces/XXXXXXXX"
+  displayName: string
+  type: 'ROOM' | 'DM' | 'GROUP_CHAT' | 'SPACE'
+  spaceType?: string
+  singleUserBotDm?: boolean
+  spaceDetails?: { description?: string }
+  adminInstalled?: boolean
+}
+
+export interface ChatMessage {
+  name: string                    // "spaces/xxx/messages/yyy"
+  sender: {
+    name: string
+    displayName: string
+    domainId?: string
+    type?: string
+    isAnonymous?: boolean
+  }
+  createTime: string              // ISO timestamp
+  text: string
+  formattedText?: string
+  thread?: { name: string }
+  space?: { name: string }
+  clientAssignedMessageId?: string
+  annotations?: unknown[]
+}
+
+export interface ChatSpacesResponse {
+  spaces: ChatSpace[]
+  nextPageToken?: string
+}
+
+export interface ChatMessagesResponse {
+  messages: ChatMessage[]
+  nextPageToken?: string
+}
+
+/** List all Google Chat spaces the authenticated user is a member of */
+export async function listChatSpaces(
+  accessToken: string,
+  pageSize = 100
+): Promise<ChatSpace[]> {
+  const params = new URLSearchParams({
+    pageSize: String(pageSize),
+  })
+  const data = await googleFetch<ChatSpacesResponse>(
+    `${CHAT_BASE}/spaces?${params}`,
+    accessToken
+  )
+  // Filter out bot DMs for cleaner UX
+  return (data.spaces ?? []).filter(s => !s.singleUserBotDm)
+}
+
+/** List recent messages from a Google Chat space */
+export async function listChatMessages(
+  accessToken: string,
+  spaceId: string,
+  pageSize = 50
+): Promise<ChatMessage[]> {
+  // spaceId can be "spaces/XXXXXXXX" or just "XXXXXXXX"
+  const spaceName = spaceId.startsWith('spaces/') ? spaceId : `spaces/${spaceId}`
+  const params = new URLSearchParams({
+    pageSize: String(pageSize),
+    orderBy: 'createTime desc',
+  })
+  const data = await googleFetch<ChatMessagesResponse>(
+    `${CHAT_BASE}/${spaceName}/messages?${params}`,
+    accessToken
+  )
+  // Return in chronological order (oldest first for chat display)
+  return (data.messages ?? []).reverse()
+}
+
+/** Send a new message or reply to a Google Chat space */
+export async function sendChatMessage(
+  accessToken: string,
+  spaceId: string,
+  text: string,
+  threadKey?: string
+): Promise<ChatMessage> {
+  const spaceName = spaceId.startsWith('spaces/') ? spaceId : `spaces/${spaceId}`
+
+  const body: Record<string, unknown> = { text }
+  if (threadKey) {
+    body.thread = { threadKey }
+  }
+
+  return googleFetch<ChatMessage>(
+    `${CHAT_BASE}/${spaceName}/messages`,
+    accessToken,
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }
+  )
+}
+

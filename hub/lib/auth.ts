@@ -19,6 +19,10 @@ const GOOGLE_SCOPES = [
   'https://www.googleapis.com/auth/calendar',
   'https://www.googleapis.com/auth/drive.readonly',
   'https://www.googleapis.com/auth/spreadsheets',  // read-write for Hub Roles sheet
+  // Google Chat — read spaces + messages, send messages
+  'https://www.googleapis.com/auth/chat.spaces.readonly',
+  'https://www.googleapis.com/auth/chat.messages',
+  'https://www.googleapis.com/auth/chat.messages.create',
 ].join(' ')
 
 /* ── Token refresh helper ── */
@@ -143,13 +147,15 @@ export const authOptions: NextAuthOptions = {
     },
 
     async session({ session, token }) {
+      // TEMP DIAGNOSTIC — remove after superadmin confirmed
+      console.log(`[auth] session callback: token.role="${String(token.role)}" token.email="${String(token.email)}"`)
       if (session.user) {
         const u = session.user as Record<string, unknown>
         u.role = token.role
         u.assignedProjects = token.assignedProjects
         u.id = token.sub
         u.error = token.error
-        // accessToken stays server-side only — API routes use getToken({ req })
+        console.log(`[auth] session.user.role set to "${String(u.role)}"`)
       }
       return session
     },

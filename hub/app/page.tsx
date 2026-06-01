@@ -11,6 +11,7 @@ import { BrandedHeader } from '@/app/components/BrandedHeader'
 import { AnimatedNumber } from '@/app/components/AnimatedNumber'
 import { OnboardingCard, shouldShowOnboardingCard } from '@/app/components/OnboardingCard'
 import { OnboardingBanner } from '@/app/components/OnboardingBanner'
+import { GoogleChatPanel, ChatBottomBar } from '@/app/components/GoogleChatPanel'
 import {
   detectIntent,
   startInterview,
@@ -176,6 +177,7 @@ export default function HubPage() {
   const [mobileTab, setMobileTab] = useState<MobileTab>('chat')
   const [theme, setTheme] = useState<'dark' | 'light'>('dark')
   const [showOnboardingCard, setShowOnboardingCard] = useState(false)
+  const [chatPanelOpen, setChatPanelOpen] = useState(false)
 
   // Derive current user role from session
   const userRole = (session?.user as Record<string, unknown>)?.role as string ?? 'onboarding'
@@ -984,6 +986,18 @@ export default function HubPage() {
           </aside>
         )}
       </div>
+
+      {/* Google Chat bottom bar — sits above the mobile nav */}
+      <ChatBottomBar
+        unreadCount={0}
+        onOpen={() => setChatPanelOpen(true)}
+      />
+
+      {/* Google Chat panel overlay */}
+      <GoogleChatPanel
+        isOpen={chatPanelOpen}
+        onClose={() => setChatPanelOpen(false)}
+      />
 
       {/* Mobile: Glassmorphism Bottom Navigation Bar */}
       <nav className="mobile-bottom-nav" aria-label="Mobile navigation" role="tablist">
