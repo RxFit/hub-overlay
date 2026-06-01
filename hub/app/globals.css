@@ -779,6 +779,25 @@ a:hover {
   border-top-left-radius: var(--radius-sm);
 }
 
+.chat-copy-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  margin-top: var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  transition: all 0.2s ease;
+}
+
+.chat-copy-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
 .chat-bubble-user {
   background: rgba(197, 160, 89, 0.09);
   border: 1px solid var(--accent-border);

@@ -171,6 +171,37 @@ function RightPanel({ isOpen, onClose, onInjectChat, panelRef, style, projects }
 type MobileTab = 'chat' | 'command' | 'execution' | 'google_chat'
 type ChatMsg = { id: string; role: 'user' | 'assistant'; content: string; timestamp?: string }
 
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  
+  const handleCopy = () => {
+    navigator.clipboard.writeText(text)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  return (
+    <button 
+      onClick={handleCopy} 
+      className="chat-copy-btn" 
+      aria-label="Copy message"
+      title="Copy message"
+    >
+      {copied ? (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M20 6L9 17l-5-5" />
+        </svg>
+      ) : (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+        </svg>
+      )}
+      <span style={{ fontSize: '10px', marginLeft: '4px' }}>{copied ? 'Copied!' : 'Copy'}</span>
+    </button>
+  )
+}
+
 export default function HubPage() {
   const { data: session } = useSession()
   const router = useRouter()
@@ -909,8 +940,11 @@ export default function HubPage() {
                   >
                     {msg.role === 'user' ? userInitials : '✦'}
                   </div>
-                  <div className={`chat-bubble ${msg.role === 'user' ? 'chat-bubble-user' : 'chat-bubble-ai'}`}>
-                    <MessageContent content={msg.content} />
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '78%' }}>
+                    <div className={`chat-bubble ${msg.role === 'user' ? 'chat-bubble-user' : 'chat-bubble-ai'}`} style={{ maxWidth: '100%' }}>
+                      <MessageContent content={msg.content} />
+                    </div>
+                    {msg.role === 'assistant' && msg.content && <CopyButton text={msg.content} />}
                   </div>
                 </div>
               ))}
