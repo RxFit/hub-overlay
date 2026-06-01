@@ -5018,6 +5018,97 @@ a:hover .rx-arrow {
 
 
 /* ══════════════════════════════════════════════════════════════════════════════
+   MENTION PICKER (Google Chat)
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+.mention-picker {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  width: max-content;
+  min-width: 200px;
+}
+
+.mention-picker__header {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.mention-picker__label {
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.mention-picker__list {
+  max-height: 240px;
+  overflow-y: auto;
+  padding: var(--space-1) 0;
+}
+
+.mention-picker__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.mention-picker__item--active {
+  background: var(--bg-hover);
+}
+
+.mention-picker__avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.mention-picker__info {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.mention-picker__name {
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mention-picker__email {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
    ACCESSIBILITY — Reduced Motion
    ══════════════════════════════════════════════════════════════════════════════ */
 @media (prefers-reduced-motion: reduce) {
@@ -5867,4 +5958,27 @@ a:hover .rx-arrow {
   padding-top: var(--space-2);
 }
 
+/* KPI source badge */
+.kpi-source-badge {
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+  opacity: 0.7;
+  margin-left: auto;
+  flex-shrink: 0;
+}
 
+/* Project health inline stats */
+.project-health-stats {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.project-health-item--live .project-health-status-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}

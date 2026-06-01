@@ -1,8 +1,10 @@
 'use client'
 
 import { useState, ReactNode } from 'react'
-import { useTasks, useCalendar, useDrive, useKPIs } from '@/app/hooks/useHubData'
-import type { TaskItem, CalendarEvent, DriveFile, KPIRow } from '@/app/hooks/useHubData'
+import { useTasks, useCalendar, useDrive } from '@/app/hooks/useHubData'
+import type { TaskItem, CalendarEvent, DriveFile } from '@/app/hooks/useHubData'
+import { useKPIData } from '@/app/hooks/useKPIData'
+import type { LiveKPI, ProjectKPI } from '@/types'
 import { AnimatedNumber } from './AnimatedNumber'
 
 /* ══════════════════════════════════════════════════════════════════════════════
@@ -499,33 +501,19 @@ function DocumentRow({ file, onClick }: { file: DriveFile; onClick: () => void }
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
-   KPI SECTION
+   KPI SECTION — Live Paperclip + Sheet KPIs
    ══════════════════════════════════════════════════════════════════════════════ */
 
-/** Static fallback KPI data when Sheet is unavailable */
-const FALLBACK_KPIS: KPIRow[] = [
-  { label: 'Revenue MTD', value: '$124,500', trend: '+12.4%', up: true },
-  { label: 'Active Clients', value: '47', trend: '+3', up: true },
-  { label: 'Agent Tasks', value: '18', trend: 'In Progress', up: true },
-  { label: 'Open Issues', value: '34', trend: '-8 this week', up: true },
-]
-
 export function KPISection({
-  sheetId,
-  range = 'KPIs!A2:D10',
+  activeProject,
   onInjectChat,
 }: {
-  sheetId?: string
-  range?: string
+  activeProject?: string
   onInjectChat: (msg: string) => void
 }) {
-  const { kpis, isLoading, error } = useKPIs(sheetId, range)
+  const { kpis, isLoading, error } = useKPIData(activeProject)
 
-  // Use live data if available, otherwise fall back to static
-  const displayKpis = (kpis.length > 0 && !error) ? kpis : FALLBACK_KPIS
-  const usingFallback = kpis.length === 0 || !!error
-
-  if (isLoading && sheetId) {
+  if (isLoading) {
     return (
       <CollapsibleSection title="KPIs" protocolNum="04" defaultOpen>
         <SkeletonBlock lines={4} />
@@ -533,81 +521,111 @@ export function KPISection({
     )
   }
 
+  if (kpis.length === 0 && !isLoading) {
+    return (
+      <CollapsibleSection title="KPIs" protocolNum="04" defaultOpen>
+        <SectionMessage message="No KPI data available" type="empty" />
+      </CollapsibleSection>
+    )
+  }
+
   return (
     <CollapsibleSection title="KPIs" protocolNum="04" defaultOpen>
       <div className="kpi-grid" role="list" aria-label="Key performance indicators">
-        {displayKpis.map((kpi, i) => (
-          <button
-            key={kpi.label}
-            className="kpi-card kpi-card--clickable"
-            role="listitem"
-            onClick={() => onInjectChat(`Tell me more about KPI: ${kpi.label}`)}
-            aria-label={`${kpi.label}: ${kpi.value}, trend ${kpi.trend}`}
-          >
-            <div className="kpi-label">{kpi.label}</div>
-            <div className="kpi-value">
-              <AnimatedNumber value={kpi.value} delay={i * 120} />
-            </div>
-            <div
-              className={`kpi-trend ${kpi.up ? 'kpi-trend-up' : 'kpi-trend-down'}`}
-              aria-label={`Trend: ${kpi.up ? 'up' : 'down'} ${kpi.trend}`}
+        {kpis.map((kpi: LiveKPI, i: number) => {
+          const trendClass =
+            kpi.trendDirection === 'up'
+              ? 'kpi-trend-up'
+              : kpi.trendDirection === 'down'
+                ? 'kpi-trend-down'
+                : 'kpi-trend-neutral'
+          const sourceBadge = kpi.source === 'paperclip' ? '⚡' : kpi.source === 'sheet' ? '📊' : '✦'
+
+          return (
+            <button
+              key={kpi.id}
+              className="kpi-card kpi-card--clickable"
+              role="listitem"
+              onClick={() => onInjectChat(`Tell me more about KPI: ${kpi.label}`)}
+              aria-label={`${kpi.label}: ${kpi.value}, trend ${kpi.trend}`}
             >
-              <span aria-hidden="true" className="rx-star">✦</span> {kpi.trend}
-            </div>
-          </button>
-        ))}
+              <div className="kpi-label">
+                {kpi.label}
+                <span className="kpi-source-badge" title={kpi.source}>{sourceBadge}</span>
+              </div>
+              <div className="kpi-value">
+                <AnimatedNumber value={kpi.value} delay={i * 120} />
+              </div>
+              <div
+                className={`kpi-trend ${trendClass}`}
+                aria-label={`Trend: ${kpi.trendDirection} ${kpi.trend}`}
+              >
+                <span aria-hidden="true" className="rx-star">✦</span> {kpi.trend}
+              </div>
+            </button>
+          )
+        })}
       </div>
-      {usingFallback && !isLoading && sheetId && (
-        <div className="kpi-fallback-notice">
-          // using cached data
-        </div>
-      )}
     </CollapsibleSection>
   )
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
-   PROJECT HEALTH SECTION — static data (mirrors page.tsx)
+   PROJECT HEALTH SECTION — Live Paperclip data
    ══════════════════════════════════════════════════════════════════════════════ */
 
-const PROJECTS = [
-  { id: 'rxfit',      name: 'RxFit',      abbr: 'RX', color: '#C5A059' },
-  { id: 'fridgesnap', name: 'FridgeSnap', abbr: 'FS', color: '#4A6FA5' },
-  { id: 'jadecoss',   name: 'JadeCoS',    abbr: 'JC', color: '#8a6e3e' },
-  { id: 'wellnessapp',name: 'WellnessApp',abbr: 'WA', color: '#d4b572' },
-  { id: 'notebookrx', name: 'NotebookRx', abbr: 'NR', color: '#9aa8c6' },
-  { id: 'seo-agent',  name: 'SEO Agent',  abbr: 'SE', color: '#ef4444' },
-]
+const HEALTH_COLORS: Record<string, string> = {
+  healthy: 'var(--accent)',
+  'at-risk': 'var(--warn)',
+  critical: 'var(--danger)',
+}
 
-export function ProjectHealthSection({ onInjectChat }: { onInjectChat: (msg: string) => void }) {
+export function ProjectHealthSection({
+  projects,
+  onInjectChat,
+}: {
+  projects?: ProjectKPI[]
+  onInjectChat: (msg: string) => void
+}) {
+  if (!projects || projects.length === 0) {
+    return (
+      <CollapsibleSection title="Project Health" protocolNum="05" defaultOpen>
+        <SectionMessage message="No project data" type="empty" />
+      </CollapsibleSection>
+    )
+  }
+
   return (
     <CollapsibleSection title="Project Health" protocolNum="05" defaultOpen>
       <div className="project-health-list" role="list" aria-label="Project health status">
-        {PROJECTS.map(p => {
-          const healthStatus = p.id === 'jadecoss' ? 'critical' : p.id === 'fridgesnap' ? 'at risk' : 'healthy'
-          const statusColor = p.id === 'jadecoss' ? 'var(--danger)' : p.id === 'fridgesnap' ? 'var(--warn)' : 'var(--accent)'
+        {projects.map((p) => {
+          const statusColor = HEALTH_COLORS[p.health] ?? 'var(--text-muted)'
+          const abbr = p.identifier.slice(0, 3).toUpperCase()
           return (
             <div
-              key={p.id}
+              key={p.companyId}
               role="listitem"
               tabIndex={0}
-              aria-label={`${p.name}: ${healthStatus}`}
-              className="project-health-item"
-              onClick={() => onInjectChat(`Show me the health status for ${p.name}`)}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onInjectChat(`Show me the health status for ${p.name}`) } }}
+              aria-label={`${p.companyName}: ${p.health}`}
+              className={`project-health-item project-health-item--live`}
+              onClick={() => onInjectChat(`Show me the health status for ${p.companyName}`)}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onInjectChat(`Show me the health status for ${p.companyName}`) } }}
             >
               <span
                 aria-hidden="true"
                 className="project-health-badge"
                 style={{
-                  background: `${p.color}1a`,
-                  border: `1px solid ${p.color}44`,
-                  color: p.color,
+                  background: `${statusColor}1a`,
+                  border: `1px solid ${statusColor}44`,
+                  color: statusColor,
                 }}
               >
-                {p.abbr}
+                {abbr}
               </span>
-              <span className="project-health-name">{p.name}</span>
+              <span className="project-health-name">{p.companyName}</span>
+              <span className="project-health-stats">
+                {p.openIssues} open · {p.completionRate}%
+              </span>
               <span
                 aria-hidden="true"
                 className="project-status-pulse project-health-status-dot"

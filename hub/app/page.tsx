@@ -12,6 +12,8 @@ import { AnimatedNumber } from '@/app/components/AnimatedNumber'
 import { OnboardingCard, shouldShowOnboardingCard } from '@/app/components/OnboardingCard'
 import { OnboardingBanner } from '@/app/components/OnboardingBanner'
 import { GoogleChatPanel, ChatBottomBar } from '@/app/components/GoogleChatPanel'
+import { useKPIData } from '@/app/hooks/useKPIData'
+import { useSpaces, useUnreadCounts } from '@/app/hooks/useGoogleChat'
 import {
   detectIntent,
   startInterview,
@@ -43,7 +45,7 @@ const ONBOARDING_SUGGESTIONS = [
 // AnimatedNumber is now imported from @/app/components/AnimatedNumber
 
 /* ── Left Panel: Context Layer ── */
-function LeftPanel({ isOpen, onClose, onInjectChat, panelRef, style }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string) => void; panelRef?: React.Ref<HTMLElement>; style?: React.CSSProperties }) {
+function LeftPanel({ isOpen, onClose, onInjectChat, panelRef, style, activeProject }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string) => void; panelRef?: React.Ref<HTMLElement>; style?: React.CSSProperties; activeProject?: string }) {
   return (
     <aside ref={panelRef} className={`panel-left ${isOpen ? 'mobile-open' : ''}`} aria-label="Context Layer" style={style}>
       <div className="panel-header">
@@ -58,7 +60,7 @@ function LeftPanel({ isOpen, onClose, onInjectChat, panelRef, style }: { isOpen?
       </div>
 
       <div className="panel-content">
-        <KPISection sheetId={process.env.NEXT_PUBLIC_KPI_SHEET_ID} onInjectChat={onInjectChat} />
+        <KPISection activeProject={activeProject} onInjectChat={onInjectChat} />
         <TasksSection onInjectChat={onInjectChat} />
         <CalendarSection onInjectChat={onInjectChat} />
         <DocumentsSection onInjectChat={onInjectChat} />
@@ -139,7 +141,7 @@ function MessageContent({ content }: { content: string }) {
 }
 
 /* ── Right Panel: Execution Layer ── */
-function RightPanel({ isOpen, onClose, onInjectChat, panelRef, style }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string) => void; panelRef?: React.Ref<HTMLElement>; style?: React.CSSProperties }) {
+function RightPanel({ isOpen, onClose, onInjectChat, panelRef, style, projects }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string) => void; panelRef?: React.Ref<HTMLElement>; style?: React.CSSProperties; projects?: import('@/types').ProjectKPI[] }) {
   return (
     <aside ref={panelRef} className={`panel-right ${isOpen ? 'mobile-open' : ''}`} aria-label="Execution Layer" style={style}>
       <div className="panel-header">
@@ -154,7 +156,7 @@ function RightPanel({ isOpen, onClose, onInjectChat, panelRef, style }: { isOpen
       </div>
 
       <div className="panel-content">
-        <ProjectHealthSection onInjectChat={onInjectChat} />
+        <ProjectHealthSection projects={projects} onInjectChat={onInjectChat} />
         <ExecutionFeed onInjectChat={onInjectChat} />
       </div>
     </aside>
@@ -172,6 +174,7 @@ export default function HubPage() {
   const { data: session } = useSession()
   const router = useRouter()
   const [activeProject, setActiveProject] = useState('all')
+  const { projects } = useKPIData(activeProject)
   const [mobileLeftOpen, setMobileLeftOpen] = useState(false)
   const [mobileRightOpen, setMobileRightOpen] = useState(false)
   const [mobileTab, setMobileTab] = useState<MobileTab>('chat')
@@ -179,6 +182,9 @@ export default function HubPage() {
   const [showOnboardingCard, setShowOnboardingCard] = useState(false)
   const [chatPanelOpen, setChatPanelOpen] = useState(false)
 
+  // Google Chat unread badge — uses visible spaces from useSpaces hook
+  const { visibleSpaces: chatVisibleSpaces } = useSpaces()
+  const { totalUnread: chatTotalUnread } = useUnreadCounts(chatVisibleSpaces)
   // Derive current user role from session
   const userRole = (session?.user as Record<string, unknown>)?.role as string ?? 'onboarding'
   const isOnboarding = userRole === 'onboarding'
@@ -819,7 +825,7 @@ export default function HubPage() {
       </div>
 
       <div className="panels-container">
-        <LeftPanel isOpen={mobileLeftOpen} onClose={handleClosePanels} onInjectChat={handleChatInject} panelRef={leftPanelRef} />
+        <LeftPanel isOpen={mobileLeftOpen} onClose={handleClosePanels} onInjectChat={handleChatInject} panelRef={leftPanelRef} activeProject={activeProject} />
 
         {/* ── Center Panel: AI Chat (inlined for shared state) ── */}
         <main className="panel-center" aria-label="AI Chat">
@@ -973,7 +979,7 @@ export default function HubPage() {
         </main>
 
         {!isOnboarding && (
-          <RightPanel isOpen={mobileRightOpen} onClose={handleClosePanels} onInjectChat={handleChatInject} panelRef={rightPanelRef} />
+          <RightPanel isOpen={mobileRightOpen} onClose={handleClosePanels} onInjectChat={handleChatInject} panelRef={rightPanelRef} projects={projects} />
         )}
 
         {/* Onboarding: hide right panel placeholder for onboarding users */}
@@ -989,7 +995,7 @@ export default function HubPage() {
 
       {/* Google Chat bottom bar — sits above the mobile nav */}
       <ChatBottomBar
-        unreadCount={0}
+        unreadCount={chatTotalUnread}
         onOpen={() => setChatPanelOpen(true)}
       />
 

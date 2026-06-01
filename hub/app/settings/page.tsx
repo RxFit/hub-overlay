@@ -313,11 +313,14 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {/* ── Google Sheet Source ── */}
+      {/* ── Business KPIs (Google Sheet) ── */}
       <section className="settings-section">
         <h2 className="settings-section-title">
-          <span className="rx-comment-label">01 //</span> Google Sheet Source
+          <span className="rx-comment-label">01 //</span> Business KPIs (Google Sheet)
         </h2>
+        <p className="settings-section-desc">
+          Operational KPIs are automatically derived from Paperclip. Use this section for revenue and custom business metrics only.
+        </p>
 
         <div className="settings-input-group">
           <label className="settings-label" htmlFor="sheet-id">Sheet ID</label>

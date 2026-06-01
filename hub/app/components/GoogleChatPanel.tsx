@@ -1,8 +1,9 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { useSpaces, useMessages, useSendMessage, setPinnedSpaces, getPinnedSpaces } from '@/app/hooks/useGoogleChat'
-import type { ChatSpace, ChatMessage } from '@/app/hooks/useGoogleChat'
+import { useSpaces, useMessages, useSendMessage, useSpaceMembers } from '@/app/hooks/useGoogleChat'
+import type { ChatSpace, ChatMessage, SpaceMember } from '@/app/hooks/useGoogleChat'
+import { MentionPicker, useMentionTrigger } from '@/app/components/MentionPicker'
 
 /* ══════════════════════════════════════════
    CHAT BOTTOM BAR — always-visible pill
@@ -169,29 +170,75 @@ function MessageThread({
 }) {
   const { messages, isLoading } = useMessages(spaceId)
   const { send, isSending, sendError, clearError } = useSendMessage()
+  const { members } = useSpaceMembers(spaceId)
   const [draft, setDraft] = useState('')
+  const [cursorPos, setCursorPos] = useState(0)
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const composerRef = useRef<HTMLDivElement>(null)
+
+  // Mention trigger detection
+  const mention = useMentionTrigger(draft, cursorPos)
 
   // Scroll to bottom when messages change
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  const handleMentionSelect = useCallback((member: SpaceMember) => {
+    if (mention.atIndex === -1) return
+    const before = draft.slice(0, mention.atIndex)
+    const after = draft.slice(cursorPos)
+    // Insert the Google Chat mention tag
+    const mentionTag = member.email
+      ? `<users/${member.email}>`
+      : `<${member.name}>`
+    const newDraft = `${before}${mentionTag} ${after}`
+    setDraft(newDraft)
+    // Move cursor after the inserted mention
+    const newPos = before.length + mentionTag.length + 1
+    setCursorPos(newPos)
+    // Focus and set cursor position
+    requestAnimationFrame(() => {
+      if (inputRef.current) {
+        inputRef.current.focus()
+        inputRef.current.setSelectionRange(newPos, newPos)
+      }
+    })
+  }, [draft, cursorPos, mention.atIndex])
+
   const handleSend = useCallback(async () => {
     const text = draft.trim()
     if (!text || isSending) return
     setDraft('')
+    setCursorPos(0)
     if (inputRef.current) inputRef.current.style.height = 'auto'
     await send(spaceId, text)
   }, [draft, spaceId, send, isSending])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Don't intercept Enter/Arrow when mention picker is open
+    if (mention.active && members.length > 0) {
+      if (['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape'].includes(e.key)) {
+        return // Let MentionPicker handle these
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
     }
-  }, [handleSend])
+  }, [handleSend, mention.active, members.length])
+
+  const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setDraft(e.target.value)
+    setCursorPos(e.target.selectionStart ?? e.target.value.length)
+    e.target.style.height = 'auto'
+    e.target.style.height = Math.min(e.target.scrollHeight, 100) + 'px'
+  }, [])
+
+  const handleInputClick = useCallback((e: React.MouseEvent<HTMLTextAreaElement>) => {
+    setCursorPos((e.target as HTMLTextAreaElement).selectionStart ?? 0)
+  }, [])
 
   if (isLoading) {
     return (
@@ -230,20 +277,28 @@ function MessageThread({
         </div>
       )}
 
+      {/* Mention picker — floats above composer */}
+      {mention.active && members.length > 0 && (
+        <MentionPicker
+          members={members}
+          filter={mention.filter}
+          onSelect={handleMentionSelect}
+          onClose={() => setCursorPos(0)} // Reset to dismiss
+          anchorRect={composerRef.current?.getBoundingClientRect() ?? null}
+        />
+      )}
+
       {/* Composer */}
-      <div className="chat-composer">
+      <div className="chat-composer" ref={composerRef}>
         <textarea
           ref={inputRef}
           id="chat-composer-input"
           className="chat-composer__input"
           value={draft}
-          onChange={e => {
-            setDraft(e.target.value)
-            e.target.style.height = 'auto'
-            e.target.style.height = Math.min(e.target.scrollHeight, 100) + 'px'
-          }}
+          onChange={handleInputChange}
+          onClick={handleInputClick}
           onKeyDown={handleKeyDown}
-          placeholder={`Message ${spaceName}…`}
+          placeholder={`Message ${spaceName}… (type @ to mention)`}
           aria-label={`Compose message to ${spaceName}`}
           rows={1}
           disabled={isSending}
