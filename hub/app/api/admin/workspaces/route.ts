@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
+import { getPaperclipAuthHeaders, clearPaperclipSession } from '@/lib/paperclipSession'
 
 const PAPERCLIP_BASE = process.env.PAPERCLIP_BASE_URL || 'https://rxfit-paperclip-11747747730.us-central1.run.app'
-const PAPERCLIP_KEY  = process.env.PAPERCLIP_API_KEY || ''
 
 // Standard C-Suite agent template — seeded for every new workspace
 const AGENT_TEMPLATES = [
@@ -12,7 +12,7 @@ const AGENT_TEMPLATES = [
     name: (companyName: string) => `${companyName} CEO`,
     canCreateAgents: true,
     instructions: (companyName: string) => `You are the CEO of ${companyName}. You are the primary orchestrator for this company within Paperclip. You receive issues, delegate to your C-Suite, and ensure all company objectives are met. Always assign new issues to the most relevant C-Suite agent after reviewing them. Escalate to the board (Danny Trejo / Antigravity) only for: external communications, budget decisions over $500, and strategic pivots.`,
-    reportingRole: null,
+    reportingRole: null as string | null,
   },
   {
     role: 'CMO',
@@ -44,16 +44,29 @@ const AGENT_TEMPLATES = [
   },
 ]
 
+/**
+ * Shared Paperclip POST helper using session auth.
+ * Replaces the old paperclipPost that used Bearer API key auth.
+ */
 async function paperclipPost(path: string, body: object) {
+  const authHeaders = await getPaperclipAuthHeaders()
+
   const res = await fetch(`${PAPERCLIP_BASE}${path}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...(PAPERCLIP_KEY ? { 'Authorization': `Bearer ${PAPERCLIP_KEY}` } : {}),
+      Origin: PAPERCLIP_BASE,
+      ...authHeaders,
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10_000),
   })
+
   if (!res.ok) {
+    // On 401, clear session so next request re-authenticates
+    if (res.status === 401) {
+      clearPaperclipSession()
+    }
     const text = await res.text().catch(() => `HTTP ${res.status}`)
     throw new Error(`Paperclip API ${res.status}: ${text}`)
   }

@@ -3,26 +3,25 @@ import { getPaperclipAuthHeaders, clearPaperclipSession } from '@/lib/paperclipS
 
 const PAPERCLIP_BASE = process.env.PAPERCLIP_BASE_URL || 'https://rxfit-paperclip-11747747730.us-central1.run.app'
 
+/**
+ * Shared Paperclip fetch wrapper.
+ * - Session-based auth via paperclipSession.ts
+ * - Auto-retry once on 401 (re-authenticates then retries)
+ * - 10s timeout on all requests
+ */
 async function paperclipFetch<T>(path: string, opts?: RequestInit): Promise<T> {
   const url = `${PAPERCLIP_BASE}${path}`
-  const authHeaders = await getPaperclipAuthHeaders()
-  const res = await fetch(url, {
-    ...opts,
-    signal: AbortSignal.timeout(10_000), // 10s timeout — prevent indefinite hangs on cold starts
-    headers: {
-      'Content-Type': 'application/json',
-      'Origin': PAPERCLIP_BASE, // Required by Paperclip CORS/auth
-      ...authHeaders,
-      ...opts?.headers,
-    },
-    next: { revalidate: 30 }, // ISR: refresh every 30s
-  })
+
+  // First attempt
+  let res = await doPaperclipFetch(url, opts)
+
+  // F4 fix: On 401, clear session, re-authenticate, and retry once
+  if (res.status === 401) {
+    clearPaperclipSession()
+    res = await doPaperclipFetch(url, opts)
+  }
 
   if (!res.ok) {
-    // If we get a 401, clear the session so next request re-authenticates
-    if (res.status === 401) {
-      clearPaperclipSession()
-    }
     const body = await res.text().catch(() => 'Unknown error')
     throw new Error(`Paperclip API error ${res.status}: ${body}`)
   }
@@ -30,11 +29,26 @@ async function paperclipFetch<T>(path: string, opts?: RequestInit): Promise<T> {
   return res.json()
 }
 
+/** Build and execute a single fetch to Paperclip with current auth. */
+async function doPaperclipFetch(url: string, opts?: RequestInit): Promise<Response> {
+  const authHeaders = await getPaperclipAuthHeaders()
+  return fetch(url, {
+    ...opts,
+    signal: AbortSignal.timeout(10_000),
+    headers: {
+      'Content-Type': 'application/json',
+      Origin: PAPERCLIP_BASE,
+      ...authHeaders,
+      ...opts?.headers,
+    },
+    next: { revalidate: 30 },
+  })
+}
+
 /* ── Companies ── */
 
 export async function getCompanies(): Promise<Company[]> {
   const data = await paperclipFetch<{ companies: Company[] } | Company[]>('/api/companies')
-  // Handle both array and wrapped responses
   if (Array.isArray(data)) return data
   return data.companies ?? []
 }

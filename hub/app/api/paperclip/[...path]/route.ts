@@ -77,41 +77,46 @@ async function proxyRequest(
 
   // Forward request to Paperclip with session auth
   const url = `${PAPERCLIP_BASE}${apiPath}`
-  let authHeaders: Record<string, string>
-  try {
-    authHeaders = await getPaperclipAuthHeaders()
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Paperclip auth failed'
-    return NextResponse.json({ error: message }, { status: 502 })
-  }
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...authHeaders,
-  }
-
-  const fetchOpts: RequestInit = {
-    method,
-    headers,
-    signal: AbortSignal.timeout(10_000), // 10s timeout to prevent indefinite hangs
-  }
-
-  // Forward body for POST/PUT/PATCH
+  // Read body once (for POST/PUT/PATCH) — we may need to retry
+  let requestBody: string | undefined
   if (method !== 'GET' && method !== 'HEAD') {
     try {
       const body = await req.text()
-      if (body) fetchOpts.body = body
+      if (body) requestBody = body
     } catch {
       // No body — that's fine
     }
   }
 
-  try {
-    const upstream = await fetch(url, fetchOpts)
+  /** Build fetch options with current auth headers */
+  async function buildFetchOpts(): Promise<RequestInit> {
+    let authHeaders: Record<string, string>
+    try {
+      authHeaders = await getPaperclipAuthHeaders()
+    } catch (err) {
+      throw new Error(err instanceof Error ? err.message : 'Paperclip auth failed')
+    }
+    const opts: RequestInit = {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        Origin: PAPERCLIP_BASE,
+        ...authHeaders,
+      },
+      signal: AbortSignal.timeout(10_000),
+    }
+    if (requestBody) opts.body = requestBody
+    return opts
+  }
 
-    // If Paperclip returns 401, clear session to force re-auth on next request
+  try {
+    let upstream = await fetch(url, await buildFetchOpts())
+
+    // Auto-retry on 401: clear session, re-authenticate, retry once
     if (upstream.status === 401) {
       clearPaperclipSession()
+      upstream = await fetch(url, await buildFetchOpts())
     }
 
     const data = await upstream.text()
