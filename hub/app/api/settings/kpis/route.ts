@@ -1,113 +1,149 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
-import { getToken } from 'next-auth/jwt'
 import { authOptions } from '@/lib/auth'
-import { readSheetValues } from '@/lib/google'
+import { eq } from 'drizzle-orm'
+import { db } from '@/lib/db'
+import { kpis, tenants } from '@/lib/schema'
 
 export const runtime = 'nodejs'
 
-/* ── Default KPI display config ── */
-const DEFAULT_CONFIG = {
-  sheetId: process.env.NEXT_PUBLIC_KPI_SHEET_ID || '',
-  tabName: 'KPIs',
-  cellRange: 'A2:D10',
-  rows: [] as Array<{
-    label: string
-    value: string
-    trend: string
-    direction: 'up' | 'down'
-    visible: boolean
-    order: number
-  }>,
+const TENANT_ID = process.env.NEXT_PUBLIC_TENANT_ID || 'rxfit'
+
+/** Ensure the rxfit tenant row exists (idempotent) */
+async function ensureTenant() {
+  await db
+    .insert(tenants)
+    .values({ id: TENANT_ID, name: 'RxFit Athletics', domain: 'rxfitatx.com' })
+    .onConflictDoNothing()
 }
 
 /**
  * GET /api/settings/kpis
- * Returns current KPI display configuration.
- * Attempts to read from a 'HubSettings' tab in the KPI Sheet, falls back to defaults.
+ * Returns all KPI rows for the current tenant from Postgres.
  */
-export async function GET(req: NextRequest) {
+export async function GET(_req: NextRequest) {
   const session = await getServerSession(authOptions)
-  if (!session?.user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  try {
+    await ensureTenant()
+    const rows = await db
+      .select()
+      .from(kpis)
+      .where(eq(kpis.tenantId, TENANT_ID))
+      .orderBy(kpis.updatedAt)
+
+    return NextResponse.json({ rows, source: 'db' })
+  } catch (err) {
+    console.error('[settings/kpis GET]', err)
+    return NextResponse.json({ error: 'Failed to load KPIs' }, { status: 500 })
   }
-
-  const token = await getToken({ req })
-  const accessToken = token?.accessToken as string | undefined
-  const sheetId = process.env.NEXT_PUBLIC_KPI_SHEET_ID
-
-  // Try reading from HubSettings tab
-  if (accessToken && sheetId) {
-    try {
-      const data = await readSheetValues(accessToken, sheetId, 'HubSettings!A2:F50')
-      if (data.values && data.values.length > 0) {
-        const rows = data.values.map((row, i) => ({
-          label: row[0] || `KPI ${i + 1}`,
-          value: row[1] || '—',
-          trend: row[2] || '—',
-          direction: (row[3]?.toLowerCase() === 'down' ? 'down' : 'up') as 'up' | 'down',
-          visible: row[4] !== 'false',
-          order: row[5] ? parseInt(row[5], 10) : i,
-        }))
-        return NextResponse.json({
-          ...DEFAULT_CONFIG,
-          sheetId,
-          rows,
-          source: 'sheet',
-        })
-      }
-    } catch {
-      // HubSettings tab doesn't exist — fall back to defaults
-    }
-  }
-
-  return NextResponse.json({
-    ...DEFAULT_CONFIG,
-    sheetId: sheetId || '',
-    source: 'defaults',
-  })
 }
 
 /**
  * POST /api/settings/kpis
- * Saves KPI display configuration.
- * For MVP, this validates and returns the config (client stores in localStorage).
- * Future: write to a 'HubSettings' tab in the Sheet.
+ * Creates a new KPI row. Admin only.
  */
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions)
-  if (!session?.user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+  if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  // Check admin role
-  const role = (session.user as Record<string, unknown>)?.role
+  const role = (session.user as Record<string, unknown>)?.role as string
   if (role !== 'admin' && role !== 'superadmin') {
     return NextResponse.json({ error: 'Forbidden — admin access required' }, { status: 403 })
   }
 
   try {
     const body = await req.json()
+    const { label, value, trend, trendDirection, unit, scope, visibility } = body
 
-    // Validate structure
-    const config = {
-      sheetId: typeof body.sheetId === 'string' ? body.sheetId : DEFAULT_CONFIG.sheetId,
-      tabName: typeof body.tabName === 'string' ? body.tabName : DEFAULT_CONFIG.tabName,
-      cellRange: typeof body.cellRange === 'string' ? body.cellRange : DEFAULT_CONFIG.cellRange,
-      rows: Array.isArray(body.rows)
-        ? body.rows.map((r: Record<string, unknown>, i: number) => ({
-            label: typeof r.label === 'string' ? r.label : `KPI ${i + 1}`,
-            value: typeof r.value === 'string' ? r.value : '—',
-            trend: typeof r.trend === 'string' ? r.trend : '—',
-            direction: r.direction === 'down' ? 'down' : 'up',
-            visible: r.visible !== false,
-            order: typeof r.order === 'number' ? r.order : i,
-          }))
-        : [],
-    }
+    if (!label) return NextResponse.json({ error: 'label is required' }, { status: 400 })
 
-    return NextResponse.json({ config, saved: true })
-  } catch {
-    return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
+    await ensureTenant()
+    const [row] = await db
+      .insert(kpis)
+      .values({
+        tenantId: TENANT_ID,
+        label: String(label),
+        value: value != null ? String(value) : '0',
+        trend: trend ? String(trend) : null,
+        trendDirection: trendDirection || 'neutral',
+        unit: unit ? String(unit) : null,
+        scope: scope || 'global',
+        visibility: visibility || 'staff',
+        updatedBy: (session.user as Record<string, unknown>)?.email as string,
+      })
+      .returning()
+
+    return NextResponse.json({ row, created: true })
+  } catch (err) {
+    console.error('[settings/kpis POST]', err)
+    return NextResponse.json({ error: 'Failed to create KPI' }, { status: 500 })
+  }
+}
+
+/**
+ * PATCH /api/settings/kpis
+ * Updates an existing KPI row by ID. Admin only.
+ */
+export async function PATCH(req: NextRequest) {
+  const session = await getServerSession(authOptions)
+  if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const role = (session.user as Record<string, unknown>)?.role as string
+  if (role !== 'admin' && role !== 'superadmin') {
+    return NextResponse.json({ error: 'Forbidden — admin access required' }, { status: 403 })
+  }
+
+  try {
+    const body = await req.json()
+    const { id, ...fields } = body
+    if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 })
+
+    const updateData: Record<string, unknown> = { updatedAt: new Date(), updatedBy: (session.user as Record<string, unknown>)?.email as string }
+    if (fields.label != null)          updateData.label          = String(fields.label)
+    if (fields.value != null)          updateData.value          = String(fields.value)
+    if (fields.trend != null)          updateData.trend          = String(fields.trend)
+    if (fields.trendDirection != null) updateData.trendDirection = String(fields.trendDirection)
+    if (fields.unit != null)           updateData.unit           = String(fields.unit)
+    if (fields.scope != null)          updateData.scope          = String(fields.scope)
+    if (fields.visibility != null)     updateData.visibility     = String(fields.visibility)
+
+    const [row] = await db
+      .update(kpis)
+      .set(updateData)
+      .where(eq(kpis.id, id))
+      .returning()
+
+    return NextResponse.json({ row, updated: true })
+  } catch (err) {
+    console.error('[settings/kpis PATCH]', err)
+    return NextResponse.json({ error: 'Failed to update KPI' }, { status: 500 })
+  }
+}
+
+/**
+ * DELETE /api/settings/kpis
+ * Deletes a KPI row by ID. Admin only.
+ */
+export async function DELETE(req: NextRequest) {
+  const session = await getServerSession(authOptions)
+  if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const role = (session.user as Record<string, unknown>)?.role as string
+  if (role !== 'admin' && role !== 'superadmin') {
+    return NextResponse.json({ error: 'Forbidden — admin access required' }, { status: 403 })
+  }
+
+  try {
+    const { searchParams } = req.nextUrl
+    const id = searchParams.get('id')
+    if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 })
+
+    await db.delete(kpis).where(eq(kpis.id, id))
+    return NextResponse.json({ deleted: true })
+  } catch (err) {
+    console.error('[settings/kpis DELETE]', err)
+    return NextResponse.json({ error: 'Failed to delete KPI' }, { status: 500 })
   }
 }
