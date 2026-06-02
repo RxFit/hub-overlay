@@ -1,7 +1,8 @@
 import type { Company, Issue, Run, Agent } from '@/types'
 import { getPaperclipAuthHeaders, clearPaperclipSession } from '@/lib/paperclipSession'
+import { PAPERCLIP_BASE_URL } from '@/lib/paperclipConfig'
 
-const PAPERCLIP_BASE = process.env.PAPERCLIP_BASE_URL || 'https://rxfit-paperclip-11747747730.us-central1.run.app'
+const PAPERCLIP_BASE = PAPERCLIP_BASE_URL
 
 /**
  * Shared Paperclip fetch wrapper.

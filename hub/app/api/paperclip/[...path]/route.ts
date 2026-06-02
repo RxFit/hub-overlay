@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { getPaperclipAuthHeaders, clearPaperclipSession } from '@/lib/paperclipSession'
+import { PAPERCLIP_BASE_URL } from '@/lib/paperclipConfig'
 
-const PAPERCLIP_BASE = process.env.PAPERCLIP_BASE_URL || 'https://rxfit-paperclip-11747747730.us-central1.run.app'
+const PAPERCLIP_BASE = PAPERCLIP_BASE_URL
 
 // Allowed API path prefixes for the proxy — covers full Paperclip surface
 const ALLOWED_PREFIXES = [
