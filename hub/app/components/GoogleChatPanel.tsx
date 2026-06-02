@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useReducer } from 'react'
 import { useSpaces, useMessages, useSendMessage, useSpaceMembers } from '@/app/hooks/useGoogleChat'
 import type { ChatSpace, ChatMessage, SpaceMember } from '@/app/hooks/useGoogleChat'
 import { MentionPicker, useMentionTrigger } from '@/app/components/MentionPicker'
@@ -300,8 +300,298 @@ function MessageThread({
 }
 
 /* ══════════════════════════════════════════
-   MAIN PANEL — full modal overlay
+   GMAIL VIEW — embedded in the panel body
    ══════════════════════════════════════════ */
+
+interface GmailThread {
+  id: string
+  subject: string
+  from: string
+  date: string
+  snippet: string
+  isUnread: boolean
+  messageCount: number
+}
+
+interface GmailMessage {
+  id: string
+  from: string
+  to: string
+  subject: string
+  date: string
+  body: string
+  isUnread: boolean
+  inReplyTo: string
+}
+
+function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => void }) {
+  const [threads, setThreads] = useState<GmailThread[]>([])
+  const [selectedThread, setSelectedThread] = useState<{ id: string; messages: GmailMessage[] } | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [threadLoading, setThreadLoading] = useState(false)
+  const [reply, setReply] = useState('')
+  const [sending, setSending] = useState(false)
+  const [sendError, setSendError] = useState<string | null>(null)
+  const [mobileView, setMobileView] = useState<'list' | 'thread'>('list')
+  const bottomRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    fetch('/api/google/gmail?view=inbox&maxResults=20')
+      .then(r => r.json())
+      .then(d => {
+        setThreads(d.threads ?? [])
+        onUnreadCount(d.unreadCount ?? 0)
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [onUnreadCount])
+
+  const openThread = async (id: string) => {
+    setThreadLoading(true)
+    setMobileView('thread')
+    try {
+      const d = await fetch(`/api/google/gmail?threadId=${id}`).then(r => r.json())
+      setSelectedThread(d.thread ?? null)
+      // Mark as read locally
+      setThreads(prev => prev.map(t => t.id === id ? { ...t, isUnread: false } : t))
+      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
+    } catch {}
+    setThreadLoading(false)
+  }
+
+  const handleSend = async () => {
+    if (!reply.trim() || !selectedThread) return
+    const last = selectedThread.messages[selectedThread.messages.length - 1]
+    setSending(true)
+    setSendError(null)
+    try {
+      const res = await fetch('/api/google/gmail', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: last.from,
+          threadId: selectedThread.id,
+          inReplyTo: last.inReplyTo,
+          message: reply,
+        }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setReply('')
+      // Optimistically append reply
+      setSelectedThread(prev => prev ? {
+        ...prev,
+        messages: [...prev.messages, {
+          id: d.messageId,
+          from: 'me',
+          to: last.from,
+          subject: last.subject,
+          date: new Date().toUTCString(),
+          body: reply,
+          isUnread: false,
+          inReplyTo: '',
+        }],
+      } : prev)
+      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : 'Failed to send')
+    }
+    setSending(false)
+  }
+
+  const formatDate = (dateStr: string) => {
+    try {
+      const d = new Date(dateStr)
+      const now = new Date()
+      const isToday = d.toDateString() === now.toDateString()
+      return isToday
+        ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+        : d.toLocaleDateString([], { month: 'short', day: 'numeric' })
+    } catch { return '' }
+  }
+
+  const extractName = (fromStr: string) => {
+    const match = fromStr.match(/^(.+?)\s*</)
+    return match ? match[1].trim() : fromStr.split('@')[0]
+  }
+
+  return (
+    <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
+      {/* Thread list */}
+      <div style={{
+        width: '220px',
+        flexShrink: 0,
+        borderRight: '1px solid var(--border)',
+        overflowY: 'auto',
+        display: mobileView === 'thread' ? 'none' : 'flex',
+        flexDirection: 'column',
+      }}
+        className="chat-panel-spaces"
+      >
+        {loading ? (
+          [1,2,3,4,5].map(i => (
+            <div key={i} style={{ padding: '12px', borderBottom: '1px solid var(--border)', opacity: 0.4 }}>
+              <div style={{ height: '10px', background: 'var(--surface-2)', borderRadius: '4px', marginBottom: '6px', width: '70%' }} />
+              <div style={{ height: '8px', background: 'var(--surface-2)', borderRadius: '4px', width: '90%' }} />
+            </div>
+          ))
+        ) : threads.length === 0 ? (
+          <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+            No messages
+          </div>
+        ) : (
+          threads.map(t => (
+            <button
+              key={t.id}
+              onClick={() => openThread(t.id)}
+              style={{
+                display: 'block',
+                width: '100%',
+                textAlign: 'left',
+                padding: '10px 12px',
+                border: 'none',
+                borderBottom: '1px solid var(--border)',
+                background: selectedThread?.id === t.id ? 'var(--surface-2)' : 'transparent',
+                cursor: 'pointer',
+                transition: 'background 0.1s ease',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '3px' }}>
+                <span style={{
+                  fontSize: '0.72rem',
+                  fontWeight: t.isUnread ? 700 : 400,
+                  color: t.isUnread ? 'var(--text-primary)' : 'var(--text-secondary)',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  maxWidth: '130px',
+                }}>
+                  {extractName(t.from)}
+                </span>
+                <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', flexShrink: 0 }}>
+                  {formatDate(t.date)}
+                </span>
+              </div>
+              <div style={{
+                fontSize: '0.68rem',
+                color: t.isUnread ? 'var(--text-primary)' : 'var(--text-muted)',
+                fontWeight: t.isUnread ? 600 : 400,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}>
+                {t.subject}
+              </div>
+              <div style={{
+                fontSize: '0.62rem',
+                color: 'var(--text-muted)',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                marginTop: '2px',
+              }}>
+                {t.snippet}
+              </div>
+            </button>
+          ))
+        )}
+      </div>
+
+      {/* Thread detail */}
+      <div style={{
+        flex: 1,
+        display: mobileView === 'list' ? 'none' : 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+      }}
+        className="chat-panel-thread"
+      >
+        {/* Mobile back */}
+        {mobileView === 'thread' && (
+          <button
+            onClick={() => setMobileView('list')}
+            style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '8px 12px', textAlign: 'left', fontSize: '0.8rem' }}
+          >
+            ‹ Back
+          </button>
+        )}
+
+        {threadLoading ? (
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+            Loading…
+          </div>
+        ) : selectedThread ? (
+          <>
+            {/* Messages */}
+            <div style={{ flex: 1, overflowY: 'auto', padding: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {selectedThread.messages.map(msg => (
+                <div key={msg.id} style={{
+                  padding: '10px 12px',
+                  background: 'var(--surface-2, rgba(255,255,255,0.04))',
+                  borderRadius: '8px',
+                  border: '1px solid var(--border)',
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                      {extractName(msg.from)}
+                    </span>
+                    <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>
+                      {formatDate(msg.date)}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--text-primary)', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
+                    {msg.body}
+                  </div>
+                </div>
+              ))}
+              <div ref={bottomRef} />
+            </div>
+
+            {/* Reply composer */}
+            {sendError && (
+              <div style={{ padding: '6px 12px', color: 'var(--danger)', fontSize: '0.72rem', borderTop: '1px solid var(--border)' }}>
+                ⚠️ {sendError}
+              </div>
+            )}
+            <div className="chat-composer" style={{ borderTop: '1px solid var(--border)', padding: '8px 12px', gap: '8px' }}>
+              <textarea
+                className="chat-composer__input"
+                value={reply}
+                onChange={e => setReply(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() } }}
+                placeholder="Reply…"
+                rows={1}
+                disabled={sending}
+                style={{ fontSize: '0.8rem' }}
+              />
+              <button
+                className="chat-composer__send"
+                onClick={handleSend}
+                disabled={!reply.trim() || sending}
+                aria-label="Send reply"
+              >
+                {sending ? (
+                  <span className="chat-composer__spinner" aria-hidden="true" />
+                ) : (
+                  <span className="rx-icon rx-icon--sm" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                      <line x1="22" y1="2" x2="11" y2="13" />
+                      <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                    </svg>
+                  </span>
+                )}
+              </button>
+            </div>
+          </>
+        ) : (
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+            Select a thread
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
 
 export function GoogleChatPanel({
   isOpen,
@@ -313,6 +603,8 @@ export function GoogleChatPanel({
   const { visibleSpaces, isLoading, missingScope } = useSpaces()
   const [selectedSpace, setSelectedSpace] = useState<ChatSpace | null>(null)
   const [mobileView, setMobileView] = useState<'spaces' | 'thread'>('spaces')
+  const [activeTab, setActiveTab] = useState<'chat' | 'gmail'>('chat')
+  const [gmailUnread, setGmailUnread] = useState(0)
   const panelRef = useRef<HTMLDivElement>(null)
 
   // Auto-select first space on desktop
@@ -367,7 +659,7 @@ export function GoogleChatPanel({
         {/* Panel header */}
         <div className="chat-panel-header">
           {/* Mobile back button */}
-          {mobileView === 'thread' && (
+          {activeTab === 'chat' && mobileView === 'thread' && (
             <button
               className="chat-panel-back"
               onClick={() => setMobileView('spaces')}
@@ -377,19 +669,66 @@ export function GoogleChatPanel({
             </button>
           )}
 
-          <div className="chat-panel-header__title">
-            <span className="rx-icon rx-icon--sm" aria-hidden="true">
-              <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-              </svg>
-            </span>
-            <span>Google Chat</span>
+          {/* Tab toggle: Gmail | Chat */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '2px',
+            background: 'rgba(255,255,255,0.06)',
+            borderRadius: '8px',
+            padding: '3px',
+            flex: 1,
+            maxWidth: '180px',
+          }}>
+            {(['gmail', 'chat'] as const).map(tab => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                aria-selected={activeTab === tab}
+                style={{
+                  flex: 1,
+                  padding: '4px 8px',
+                  borderRadius: '6px',
+                  border: 'none',
+                  background: activeTab === tab ? 'var(--surface-3, rgba(255,255,255,0.12))' : 'transparent',
+                  color: activeTab === tab ? 'var(--text-primary)' : 'var(--text-muted)',
+                  fontSize: '0.72rem',
+                  fontWeight: activeTab === tab ? 700 : 400,
+                  fontFamily: 'var(--font-mono)',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em',
+                  position: 'relative',
+                }}
+              >
+                {tab === 'gmail' ? 'Gmail' : 'Chat'}
+                {tab === 'gmail' && gmailUnread > 0 && (
+                  <span style={{
+                    position: 'absolute',
+                    top: '2px',
+                    right: '4px',
+                    background: 'var(--accent)',
+                    color: '#000',
+                    borderRadius: '10px',
+                    fontSize: '0.55rem',
+                    fontWeight: 800,
+                    padding: '0 4px',
+                    lineHeight: '14px',
+                    minWidth: '14px',
+                    textAlign: 'center',
+                  }}>
+                    {gmailUnread > 99 ? '99+' : gmailUnread}
+                  </span>
+                )}
+              </button>
+            ))}
           </div>
 
           <button
             className="chat-panel-close"
             onClick={onClose}
-            aria-label="Close Google Chat"
+            aria-label="Close panel"
           >
             ✕
           </button>
@@ -397,35 +736,41 @@ export function GoogleChatPanel({
 
         {/* Panel body */}
         <div className="chat-panel-body">
-          {/* Spaces column (hidden on mobile when viewing thread) */}
-          <div className={`chat-panel-spaces${mobileView === 'thread' ? ' chat-panel-spaces--mobile-hidden' : ''}`}>
-            <SpacesList
-              spaces={visibleSpaces}
-              selectedId={selectedSpace?.name ?? null}
-              onSelect={handleSelectSpace}
-              isLoading={isLoading}
-              missingScope={missingScope}
-            />
-          </div>
-
-          {/* Thread column */}
-          <div className={`chat-panel-thread${mobileView === 'spaces' ? ' chat-panel-thread--mobile-hidden' : ''}`}>
-            {selectedSpace ? (
-              <MessageThread
-                spaceId={selectedSpace.name}
-                spaceName={selectedSpace.displayName || selectedSpace.name}
-              />
-            ) : (
-              <div className="chat-thread__empty chat-thread__select-prompt">
-                <span className="rx-icon rx-icon--lg" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                  </svg>
-                </span>
-                <p>Select a space to start chatting</p>
+          {activeTab === 'gmail' ? (
+            <GmailView onUnreadCount={setGmailUnread} />
+          ) : (
+            <>
+              {/* Spaces column (hidden on mobile when viewing thread) */}
+              <div className={`chat-panel-spaces${mobileView === 'thread' ? ' chat-panel-spaces--mobile-hidden' : ''}`}>
+                <SpacesList
+                  spaces={visibleSpaces}
+                  selectedId={selectedSpace?.name ?? null}
+                  onSelect={handleSelectSpace}
+                  isLoading={isLoading}
+                  missingScope={missingScope}
+                />
               </div>
-            )}
-          </div>
+
+              {/* Thread column */}
+              <div className={`chat-panel-thread${mobileView === 'spaces' ? ' chat-panel-thread--mobile-hidden' : ''}`}>
+                {selectedSpace ? (
+                  <MessageThread
+                    spaceId={selectedSpace.name}
+                    spaceName={selectedSpace.displayName || selectedSpace.name}
+                  />
+                ) : (
+                  <div className="chat-thread__empty chat-thread__select-prompt">
+                    <span className="rx-icon rx-icon--lg" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                      </svg>
+                    </span>
+                    <p>Select a space to start chatting</p>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
         </div>
       </div>
     </>

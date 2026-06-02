@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
-import { getToken } from 'next-auth/jwt'
 import { authOptions } from '@/lib/auth'
 import { getCompanies, getIssues, getRuns, getAgents } from '@/lib/paperclip'
 import { computeOperationalKPIs, computeProjectHealth, filterByRole } from '@/lib/kpi-engine'
-import { readSheetValues } from '@/lib/google'
 import type { LiveKPI, ProjectKPI } from '@/types'
 
 export const runtime = 'nodejs'
@@ -72,37 +70,35 @@ export async function GET(req: NextRequest) {
       if (res.health) allProjects.push(res.health)
     }
 
-    // 3. Optionally fetch business KPIs from Google Sheet
-    const sheetId = process.env.NEXT_PUBLIC_KPI_SHEET_ID
-    if (sheetId && (!requestedCompanyId || requestedCompanyId === 'all')) {
+    // 3. Fetch business KPIs from DB (replaces Google Sheet source)
+    if (!requestedCompanyId || requestedCompanyId === 'all') {
       try {
-        const token = await getToken({ req })
-        if (token?.accessToken) {
-          const sheetData = await readSheetValues(token.accessToken as string, sheetId, 'KPIs!A2:E50')
-          
-          if (sheetData.values) {
-            const now = new Date().toISOString()
-            const sheetKpis: LiveKPI[] = sheetData.values
-              .filter(row => row[0]) // must have label
-              .map((row, i) => {
-                const isUp = (row[3] ?? '').toLowerCase() !== 'down'
-                return {
-                  id: `sheet-kpi-${i}`,
-                  label: row[0],
-                  value: row[1] ?? '0',
-                  trend: row[2] ?? '',
-                  trendDirection: isUp ? 'up' : 'down',
-                  source: 'sheet',
-                  scope: 'global',
-                  visibility: 'admin', // Default sheet KPIs to admin visibility
-                  updatedAt: now,
-                }
-              })
-            allKpis.push(...sheetKpis)
-          }
-        }
+        const { db } = await import('@/lib/db')
+        const { kpis: kpisTable } = await import('@/lib/schema')
+        const { eq } = await import('drizzle-orm')
+        const tenantId = process.env.NEXT_PUBLIC_TENANT_ID || 'rxfit'
+
+        const dbKpis = await db
+          .select()
+          .from(kpisTable)
+          .where(eq(kpisTable.tenantId, tenantId))
+
+        const now = new Date().toISOString()
+        const businessKpis: LiveKPI[] = dbKpis.map(row => ({
+          id: row.id,
+          label: row.label,
+          value: row.value,
+          trend: row.trend ?? '',
+          trendDirection: (row.trendDirection as 'up' | 'down' | 'neutral') ?? 'neutral',
+          source: 'sheet' as const,   // keeps 'sheet' source so Left Panel filter includes them
+          scope: (row.scope as 'global' | 'project') ?? 'global',
+          visibility: (row.visibility as 'public' | 'staff' | 'admin') ?? 'staff',
+          updatedAt: row.updatedAt?.toISOString() ?? now,
+          companyId: row.companyId ?? undefined,
+        }))
+        allKpis.push(...businessKpis)
       } catch (err) {
-        console.warn('Failed to fetch business KPIs from Google Sheet', err)
+        console.warn('[kpis] Failed to fetch business KPIs from DB:', err)
       }
     }
 

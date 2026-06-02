@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { getToken } from 'next-auth/jwt'
 import { authOptions } from '@/lib/auth'
-import { getAllRoleEntries, upsertUserRole } from '@/lib/hubRoles'
+import { getAllRoleEntries, upsertUserRole } from '@/lib/userRoles'
 
 export const runtime = 'nodejs'
 

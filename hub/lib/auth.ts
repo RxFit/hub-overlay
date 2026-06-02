@@ -1,7 +1,7 @@
 import type { NextAuthOptions } from 'next-auth'
 import type { JWT } from 'next-auth/jwt'
 import GoogleProvider from 'next-auth/providers/google'
-import { getAllRoleEntries } from '@/lib/hubRoles'
+import { getAllRoleEntries } from '@/lib/userRoles'
 
 /* ── Admin email lists (comma-separated env vars) ── */
 const SUPERADMIN_EMAILS = (process.env.SUPERADMIN_EMAILS || '')
@@ -18,12 +18,15 @@ const GOOGLE_SCOPES = [
   'https://www.googleapis.com/auth/tasks',
   'https://www.googleapis.com/auth/calendar',
   'https://www.googleapis.com/auth/drive.readonly',
-  'https://www.googleapis.com/auth/spreadsheets',  // read-write for Hub Roles sheet
+  // Gmail — read inbox, send, mark read
+  'https://www.googleapis.com/auth/gmail.readonly',
+  'https://www.googleapis.com/auth/gmail.send',
+  'https://www.googleapis.com/auth/gmail.modify',
   // Google Chat — read spaces + messages, send messages
   'https://www.googleapis.com/auth/chat.spaces.readonly',
   'https://www.googleapis.com/auth/chat.messages',
   'https://www.googleapis.com/auth/chat.messages.create',
-  // Google Chat — member listing (for @mentions) + read state (for unread badges)
+  // Google Chat — member listing + read state (for unread badges)
   'https://www.googleapis.com/auth/chat.memberships.readonly',
   'https://www.googleapis.com/auth/chat.users.readstate.readonly',
 ].join(' ')
