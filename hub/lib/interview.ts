@@ -187,108 +187,44 @@ export function detectIntent(message: string): InterviewIntent | null {
 const INTERVIEW_SEQUENCES: Record<InterviewIntent, InterviewStep[]> = {
   create_task: [
     {
-      question:
-        'What exactly needs to be done? Be specific about the deliverable — not just the action, but what "done" looks like.',
+      question: 'What exactly needs to be done? Provide the task description and any necessary context.',
       key: 'description',
     },
     {
-      question: 'What priority should this be? (urgent / high / medium / low)',
-      key: 'priority',
-      defaultValue: 'medium',
-    },
-    {
-      question: 'When does this need to be completed by?',
-      key: 'deadline',
-      defaultValue: 'End of this week',
-    },
-    {
-      question: 'Who should this be assigned to? (name, role, or "me")',
-      key: 'assignee',
-      defaultValue: 'me',
-    },
-    {
-      question:
-        'Let me confirm: I\'ll create this task with the details above. Does everything look correct? (yes / edit / cancel)',
+      question: 'I\'ll create this task with the context provided. Confirm? (yes / edit / cancel)',
       key: '_confirm',
     },
   ],
 
   schedule_event: [
     {
-      question: 'What is this event about? Give it a clear title and purpose.',
-      key: 'title',
+      question: 'What is this event about? Please provide the title, attendees, date/time, and any context.',
+      key: 'details',
     },
     {
-      question: 'When should this happen? (date and time)',
-      key: 'when',
-      defaultValue: 'Tomorrow at 10:00 AM',
-    },
-    {
-      question: 'Who should be invited?',
-      key: 'attendees',
-    },
-    {
-      question:
-        'Where will this take place? (conference room, Zoom, Google Meet, etc.)',
-      key: 'location',
-      defaultValue: 'Google Meet',
-    },
-    {
-      question: 'How long should this be? (e.g., 30 min, 1 hour)',
-      key: 'duration',
-      defaultValue: '30 minutes',
-    },
-    {
-      question:
-        'Let me confirm: I\'ll schedule this event with the details above. Does everything look correct? (yes / edit / cancel)',
+      question: 'I\'ll schedule this event with the details above. Confirm? (yes / edit / cancel)',
       key: '_confirm',
     },
   ],
 
   send_communication: [
     {
-      question: 'Who should receive this? (name or email)',
-      key: 'recipient',
+      question: 'Who should receive this and what should the message say? Provide the recipient and the content.',
+      key: 'details',
     },
     {
-      question:
-        'What channel? (email, Slack, text, or notification)',
-      key: 'channel',
-      defaultValue: 'email',
-    },
-    {
-      question: 'What should the message say? Give me the key points.',
-      key: 'content',
-    },
-    {
-      question:
-        'What tone? (professional, casual, urgent, friendly)',
-      key: 'tone',
-      defaultValue: 'professional',
-    },
-    {
-      question:
-        'Let me confirm: I\'ll send this communication with the details above. Does everything look correct? (yes / edit / cancel)',
+      question: 'I\'ll prepare this communication with the details above. Confirm? (yes / edit / cancel)',
       key: '_confirm',
     },
   ],
 
   create_paperclip_issue: [
     {
-      question: 'Give this task a clear, action-oriented title.',
-      key: 'title',
-    },
-    {
-      question: 'What needs to be done? Provide full context, constraints, and what success looks like.',
+      question: 'What needs to be done? Provide the issue title and context for the agent.',
       key: 'description',
     },
     {
-      question: 'What is the priority? (urgent / high / medium / low)',
-      key: 'priority',
-      defaultValue: 'medium',
-    },
-    {
-      question: 'Let me confirm: I\'ll create this issue and assign it to the CEO Agent. Does everything look correct? (yes / edit / cancel)',
+      question: 'I\'ll create this issue and assign it to the CEO Agent. Confirm? (yes / edit / cancel)',
       key: '_confirm',
     },
   ],

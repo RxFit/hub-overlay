@@ -15,6 +15,7 @@ import { AnimatedNumber } from '@/app/components/AnimatedNumber'
 import { OnboardingCard, shouldShowOnboardingCard } from '@/app/components/OnboardingCard'
 import { OnboardingBanner } from '@/app/components/OnboardingBanner'
 import { GoogleChatPanel } from '@/app/components/GoogleChatPanel'
+import { EmailPreviewCard } from '@/app/components/EmailPreviewCard'
 import { InfoPopover } from '@/app/components/InfoPopover'
 import { useTenant } from '@/app/components/TenantProvider'
 import { useKPIData } from '@/app/hooks/useKPIData'
@@ -126,39 +127,66 @@ function parseInlineMarkdown(text: string, onToolActivate?: (toolId: string) => 
 function MessageContent({ content, onToolActivate }: { content: string; onToolActivate?: (toolId: string) => void }) {
   // Strip suggestedTools metadata from visible content
   const cleanContent = content.replace(/<!--suggestedTools:\[.*?\]-->/g, '').trimEnd()
-  const lines = cleanContent.split('\n')
+  
+  // Custom parser to split by HTML code blocks
+  const parts: { type: 'text' | 'html', content: string }[] = []
+  const htmlBlockRegex = /```html\n([\s\S]*?)```/g
+  let lastIndex = 0
+  let match
+
+  while ((match = htmlBlockRegex.exec(cleanContent)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push({ type: 'text', content: cleanContent.slice(lastIndex, match.index) })
+    }
+    parts.push({ type: 'html', content: match[1] })
+    lastIndex = match.index + match[0].length
+  }
+  if (lastIndex < cleanContent.length) {
+    parts.push({ type: 'text', content: cleanContent.slice(lastIndex) })
+  }
 
   return (
     <div style={{ whiteSpace: 'pre-wrap' }}>
-      {lines.map((line, i) => {
-        // Bullet points
-        if (line.startsWith('• ') || line.startsWith('- ')) {
-          return <div key={i} style={{ paddingLeft: '8px' }}>{parseInlineMarkdown(line, onToolActivate)}</div>
+      {parts.map((part, pIndex) => {
+        if (part.type === 'html') {
+          return <EmailPreviewCard key={pIndex} htmlContent={part.content} />
         }
-        // Table header detection
-        if (line.includes('|') && line.trim().startsWith('|')) {
-          const cells = line.split('|').filter(c => c.trim())
-          if (cells.every(c => /^[\s-]+$/.test(c))) return <Fragment key={i} />  // separator line
-          return (
-            <div key={i} style={{
-              display: 'flex',
-              gap: '8px',
-              fontFamily: 'var(--font-mono)',
-              fontSize: '0.7rem',
-              padding: '2px 0',
-              color: line.includes('---') ? 'transparent' : undefined,
-            }}>
-              {cells.map((cell, j) => (
-                <span key={j} style={{ flex: 1, minWidth: 0 }}>{parseInlineMarkdown(cell.trim(), onToolActivate)}</span>
-              ))}
-            </div>
-          )
-        }
-        // Empty line
-        if (!line.trim()) {
-          return <div key={i}>{' '}</div>
-        }
-        return <div key={i}>{parseInlineMarkdown(line, onToolActivate)}</div>
+        
+        const lines = part.content.split('\n')
+        return (
+          <Fragment key={pIndex}>
+            {lines.map((line, i) => {
+              // Bullet points
+              if (line.startsWith('• ') || line.startsWith('- ')) {
+                return <div key={`${pIndex}-${i}`} style={{ paddingLeft: '8px' }}>{parseInlineMarkdown(line, onToolActivate)}</div>
+              }
+              // Table header detection
+              if (line.includes('|') && line.trim().startsWith('|')) {
+                const cells = line.split('|').filter(c => c.trim())
+                if (cells.every(c => /^[\s-]+$/.test(c))) return <Fragment key={`${pIndex}-${i}`} />  // separator line
+                return (
+                  <div key={`${pIndex}-${i}`} style={{
+                    display: 'flex',
+                    gap: '8px',
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: '0.7rem',
+                    padding: '2px 0',
+                    color: line.includes('---') ? 'transparent' : undefined,
+                  }}>
+                    {cells.map((cell, j) => (
+                      <span key={j} style={{ flex: 1, minWidth: 0 }}>{parseInlineMarkdown(cell.trim(), onToolActivate)}</span>
+                    ))}
+                  </div>
+                )
+              }
+              // Empty line
+              if (!line.trim()) {
+                return <div key={`${pIndex}-${i}`}>{' '}</div>
+              }
+              return <div key={`${pIndex}-${i}`}>{parseInlineMarkdown(line, onToolActivate)}</div>
+            })}
+          </Fragment>
+        )
       })}
     </div>
   )
@@ -501,7 +529,7 @@ export default function HubPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [])
 
-  useEffect(() => { scrollToBottom() }, [messages, scrollToBottom])
+  useEffect(() => { scrollToBottom() }, [messages, actionSpec, scrollToBottom])
 
   /* ── E2: Scroll-to-bottom detection ── */
   useEffect(() => {
@@ -740,6 +768,7 @@ export default function HubPage() {
     setActionExecuting(true)
     setActionSpec(null)
     setInterviewState(null)
+    setMessages(prev => prev.filter(m => !m.content.includes('Interview complete!')))
 
     // Add a "working on it" message
     const workingId = crypto.randomUUID()
@@ -1246,7 +1275,11 @@ export default function HubPage() {
                   spec={actionSpec}
                   onApprove={() => handleActionApprove(actionSpec)}
                   onEdit={() => { /* could re-enter interview */ }}
-                  onCancel={() => { setActionSpec(null); setInterviewState(null) }}
+                  onCancel={() => {
+                    setActionSpec(null)
+                    setInterviewState(null)
+                    setMessages(prev => prev.filter(m => !m.content.includes('Interview complete!')))
+                  }}
                 />
               )}
 
