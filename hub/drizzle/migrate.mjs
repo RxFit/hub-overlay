@@ -62,6 +62,15 @@ async function run() {
   `
   console.log('[migrate] ✓ kpis table')
 
+  // Migration 0001 — KPI sync columns (safe to re-run)
+  await sql`
+    ALTER TABLE kpis
+      ADD COLUMN IF NOT EXISTS previous_value   TEXT,
+      ADD COLUMN IF NOT EXISTS source_config    JSONB,
+      ADD COLUMN IF NOT EXISTS last_synced_at   TIMESTAMPTZ
+  `
+  console.log('[migrate] ✓ kpis sync columns (0001)')
+
   // Seed rxfit tenant
   await sql`
     INSERT INTO tenants (id, name, domain)
