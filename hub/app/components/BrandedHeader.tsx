@@ -12,6 +12,8 @@ interface BrandedHeaderProps {
   onProjectChange: (id: string) => void
   theme: 'dark' | 'light'
   onThemeToggle: () => void
+  onOpenGoogleChat?: () => void
+  chatUnreadCount?: number
 }
 
 export function BrandedHeader({
@@ -19,6 +21,8 @@ export function BrandedHeader({
   onProjectChange,
   theme,
   onThemeToggle,
+  onOpenGoogleChat,
+  chatUnreadCount = 0,
 }: BrandedHeaderProps) {
   const tenant = useTenant()
   const { data: session } = useSession()
@@ -84,19 +88,32 @@ export function BrandedHeader({
           ))}
         </select>
 
-        {/* Settings gear — all authenticated users */}
-        {session && (
-          <Link
-            href="/settings"
+        {/* Google Chat button — desktop view */}
+        {session && onOpenGoogleChat && (
+          <button
             className="theme-toggle-btn"
-            aria-label="Hub Settings"
-            title="Hub Settings"
+            onClick={onOpenGoogleChat}
+            aria-label="Google Chat"
+            title="Google Chat"
+            style={{ position: 'relative' }}
           >
-            ⚙️
-          </Link>
+            <span style={{ fontSize: '1.2rem', marginTop: '2px', display: 'inline-block' }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+            </span>
+            {chatUnreadCount > 0 && (
+              <span style={{
+                position: 'absolute', top: '0px', right: '0px',
+                background: 'var(--accent)', color: 'var(--btn-text)',
+                fontSize: '10px', padding: '2px 6px', borderRadius: '12px',
+                fontWeight: 'bold', transform: 'translate(25%, -25%)'
+              }}>
+                {chatUnreadCount > 99 ? '99+' : chatUnreadCount}
+              </span>
+            )}
+          </button>
         )}
-
-
         <button
           className="theme-toggle-btn"
           onClick={onThemeToggle}
@@ -138,6 +155,10 @@ export function BrandedHeader({
 
               {/* Menu items */}
               <div style={{ padding: '6px' }}>
+                <Link href="/settings" style={{ display: 'block', padding: '6px 12px', color: 'inherit', textDecoration: 'none' }}>
+                  <span style={{ fontSize: '1rem', marginRight: '8px' }}>⚙️</span>
+                  Settings
+                </Link>
                 <button
                   role="menuitem"
                   onClick={handleSignOut}

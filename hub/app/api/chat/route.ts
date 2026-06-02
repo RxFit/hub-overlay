@@ -3,10 +3,11 @@ import { getServerSession } from 'next-auth'
 import { getToken } from 'next-auth/jwt'
 import { authOptions } from '@/lib/auth'
 import { streamGeminiChat, buildSystemPrompt } from '@/lib/gemini'
-import { getCompanies, getIssues } from '@/lib/paperclip'
+import { getCompanies, getIssues, getAgents } from '@/lib/paperclip'
 import { fetchUrlContent, fetchDriveDocContent } from '@/lib/content-fetch'
 import { searchSemanticBrain } from '@/lib/vertex'
 import { searchWeb, fetchUrlWithExa } from '@/lib/exa'
+import { loadSkillContent } from '@/lib/skills-loader'
 import type { ChatMessage, ChatAttachment } from '@/types'
 
 export const runtime = 'nodejs'
@@ -57,14 +58,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  let body: { messages: ChatMessage[]; useCase?: string; attachments?: ChatAttachment[] }
+  let body: { messages: ChatMessage[]; useCase?: string; attachments?: ChatAttachment[]; activeSkill?: string }
   try {
     body = await req.json()
   } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
-  const { messages, useCase = 'deep_dive', attachments } = body
+  const { messages, useCase = 'deep_dive', attachments, activeSkill } = body
   if (!messages || !Array.isArray(messages) || messages.length === 0) {
     return NextResponse.json({ error: 'Messages array required' }, { status: 400 })
   }
@@ -88,6 +89,25 @@ export async function POST(req: NextRequest) {
       .slice(0, 10)
       .map(i => `- [${i.identifier}] ${i.title} (${i.state?.name ?? 'unknown'})`)
       .join('\n')
+
+    // Also get agent status for system prompt context
+    let agentStatusContext = ''
+    try {
+      const agentPromises = companies.slice(0, 3).map(c =>
+        getAgents(c.id).catch(() => [])
+      )
+      const agentResults = await Promise.all(agentPromises)
+      const allAgents = agentResults.flat()
+      const healthy = allAgents.filter(a => a.status === 'active').length
+      const errored = allAgents.filter(a => a.status === 'error').length
+      const inactive = allAgents.filter(a => a.status === 'inactive').length
+      agentStatusContext = `Agent Fleet Status: ${allAgents.length} total — ${healthy} healthy, ${errored} errored, ${inactive} inactive`
+    } catch {
+      // Agents unavailable
+    }
+    if (agentStatusContext) {
+      agentActivity += '\n' + agentStatusContext
+    }
   } catch {
     // Paperclip unavailable — proceed without context
     projectContext = 'Paperclip API unavailable — using cached context'
@@ -224,20 +244,46 @@ export async function POST(req: NextRequest) {
   // Combine all injected context
   const allInjectedContext = [searchContext, attachmentContext].filter(Boolean).join('\n\n')
 
+  // Load active skill content if specified
+  let activeSkillContent: string | undefined
+  if (activeSkill) {
+    const content = await loadSkillContent(activeSkill)
+    if (content) activeSkillContent = content
+  }
+
   const systemPrompt = buildSystemPrompt({
     projects: projectContext,
     agentActivity,
     injectedContext: allInjectedContext || undefined,
+    activeSkill: activeSkill || undefined,
+    activeSkillContent,
   })
+
+  // Force deep_dive model when a skill is active
+  const effectiveUseCase = activeSkill ? 'deep_dive' : useCase
 
   // Stream response
   const encoder = new TextEncoder()
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        for await (const chunk of streamGeminiChat(messages, systemPrompt, useCase)) {
+        let fullText = ''
+        for await (const chunk of streamGeminiChat(messages, systemPrompt, effectiveUseCase)) {
+          fullText += chunk
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: chunk })}\n\n`))
         }
+
+        // Parse suggestedTools metadata from AI response
+        const toolMatch = fullText.match(/<!--suggestedTools:(\[.*?\])-->/)
+        if (toolMatch) {
+          try {
+            const tools = JSON.parse(toolMatch[1])
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ suggestedTools: tools })}\n\n`))
+          } catch {
+            // Skip malformed suggestedTools
+          }
+        }
+
         controller.enqueue(encoder.encode('data: [DONE]\n\n'))
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error'

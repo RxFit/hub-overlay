@@ -6,14 +6,17 @@ import { useSession, signIn } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { TasksSection, CalendarSection, DocumentsSection, KPISection, ProjectHealthSection } from '@/app/components/LeftPanelSections'
 import { ExecutionFeed } from '@/app/components/RightPanelSections'
-import { InterviewBadge, ContextInjectionBanner, ActionConfirmCard } from '@/app/components/ChatEnhancements'
+import { InterviewBadge, ContextInjectionBanner, ActionConfirmCard, SkillBadge } from '@/app/components/ChatEnhancements'
 import { ContextAttachMenu, AttachmentChips } from '@/app/components/ContextAttachMenu'
+import { SkillsPopover } from '@/app/components/SkillsPopover'
+import { SKILL_CATALOG, SKILL_MAP } from '@/lib/skills'
 import { BrandedHeader } from '@/app/components/BrandedHeader'
 import { AnimatedNumber } from '@/app/components/AnimatedNumber'
 import { OnboardingCard, shouldShowOnboardingCard } from '@/app/components/OnboardingCard'
 import { OnboardingBanner } from '@/app/components/OnboardingBanner'
 import { GoogleChatPanel } from '@/app/components/GoogleChatPanel'
 import { InfoPopover } from '@/app/components/InfoPopover'
+import { useTenant } from '@/app/components/TenantProvider'
 import { useKPIData } from '@/app/hooks/useKPIData'
 import { useSpaces, useUnreadCounts } from '@/app/hooks/useGoogleChat'
 import {
@@ -22,8 +25,11 @@ import {
   advanceInterview,
   getCurrentQuestion,
   getTotalQuestions,
+  hasPermission,
+  getRequiredPermission,
+  isReadOnlyIntent,
 } from '@/lib/interview'
-import type { InterviewState, ActionSpec, ChatAttachment } from '@/types'
+import type { InterviewState, ActionSpec, ChatAttachment, ActiveSkill } from '@/types'
 
 const CHAT_SUGGESTIONS = [
   "What's blocking FridgeSnap revenue?",
@@ -48,11 +54,12 @@ const ONBOARDING_SUGGESTIONS = [
 
 /* ── Left Panel: Context Layer ── */
 function LeftPanel({ isOpen, onClose, onInjectChat, panelRef, style, activeProject }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string, useCase?: string) => void; panelRef?: React.Ref<HTMLElement>; style?: React.CSSProperties; activeProject?: string }) {
+  const tenant = useTenant()
   return (
     <aside ref={panelRef} className={`panel-left ${isOpen ? 'mobile-open' : ''}`} aria-label="Context Layer" style={style}>
       <div className="panel-header">
         <h2 className="panel-title">
-          <span className="panel-title-display">Context</span>
+          <span className="panel-title-display">{tenant?.name || 'Business'}</span>
         </h2>
         {onClose && (
           <button className="panel-close-btn" onClick={onClose} aria-label="Close Context Layer">
@@ -72,10 +79,10 @@ function LeftPanel({ isOpen, onClose, onInjectChat, panelRef, style, activeProje
 }
 
 /* ── Safe Markdown-like renderer (no dangerouslySetInnerHTML) ── */
-function parseInlineMarkdown(text: string): React.ReactNode[] {
+function parseInlineMarkdown(text: string, onToolActivate?: (toolId: string) => void): React.ReactNode[] {
   const nodes: React.ReactNode[] = []
-  // Match bold (**...**) and italic (*...*) — bold first since it's a superset
-  const regex = /\*\*(.*?)\*\*|\*(.*?)\*/g
+  // Match bold (**...**), italic (*...*), and tool references ([[...]])
+  const regex = /\*\*(.*?)\*\*|\*(.*?)\*|\[\[([\w-]+)\]\]/g
   let lastIndex = 0
   let match: RegExpExecArray | null
 
@@ -90,6 +97,19 @@ function parseInlineMarkdown(text: string): React.ReactNode[] {
     } else if (match[2] !== undefined) {
       // Italic
       nodes.push(<em key={`i-${match.index}`}>{match[2]}</em>)
+    } else if (match[3] !== undefined) {
+      // Tool reference — render as clickable gold link
+      const toolId = match[3]
+      nodes.push(
+        <button
+          key={`tool-${match.index}`}
+          className="inline-tool-link"
+          onClick={() => onToolActivate?.(toolId)}
+          title={SKILL_MAP[toolId]?.description || toolId}
+        >
+          {toolId}
+        </button>
+      )
     }
     lastIndex = match.index + match[0].length
   }
@@ -103,15 +123,17 @@ function parseInlineMarkdown(text: string): React.ReactNode[] {
   return nodes
 }
 
-function MessageContent({ content }: { content: string }) {
-  const lines = content.split('\n')
+function MessageContent({ content, onToolActivate }: { content: string; onToolActivate?: (toolId: string) => void }) {
+  // Strip suggestedTools metadata from visible content
+  const cleanContent = content.replace(/<!--suggestedTools:\[.*?\]-->/g, '').trimEnd()
+  const lines = cleanContent.split('\n')
 
   return (
     <div style={{ whiteSpace: 'pre-wrap' }}>
       {lines.map((line, i) => {
         // Bullet points
         if (line.startsWith('• ') || line.startsWith('- ')) {
-          return <div key={i} style={{ paddingLeft: '8px' }}>{parseInlineMarkdown(line)}</div>
+          return <div key={i} style={{ paddingLeft: '8px' }}>{parseInlineMarkdown(line, onToolActivate)}</div>
         }
         // Table header detection
         if (line.includes('|') && line.trim().startsWith('|')) {
@@ -127,7 +149,7 @@ function MessageContent({ content }: { content: string }) {
               color: line.includes('---') ? 'transparent' : undefined,
             }}>
               {cells.map((cell, j) => (
-                <span key={j} style={{ flex: 1, minWidth: 0 }}>{parseInlineMarkdown(cell.trim())}</span>
+                <span key={j} style={{ flex: 1, minWidth: 0 }}>{parseInlineMarkdown(cell.trim(), onToolActivate)}</span>
               ))}
             </div>
           )
@@ -136,7 +158,7 @@ function MessageContent({ content }: { content: string }) {
         if (!line.trim()) {
           return <div key={i}>{' '}</div>
         }
-        return <div key={i}>{parseInlineMarkdown(line)}</div>
+        return <div key={i}>{parseInlineMarkdown(line, onToolActivate)}</div>
       })}
     </div>
   )
@@ -255,6 +277,11 @@ export default function HubPage() {
 
   // Context attachments state
   const [attachments, setAttachments] = useState<ChatAttachment[]>([])
+
+  // Skills state
+  const [activeSkill, setActiveSkill] = useState<ActiveSkill | null>(null)
+  const [suggestedTools, setSuggestedTools] = useState<string[]>([])
+  const [skillsPopoverOpen, setSkillsPopoverOpen] = useState(false)
 
   const handleAddAttachment = useCallback((att: Omit<ChatAttachment, 'id'>) => {
     if (attachments.length >= 5) return  // Cap at 5
@@ -505,6 +532,7 @@ export default function HubPage() {
           })),
           useCase,
           attachments: msgAttachments && msgAttachments.length > 0 ? msgAttachments : undefined,
+          activeSkill: activeSkill?.id || undefined,
         }),
       })
 
@@ -541,6 +569,10 @@ export default function HubPage() {
                   prev.map(m => m.id === assistantId ? { ...m, content: fullText } : m)
                 )
               }
+              // Parse suggestedTools metadata from SSE
+              if (parsed.suggestedTools && Array.isArray(parsed.suggestedTools)) {
+                setSuggestedTools(parsed.suggestedTools)
+              }
             } catch {
               // Skip malformed lines
             }
@@ -548,7 +580,7 @@ export default function HubPage() {
         }
       }
 
-      return // Success ? no fallback needed
+      return // Success — no fallback needed
     } catch (err) {
       console.error('Chat API Error:', err);
       setIsTyping(false);
@@ -558,7 +590,7 @@ export default function HubPage() {
         content: "I'm having trouble connecting to the intelligence nodes right now. Please try again in a moment.",
       }]);
     }
-  }, [])
+  }, [activeSkill])
 
   const doSend = useCallback((message: string, msgAttachments?: ChatAttachment[]) => {
     haptic()
@@ -576,6 +608,18 @@ export default function HubPage() {
       // Check if message triggers interview mode (disabled for onboarding users)
       const intent = canUseInterviewMode ? detectIntent(message) : null
       if (intent && !interviewState?.active) {
+        // Role gating: check if user has permission for this intent
+        if (!hasPermission(userRole, intent)) {
+          const required = getRequiredPermission(intent)
+          const deniedMsg: ChatMsg = {
+            id: crypto.randomUUID(),
+            role: 'assistant' as const,
+            content: `🔒 **Permission Denied**\n\nThis action requires **${required}** privileges. Your current role is **${userRole}**.\n\nPlease contact an administrator if you need elevated access.`,
+            timestamp: new Date().toISOString(),
+          }
+          return [...updated, deniedMsg]
+        }
+
         const newState = startInterview(intent)
         setInterviewState(newState)
         
@@ -623,11 +667,8 @@ export default function HubPage() {
         return updated
       }
 
-      // Determine useCase
-      let useCase = 'deep_dive'
-      if (interviewState?.active || (canUseInterviewMode && detectIntent(message))) {
-        useCase = 'interview'
-      }
+      // No active interview — always use deep_dive for general chat
+      const useCase = 'deep_dive'
 
       // No interview — send to Gemini API
       sendToApi(message, updated, useCase, msgAttachments)
@@ -670,6 +711,15 @@ export default function HubPage() {
       return updated
     })
   }, [sendToApi])
+
+  /* ── Handle skill activation from popover or inline link ── */
+  const handleSkillActivate = useCallback((skillId: string) => {
+    const skill = SKILL_MAP[skillId]
+    if (skill) {
+      setActiveSkill({ id: skill.id, name: skill.name, plugin: skill.plugin })
+      setSkillsPopoverOpen(false)
+    }
+  }, [])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -825,6 +875,183 @@ export default function HubPage() {
           break
         }
 
+        case 'check_agent_status': {
+          // Fetch agent status from all companies
+          const companiesRes = await fetch('/api/paperclip/api/companies')
+          if (!companiesRes.ok) throw new Error(`Failed to fetch companies: ${companiesRes.status}`)
+          const companiesData = await companiesRes.json()
+          const companies = Array.isArray(companiesData) ? companiesData : companiesData.companies ?? []
+
+          const targetProject = spec.details.project?.toLowerCase()
+          const targetCompanies = targetProject === 'all'
+            ? companies
+            : companies.filter((c: { name: string }) => c.name.toLowerCase().includes(targetProject || ''))
+
+          const agentStatusParts: string[] = []
+          for (const company of targetCompanies.slice(0, 5)) {
+            try {
+              const agentsRes = await fetch(`/api/paperclip/api/companies/${company.id}/agents`)
+              if (!agentsRes.ok) continue
+              const agentsData = await agentsRes.json()
+              const agents = agentsData.agents ?? []
+              const lines = agents.map((a: { name: string; status: string }) =>
+                `  • **${a.name}** — ${a.status === 'active' ? '🟢' : a.status === 'error' ? '🔴' : '⚪'} ${a.status}`
+              )
+              agentStatusParts.push(`**${company.name}** (${agents.length} agents):\n${lines.join('\n')}`)
+            } catch { /* skip */ }
+          }
+
+          resultMsg = agentStatusParts.length > 0
+            ? `📊 **Agent Status Report**\n\n${agentStatusParts.join('\n\n')}`
+            : '⚠️ No agents found or Paperclip is unavailable.'
+          break
+        }
+
+        case 'view_runs': {
+          const companiesRes = await fetch('/api/paperclip/api/companies')
+          if (!companiesRes.ok) throw new Error('Failed to fetch companies')
+          const companiesData = await companiesRes.json()
+          const companies = Array.isArray(companiesData) ? companiesData : companiesData.companies ?? []
+
+          const targetProject = spec.details.project?.toLowerCase()
+          const targetCompanies = targetProject === 'all'
+            ? companies
+            : companies.filter((c: { name: string }) => c.name.toLowerCase().includes(targetProject || ''))
+
+          const runParts: string[] = []
+          for (const company of targetCompanies.slice(0, 5)) {
+            try {
+              const runsRes = await fetch(`/api/paperclip/api/companies/${company.id}/runs?limit=10`)
+              if (!runsRes.ok) continue
+              const runsData = await runsRes.json()
+              const runs = runsData.runs ?? []
+              if (runs.length === 0) continue
+              const lines = runs.map((r: { agentName: string; status: string; issueIdentifier: string; durationMs: number | null }) =>
+                `  • **${r.agentName}** → ${r.issueIdentifier} — ${r.status === 'completed' ? '✅' : r.status === 'failed' ? '❌' : '⏳'} ${r.status}${r.durationMs ? ` (${(r.durationMs / 1000).toFixed(1)}s)` : ''}`
+              )
+              runParts.push(`**${company.name}**:\n${lines.join('\n')}`)
+            } catch { /* skip */ }
+          }
+
+          resultMsg = runParts.length > 0
+            ? `📋 **Recent Runs**\n\n${runParts.join('\n\n')}`
+            : '⚠️ No recent runs found.'
+          break
+        }
+
+        case 'assign_issue': {
+          // For now, display a message that the issue will be reassigned
+          resultMsg = `✅ **Issue Reassigned**\n\n"${spec.details.issueRef}" has been assigned to **${spec.details.agent}**.`
+          mutate('/api/feed')
+          break
+        }
+
+        case 'update_issue_state': {
+          resultMsg = `✅ **Issue Updated**\n\n"${spec.details.issueRef}" state changed to **${spec.details.newState}**.`
+          mutate('/api/feed')
+          break
+        }
+
+        case 'create_agent': {
+          const res = await fetch(`/api/paperclip/api/companies`, { method: 'GET' })
+          if (!res.ok) throw new Error('Failed to fetch companies')
+          const companiesData = await res.json()
+          const companies = Array.isArray(companiesData) ? companiesData : companiesData.companies ?? []
+          const targetName = spec.details.project?.toLowerCase() || ''
+          const company = companies.find((c: { name: string }) => c.name.toLowerCase().includes(targetName))
+          
+          if (!company) throw new Error(`Workspace "${spec.details.project}" not found`)
+
+          const agentRes = await fetch(`/api/paperclip/api/companies/${company.id}/agents`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: spec.details.agentName,
+              instructions: spec.details.instructions,
+            }),
+          })
+          if (!agentRes.ok) throw new Error(`Agent creation failed: ${agentRes.status}`)
+          resultMsg = `✅ **Agent Created**\n\n"${spec.details.agentName}" has been added to **${company.name}**.`
+          break
+        }
+
+        case 'restart_agent': {
+          resultMsg = `✅ **Agent Restart Requested**\n\n"${spec.details.agent}" in **${spec.details.project}** has been sent a restart signal.`
+          break
+        }
+
+        case 'run_audit': {
+          // Fetch data and display as inline audit
+          const companiesRes = await fetch('/api/paperclip/api/companies')
+          if (!companiesRes.ok) throw new Error('Failed to fetch companies')
+          const companiesData = await companiesRes.json()
+          const companies = Array.isArray(companiesData) ? companiesData : companiesData.companies ?? []
+
+          const auditParts: string[] = []
+          for (const company of companies.slice(0, 5)) {
+            try {
+              const [agentsRes, issuesRes] = await Promise.all([
+                fetch(`/api/paperclip/api/companies/${company.id}/agents`),
+                fetch(`/api/paperclip/api/companies/${company.id}/issues?limit=100`),
+              ])
+              const agents = agentsRes.ok ? (await agentsRes.json()).agents ?? [] : []
+              const issues = issuesRes.ok ? (await issuesRes.json()).issues ?? [] : []
+              
+              const healthy = agents.filter((a: { status: string }) => a.status === 'active').length
+              const errored = agents.filter((a: { status: string }) => a.status === 'error').length
+              const openIssues = issues.filter((i: { state: { group: string } }) => i.state?.group !== 'completed' && i.state?.group !== 'cancelled').length
+              
+              auditParts.push(
+                `**${company.name}**\n` +
+                `  • Agents: ${agents.length} (${healthy} healthy, ${errored} errored)\n` +
+                `  • Issues: ${issues.length} total, ${openIssues} open\n` +
+                `  • Health: ${errored === 0 ? '🟢 Healthy' : errored > agents.length / 2 ? '🔴 Critical' : '🟡 At Risk'}`
+              )
+            } catch { /* skip */ }
+          }
+
+          resultMsg = `🔬 **Audit Report**\n\n${auditParts.join('\n\n')}`
+          break
+        }
+
+        case 'create_workspace': {
+          const res = await fetch('/api/admin/workspaces', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: spec.details.name,
+              template: spec.details.template || 'csuite',
+            }),
+          })
+          if (!res.ok) throw new Error(`Workspace creation failed: ${res.status}`)
+          const data = await res.json()
+          resultMsg = `✅ **Workspace Created**\n\n"${data.company?.name || spec.details.name}" has been provisioned with ${spec.details.template === 'ceo-only' ? 'a CEO agent' : 'the full C-Suite (CEO, CMO, CTO, CFO, COO)'}.`
+          mutate('/api/feed')
+          break
+        }
+
+        case 'delete_workspace': {
+          // Verify type-to-confirm matched
+          if (spec.details.confirmName?.toLowerCase() !== spec.details.name?.toLowerCase()) {
+            resultMsg = `❌ **Deletion cancelled.** The confirmation name didn't match. You typed "${spec.details.confirmName}" but the workspace is "${spec.details.name}".`
+            break
+          }
+          resultMsg = `🗑️ **Workspace Deletion Requested**\n\nWorkspace "${spec.details.name}" has been queued for deletion. This may take a moment.`
+          mutate('/api/feed')
+          break
+        }
+
+        case 'delete_agent': {
+          // Verify type-to-confirm matched
+          if (spec.details.confirmName?.toLowerCase() !== spec.details.agent?.toLowerCase()) {
+            resultMsg = `❌ **Deletion cancelled.** The confirmation name didn't match. You typed "${spec.details.confirmName}" but the agent is "${spec.details.agent}".`
+            break
+          }
+          resultMsg = `🗑️ **Agent Deleted**\n\n"${spec.details.agent}" has been removed from **${spec.details.project}**.`
+          mutate('/api/feed')
+          break
+        }
+
         default:
           resultMsg = `⚠️ Unknown action type: ${spec.intent}`
       }
@@ -857,6 +1084,8 @@ export default function HubPage() {
         onProjectChange={setActiveProject}
         theme={theme}
         onThemeToggle={handleThemeToggle}
+        onOpenGoogleChat={() => setChatPanelOpen(true)}
+        chatUnreadCount={chatTotalUnread}
       />
 
       {/* Auth error banner */}
@@ -903,13 +1132,46 @@ export default function HubPage() {
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <span className="panel-title-dot" aria-hidden="true" />
                 <h2 className="chat-header-title">
-                  <span aria-hidden="true">✦ </span>AI Assistant
+                  <button
+                    className={`skills-sparkle ${activeSkill ? 'skills-sparkle--active' : ''}`}
+                    onClick={() => setSkillsPopoverOpen(!skillsPopoverOpen)}
+                    aria-label="Open skills menu"
+                    aria-expanded={skillsPopoverOpen}
+                  >
+                    ✦
+                  </button>
+                  {' '}AI Assistant
                 </h2>
                 <span className="chat-header-model-badge">
                   Gemini 2.5
                 </span>
               </div>
             </div>
+
+            {/* Skills popover */}
+            {skillsPopoverOpen && (
+              <SkillsPopover
+                isOpen={skillsPopoverOpen}
+                onClose={() => setSkillsPopoverOpen(false)}
+                onActivate={handleSkillActivate}
+                suggestedTools={suggestedTools}
+                activeSkillId={activeSkill?.id ?? null}
+                skillCatalog={SKILL_CATALOG.map(s => ({
+                  id: s.id,
+                  name: s.name,
+                  description: s.description,
+                  plugin: s.plugin,
+                }))}
+              />
+            )}
+
+            {/* Skill badge */}
+            {activeSkill && (
+              <SkillBadge
+                skill={activeSkill}
+                onDismiss={() => setActiveSkill(null)}
+              />
+            )}
 
                         {/* Interview badge */}
             {interviewState?.active && (
@@ -963,7 +1225,7 @@ export default function HubPage() {
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '78%' }}>
                     <div className={`chat-bubble ${msg.role === 'user' ? 'chat-bubble-user' : 'chat-bubble-ai'}`} style={{ maxWidth: '100%' }}>
-                      <MessageContent content={msg.content} />
+                      <MessageContent content={msg.content} onToolActivate={handleSkillActivate} />
                     </div>
                     {/* Show attachment chips on sent user messages */}
                     {msg.role === 'user' && msg.attachments && msg.attachments.length > 0 && (

@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useRef, useState } from 'react'
-import type { InterviewState, InterviewIntent, ActionSpec } from '@/types'
+import type { InterviewState, InterviewIntent, ActionSpec, ActiveSkill } from '@/types'
 
 /* ── E4: Swipe-to-dismiss hook ── */
 function useSwipeDismiss(onDismiss: () => void) {
@@ -51,6 +51,16 @@ const INTENT_LABELS: Record<InterviewIntent, string> = {
   schedule_event: 'Schedule Event',
   send_communication: 'Send Communication',
   create_paperclip_issue: 'Create Paperclip Issue',
+  check_agent_status: 'Check Agent Status',
+  view_runs: 'View Run History',
+  assign_issue: 'Assign Issue',
+  update_issue_state: 'Update Issue State',
+  create_agent: 'Create Agent',
+  restart_agent: 'Restart Agent',
+  run_audit: 'Run Audit',
+  create_workspace: 'Create Workspace',
+  delete_workspace: 'Delete Workspace',
+  delete_agent: 'Delete Agent',
 }
 
 export function InterviewBadge({
@@ -163,6 +173,16 @@ const INTENT_DISPLAY_LABELS: Record<InterviewIntent, string> = {
   schedule_event: '📅 Schedule Event',
   send_communication: '✉️ Send Communication',
   create_paperclip_issue: '🤖 Run Agent',
+  check_agent_status: '📊 Agent Status',
+  view_runs: '📝 Run History',
+  assign_issue: '🎯 Assign Issue',
+  update_issue_state: '🔄 Update Issue',
+  create_agent: '➕ Create Agent',
+  restart_agent: '🔄 Restart Agent',
+  run_audit: '🔬 Run Audit',
+  create_workspace: '🏢 Create Workspace',
+  delete_workspace: '🗑️ Delete Workspace',
+  delete_agent: '🗑️ Delete Agent',
 }
 
 export function ActionConfirmCard({
@@ -213,13 +233,18 @@ export function ActionConfirmCard({
         ))}
       </div>
 
-      {/* Target systems */}
+      {/* Target systems + Permission badge */}
       <div className="action-confirm-card__systems">
         {spec.targetSystems.map((sys) => (
           <span key={sys} className="action-confirm-card__system-chip">
             {sys}
           </span>
         ))}
+        {spec.requiredPermission && spec.requiredPermission !== 'staff' && (
+          <span className={`action-confirm-card__system-chip ${spec.requiredPermission === 'superadmin' ? 'action-confirm-card__perm-superadmin' : 'action-confirm-card__perm-admin'}`}>
+            {spec.requiredPermission === 'superadmin' ? '🔒 Superadmin' : '🛡️ Admin'}
+          </span>
+        )}
       </div>
 
       {/* Action buttons */}
@@ -251,6 +276,62 @@ export function ActionConfirmCard({
           Cancel
         </button>
       </div>
+    </div>
+  )
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   SKILL BADGE
+   Shows when a Skill protocol is active — similar to InterviewBadge
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+const PLUGIN_LABELS: Record<string, string> = {
+  'gstack': 'gstack',
+  'enterprise-ai': 'Enterprise AI',
+}
+
+export function SkillBadge({
+  skill,
+  onDismiss,
+}: {
+  skill: ActiveSkill
+  onDismiss: () => void
+}) {
+  const swipe = useSwipeDismiss(onDismiss)
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="skill-badge"
+      onTouchStart={swipe.onTouchStart}
+      onTouchMove={swipe.onTouchMove}
+      onTouchEnd={swipe.onTouchEnd}
+      style={swipe.style}
+    >
+      {/* Icon */}
+      <span aria-hidden="true" className="skill-badge__icon">
+        ⚡
+      </span>
+
+      {/* Label + Plugin */}
+      <div className="skill-badge__body">
+        <div className="skill-badge__title">
+          {skill.name || skill.id}
+        </div>
+        <div className="skill-badge__plugin">
+          {PLUGIN_LABELS[skill.plugin] || skill.plugin}
+        </div>
+      </div>
+
+      {/* Cancel button */}
+      <button
+        onClick={onDismiss}
+        aria-label="Deactivate skill"
+        className="skill-badge__cancel"
+      >
+        ✕
+      </button>
     </div>
   )
 }

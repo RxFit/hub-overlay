@@ -184,7 +184,22 @@ export interface FeedItem {
 
 /* ── Interview Mode Types ── */
 
-export type InterviewIntent = 'create_task' | 'schedule_event' | 'send_communication' | 'create_paperclip_issue'
+export type InterviewIntent =
+  | 'create_task'
+  | 'schedule_event'
+  | 'send_communication'
+  | 'create_paperclip_issue'
+  // Phase 3: Paperclip orchestrator intents
+  | 'check_agent_status'
+  | 'view_runs'
+  | 'assign_issue'
+  | 'update_issue_state'
+  | 'create_agent'
+  | 'restart_agent'
+  | 'run_audit'
+  | 'create_workspace'
+  | 'delete_workspace'
+  | 'delete_agent'
 
 export interface InterviewStep {
   question: string
@@ -206,7 +221,11 @@ export interface ActionSpec {
   details: Record<string, string>
   targetSystems: string[]
   summary: string
+  requiredPermission?: ActionPermission
 }
+
+/** Minimum Hub role required to execute an action */
+export type ActionPermission = 'staff' | 'admin' | 'superadmin'
 
 /* ── Multi-Tenant KPI Types ── */
 
@@ -251,4 +270,14 @@ export interface ChatAttachment {
   fileId?: string         // For 'document' type (Google Drive file ID)
   url?: string            // For 'url' type
   mimeType?: string       // For document type
+}
+
+/* ── Active Skill Types ── */
+
+export type SkillPlugin = 'gstack' | 'enterprise-ai'
+
+export interface ActiveSkill {
+  id: string
+  name: string
+  plugin: SkillPlugin
 }
