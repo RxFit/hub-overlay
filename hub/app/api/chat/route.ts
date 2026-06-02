@@ -52,11 +52,11 @@ function needsExternalSearch(message: string): boolean {
 }
 
 export async function POST(req: NextRequest) {
-  // Auth check bypassed for testing
-  // const session = await getServerSession(authOptions)
-  // if (!session?.user) {
-  //   return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  // }
+  // Auth check
+  const session = await getServerSession(authOptions)
+  if (!session?.user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
 
   let body: { messages: ChatMessage[]; useCase?: string; attachments?: ChatAttachment[]; activeSkill?: string }
   try {

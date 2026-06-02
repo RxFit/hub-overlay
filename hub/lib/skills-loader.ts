@@ -10,7 +10,7 @@ import { join } from 'path'
 import { SKILL_MAP } from './skills'
 
 const SKILLS_BASE = process.env.SKILLS_BASE_PATH
-  || `${process.env.USERPROFILE || process.env.HOME || ''}/.gemini/antigravity/skills`
+  || join(process.cwd(), 'skills')
 
 // Server-side cache for loaded skills
 const contentCache: Record<string, string> = {}
