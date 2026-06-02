@@ -91,7 +91,7 @@ export function BrandedHeader({
         {/* Google Chat button — desktop view */}
         {session && onOpenGoogleChat && (
           <button
-            className="theme-toggle-btn"
+            className="theme-toggle-btn desktop-only"
             onClick={onOpenGoogleChat}
             aria-label="Google Chat"
             title="Google Chat"

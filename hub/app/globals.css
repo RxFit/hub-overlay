@@ -7020,3 +7020,12 @@ a:hover .rx-arrow {
   }
 }
 
+/* ============================================================
+   RESPONSIVE UTILITIES
+   ============================================================ */
+@media (max-width: 640px) {
+  .desktop-only {
+    display: none !important;
+  }
+}
+
