@@ -1,7 +1,7 @@
 import type { NextAuthOptions } from 'next-auth'
 import type { JWT } from 'next-auth/jwt'
 import GoogleProvider from 'next-auth/providers/google'
-import { getUserRole, getAllRoleEntries, upsertUserRole } from '@/lib/hubRoles'
+import { getAllRoleEntries } from '@/lib/hubRoles'
 
 /* ── Admin email lists (comma-separated env vars) ── */
 const SUPERADMIN_EMAILS = (process.env.SUPERADMIN_EMAILS || '')
@@ -95,19 +95,9 @@ async function resolveUserRole(
       return { role: existingEntry.role, assignedProjects: existingEntry.assignedProjects }
     }
 
-    // User not found in sheet — self-register as 'onboarding' so admins can see them
-    console.log(`[auth] Self-registering new user as onboarding: ${email}`)
-    try {
-      await upsertUserRole(
-        { email: normalized, role: 'onboarding', assignedProjects: [], assignedBy: 'system' },
-        accessToken,
-        sheetId
-      )
-    } catch (upsertErr) {
-      // Non-fatal — user still gets onboarding role, just won't be visible to admins yet
-      console.warn('[auth] Failed to self-register onboarding user:', upsertErr)
-    }
-
+    // User not found in sheet — return onboarding role.
+    // Self-registration is handled client-side via /api/auth/register
+    // (called from OnboardingCard on mount) using the user's established session.
     return { role: 'onboarding', assignedProjects: [] }
   } catch {
     return { role: 'onboarding', assignedProjects: [] }

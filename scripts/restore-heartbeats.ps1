@@ -5,11 +5,11 @@
   companies (RxFit, NotebookRx, FridgeSnap) after the migration DB wipe.
 
   Cadences (from .paperclip.yaml):
-    CEO  → Weekly (604800s)
-    CMO  → Daily  (86400s)
-    CTO  → Daily  (86400s)
-    CFO  → Weekly (604800s)
-    COO  → Weekly (604800s)
+    CEO  -> Weekly (604800s)
+    CMO  -> Daily  (86400s)
+    CTO  -> Daily  (86400s)
+    CFO  -> Weekly (604800s)
+    COO  -> Weekly (604800s)
 
   USAGE:
     .\restore-heartbeats.ps1
@@ -28,7 +28,7 @@ $COMPANIES = @{
   "RxFit Enterprise" = @{
     Id     = "829b2493-97ed-4cb9-8775-ff8298dcf650"
     Agents = @{
-      CEO = "82984f59-0000-0000-0000-000000000000"  # PARTIAL — script fetches real IDs
+      CEO = "82984f59-0000-0000-0000-000000000000"  # PARTIAL - script fetches real IDs
       CMO = "360e4642-0000-0000-0000-000000000000"
       CTO = "91873c35-0000-0000-0000-000000000000"
       CFO = "4f4548b7-0000-0000-0000-000000000000"
@@ -66,7 +66,7 @@ $CADENCES = @{
   COO = 604800  # weekly
 }
 
-# Heartbeat prompts — what each agent runs autonomously
+# Heartbeat prompts - what each agent runs autonomously
 $HEARTBEAT_PROMPTS = @{
   CEO = "Conduct your weekly executive review. Check all C-Suite agent activity from the past week. Identify any critical issues, flag blockers, and set priorities for the coming week. Use exa_search if you need market context or news about our industry."
   CMO = "Conduct your daily marketing review. Audit all marketing KPIs, check campaign performance, review SEO/AEO/GEO metrics, and identify the top 3 marketing actions needed today. Use exa_search for competitor intelligence and industry trends."
@@ -87,9 +87,9 @@ try {
     -Body $authBody `
     -SessionVariable paperclipSession `
     -ErrorAction Stop
-  Write-Host "  ✅ Authenticated (HTTP $($authResp.StatusCode))" -ForegroundColor Green
+  Write-Host "  [OK] Authenticated (HTTP $($authResp.StatusCode))" -ForegroundColor Green
 } catch {
-  Write-Error "❌ Authentication failed: $_"
+  Write-Error "[ERR] Authentication failed: $_"
   exit 1
 }
 
@@ -104,9 +104,9 @@ function Get-CompanyAgents {
       -Method GET `
       -WebSession $paperclipSession `
       -ErrorAction Stop
-    return $resp.agents ?? $resp
+    if ($null -ne $resp.agents) { return $resp.agents } else { return $resp }
   } catch {
-    Write-Warning "  Could not fetch agents for company $CompanyId: $_"
+    Write-Warning "  Could not fetch agents for company $($CompanyId): $_"
     return @()
   }
 }
@@ -134,15 +134,16 @@ function New-HeartbeatRoutine {
   $cadence = $CADENCES[$Role]
   $prompt  = $HEARTBEAT_PROMPTS[$Role]
 
-  $body = @{
+  $bodyObj = @{
     agentId     = $AgentId
     type        = "heartbeat"
     cadence     = $cadence
     prompt      = $prompt
     enabled     = $true
     name        = "$AgentName Heartbeat"
-    description = "Automated $Role review — $(if ($cadence -eq 86400) { 'Daily' } else { 'Weekly' }) cadence"
-  } | ConvertTo-Json -Depth 5
+    description = "Automated $Role review - $(if ($cadence -eq 86400) { 'Daily' } else { 'Weekly' }) cadence"
+  }
+  $body = $bodyObj | ConvertTo-Json -Depth 5
 
   try {
     $resp = Invoke-RestMethod `
@@ -153,32 +154,32 @@ function New-HeartbeatRoutine {
       -WebSession $paperclipSession `
       -ErrorAction Stop
 
-    $cadenceLabel = if ($cadence -eq 86400) { "Daily" } else { "Weekly" }
-    Write-Host "  ✅ [$CompanyName] $Role ($cadenceLabel heartbeat) → routine ID: $($resp.id ?? $resp.routine?.id ?? 'created')" -ForegroundColor Green
+    if ($cadence -eq 86400) { $cadenceLabel = "Daily" } else { $cadenceLabel = "Weekly" }
+    Write-Host "  [OK] [$CompanyName] $Role ($cadenceLabel heartbeat) -> routine ID: $routineId" -ForegroundColor Green
   } catch {
     $statusCode = $_.Exception.Response.StatusCode.value__
     if ($statusCode -eq 409) {
-      Write-Host "  ♻️  [$CompanyName] $Role heartbeat already exists" -ForegroundColor Yellow
+      Write-Host "  [SKIP]  [$CompanyName] $Role heartbeat already exists" -ForegroundColor Yellow
     } else {
-      Write-Warning "  ❌ [$CompanyName] $Role heartbeat failed (HTTP $statusCode): $_"
+      Write-Warning "  [ERR] [$CompanyName] $Role heartbeat failed (HTTP $statusCode): $_"
     }
   }
 }
 
 # ── Main Loop ─────────────────────────────────────────────────────────────────
-Write-Host "`n💓 Restoring heartbeat routines..." -ForegroundColor Cyan
+Write-Host "`n* Restoring heartbeat routines..." -ForegroundColor Cyan
 
 foreach ($company in $COMPANIES.GetEnumerator()) {
   $companyName = $company.Key
   $companyId   = $company.Value.Id
   
-  Write-Host "`n  📦 $companyName ($companyId)" -ForegroundColor Magenta
+  Write-Host "`n  * $companyName ($companyId)" -ForegroundColor Magenta
 
   # Fetch live agents to get real IDs
   $liveAgents = Get-CompanyAgents -CompanyId $companyId
 
   if ($liveAgents.Count -eq 0) {
-    Write-Warning "  No agents found for $companyName — skipping"
+    Write-Warning "  No agents found for $companyName - skipping"
     continue
   }
 
@@ -200,7 +201,7 @@ foreach ($company in $COMPANIES.GetEnumerator()) {
   }
 }
 
-Write-Host "`n✅ Heartbeat restoration complete!" -ForegroundColor Green
-Write-Host "   Verify in Paperclip UI: $PAPERCLIP_URL → Company → Routines" -ForegroundColor Gray
-Write-Host "`n⚡ To trigger a manual test heartbeat for the RxFit CEO, run:" -ForegroundColor Cyan
-Write-Host "   POST $PAPERCLIP_URL/api/companies/829b2493.../routines/{routineId}/trigger" -ForegroundColor Gray
+Write-Host "`n[OK] Heartbeat restoration complete!" -ForegroundColor Green
+Write-Host "   Verify in Paperclip UI: $PAPERCLIP_URL -> Company -> Routines" -ForegroundColor Gray
+Write-Host "`n! To trigger a manual test heartbeat for the RxFit CEO, run:" -ForegroundColor Cyan
+Write-Host "   POST $($PAPERCLIP_URL)/api/companies/829b2493.../routines/{routineId}/trigger" -ForegroundColor Gray

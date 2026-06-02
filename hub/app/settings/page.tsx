@@ -63,6 +63,9 @@ function OnboardingUsersCard({ callerRole }: { callerRole: string }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
+  const [registerEmail, setRegisterEmail] = useState('')
+  const [registering, setRegistering] = useState(false)
+  const [registerMsg, setRegisterMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
 
   const fetchOnboardingUsers = useCallback(async () => {
     setLoading(true)
@@ -89,6 +92,31 @@ function OnboardingUsersCard({ callerRole }: { callerRole: string }) {
   useEffect(() => {
     fetchOnboardingUsers()
   }, [fetchOnboardingUsers])
+
+  // Manually register a user by email (admin writes their onboarding row)
+  const handleRegisterByEmail = useCallback(async () => {
+    const email = registerEmail.trim().toLowerCase()
+    if (!email || !email.includes('@')) return
+    setRegistering(true)
+    setRegisterMsg(null)
+    try {
+      const res = await fetch('/api/admin/roles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, role: 'onboarding', assignedProjects: [] }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || `Failed (${res.status})`)
+      setRegisterMsg({ type: 'ok', text: `${email} added — refresh to see them below` })
+      setRegisterEmail('')
+      // Refresh the list after a short delay
+      setTimeout(fetchOnboardingUsers, 800)
+    } catch (err) {
+      setRegisterMsg({ type: 'err', text: err instanceof Error ? err.message : 'Failed' })
+    } finally {
+      setRegistering(false)
+    }
+  }, [registerEmail, fetchOnboardingUsers])
 
   const handlePromote = async (email: string) => {
     const user = users.find(u => u.email === email)
@@ -200,6 +228,73 @@ function OnboardingUsersCard({ callerRole }: { callerRole: string }) {
         </div>
       )}
 
+      {/* Register by email — admin manually adds a user who couldn't self-register */}
+      <div style={{ marginBottom: '16px' }}>
+        <label style={{
+          display: 'block',
+          fontSize: 'var(--text-xs)',
+          color: 'var(--text-muted)',
+          fontFamily: 'var(--font-mono)',
+          textTransform: 'uppercase',
+          letterSpacing: '0.06em',
+          marginBottom: '6px',
+        }}>
+          Add user by email
+        </label>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <input
+            id="settings-register-email-input"
+            type="email"
+            placeholder="colleague@company.com"
+            value={registerEmail}
+            onChange={e => { setRegisterEmail(e.target.value); setRegisterMsg(null) }}
+            onKeyDown={e => { if (e.key === 'Enter') handleRegisterByEmail() }}
+            disabled={registering}
+            style={{
+              flex: 1,
+              background: 'var(--surface-2, rgba(255,255,255,0.04))',
+              border: '1px solid var(--border)',
+              borderRadius: '6px',
+              padding: '6px 10px',
+              color: 'var(--text-primary)',
+              fontSize: '0.8rem',
+              fontFamily: 'var(--font-mono)',
+              outline: 'none',
+            }}
+          />
+          <button
+            id="settings-register-email-btn"
+            onClick={handleRegisterByEmail}
+            disabled={registering || !registerEmail.trim()}
+            style={{
+              background: 'var(--accent)',
+              color: 'var(--btn-text, #000)',
+              border: 'none',
+              borderRadius: '6px',
+              padding: '6px 14px',
+              fontSize: '0.75rem',
+              fontWeight: 700,
+              cursor: registering || !registerEmail.trim() ? 'not-allowed' : 'pointer',
+              opacity: registering || !registerEmail.trim() ? 0.5 : 1,
+              transition: 'opacity 0.15s ease',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {registering ? '…' : '+ Add'}
+          </button>
+        </div>
+        {registerMsg && (
+          <div style={{
+            marginTop: '6px',
+            fontSize: '0.72rem',
+            color: registerMsg.type === 'ok' ? 'var(--accent)' : 'var(--danger)',
+            fontFamily: 'var(--font-mono)',
+          }}>
+            {registerMsg.type === 'ok' ? '✓' : '⚠️'} {registerMsg.text}
+          </div>
+        )}
+      </div>
+
       {/* Loading skeleton */}
       {loading && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -221,6 +316,7 @@ function OnboardingUsersCard({ callerRole }: { callerRole: string }) {
           <div>No users waiting for role assignment.</div>
         </div>
       )}
+
 
       {/* User list */}
       {!loading && users.length > 0 && (

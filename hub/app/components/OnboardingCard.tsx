@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useSession } from 'next-auth/react'
 import { useTenant } from '@/app/components/TenantProvider'
 
 const ONBOARDED_KEY = 'hub-onboarded'
@@ -34,6 +35,7 @@ function PanelDiagram() {
 
 export function OnboardingCard({ onDismiss }: OnboardingCardProps) {
   const tenant = useTenant()
+  const { data: session } = useSession()
   const [mounted, setMounted] = useState(false)
   const [exiting, setExiting] = useState(false)
 
@@ -42,6 +44,14 @@ export function OnboardingCard({ onDismiss }: OnboardingCardProps) {
     const t = setTimeout(() => setMounted(true), 50)
     return () => clearTimeout(t)
   }, [])
+
+  // Self-register as onboarding so admin can see this user in /settings
+  useEffect(() => {
+    if (!session?.user?.email) return
+    fetch('/api/auth/register', { method: 'POST' }).catch(() => {
+      // Non-fatal — user still has onboarding role
+    })
+  }, [session?.user?.email])
 
   const handleDismiss = () => {
     setExiting(true)

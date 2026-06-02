@@ -1,0 +1,120 @@
+﻿[INFO] [HEALTH] --- Cloud Run Health ---
+[OK] [HEALTH] Cloud Run: status=ok, mode=authenticated, bootstrap=ready
+[INFO] [HEALTH] --- Railway Health ---
+[OK] [HEALTH] Railway: status=ok, mode=authenticated, bootstrap=ready
+[OK] [AUTH] Cloud Run authenticated (HTTP 200)
+[ERROR] [AUTH] Railway auth failed: The remote server returned an error: (401) Unauthorized.
+[INFO] [COMPANIES] === COMPANIES AUDIT ===
+[OK] [COMPANIES] Cloud Run: 6 companies
+[INFO] [COMPANIES]   CR: SEO Agent | ID: 5021a3f7-3de2-442e-a639-7de2867eed17
+[INFO] [COMPANIES]   CR: Jade CoS | ID: f6801930-4c1b-43c0-a983-e5b2a98671b9
+[INFO] [COMPANIES]   CR: Wellness App | ID: 130d9582-1926-4b14-bffa-798f3a47d5e9
+[INFO] [COMPANIES]   CR: NotebookRx | ID: 05ca9da4-5ea1-4dc3-8a17-be9faa821dfb
+[INFO] [COMPANIES]   CR: RxFit Enterprise | ID: 829b2493-97ed-4cb9-8775-ff8298dcf650
+[INFO] [COMPANIES]   CR: FridgeSnap | ID: fe281b7a-23c7-4b10-883c-997eebc841dc
+[INFO] [AGENTS] === AGENT AUDIT ===
+[OK] [AGENTS] CloudRun | SEO Agent: 10 agents (idle=10, error=0, running=0, terminated=0)
+[INFO] [AGENTS]   Heartbeat-configured agents: 10
+[OK] [AGENTS] CloudRun | Jade CoS: 10 agents (idle=10, error=0, running=0, terminated=0)
+[INFO] [AGENTS]   Heartbeat-configured agents: 10
+[OK] [AGENTS] CloudRun | Wellness App: 10 agents (idle=10, error=0, running=0, terminated=0)
+[INFO] [AGENTS]   Heartbeat-configured agents: 10
+[WARN] [AGENTS] CloudRun | NotebookRx: 5 agents (idle=0, error=2, running=0, terminated=0)
+[INFO] [AGENTS]   Heartbeat-configured agents: 5
+[WARN] [AGENTS] CloudRun | RxFit Enterprise: 20 agents (idle=0, error=4, running=0, terminated=0)
+[INFO] [AGENTS]   Heartbeat-configured agents: 5
+[WARN] [AGENTS] CloudRun | FridgeSnap: 4 agents (idle=0, error=3, running=0, terminated=0)
+[INFO] [AGENTS]   Heartbeat-configured agents: 4
+[INFO] [HEARTBEAT] === HEARTBEAT TEST ===
+[WARN] [HEARTBEAT] CloudRun | SEO Agent | SEO Agent CMO: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | SEO Agent | SEO Agent CFO: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | SEO Agent | SEO Agent CTO: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | SEO Agent | SEO Agent COO: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | SEO Agent | SEO Agent CEO: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | SEO Agent | SEO Agent CMO 2: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | SEO Agent | SEO Agent CFO 2: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | SEO Agent | SEO Agent CEO 2: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | SEO Agent | SEO Agent CTO 2: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | SEO Agent | SEO Agent COO 2: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | Jade CoS | Jade CoS CEO 2: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | Jade CoS | Jade CoS CMO 2: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | Jade CoS | Jade CoS CEO: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | Jade CoS | Jade CoS CMO: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | Jade CoS | Jade CoS CTO: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | Jade CoS | Jade CoS CFO: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | Jade CoS | Jade CoS COO: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | Jade CoS | Jade CoS CTO 2: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | Jade CoS | Jade CoS CFO 2: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | Jade CoS | Jade CoS COO 2: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | Wellness App | Wellness App CTO: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | Wellness App | Wellness App CEO: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | Wellness App | Wellness App CFO: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | Wellness App | Wellness App COO: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | Wellness App | Wellness App CMO: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | Wellness App | Wellness App CFO 2: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | Wellness App | Wellness App COO 2: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | Wellness App | Wellness App CMO 2: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | Wellness App | Wellness App CTO 2: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | Wellness App | Wellness App CEO 2: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | NotebookRx | CTO � Chief Technology Officer: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | NotebookRx | CEO � Chief Executive Officer: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | NotebookRx | CMO � Chief Marketing Officer: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | NotebookRx | CFO � Chief Financial Officer: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | NotebookRx | COO � Chief Operating Officer: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | RxFit Enterprise | CRO Agent: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | RxFit Enterprise | Jules Integration Agent: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | RxFit Enterprise | CEO � Chief Executive Officer: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | RxFit Enterprise | CMO � Chief Marketing Officer: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | RxFit Enterprise | CTO � Chief Technology Officer: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | RxFit Enterprise | CFO � Chief Financial Officer: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | RxFit Enterprise | COO � Chief Operating Officer: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | RxFit Enterprise | Billing Prep Agent: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | RxFit Enterprise | Stripe Analyst: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | RxFit Enterprise | Comms Agent: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | RxFit Enterprise | CEO Personal: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | RxFit Enterprise | SEO Agent: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | RxFit Enterprise | AEO Agent: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | RxFit Enterprise | GEO Agent: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | RxFit Enterprise | Paid Ads Agent: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | RxFit Enterprise | CMO Operating Manual: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | RxFit Enterprise | DevOps Agent: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | RxFit Enterprise | Local Map Pack Agent: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | RxFit Enterprise | Lead Engineer: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | RxFit Enterprise | QA Agent: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | FridgeSnap | CEO � Chief Executive Officer: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | FridgeSnap | CFO � Chief Financial Officer: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | FridgeSnap | CTO � Chief Technology Officer: 404 - Heartbeat endpoint not found
+[WARN] [HEARTBEAT] CloudRun | FridgeSnap | CMO � Chief Marketing Officer: 404 - Heartbeat endpoint not found
+[INFO] [ROUTINES] === ROUTINES AUDIT ===
+[OK] [ROUTINES] CloudRun | SEO Agent: 5 routines
+[INFO] [ROUTINES]   : enabled=, cadence=N/A
+[INFO] [ROUTINES]   : enabled=, cadence=N/A
+[INFO] [ROUTINES]   : enabled=, cadence=N/A
+[INFO] [ROUTINES]   : enabled=, cadence=N/A
+[INFO] [ROUTINES]   : enabled=, cadence=N/A
+[OK] [ROUTINES] CloudRun | Jade CoS: 5 routines
+[INFO] [ROUTINES]   : enabled=, cadence=N/A
+[INFO] [ROUTINES]   : enabled=, cadence=N/A
+[INFO] [ROUTINES]   : enabled=, cadence=N/A
+[INFO] [ROUTINES]   : enabled=, cadence=N/A
+[INFO] [ROUTINES]   : enabled=, cadence=N/A
+[OK] [ROUTINES] CloudRun | Wellness App: 5 routines
+[INFO] [ROUTINES]   : enabled=, cadence=N/A
+[INFO] [ROUTINES]   : enabled=, cadence=N/A
+[INFO] [ROUTINES]   : enabled=, cadence=N/A
+[INFO] [ROUTINES]   : enabled=, cadence=N/A
+[INFO] [ROUTINES]   : enabled=, cadence=N/A
+[WARN] [ROUTINES] CloudRun | NotebookRx: NO routines found
+[WARN] [ROUTINES] CloudRun | RxFit Enterprise: NO routines found
+[WARN] [ROUTINES] CloudRun | FridgeSnap: NO routines found
+[INFO] [ISSUES] === ISSUES AUDIT ===
+[OK] [ISSUES] CloudRun | SEO Agent: 0 total issues, 0 open
+[OK] [ISSUES] CloudRun | Jade CoS: 0 total issues, 0 open
+[OK] [ISSUES] CloudRun | Wellness App: 0 total issues, 0 open
+[OK] [ISSUES] CloudRun | NotebookRx: 0 total issues, 0 open
+[OK] [ISSUES] CloudRun | RxFit Enterprise: 0 total issues, 0 open
+[OK] [ISSUES] CloudRun | FridgeSnap:  total issues,  open
+[INFO] [ACTIVITY] === RECENT ACTIVITY ===
+[WARN] [ACTIVITY] CloudRun: Activity endpoint returned HTTP 404
+[INFO] [BLOCKED] === BLOCKED INBOX ===
+[WARN] [BLOCKED] CloudRun: Blocked inbox returned HTTP 404
