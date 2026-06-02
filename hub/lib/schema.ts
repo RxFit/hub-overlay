@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core'
+import { pgTable, text, timestamp, uniqueIndex, jsonb } from 'drizzle-orm/pg-core'
 
 /**
  * Hub database schema — Railway Postgres
@@ -45,13 +45,17 @@ export const kpis = pgTable('kpis', {
   tenantId:       text('tenant_id').notNull().references(() => tenants.id),
   label:          text('label').notNull(),
   value:          text('value').notNull().default('0'),
-  unit:           text('unit'),                           // '%', '$', 'units'
-  trend:          text('trend'),                          // display string e.g. '+12%'
+  previousValue:  text('previous_value'),                     // last known value — used for trend calc
+  unit:           text('unit'),                               // '%', '$', 'units'
+  trend:          text('trend'),                              // display string e.g. '+12%'
   trendDirection: text('trend_direction').default('neutral'), // up|down|neutral
-  source:         text('source').default('manual'),       // manual|paperclip|derived
-  scope:          text('scope').default('global'),        // global|project
-  companyId:      text('company_id'),                     // Paperclip company ID when scope=project
-  visibility:     text('visibility').default('staff'),    // public|staff|admin
+  source:         text('source').default('manual'),           // manual|ga4|stripe|gsc|paperclip
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  sourceConfig:   jsonb('source_config').$type<Record<string, any>>(), // source-specific query params
+  scope:          text('scope').default('global'),            // global|project
+  companyId:      text('company_id'),                         // Paperclip company ID when scope=project
+  visibility:     text('visibility').default('staff'),        // public|staff|admin
+  lastSyncedAt:   timestamp('last_synced_at'),                // when this row was last auto-refreshed
   updatedAt:      timestamp('updated_at').defaultNow(),
   updatedBy:      text('updated_by'),
 })

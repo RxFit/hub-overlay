@@ -195,6 +195,7 @@ export type InterviewIntent =
   | 'assign_issue'
   | 'update_issue_state'
   | 'create_agent'
+  | 'launch_campaign'
   | 'restart_agent'
   | 'run_audit'
   | 'create_workspace'

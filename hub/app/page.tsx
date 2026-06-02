@@ -29,6 +29,7 @@ import {
   hasPermission,
   getRequiredPermission,
   isReadOnlyIntent,
+  isCeoRoutedIntent,
 } from '@/lib/interview'
 import type { InterviewState, ActionSpec, ChatAttachment, ActiveSkill } from '@/types'
 
@@ -671,7 +672,102 @@ export default function HubPage() {
         setInterviewState(nextState)
 
         if (!nextState.active && nextState.spec) {
-          // Interview complete — build spec
+          // Interview complete — check if this is a CEO-routed intent needing AI quality gate
+          if (isCeoRoutedIntent(nextState.spec.intent)) {
+            // Send spec to AI for quality evaluation before showing confirm card
+            const specSummary = Object.entries(nextState.spec.details)
+              .map(([k, v]) => `${k}: ${v}`)
+              .join('\n')
+            
+            const evalPrompt = `You are evaluating whether a briefing for the Paperclip CEO Agent is sufficient. The user wants to: ${nextState.spec.summary}\n\nCollected details:\n${specSummary}\n\nIs this briefing detailed enough for the CEO Agent to take action? Consider:\n- Is the goal clear?\n- Is there enough context for the CEO to decide which agents to create?\n- Are success criteria defined?\n\nRespond with EXACTLY one of:\n1. "SUFFICIENT" if the brief is ready\n2. A single follow-up question if more context is needed (just the question, nothing else)`
+
+            // Show a thinking indicator
+            const thinkingMsg: ChatMsg = {
+              id: crypto.randomUUID(),
+              role: 'assistant' as const,
+              content: '🧠 Evaluating briefing quality for CEO handoff...',
+              timestamp: new Date().toISOString(),
+            }
+            
+            // Fire the quality gate asynchronously
+            fetch('/api/chat', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                messages: [{ role: 'user', content: evalPrompt }],
+                useCase: 'deep_dive',
+              }),
+            }).then(async (res) => {
+              const reader = res.body?.getReader()
+              if (!reader) return
+              
+              let fullText = ''
+              const decoder = new TextDecoder()
+              while (true) {
+                const { done, value } = await reader.read()
+                if (done) break
+                const chunk = decoder.decode(value)
+                const lines = chunk.split('\n').filter(l => l.startsWith('data: '))
+                for (const line of lines) {
+                  const data = line.slice(6)
+                  if (data === '[DONE]') continue
+                  try {
+                    const parsed = JSON.parse(data)
+                    if (parsed.text) fullText += parsed.text
+                  } catch { /* skip */ }
+                }
+              }
+              
+              const cleanResponse = fullText.replace(/<!--suggestedTools:\[.*?\]-->/g, '').trim()
+
+              if (cleanResponse.toUpperCase().includes('SUFFICIENT')) {
+                // Brief is good — show the confirm card
+                setActionSpec(nextState.spec)
+                setMessages(prev => {
+                  const filtered = prev.filter(m => m.content !== '🧠 Evaluating briefing quality for CEO handoff...')
+                  return [...filtered, {
+                    id: crypto.randomUUID(),
+                    role: 'assistant' as const,
+                    content: '✅ Briefing approved by AI quality gate. Please review the action below and approve, edit, or cancel.',
+                    timestamp: new Date().toISOString(),
+                  }]
+                })
+              } else {
+                // AI needs more context — ask the follow-up question
+                // Re-activate interview with an extra question
+                setInterviewState({
+                  ...nextState,
+                  active: true,
+                  spec: null,
+                })
+                setMessages(prev => {
+                  const filtered = prev.filter(m => m.content !== '🧠 Evaluating briefing quality for CEO handoff...')
+                  return [...filtered, {
+                    id: crypto.randomUUID(),
+                    role: 'assistant' as const,
+                    content: `🧠 **AI Quality Gate** — The briefing needs more detail before handing off to the CEO:\n\n**${cleanResponse}**`,
+                    timestamp: new Date().toISOString(),
+                  }]
+                })
+              }
+            }).catch(() => {
+              // Quality gate failed — show confirm card anyway
+              setActionSpec(nextState.spec)
+              setMessages(prev => {
+                const filtered = prev.filter(m => m.content !== '🧠 Evaluating briefing quality for CEO handoff...')
+                return [...filtered, {
+                  id: crypto.randomUUID(),
+                  role: 'assistant' as const,
+                  content: '✅ Interview complete! Please review the action below and approve, edit, or cancel.',
+                  timestamp: new Date().toISOString(),
+                }]
+              })
+            })
+
+            return [...updated, thinkingMsg]
+          }
+
+          // Non-CEO-routed intent — show confirm card immediately
           setActionSpec(nextState.spec)
           const doneMsg: ChatMsg = {
             id: crypto.randomUUID(),
@@ -982,25 +1078,98 @@ export default function HubPage() {
         }
 
         case 'create_agent': {
-          const res = await fetch(`/api/paperclip/api/companies`, { method: 'GET' })
-          if (!res.ok) throw new Error('Failed to fetch companies')
-          const companiesData = await res.json()
+          // CEO-ROUTED: Create an Issue for the CEO to provision the agent
+          const companiesRes = await fetch('/api/paperclip/api/companies')
+          if (!companiesRes.ok) throw new Error('Failed to fetch companies')
+          const companiesData = await companiesRes.json()
           const companies = Array.isArray(companiesData) ? companiesData : companiesData.companies ?? []
           const targetName = spec.details.project?.toLowerCase() || ''
           const company = companies.find((c: { name: string }) => c.name.toLowerCase().includes(targetName))
-          
           if (!company) throw new Error(`Workspace "${spec.details.project}" not found`)
 
-          const agentRes = await fetch(`/api/paperclip/api/companies/${company.id}/agents`, {
+          // Get the CEO agent ID
+          const agentsRes = await fetch(`/api/paperclip/api/companies/${company.id}/agents`)
+          const agentsData = agentsRes.ok ? await agentsRes.json() : { agents: [] }
+          const agents = agentsData.agents ?? []
+          const ceoAgent = agents.find((a: { name: string }) => a.name.toLowerCase().includes('ceo'))
+
+          const issueTitle = `Provision Agent: ${spec.details.agentName}`
+          const issueDesc = [
+            `## Agent Provisioning Request`,
+            ``,
+            `**Requested Agent:** ${spec.details.agentName}`,
+            `**Role/Instructions:** ${spec.details.instructions}`,
+            `**Workspace:** ${company.name}`,
+            ``,
+            `### Directive`,
+            `The human operator has requested a new agent role. CEO: evaluate whether this role is needed, determine the appropriate adapter and instructions, and provision the agent.`,
+          ].join('\n')
+
+          const issueRes = await fetch('/api/paperclip/issues', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              name: spec.details.agentName,
-              instructions: spec.details.instructions,
+              title: issueTitle,
+              description: issueDesc,
+              priority: 'high',
+              companyId: company.id,
+              assigneeId: ceoAgent?.id || undefined,
             }),
           })
-          if (!agentRes.ok) throw new Error(`Agent creation failed: ${agentRes.status}`)
-          resultMsg = `✅ **Agent Created**\n\n"${spec.details.agentName}" has been added to **${company.name}**.`
+          if (!issueRes.ok) throw new Error(`Issue creation failed: ${issueRes.status}`)
+          const issueData = await issueRes.json()
+          resultMsg = `🧠 **CEO Briefed**\n\nIssue "${issueData.issue?.title || issueTitle}" has been created and assigned to the CEO Agent in **${company.name}**.\n\nThe CEO will evaluate the request and provision the agent. Track progress in the Execution Feed.`
+          mutate('/api/feed')
+          break
+        }
+
+        case 'launch_campaign': {
+          // CEO-ROUTED: Create a campaign-level Issue for the CEO
+          const companiesRes = await fetch('/api/paperclip/api/companies')
+          if (!companiesRes.ok) throw new Error('Failed to fetch companies')
+          const companiesData = await companiesRes.json()
+          const companies = Array.isArray(companiesData) ? companiesData : companiesData.companies ?? []
+          const targetName = spec.details.project?.toLowerCase() || ''
+          const company = companies.find((c: { name: string }) => c.name.toLowerCase().includes(targetName))
+          if (!company) throw new Error(`Workspace "${spec.details.project}" not found`)
+
+          // Get the CEO agent ID
+          const agentsRes = await fetch(`/api/paperclip/api/companies/${company.id}/agents`)
+          const agentsData = agentsRes.ok ? await agentsRes.json() : { agents: [] }
+          const agents = agentsData.agents ?? []
+          const ceoAgent = agents.find((a: { name: string }) => a.name.toLowerCase().includes('ceo'))
+
+          const suggestedRoles = spec.details.suggestedRoles || 'CEO to determine'
+          const constraints = spec.details.constraints || 'None specified'
+
+          const issueTitle = `Campaign: ${spec.details.campaignGoal?.slice(0, 80) || 'New Campaign'}`
+          const issueDesc = [
+            `## Campaign Launch Request`,
+            ``,
+            `**Campaign Goal:** ${spec.details.campaignGoal}`,
+            `**Suggested Agent Roles:** ${suggestedRoles}`,
+            `**Constraints:** ${constraints}`,
+            `**Workspace:** ${company.name}`,
+            ``,
+            `### Directive`,
+            `The human operator has requested a multi-agent campaign. CEO: determine the optimal agent structure, provision the necessary agents, assign sub-tasks, and coordinate delivery. You have full authority to create, modify, or reassign agents as needed.`,
+          ].join('\n')
+
+          const issueRes = await fetch('/api/paperclip/issues', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              title: issueTitle,
+              description: issueDesc,
+              priority: 'high',
+              companyId: company.id,
+              assigneeId: ceoAgent?.id || undefined,
+            }),
+          })
+          if (!issueRes.ok) throw new Error(`Campaign issue creation failed: ${issueRes.status}`)
+          const issueData = await issueRes.json()
+          resultMsg = `🚀 **Campaign Briefed to CEO**\n\nIssue "${issueData.issue?.title || issueTitle}" has been created and assigned to the CEO Agent in **${company.name}**.\n\nThe CEO will determine the agent structure, provision the necessary roles, and coordinate the campaign. Track progress in the Execution Feed.`
+          mutate('/api/feed')
           break
         }
 

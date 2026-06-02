@@ -30,6 +30,7 @@ const INTENT_PERMISSIONS: Record<InterviewIntent, ActionPermission> = {
   assign_issue: 'admin',
   update_issue_state: 'admin',
   create_agent: 'admin',
+  launch_campaign: 'admin',
   restart_agent: 'admin',
   run_audit: 'admin',
   // Superadmin-level (destructive)
@@ -132,6 +133,15 @@ const INTENT_PATTERNS: Array<{ intent: InterviewIntent; patterns: RegExp[] }> = 
     patterns: [
       /\b(create|add|make|spin up|provision)\b.*\b(agent|bot)\b/i,
       /\bnew agent\b/i,
+    ],
+  },
+  {
+    intent: 'launch_campaign',
+    patterns: [
+      /\b(launch|start|create|build|run)\b.*\b(campaign|strategy|initiative|program)\b/i,
+      /\b(content|blog|seo|marketing|social media|email)\b.*\b(campaign|strategy|plan|initiative)\b/i,
+      /\b(need|want)\b.*\b(copywriter|keyword|seo|content writer|marketing team)\b/i,
+      /\bmulti.?agent\b/i,
     ],
   },
   {
@@ -305,11 +315,36 @@ const INTERVIEW_SEQUENCES: Record<InterviewIntent, InterviewStep[]> = {
       key: 'agentName',
     },
     {
-      question: 'What role/instructions should the agent have? Describe what it does.',
+      question: 'What role/instructions should the agent have? Describe what it does, what success looks like, and any constraints.',
       key: 'instructions',
     },
     {
-      question: 'I\'ll create this agent. This requires admin privileges. Confirm? (yes / cancel)',
+      question: 'I\'ll brief the CEO Agent to provision this role. This requires admin privileges. Confirm? (yes / cancel)',
+      key: '_confirm',
+    },
+  ],
+
+  launch_campaign: [
+    {
+      question: 'What is the campaign about? Describe the goal, target audience, and desired outcome.',
+      key: 'campaignGoal',
+    },
+    {
+      question: 'Which project/workspace should this campaign run in?',
+      key: 'project',
+    },
+    {
+      question: 'What agent roles do you envision? (e.g., "Copywriter, SEO Auditor, Keyword Researcher" — or say "let the CEO decide")',
+      key: 'suggestedRoles',
+      defaultValue: 'Let the CEO decide',
+    },
+    {
+      question: 'Any deadlines, budget constraints, or specific requirements the CEO should know about?',
+      key: 'constraints',
+      defaultValue: 'No specific constraints',
+    },
+    {
+      question: 'I\'ll brief the CEO Agent with this campaign plan. The CEO will determine the agent structure and coordinate execution. Confirm? (yes / cancel)',
       key: '_confirm',
     },
   ],
@@ -496,7 +531,8 @@ const INTENT_LABELS: Record<InterviewIntent, string> = {
   view_runs: 'View Run History',
   assign_issue: 'Assign Issue',
   update_issue_state: 'Update Issue State',
-  create_agent: 'Create Agent',
+  create_agent: 'Create Agent (via CEO)',
+  launch_campaign: 'Launch Campaign (via CEO)',
   restart_agent: 'Restart Agent',
   run_audit: 'Run Audit',
   create_workspace: 'Create Workspace',
@@ -513,7 +549,8 @@ const INTENT_TARGET_SYSTEMS: Record<InterviewIntent, string[]> = {
   view_runs: ['Paperclip AI'],
   assign_issue: ['Paperclip AI'],
   update_issue_state: ['Paperclip AI'],
-  create_agent: ['Paperclip AI'],
+  create_agent: ['Paperclip AI — CEO Routed'],
+  launch_campaign: ['Paperclip AI — CEO Routed'],
   restart_agent: ['Paperclip AI'],
   run_audit: ['Paperclip AI'],
   create_workspace: ['Paperclip AI'],
@@ -570,4 +607,12 @@ export function isDestructiveIntent(intent: InterviewIntent): boolean {
  */
 export function isReadOnlyIntent(intent: InterviewIntent): boolean {
   return intent === 'check_agent_status' || intent === 'view_runs' || intent === 'run_audit'
+}
+
+/**
+ * Check if an intent should be routed through the CEO Agent via an Issue
+ * instead of executing directly.
+ */
+export function isCeoRoutedIntent(intent: InterviewIntent): boolean {
+  return intent === 'create_agent' || intent === 'launch_campaign'
 }

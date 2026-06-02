@@ -29,7 +29,11 @@ const GOOGLE_SCOPES = [
   // Google Chat — member listing + read state (for unread badges)
   'https://www.googleapis.com/auth/chat.memberships.readonly',
   'https://www.googleapis.com/auth/chat.users.readstate.readonly',
+  // KPI sources — GA4 Data API + Google Search Console
+  'https://www.googleapis.com/auth/analytics.readonly',
+  'https://www.googleapis.com/auth/webmasters.readonly',
 ].join(' ')
+
 
 /* ── Token refresh helper ── */
 async function refreshAccessToken(token: JWT): Promise<JWT> {
