@@ -6079,8 +6079,8 @@ a:hover .rx-arrow {
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  width: min(92vw, 880px);
-  height: min(88vh, 680px);
+  width: min(95vw, 1200px);
+  height: min(92vh, 850px);
   background: var(--bg-primary);
   border: 1px solid var(--border-accent);
   border-radius: var(--radius-2xl);
@@ -7029,3 +7029,75 @@ a:hover .rx-arrow {
   }
 }
 
+/* ── Reply Quote Button ── */
+.chat-reply-btn {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  background: none;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 2px 8px;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+.chat-message:hover .chat-reply-btn {
+  opacity: 1;
+}
+.chat-reply-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+  border-color: var(--border-accent);
+}
+
+/* ── Quoted Reply Chip ── */
+.quoted-reply-chip {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--surface-bg);
+  border-left: 3px solid var(--accent-gold);
+  border-radius: var(--radius-md);
+  margin-bottom: 8px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  max-height: 60px;
+  overflow: hidden;
+  position: relative;
+}
+.quoted-reply-chip::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 20px;
+  background: linear-gradient(transparent, var(--surface-bg));
+}
+.quoted-reply-chip__dismiss {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.9rem;
+  padding: 0;
+  flex-shrink: 0;
+}
+.quoted-reply-chip__dismiss:hover {
+  color: var(--text-primary);
+}
+
+/* ── AI Avatar clickable (skills trigger) ── */
+.chat-message-avatar-ai.clickable {
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.chat-message-avatar-ai.clickable:hover {
+  transform: scale(1.1);
+  box-shadow: 0 0 12px rgba(197, 160, 89, 0.4);
+}

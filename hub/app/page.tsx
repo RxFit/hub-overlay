@@ -194,18 +194,51 @@ function MessageContent({ content, onToolActivate }: { content: string; onToolAc
 }
 
 /* ── Right Panel: Execution Layer ── */
-function RightPanel({ isOpen, onClose, onInjectChat, panelRef, style, projects }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string, useCase?: string) => void; panelRef?: React.Ref<HTMLElement>; style?: React.CSSProperties; projects?: import('@/types').ProjectKPI[] }) {
+function RightPanel({ isOpen, onClose, onInjectChat, panelRef, style, projects, activeProject }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string, useCase?: string) => void; panelRef?: React.Ref<HTMLElement>; style?: React.CSSProperties; projects?: import('@/types').ProjectKPI[]; activeProject?: string }) {
+  // Build Paperclip workspace URL from the active project
+  const paperclipBaseUrl = process.env.NEXT_PUBLIC_PAPERCLIP_URL || 'https://rxfit-paperclip-11747747730.us-central1.run.app'
+  const activeCompany = projects?.find(p => p.identifier?.toLowerCase() === activeProject?.toLowerCase() || p.companyName?.toLowerCase().includes(activeProject?.toLowerCase() || ''))
+  const paperclipUrl = activeCompany?.companyId
+    ? `${paperclipBaseUrl}/companies/${activeCompany.companyId}`
+    : paperclipBaseUrl
+
   return (
     <aside ref={panelRef} className={`panel-right ${isOpen ? 'mobile-open' : ''}`} aria-label="Execution Layer" style={style}>
       <div className="panel-header">
         <h2 className="panel-title">
           <span className="panel-title-display">Execution</span>
         </h2>
-        {onClose && (
-          <button className="panel-close-btn" onClick={onClose} aria-label="Close Execution Layer">
-            &times;
-          </button>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <a
+            href={paperclipUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px',
+              padding: '4px 10px',
+              fontSize: '0.7rem',
+              fontWeight: 600,
+              color: 'var(--accent-gold)',
+              border: '1px solid var(--accent-gold)',
+              borderRadius: 'var(--radius-md)',
+              textDecoration: 'none',
+              transition: 'all 0.15s ease',
+              opacity: 0.85,
+            }}
+            onMouseEnter={(e) => { (e.target as HTMLElement).style.opacity = '1'; (e.target as HTMLElement).style.background = 'rgba(197,160,89,0.1)' }}
+            onMouseLeave={(e) => { (e.target as HTMLElement).style.opacity = '0.85'; (e.target as HTMLElement).style.background = 'transparent' }}
+            aria-label="Open Paperclip workspace"
+          >
+            📎 Paperclip →
+          </a>
+          {onClose && (
+            <button className="panel-close-btn" onClick={onClose} aria-label="Close Execution Layer">
+              &times;
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="panel-content">
@@ -306,6 +339,9 @@ export default function HubPage() {
 
   // Context attachments state
   const [attachments, setAttachments] = useState<ChatAttachment[]>([])
+
+  // Quoted reply state
+  const [quotedReply, setQuotedReply] = useState<{ id: string; content: string } | null>(null)
 
   // Skills state
   const [activeSkill, setActiveSkill] = useState<ActiveSkill | null>(null)
@@ -623,10 +659,17 @@ export default function HubPage() {
 
   const doSend = useCallback((message: string, msgAttachments?: ChatAttachment[]) => {
     haptic()
+    // If there's a quoted reply, prepend it as context
+    const contextPrefix = quotedReply
+      ? `> Replying to: ${quotedReply.content.slice(0, 200)}...\n\n`
+      : ''
+    const fullMessage = contextPrefix + message
+    if (quotedReply) setQuotedReply(null)
+
     const newMessage: ChatMsg = {
       id: crypto.randomUUID(),
       role: 'user' as const,
-      content: message,
+      content: fullMessage,
       timestamp: new Date().toISOString(),
       attachments: msgAttachments,
     }
@@ -798,7 +841,7 @@ export default function HubPage() {
       sendToApi(message, updated, useCase, msgAttachments)
       return updated
     })
-  }, [interviewState, sendToApi, canUseInterviewMode])
+  }, [interviewState, sendToApi, canUseInterviewMode, quotedReply])
 
   /* ── Handle manual send from input ── */
   const handleSend = useCallback(() => {
@@ -1330,14 +1373,9 @@ export default function HubPage() {
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <span className="panel-title-dot" aria-hidden="true" />
                 <h2 className="chat-header-title">
-                  <button
-                    className={`skills-sparkle ${activeSkill ? 'skills-sparkle--active' : ''}`}
-                    onClick={() => setSkillsPopoverOpen(!skillsPopoverOpen)}
-                    aria-label="Open skills menu"
-                    aria-expanded={skillsPopoverOpen}
-                  >
+                  <span className="skills-sparkle">
                     ✦
-                  </button>
+                  </span>
                   {' '}AI Assistant
                 </h2>
                 <span className="chat-header-model-badge">
@@ -1415,12 +1453,23 @@ export default function HubPage() {
               )}
               {messages.map(msg => (
                 <div key={msg.id} className={`chat-message ${msg.role === 'user' ? 'chat-message-user' : ''}`}>
-                  <div
-                    className={`chat-message-avatar ${msg.role === 'user' ? 'chat-message-avatar-user' : 'chat-message-avatar-ai'}`}
-                    aria-hidden="true"
-                  >
-                    {msg.role === 'user' ? userInitials : '✦'}
-                  </div>
+                  {msg.role === 'assistant' ? (
+                    <button
+                      className="chat-message-avatar chat-message-avatar-ai clickable"
+                      onClick={() => setSkillsPopoverOpen(!skillsPopoverOpen)}
+                      aria-label="Open skills menu"
+                      title="Open AI Skills"
+                    >
+                      ✦
+                    </button>
+                  ) : (
+                    <div
+                      className="chat-message-avatar chat-message-avatar-user"
+                      aria-hidden="true"
+                    >
+                      {userInitials}
+                    </div>
+                  )}
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '78%' }}>
                     <div className={`chat-bubble ${msg.role === 'user' ? 'chat-bubble-user' : 'chat-bubble-ai'}`} style={{ maxWidth: '100%' }}>
                       <MessageContent content={msg.content} onToolActivate={handleSkillActivate} />
@@ -1433,7 +1482,18 @@ export default function HubPage() {
                         readOnly
                       />
                     )}
-                    {msg.role === 'assistant' && msg.content && <CopyButton text={msg.content} />}
+                    {msg.role === 'assistant' && msg.content && (
+                      <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                        <CopyButton text={msg.content} />
+                        <button
+                          className="chat-reply-btn"
+                          onClick={() => setQuotedReply({ id: msg.id, content: msg.content.slice(0, 300) })}
+                          aria-label="Reply to this message"
+                        >
+                          ↩️ Reply
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
@@ -1498,6 +1558,18 @@ export default function HubPage() {
             {/* Input */}
             <div className="chat-input-area">
               {/* Attachment chips (shown above textarea when items are attached) */}
+              {quotedReply && (
+                <div className="quoted-reply-chip">
+                  <div style={{ flex: 1, overflow: 'hidden' }}>{quotedReply.content}</div>
+                  <button
+                    className="quoted-reply-chip__dismiss"
+                    onClick={() => setQuotedReply(null)}
+                    aria-label="Remove quoted reply"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
               {attachments.length > 0 && (
                 <AttachmentChips
                   attachments={attachments}
@@ -1533,7 +1605,7 @@ export default function HubPage() {
         </main>
 
         {!isOnboarding && (
-          <RightPanel isOpen={mobileRightOpen} onClose={handleClosePanels} onInjectChat={(msg) => handleChatInject(msg, 'execute')} panelRef={rightPanelRef} projects={projects} />
+          <RightPanel isOpen={mobileRightOpen} onClose={handleClosePanels} onInjectChat={(msg) => handleChatInject(msg, 'execute')} panelRef={rightPanelRef} projects={projects} activeProject={activeProject} />
         )}
 
         {/* Onboarding: hide right panel placeholder for onboarding users */}

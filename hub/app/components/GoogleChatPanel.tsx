@@ -5,6 +5,7 @@ import { useSpaces, useMessages, useSendMessage, useSpaceMembers } from '@/app/h
 import type { ChatSpace, ChatMessage, SpaceMember } from '@/app/hooks/useGoogleChat'
 import { MentionPicker, useMentionTrigger } from '@/app/components/MentionPicker'
 import { InfoPopover } from '@/app/components/InfoPopover'
+import { EmailPreviewCard } from '@/app/components/EmailPreviewCard'
 
 
 /* ══════════════════════════════════════════
@@ -539,9 +540,9 @@ function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => void }) {
                       {formatDate(msg.date)}
                     </span>
                   </div>
-                  <div style={{ fontSize: '0.78rem', color: 'var(--text-primary)', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
-                    {msg.body}
-                  </div>
+                  {msg.body && (
+                    <EmailPreviewCard htmlContent={msg.body} />
+                  )}
                 </div>
               ))}
               <div ref={bottomRef} />
