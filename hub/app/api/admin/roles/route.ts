@@ -7,7 +7,14 @@ import { canAssignRole } from '@/lib/roles'
 
 export const runtime = 'nodejs'
 
-/* ── GET /api/admin/roles ── */
+/* Role hierarchy — higher index = more privilege */
+const ROLE_RANK: Record<string, number> = {
+  onboarding: 0,
+  staff: 1,
+  admin: 2,
+  superadmin: 3,
+}
+
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions)
   const callerRole = (session?.user as Record<string, unknown>)?.role as string
@@ -56,10 +63,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
-  const { email, role, assignedProjects } = body
+  const { email: rawEmail, role, assignedProjects } = body
+  const email = (rawEmail || '').trim().toLowerCase()
 
-  if (!email || !role) {
-    return NextResponse.json({ error: 'email and role are required' }, { status: 400 })
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return NextResponse.json({ error: 'Valid email is required' }, { status: 400 })
+  }
+
+  const VALID_ROLES = ['superadmin', 'admin', 'staff', 'onboarding'] as const
+  if (!role || !VALID_ROLES.includes(role as typeof VALID_ROLES[number])) {
+    return NextResponse.json({ error: `role must be one of: ${VALID_ROLES.join(', ')}` }, { status: 400 })
   }
 
   // Validate role assignment permissions
@@ -70,12 +83,38 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  // Prevent self-demotion for superadmins
-  if (email.toLowerCase() === callerEmail.toLowerCase() && callerRole === 'superadmin') {
+  // Prevent self-demotion for ALL roles (not just superadmin)
+  if (email === callerEmail.toLowerCase()) {
     return NextResponse.json(
-      { error: 'Superadmins cannot change their own role via this panel' },
+      { error: 'You cannot change your own role via this panel' },
       { status: 400 }
     )
+  }
+
+  // Prevent downgrading a role to a lower privilege level
+  // e.g. admin cannot set a superadmin to 'onboarding'
+  try {
+    const allEntries = await import('@/lib/userRoles').then(m => m.getAllRoleEntries('', process.env.HUB_ROLES_SHEET_ID))
+    const existingEntry = allEntries.find(e => e.email === email)
+    if (existingEntry) {
+      const existingRank = ROLE_RANK[existingEntry.role] ?? 0
+      const newRank = ROLE_RANK[role] ?? 0
+      const callerRank = ROLE_RANK[callerRole] ?? 0
+      if (existingRank >= callerRank) {
+        return NextResponse.json(
+          { error: `Cannot modify a user with equal or higher privilege (${existingEntry.role})` },
+          { status: 403 }
+        )
+      }
+      if (newRank > callerRank) {
+        return NextResponse.json(
+          { error: `Cannot promote a user above your own role (${callerRole})` },
+          { status: 403 }
+        )
+      }
+    }
+  } catch {
+    // DB lookup failure — proceed (the upsert will still respect canAssignRole)
   }
 
   try {

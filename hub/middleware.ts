@@ -8,9 +8,6 @@ export default withAuth(
     const role = token?.role as string | undefined
     const pathname = req.nextUrl.pathname
 
-    // TEMP DIAGNOSTIC — remove after superadmin confirmed
-    console.log(`[auth] session callback: token.role="${String(token?.role)}" token.email="${String(token?.email)}"`)
-
     // Protect /admin route — only admin and superadmin can access
     if (pathname.startsWith('/admin')) {
       if (!role || !['admin', 'superadmin'].includes(role)) {

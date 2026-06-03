@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useSession, signOut, signIn } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
@@ -489,8 +489,10 @@ function KPIEditorCard({ isAdmin }: { isAdmin: boolean }) {
   const [error, setError] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState<Partial<KpiDraft>>({})
+  const [editError, setEditError] = useState<string | null>(null)
   const [newDraft, setNewDraft] = useState<KpiDraft>(BLANK_DRAFT)
   const [adding, setAdding] = useState(false)
+  const addingRef = useRef(false)  // double-submit guard
   const [saving, setSaving] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
   const [addError, setAddError] = useState<string | null>(null)
@@ -528,6 +530,8 @@ function KPIEditorCard({ isAdmin }: { isAdmin: boolean }) {
 
   const handleAdd = async () => {
     if (!newDraft.label.trim()) return
+    if (addingRef.current) return   // double-submit guard
+    addingRef.current = true
     setAdding(true)
     setAddError(null)
     try {
@@ -544,6 +548,7 @@ function KPIEditorCard({ isAdmin }: { isAdmin: boolean }) {
       setAddError(e instanceof Error ? e.message : 'Failed to add')
     } finally {
       setAdding(false)
+      addingRef.current = false
     }
   }
 
@@ -559,9 +564,10 @@ function KPIEditorCard({ isAdmin }: { isAdmin: boolean }) {
       if (!res.ok) throw new Error(d.error)
       setEditingId(null)
       setEditDraft({})
+      setEditError(null)
       await load()
     } catch (e) {
-      console.error(e)
+      setEditError(e instanceof Error ? e.message : 'Save failed')
     } finally {
       setSaving(null)
     }
@@ -571,10 +577,11 @@ function KPIEditorCard({ isAdmin }: { isAdmin: boolean }) {
     setDeleting(id)
     try {
       const res = await fetch(`/api/settings/kpis?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`)
       await load()
     } catch (e) {
-      console.error(e)
+      setError(e instanceof Error ? e.message : 'Delete failed')
     } finally {
       setDeleting(null)
     }

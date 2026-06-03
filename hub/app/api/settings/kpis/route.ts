@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { eq } from 'drizzle-orm'
+import { eq, and } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { kpis, tenants } from '@/lib/schema'
 
@@ -13,7 +13,7 @@ const TENANT_ID = process.env.NEXT_PUBLIC_TENANT_ID || 'rxfit'
 async function ensureTenant() {
   await db
     .insert(tenants)
-    .values({ id: TENANT_ID, name: 'RxFit Athletics', domain: 'rxfitatx.com' })
+    .values({ id: TENANT_ID, name: 'RxFit Athletics', domain: 'rxfit.co' })
     .onConflictDoNothing()
 }
 
@@ -27,12 +27,21 @@ export async function GET(_req: NextRequest) {
 
   try {
     await ensureTenant()
-    const rows = await db
+    const role = (session.user as Record<string, unknown>)?.role as string | undefined
+    const isAdmin = role === 'admin' || role === 'superadmin'
+
+    let query = db
       .select()
       .from(kpis)
       .where(eq(kpis.tenantId, TENANT_ID))
-      .orderBy(kpis.updatedAt)
+      .$dynamic()
 
+    // Non-admin users only see public + staff KPIs
+    if (!isAdmin) {
+      query = query.where(eq(kpis.visibility, 'staff')) as typeof query
+    }
+
+    const rows = await query.orderBy(kpis.updatedAt)
     return NextResponse.json({ rows, source: 'db' })
   } catch (err) {
     console.error('[settings/kpis GET]', err)
@@ -112,9 +121,10 @@ export async function PATCH(req: NextRequest) {
     const [row] = await db
       .update(kpis)
       .set(updateData)
-      .where(eq(kpis.id, id))
+      .where(and(eq(kpis.id, id), eq(kpis.tenantId, TENANT_ID)))
       .returning()
 
+    if (!row) return NextResponse.json({ error: 'KPI not found or access denied' }, { status: 404 })
     return NextResponse.json({ row, updated: true })
   } catch (err) {
     console.error('[settings/kpis PATCH]', err)
@@ -140,7 +150,12 @@ export async function DELETE(req: NextRequest) {
     const id = searchParams.get('id')
     if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 })
 
-    await db.delete(kpis).where(eq(kpis.id, id))
+    const result = await db
+      .delete(kpis)
+      .where(and(eq(kpis.id, id), eq(kpis.tenantId, TENANT_ID)))
+      .returning({ id: kpis.id })
+
+    if (!result.length) return NextResponse.json({ error: 'KPI not found or access denied' }, { status: 404 })
     return NextResponse.json({ deleted: true })
   } catch (err) {
     console.error('[settings/kpis DELETE]', err)
