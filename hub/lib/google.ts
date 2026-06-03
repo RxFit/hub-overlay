@@ -111,6 +111,22 @@ export async function completeTask(
   )
 }
 
+/** Mark a task as needing action (uncomplete/restore) */
+export async function uncompleteTask(
+  accessToken: string,
+  taskListId: string,
+  taskId: string
+): Promise<GoogleTask> {
+  return googleFetch<GoogleTask>(
+    `${TASKS_BASE}/lists/${taskListId}/tasks/${taskId}`,
+    accessToken,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ status: 'needsAction', completed: null }),
+    }
+  )
+}
+
 /* ══════════════════════════════════════════
    Google Calendar  —  https://www.googleapis.com/calendar/v3
    ══════════════════════════════════════════ */
@@ -198,6 +214,26 @@ export async function createCalendarEvent(
       body: JSON.stringify(body),
     }
   )
+}
+
+/** Delete a calendar event by ID */
+export async function deleteCalendarEvent(
+  accessToken: string,
+  eventId: string,
+  calendarId = 'primary'
+): Promise<void> {
+  const calId = encodeURIComponent(calendarId)
+  const res = await fetch(
+    `${CALENDAR_BASE}/calendars/${calId}/events/${eventId}`,
+    {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${accessToken}` },
+    }
+  )
+  if (!res.ok && res.status !== 204 && res.status !== 410) {
+    const msg = await res.text().catch(() => 'Unknown error')
+    throw new Error(`deleteCalendarEvent ${res.status}: ${msg}`)
+  }
 }
 
 /* ══════════════════════════════════════════

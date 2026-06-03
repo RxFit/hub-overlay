@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { getToken } from 'next-auth/jwt'
 import { authOptions } from '@/lib/auth'
-import { listTaskLists, listTasks, createTask, completeTask } from '@/lib/google'
+import { listTaskLists, listTasks, createTask, completeTask, uncompleteTask } from '@/lib/google'
 
 export const runtime = 'nodejs'
 
@@ -81,6 +81,14 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'taskId is required' }, { status: 400 })
       }
       const task = await completeTask(accessToken, taskListId, taskId)
+      return NextResponse.json({ task })
+    }
+
+    if (action === 'uncomplete') {
+      if (!taskId) {
+        return NextResponse.json({ error: 'taskId is required' }, { status: 400 })
+      }
+      const task = await uncompleteTask(accessToken, taskListId, taskId)
       return NextResponse.json({ task })
     }
 

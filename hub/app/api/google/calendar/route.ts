@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { getToken } from 'next-auth/jwt'
 import { authOptions } from '@/lib/auth'
-import { listUpcomingEvents, createCalendarEvent, listCalendars, GoogleCalendarEvent } from '@/lib/google'
+import { listUpcomingEvents, createCalendarEvent, deleteCalendarEvent, listCalendars, GoogleCalendarEvent } from '@/lib/google'
 
 export const runtime = 'nodejs'
 
@@ -94,6 +94,38 @@ export async function POST(req: NextRequest) {
   try {
     const event = await createCalendarEvent(accessToken, body)
     return NextResponse.json({ event })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error'
+    return NextResponse.json({ error: message }, { status: 500 })
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  const session = await getServerSession(authOptions)
+  if (!session?.user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const token = await getToken({ req })
+  const accessToken = token?.accessToken as string | undefined
+  if (!accessToken) {
+    return NextResponse.json({ error: 'No Google access token' }, { status: 401 })
+  }
+
+  let body: { eventId: string; calendarId?: string }
+  try {
+    body = await req.json()
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
+  }
+
+  if (!body.eventId) {
+    return NextResponse.json({ error: 'eventId is required' }, { status: 400 })
+  }
+
+  try {
+    await deleteCalendarEvent(accessToken, body.eventId, body.calendarId)
+    return NextResponse.json({ success: true })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error'
     return NextResponse.json({ error: message }, { status: 500 })

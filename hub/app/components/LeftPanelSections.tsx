@@ -111,7 +111,19 @@ export function CollapsibleSection({
    ══════════════════════════════════════════════════════════════════════════════ */
 
 export function TasksSection({ onInjectChat }: { onInjectChat: (msg: string) => void }) {
-  const { tasks, isLoading, error } = useTasks()
+  const { taskLists, tasksByList, isLoading, error, mutate } = useTasks()
+  const [activeListId, setActiveListId] = useState<string | null>(null)
+
+  // Auto-select first list once loaded
+  const firstListId = taskLists[0]?.id ?? null
+  const resolvedListId = activeListId ?? firstListId
+
+  // Local optimistic state: task IDs that are being toggled
+  const [togglingIds, setTogglingIds] = useState<Set<string>>(new Set())
+  // IDs that have been completed and are fading out
+  const [fadingIds, setFadingIds] = useState<Set<string>>(new Set())
+  // IDs to hide from the list (after fade)
+  const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set())
 
   if (isLoading) {
     return (
@@ -133,58 +145,142 @@ export function TasksSection({ onInjectChat }: { onInjectChat: (msg: string) => 
   if (error) {
     return (
       <CollapsibleSection title="Tasks" protocolNum="03" defaultOpen>
-        <SectionMessage message="Unable to load tasks — try refreshing or check your connection" type="error" />
+        <SectionMessage message="Unable to load tasks — try refreshing" type="error" />
       </CollapsibleSection>
     )
   }
 
-  if (tasks.length === 0) {
-    return (
-      <CollapsibleSection title="Tasks" protocolNum="03" defaultOpen>
-        <SectionMessage message="No pending tasks" type="empty" />
-      </CollapsibleSection>
-    )
+  const currentTasks = resolvedListId ? (tasksByList[resolvedListId] ?? []) : []
+  const visibleTasks = currentTasks.filter(t => !hiddenIds.has(t.id))
+
+  async function handleToggleTask(task: TaskItem, listId: string) {
+    if (togglingIds.has(task.id)) return
+    const wasCompleted = task.status === 'completed'
+    const newAction = wasCompleted ? 'uncomplete' : 'complete'
+
+    if (!wasCompleted) {
+      // Mark as fading immediately for optimistic UX
+      setFadingIds(prev => new Set(prev).add(task.id))
+      setTimeout(() => {
+        setHiddenIds(prev => new Set(prev).add(task.id))
+        setFadingIds(prev => { const s = new Set(prev); s.delete(task.id); return s })
+      }, 1500)
+    }
+
+    setTogglingIds(prev => new Set(prev).add(task.id))
+    try {
+      await fetch('/api/google/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: newAction, taskListId: listId, taskId: task.id }),
+      })
+      mutate?.()
+    } catch {
+      // Rollback on error
+      setFadingIds(prev => { const s = new Set(prev); s.delete(task.id); return s })
+      setHiddenIds(prev => { const s = new Set(prev); s.delete(task.id); return s })
+    } finally {
+      setTogglingIds(prev => { const s = new Set(prev); s.delete(task.id); return s })
+    }
   }
+
+  const activeListName = taskLists.find(l => l.id === resolvedListId)?.title ?? 'Tasks'
 
   return (
-    <CollapsibleSection title="Tasks" protocolNum="01" defaultOpen>
-      <div role="list" aria-label="Google Tasks">
-        {tasks.map((task) => (
-          <TaskRow key={task.id} task={task} onClick={() => onInjectChat(`Tell me about task: ${task.title}`)} />
-        ))}
-      </div>
+    <CollapsibleSection title="Tasks" protocolNum="03" defaultOpen>
+      {/* List tab strip */}
+      {taskLists.length > 1 && (
+        <div className="doc-filter-tabs" role="tablist" aria-label="Task lists" style={{ marginBottom: '6px' }}>
+          {taskLists.map(list => (
+            <button
+              key={list.id}
+              role="tab"
+              aria-selected={resolvedListId === list.id}
+              className={`feed-filter-btn${resolvedListId === list.id ? ' active' : ''}`}
+              onClick={() => setActiveListId(list.id)}
+              title={list.title}
+            >
+              {list.title.length > 9 ? list.title.slice(0, 8) + '…' : list.title}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Task list */}
+      {visibleTasks.length === 0 ? (
+        <SectionMessage message={`No pending tasks in ${activeListName}`} type="empty" />
+      ) : (
+        <div role="list" aria-label={`${activeListName} tasks`}>
+          {visibleTasks.map(task => (
+            <TaskRow
+              key={task.id}
+              task={task}
+              isFading={fadingIds.has(task.id)}
+              isToggling={togglingIds.has(task.id)}
+              onToggle={() => resolvedListId && handleToggleTask(task, resolvedListId)}
+              onInjectChat={() => onInjectChat(`Tell me about task: ${task.title}`)}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* FAB: open AI chat to create a task */}
+      <button
+        className="tasks-fab"
+        onClick={() => onInjectChat(`I want to create a new task in my ${activeListName} list`)}
+        aria-label={`Create task in ${activeListName}`}
+        title={`Create task in ${activeListName}`}
+      >
+        + Task
+      </button>
     </CollapsibleSection>
   )
 }
 
-function TaskRow({ task, onClick }: { task: TaskItem; onClick: () => void }) {
+function TaskRow({
+  task,
+  isFading,
+  isToggling,
+  onToggle,
+  onInjectChat,
+}: {
+  task: TaskItem
+  isFading: boolean
+  isToggling: boolean
+  onToggle: () => void
+  onInjectChat: () => void
+}) {
   const dueDate = task.due ? formatRelativeDate(task.due) : null
   const isCompleted = task.status === 'completed'
 
   return (
-    <button
+    <div
       role="listitem"
-      onClick={onClick}
-      aria-label={`Task: ${task.title}${dueDate ? `, due ${dueDate}` : ''}`}
-      className="section-row"
+      className={`section-row task-row ${isFading ? 'task-row--fading' : ''}`}
+      style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'default' }}
     >
-      {/* Decorative checkbox */}
-      <span
-        aria-hidden="true"
-        className={`task-checkbox ${isCompleted ? 'task-checkbox--completed' : 'task-checkbox--pending'}`}
+      {/* Interactive checkbox */}
+      <button
+        onClick={(e) => { e.stopPropagation(); onToggle() }}
+        disabled={isToggling}
+        aria-label={isCompleted ? 'Mark incomplete' : 'Mark complete'}
+        aria-pressed={isCompleted}
+        className={`task-checkbox task-checkbox--btn ${isCompleted ? 'task-checkbox--completed' : 'task-checkbox--pending'} ${isToggling ? 'task-checkbox--toggling' : ''}`}
       >
         {isCompleted && '✓'}
-      </span>
+      </button>
 
-      {/* Content */}
-      <div className="task-content">
-        <div className={`task-title ${isCompleted ? 'task-title--completed' : 'task-title--pending'}`}>
+      {/* Content — click to inject into chat */}
+      <div
+        className="task-content"
+        onClick={onInjectChat}
+        style={{ flex: 1, cursor: 'pointer', minWidth: 0 }}
+      >
+        <div className={`task-title ${isCompleted || isFading ? 'task-title--completed' : 'task-title--pending'}`}>
           {task.title}
         </div>
         {dueDate && (
-          <div className="task-due">
-            Due {dueDate}
-          </div>
+          <div className="task-due">Due {dueDate}</div>
         )}
       </div>
 
@@ -193,14 +289,211 @@ function TaskRow({ task, onClick }: { task: TaskItem; onClick: () => void }) {
         aria-hidden="true"
         className={`task-status-dot ${isCompleted ? 'task-status-dot--completed' : 'task-status-dot--pending'}`}
       />
-    </button>
+    </div>
   )
 }
 
+/* ══════════════════════════════════════════════════════════════════════════════
+   CALENDAR EVENT MODAL
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+interface CalendarEventModalProps {
+  defaultDate?: string  // ISO date string e.g. "2026-06-03"
+  onClose: () => void
+  onCreated: () => void
+}
+
+function CalendarEventModal({ defaultDate, onClose, onCreated }: CalendarEventModalProps) {
+  const today = defaultDate || new Date().toISOString().split('T')[0]
+  const [title, setTitle] = useState('')
+  const [description, setDescription] = useState('')
+  const [date, setDate] = useState(today)
+  const [startTime, setStartTime] = useState('09:00')
+  const [endTime, setEndTime] = useState('10:00')
+  const [attendees, setAttendees] = useState('')
+  const [location, setLocation] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function handleSave(e: React.FormEvent) {
+    e.preventDefault()
+    if (!title.trim() || !date || !startTime || !endTime) return
+    setSaving(true)
+    setError(null)
+    try {
+      const start = `${date}T${startTime}:00`
+      const end = `${date}T${endTime}:00`
+      const emailList = attendees.split(',').map(s => s.trim()).filter(Boolean)
+      const res = await fetch('/api/google/calendar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          summary: title.trim(),
+          description: description.trim() || undefined,
+          start,
+          end,
+          attendees: emailList.length ? emailList : undefined,
+          location: location.trim() || undefined,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to create event')
+      onCreated()
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create event')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div
+        className="cal-event-modal-backdrop"
+        onClick={onClose}
+        aria-hidden="true"
+      />
+      {/* Modal */}
+      <div
+        className="cal-event-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Create calendar event"
+      >
+        <div className="cal-event-modal__header">
+          <h3 className="cal-event-modal__title">New Event</h3>
+          <button className="cal-event-modal__close" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+
+        <form onSubmit={handleSave} className="cal-event-form">
+          {/* Title */}
+          <div className="cal-event-form__field">
+            <label className="cal-event-form__label" htmlFor="cal-event-title">Title *</label>
+            <input
+              id="cal-event-title"
+              type="text"
+              className="cal-event-form__input"
+              value={title}
+              onChange={e => setTitle(e.target.value)}
+              placeholder="Event title"
+              required
+              autoFocus
+            />
+          </div>
+
+          {/* Date + Times row */}
+          <div className="cal-event-form__row">
+            <div className="cal-event-form__field">
+              <label className="cal-event-form__label" htmlFor="cal-event-date">Date *</label>
+              <input
+                id="cal-event-date"
+                type="date"
+                className="cal-event-form__input"
+                value={date}
+                onChange={e => setDate(e.target.value)}
+                required
+              />
+            </div>
+            <div className="cal-event-form__field">
+              <label className="cal-event-form__label" htmlFor="cal-event-start">Start</label>
+              <input
+                id="cal-event-start"
+                type="time"
+                className="cal-event-form__input"
+                value={startTime}
+                onChange={e => setStartTime(e.target.value)}
+              />
+            </div>
+            <div className="cal-event-form__field">
+              <label className="cal-event-form__label" htmlFor="cal-event-end">End</label>
+              <input
+                id="cal-event-end"
+                type="time"
+                className="cal-event-form__input"
+                value={endTime}
+                onChange={e => setEndTime(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {/* Attendees */}
+          <div className="cal-event-form__field">
+            <label className="cal-event-form__label" htmlFor="cal-event-attendees">Attendees</label>
+            <input
+              id="cal-event-attendees"
+              type="text"
+              className="cal-event-form__input"
+              value={attendees}
+              onChange={e => setAttendees(e.target.value)}
+              placeholder="email@example.com, ..."
+            />
+          </div>
+
+          {/* Location */}
+          <div className="cal-event-form__field">
+            <label className="cal-event-form__label" htmlFor="cal-event-location">Location</label>
+            <input
+              id="cal-event-location"
+              type="text"
+              className="cal-event-form__input"
+              value={location}
+              onChange={e => setLocation(e.target.value)}
+              placeholder="Address or Google Meet link"
+            />
+          </div>
+
+          {/* Description */}
+          <div className="cal-event-form__field">
+            <label className="cal-event-form__label" htmlFor="cal-event-desc">Description</label>
+            <textarea
+              id="cal-event-desc"
+              className="cal-event-form__input cal-event-form__textarea"
+              value={description}
+              onChange={e => setDescription(e.target.value)}
+              placeholder="Optional notes"
+              rows={2}
+            />
+          </div>
+
+          {error && (
+            <div className="cal-event-form__error" role="alert">{error}</div>
+          )}
+
+          <div className="cal-event-form__actions">
+            <button
+              type="button"
+              className="cal-event-form__btn cal-event-form__btn--cancel"
+              onClick={onClose}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="cal-event-form__btn cal-event-form__btn--save"
+              disabled={saving || !title.trim()}
+            >
+              {saving ? 'Saving…' : 'Save Event'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </>
+  )
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   CALENDAR SECTION
+   ══════════════════════════════════════════════════════════════════════════════ */
+
 export function CalendarSection({ onInjectChat }: { onInjectChat: (msg: string) => void }) {
-  const { events, isLoading, error } = useCalendar()
+  const { events, isLoading, error, mutate } = useCalendar()
   const [selectedDate, setSelectedDate] = useState<Date>(() => new Date())
   const [weekStart, setWeekStart] = useState<Date>(() => getMonday(new Date()))
+  const [showCreateModal, setShowCreateModal] = useState(false)
+  const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; summary: string; calendarId?: string } | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   if (isLoading) {
     return (
@@ -222,7 +515,7 @@ export function CalendarSection({ onInjectChat }: { onInjectChat: (msg: string) 
   if (error) {
     return (
       <CollapsibleSection title="Calendar" protocolNum="02" defaultOpen>
-        <SectionMessage message="Unable to load calendar — try refreshing or check your connection" type="error" />
+        <SectionMessage message="Unable to load calendar — try refreshing" type="error" />
       </CollapsibleSection>
     )
   }
@@ -257,93 +550,170 @@ export function CalendarSection({ onInjectChat }: { onInjectChat: (msg: string) 
   })
 
   const dayName = selectedDate.toLocaleDateString([], { weekday: 'long' })
+  const selectedDateISO = selectedDate.toISOString().split('T')[0]
+
+  async function handleDeleteConfirm() {
+    if (!deleteConfirm) return
+    setDeleting(true)
+    try {
+      await fetch('/api/google/calendar', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ eventId: deleteConfirm.id, calendarId: deleteConfirm.calendarId }),
+      })
+      mutate?.()
+    } catch { /* non-fatal */ } finally {
+      setDeleting(false)
+      setDeleteConfirm(null)
+    }
+  }
 
   return (
-    <CollapsibleSection title="Calendar" protocolNum="02" defaultOpen>
-      {/* Week navigation */}
-      <div className="calendar-week-nav">
-        <button
-          aria-label="Previous week"
-          className="calendar-week-nav__btn"
-          onClick={() => {
-            const prev = new Date(weekStart)
-            prev.setDate(prev.getDate() - 7)
-            setWeekStart(prev)
-          }}
-        >
-          ‹
-        </button>
-        <span className="calendar-week-nav__label">
-          {weekStart.toLocaleDateString([], { month: 'short', day: 'numeric' })} – {weekDays[6].toLocaleDateString([], { month: 'short', day: 'numeric' })}
-        </span>
-        <button
-          aria-label="Next week"
-          className="calendar-week-nav__btn"
-          onClick={() => {
-            const next = new Date(weekStart)
-            next.setDate(next.getDate() + 7)
-            setWeekStart(next)
-          }}
-        >
-          ›
-        </button>
-      </div>
+    <>
+      <CollapsibleSection title="Calendar" protocolNum="02" defaultOpen>
+        {/* Create event button in section body */}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '4px' }}>
+          <button
+            className="cal-create-btn"
+            onClick={() => setShowCreateModal(true)}
+            aria-label="Create calendar event"
+          >
+            + Event
+          </button>
+        </div>
 
-      {/* Week strip */}
-      <div className="calendar-week-strip" role="listbox" aria-label="Week days">
-        {weekDays.map((day) => {
-          const dayStr = day.toDateString()
-          const isToday = dayStr === today.toDateString()
-          const isSelected = dayStr === selectedDateStr
-          const hasEvents = daysWithEvents.has(dayStr)
-          const dayLetter = DAY_LETTERS[day.getDay()]
+        {/* Week navigation */}
+        <div className="calendar-week-nav">
+          <button
+            aria-label="Previous week"
+            className="calendar-week-nav__btn"
+            onClick={() => {
+              const prev = new Date(weekStart)
+              prev.setDate(prev.getDate() - 7)
+              setWeekStart(prev)
+            }}
+          >
+            ‹
+          </button>
+          <span className="calendar-week-nav__label">
+            {weekStart.toLocaleDateString([], { month: 'short', day: 'numeric' })} – {weekDays[6].toLocaleDateString([], { month: 'short', day: 'numeric' })}
+          </span>
+          <button
+            aria-label="Next week"
+            className="calendar-week-nav__btn"
+            onClick={() => {
+              const next = new Date(weekStart)
+              next.setDate(next.getDate() + 7)
+              setWeekStart(next)
+            }}
+          >
+            ›
+          </button>
+        </div>
 
-          const classNames = [
-            'calendar-day-cell',
-            isToday ? 'calendar-day-cell--today' : '',
-            isSelected ? 'calendar-day-cell--selected' : '',
-            hasEvents ? 'calendar-day-cell--has-events' : '',
-          ].filter(Boolean).join(' ')
+        {/* Week strip */}
+        <div className="calendar-week-strip" role="listbox" aria-label="Week days">
+          {weekDays.map((day) => {
+            const dayStr = day.toDateString()
+            const isToday = dayStr === today.toDateString()
+            const isSelected = dayStr === selectedDateStr
+            const hasEvents = daysWithEvents.has(dayStr)
+            const dayLetter = DAY_LETTERS[day.getDay()]
 
-          return (
-            <button
-              key={dayStr}
-              role="option"
-              aria-selected={isSelected}
-              aria-label={`${day.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })}${hasEvents ? ', has events' : ''}`}
-              className={classNames}
-              onClick={() => setSelectedDate(new Date(day))}
-            >
-              <span className="calendar-day-cell__letter">{dayLetter}</span>
-              <span className="calendar-day-cell__number">{day.getDate()}</span>
-              {hasEvents && <span className="calendar-day-cell__dot" aria-hidden="true" />}
-            </button>
-          )
-        })}
-      </div>
+            const classNames = [
+              'calendar-day-cell',
+              isToday ? 'calendar-day-cell--today' : '',
+              isSelected ? 'calendar-day-cell--selected' : '',
+              hasEvents ? 'calendar-day-cell--has-events' : '',
+            ].filter(Boolean).join(' ')
 
-      {/* Day detail */}
-      <div className="calendar-day-detail" aria-label={`Events for ${dayName}`}>
-        {dayEvents.length === 0 ? (
-          <SectionMessage message={`No events on ${dayName}`} type="empty" />
-        ) : (
-          <div role="list" aria-label={`${dayName} events`}>
-            {dayEvents.map((event) => (
-              <CalendarRow
-                key={event.id}
-                event={event}
-                onClick={() => {
-                  const dateStr = event.start.dateTime
-                    ? formatShortDate(event.start.dateTime)
-                    : event.start.date ?? ''
-                  onInjectChat(`Tell me about event: ${event.summary} on ${dateStr}`)
-                }}
-              />
-            ))}
+            return (
+              <button
+                key={dayStr}
+                role="option"
+                aria-selected={isSelected}
+                aria-label={`${day.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })}${hasEvents ? ', has events' : ''}`}
+                className={classNames}
+                onClick={() => setSelectedDate(new Date(day))}
+              >
+                <span className="calendar-day-cell__letter">{dayLetter}</span>
+                <span className="calendar-day-cell__number">{day.getDate()}</span>
+                {hasEvents && <span className="calendar-day-cell__dot" aria-hidden="true" />}
+              </button>
+            )
+          })}
+        </div>
+
+        {/* Day detail */}
+        <div className="calendar-day-detail" aria-label={`Events for ${dayName}`}>
+          {dayEvents.length === 0 ? (
+            <SectionMessage message={`No events on ${dayName}`} type="empty" />
+          ) : (
+            <div role="list" aria-label={`${dayName} events`}>
+              {dayEvents.map((event) => (
+                <CalendarRow
+                  key={event.id}
+                  event={event}
+                  onClick={() => {
+                    const dateStr = event.start.dateTime
+                      ? formatShortDate(event.start.dateTime)
+                      : event.start.date ?? ''
+                    onInjectChat(`Tell me about event: ${event.summary} on ${dateStr}`)
+                  }}
+                  onDelete={() => setDeleteConfirm({
+                    id: event.id,
+                    summary: event.summary,
+                    calendarId: (event as any).organizer?.email,
+                  })}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </CollapsibleSection>
+
+      {/* Create Event Modal */}
+      {showCreateModal && (
+        <CalendarEventModal
+          defaultDate={selectedDateISO}
+          onClose={() => setShowCreateModal(false)}
+          onCreated={() => mutate?.()}
+        />
+      )}
+
+      {/* Delete Confirm Dialog */}
+      {deleteConfirm && (
+        <>
+          <div className="cal-event-modal-backdrop" onClick={() => setDeleteConfirm(null)} aria-hidden="true" />
+          <div className="cal-event-modal cal-delete-dialog" role="alertdialog" aria-modal="true" aria-label="Confirm event deletion">
+            <div className="cal-event-modal__header">
+              <h3 className="cal-event-modal__title">Delete Event?</h3>
+              <button className="cal-event-modal__close" onClick={() => setDeleteConfirm(null)} aria-label="Cancel">✕</button>
+            </div>
+            <div style={{ padding: '16px 20px' }}>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0 0 16px' }}>
+                Are you sure you want to delete <strong style={{ color: 'var(--text-primary)' }}>&quot;{deleteConfirm.summary}&quot;</strong>? This cannot be undone.
+              </p>
+              <div className="cal-event-form__actions">
+                <button
+                  className="cal-event-form__btn cal-event-form__btn--cancel"
+                  onClick={() => setDeleteConfirm(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="cal-event-form__btn cal-event-form__btn--delete"
+                  onClick={handleDeleteConfirm}
+                  disabled={deleting}
+                >
+                  {deleting ? 'Deleting…' : 'Delete Event'}
+                </button>
+              </div>
+            </div>
           </div>
-        )}
-      </div>
-    </CollapsibleSection>
+        </>
+      )}
+    </>
   )
 }
 
@@ -370,35 +740,50 @@ function getWeekDays(monday: Date): Date[] {
   })
 }
 
-function CalendarRow({ event, onClick }: { event: CalendarEvent; onClick: () => void }) {
+function CalendarRow({
+  event,
+  onClick,
+  onDelete,
+}: {
+  event: CalendarEvent
+  onClick: () => void
+  onDelete: () => void
+}) {
   const startTime = event.start.dateTime
     ? formatTime(event.start.dateTime)
     : 'All day'
 
   return (
-    <button
+    <div
       role="listitem"
-      onClick={onClick}
-      aria-label={`Event: ${event.summary} at ${startTime}`}
-      className="section-row section-row--calendar"
+      className="section-row section-row--calendar cal-event-row"
+      style={{ display: 'flex', alignItems: 'center' }}
     >
-      {/* Time badge */}
-      <span className="calendar-time-badge">
-        {startTime}
-      </span>
-
-      {/* Event details */}
-      <div className="calendar-details">
-        <div className="calendar-summary">
-          {event.summary}
+      {/* Time badge + event details — clickable for AI inject */}
+      <button
+        onClick={onClick}
+        className="cal-event-row__main"
+        aria-label={`Event: ${event.summary} at ${startTime}`}
+      >
+        <span className="calendar-time-badge">{startTime}</span>
+        <div className="calendar-details">
+          <div className="calendar-summary">{event.summary}</div>
+          {(event as any).location && (
+            <div className="calendar-meta">{(event as any).location}</div>
+          )}
         </div>
-        {(event as any).location && (
-          <div className="calendar-meta">
-            {(event as any).location}
-          </div>
-        )}
-      </div>
-    </button>
+      </button>
+
+      {/* Delete button — shown on hover */}
+      <button
+        className="cal-row-delete-btn"
+        onClick={(e) => { e.stopPropagation(); onDelete() }}
+        aria-label={`Delete event: ${event.summary}`}
+        title="Delete event"
+      >
+        🗑
+      </button>
+    </div>
   )
 }
 

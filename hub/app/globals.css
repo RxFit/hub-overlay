@@ -5959,6 +5959,326 @@ a:hover .rx-arrow {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
+   TASKS — Interactive Checkboxes + Multi-list Tabs + FAB
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* Task row container (div replaces button for composite interaction) */
+.task-row {
+  border-radius: var(--radius-md);
+  transition: background 0.1s ease;
+}
+.task-row:hover {
+  background: var(--bg-hover, rgba(255,255,255,0.04));
+}
+
+/* Interactive checkbox button */
+.task-checkbox--btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.55rem;
+  font-weight: 700;
+  transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+  background: transparent;
+}
+.task-checkbox--btn.task-checkbox--pending {
+  border: 1.5px solid var(--border);
+}
+.task-checkbox--btn.task-checkbox--pending:hover {
+  border-color: var(--accent);
+  background: rgba(197,160,89,0.08);
+}
+.task-checkbox--btn.task-checkbox--completed {
+  background: var(--accent);
+  border: 1.5px solid var(--accent);
+  color: #000;
+}
+.task-checkbox--btn.task-checkbox--toggling {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+/* Fade-out animation for completed tasks */
+@keyframes taskFadeOut {
+  0% { opacity: 1; transform: translateX(0); }
+  70% { opacity: 0.3; }
+  100% { opacity: 0; transform: translateX(6px); }
+}
+.task-row--fading {
+  animation: taskFadeOut 1.4s var(--ease-out, ease-out) forwards;
+  pointer-events: none;
+}
+.task-row--fading .task-title {
+  text-decoration: line-through;
+  opacity: 0.5;
+}
+
+/* Task creation FAB */
+.tasks-fab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  margin-top: 8px;
+  padding: 6px 12px;
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.tasks-fab:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(197,160,89,0.06);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   CALENDAR — Create Button + Delete Row Button + Event Modal
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* "+ Event" compact button in calendar section header */
+.cal-create-btn {
+  padding: 3px 10px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.cal-create-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(197,160,89,0.06);
+}
+
+/* Calendar event row with hover delete */
+.cal-event-row {
+  position: relative;
+  padding: 0;
+}
+.cal-event-row__main {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  gap: 8px;
+  padding: 6px 8px;
+  background: transparent;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-md);
+  transition: background 0.1s ease;
+  width: 100%;
+  min-width: 0;
+}
+.cal-event-row__main:hover {
+  background: var(--bg-hover, rgba(255,255,255,0.04));
+}
+
+/* Delete button — hidden by default, shown on row hover */
+.cal-row-delete-btn {
+  flex-shrink: 0;
+  opacity: 0;
+  padding: 4px 6px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+.cal-event-row:hover .cal-row-delete-btn {
+  opacity: 1;
+}
+.cal-row-delete-btn:hover {
+  color: var(--danger, #ef4444);
+  background: rgba(239,68,68,0.1);
+}
+
+/* ── Calendar Event Modal ── */
+.cal-event-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  z-index: 9000;
+}
+
+@keyframes calModalIn {
+  from { opacity: 0; transform: translate(-50%, -48%) scale(0.96); }
+  to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+
+.cal-event-modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 9001;
+  width: min(95vw, 480px);
+  max-height: 90vh;
+  overflow-y: auto;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-accent, var(--accent-border, var(--border)));
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xl, 0 25px 50px rgba(0,0,0,0.5));
+  animation: calModalIn 0.2s var(--ease-out, ease-out) both;
+}
+
+.cal-event-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.cal-event-modal__title {
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+.cal-event-modal__close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.cal-event-modal__close:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover, rgba(255,255,255,0.06));
+}
+
+/* ── Calendar Event Form ── */
+.cal-event-form {
+  padding: 16px 20px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.cal-event-form__row {
+  display: flex;
+  gap: 10px;
+}
+.cal-event-form__row .cal-event-form__field {
+  flex: 1;
+}
+.cal-event-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.cal-event-form__label {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+.cal-event-form__input {
+  padding: 8px 10px;
+  background: var(--bg-input, var(--bg-secondary));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: 0.82rem;
+  outline: none;
+  transition: border-color 0.15s ease;
+  width: 100%;
+  box-sizing: border-box;
+  /* date/time inputs need some extra help in dark mode */
+  color-scheme: dark;
+}
+.cal-event-form__input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(197,160,89,0.15);
+}
+.cal-event-form__textarea {
+  resize: vertical;
+  min-height: 60px;
+}
+.cal-event-form__error {
+  padding: 8px 12px;
+  background: rgba(239,68,68,0.12);
+  border: 1px solid rgba(239,68,68,0.3);
+  border-radius: var(--radius-md);
+  font-size: 0.78rem;
+  color: var(--danger, #ef4444);
+}
+.cal-event-form__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+.cal-event-form__btn {
+  padding: 8px 18px;
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: all 0.15s ease;
+}
+.cal-event-form__btn--cancel {
+  background: var(--bg-hover, rgba(255,255,255,0.06));
+  color: var(--text-secondary);
+}
+.cal-event-form__btn--cancel:hover {
+  background: rgba(255,255,255,0.1);
+  color: var(--text-primary);
+}
+.cal-event-form__btn--save {
+  background: var(--accent);
+  color: #000;
+}
+.cal-event-form__btn--save:hover:not(:disabled) {
+  background: var(--accent-bright, var(--accent));
+  box-shadow: 0 0 12px rgba(197,160,89,0.3);
+}
+.cal-event-form__btn--save:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.cal-event-form__btn--delete {
+  background: var(--danger, #ef4444);
+  color: #fff;
+}
+.cal-event-form__btn--delete:hover:not(:disabled) {
+  background: #dc2626;
+  box-shadow: 0 0 12px rgba(239,68,68,0.3);
+}
+.cal-event-form__btn--delete:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Compact delete dialog variant */
+.cal-delete-dialog {
+  width: min(90vw, 380px);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
    ACCESSIBILITY — Reduced Motion
    ══════════════════════════════════════════════════════════════════════════════ */
 @media (prefers-reduced-motion: reduce) {
@@ -7100,4 +7420,106 @@ a:hover .rx-arrow {
 .chat-message-avatar-ai.clickable:hover {
   transform: scale(1.1);
   box-shadow: 0 0 12px rgba(197, 160, 89, 0.4);
+}
+
+/* ── Collapsible Settings Section ── */
+.settings-collapsible {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  margin-top: 8px;
+}
+.settings-collapsible__trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  user-select: none;
+  list-style: none;
+  transition: color 0.15s ease;
+}
+.settings-collapsible__trigger:hover {
+  color: var(--text-primary);
+}
+.settings-collapsible__trigger::-webkit-details-marker {
+  display: none;
+}
+.settings-collapsible__arrow {
+  font-size: 0.6rem;
+  transition: transform 0.2s ease;
+}
+details[open] > .settings-collapsible__trigger .settings-collapsible__arrow {
+  transform: rotate(90deg);
+}
+
+/* ── Google Chat Space Sections ── */
+.chat-space-section {
+  margin-bottom: 2px;
+}
+.chat-space-section__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 12px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 0.62rem;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  transition: color 0.15s ease;
+}
+.chat-space-section__header:hover {
+  color: var(--text-secondary);
+}
+.chat-space-section__arrow {
+  font-size: 0.7rem;
+  transition: transform 0.2s ease;
+  display: inline-block;
+}
+.chat-space-section__label {
+  flex: 1;
+  text-align: left;
+}
+.chat-space-section__count {
+  font-size: 0.55rem;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+.chat-space-section__unread {
+  background: var(--accent);
+  color: #000;
+  font-size: 0.5rem;
+  font-weight: 800;
+  padding: 1px 5px;
+  border-radius: 10px;
+  min-width: 14px;
+  text-align: center;
+  line-height: 14px;
+}
+
+/* Unread space item styling */
+.chat-space-item--unread .chat-space-name {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.chat-space-unread-badge {
+  background: var(--accent);
+  color: #000;
+  font-size: 0.55rem;
+  font-weight: 800;
+  padding: 0 5px;
+  border-radius: 10px;
+  min-width: 16px;
+  text-align: center;
+  line-height: 16px;
+  flex-shrink: 0;
+  margin-left: auto;
 }

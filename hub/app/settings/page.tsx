@@ -883,32 +883,38 @@ export default function SettingsPage() {
               <button className="settings-link-btn" onClick={() => { setChatSaveStatus('idle'); setPinnedSpacesState(allSpaces.map(s => s.name)) }}>Show all</button>
               <button className="settings-link-btn" onClick={() => { setChatSaveStatus('idle'); setPinnedSpacesState([]) }}>Hide all</button>
             </div>
-            <div className="settings-spaces-list" role="list">
-              {allSpaces.map((space: ChatSpace) => {
-                const isPinned = (pinnedSpaces ?? allSpaces.map(s => s.name)).includes(space.name)
-                const label = space.displayName || space.name.split('/')[1]
-                const isDM = space.type === 'DM'
-                return (
-                  <label key={space.name} className="settings-space-row">
-                    <div className="settings-space-row__info">
-                      <span className="settings-space-row__icon" aria-hidden="true">{isDM ? '👤' : '#'}</span>
-                      <span className="settings-space-row__name">{label}</span>
-                    </div>
-                    <div
-                      role="switch"
-                      aria-checked={isPinned}
-                      tabIndex={0}
-                      className={`settings-toggle ${isPinned ? 'settings-toggle--on' : ''}`}
-                      onClick={() => toggleChatSpace(space.name)}
-                      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleChatSpace(space.name) } }}
-                      aria-label={`${isPinned ? 'Hide' : 'Show'} ${label}`}
-                    >
-                      <span className="settings-toggle__thumb" />
-                    </div>
-                  </label>
-                )
-              })}
-            </div>
+            <details className="settings-collapsible">
+              <summary className="settings-collapsible__trigger">
+                <span className="settings-collapsible__arrow">▶</span>
+                {allSpaces.length} spaces · {(pinnedSpaces ?? allSpaces.map(s => s.name)).length} visible
+              </summary>
+              <div className="settings-spaces-list" role="list">
+                {allSpaces.map((space: ChatSpace) => {
+                  const isPinned = (pinnedSpaces ?? allSpaces.map(s => s.name)).includes(space.name)
+                  const label = space.displayName || space.name.split('/')[1]
+                  const isDM = space.type === 'DM'
+                  return (
+                    <label key={space.name} className="settings-space-row">
+                      <div className="settings-space-row__info">
+                        <span className="settings-space-row__icon" aria-hidden="true">{isDM ? '👤' : '#'}</span>
+                        <span className="settings-space-row__name">{label}</span>
+                      </div>
+                      <div
+                        role="switch"
+                        aria-checked={isPinned}
+                        tabIndex={0}
+                        className={`settings-toggle ${isPinned ? 'settings-toggle--on' : ''}`}
+                        onClick={() => toggleChatSpace(space.name)}
+                        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleChatSpace(space.name) } }}
+                        aria-label={`${isPinned ? 'Hide' : 'Show'} ${label}`}
+                      >
+                        <span className="settings-toggle__thumb" />
+                      </div>
+                    </label>
+                  )
+                })}
+              </div>
+            </details>
             <div className="settings-save-row">
               <button
                 id="settings-save-chat-btn"

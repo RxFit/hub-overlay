@@ -80,7 +80,7 @@ interface TasksResponse {
  * Refreshes every 30 seconds.
  */
 export function useTasks() {
-  // Step 1: get task lists
+  // Step 1: fetch all task lists
   const {
     data: listData,
     error: listError,
@@ -90,27 +90,49 @@ export function useTasks() {
     { refreshInterval: 30_000, revalidateOnFocus: false }
   )
 
-  const firstListId = listData?.taskLists?.[0]?.id
+  const taskLists = listData?.taskLists ?? []
 
-  // Step 2: get tasks from the first list
+  // Step 2: fetch tasks for EVERY list in parallel
+  // SWR can't do dynamic-length hooks, so we cap at 10 lists and use a join key
+  const listIds = taskLists.map(l => l.id)
+  const allListsKey = listIds.length > 0
+    ? `/api/google/tasks?allLists=${listIds.map(id => encodeURIComponent(id)).join(',')}`
+    : null
+
   const {
-    data: taskData,
-    error: taskError,
+    data: allTasksData,
+    error: tasksError,
     isLoading: isLoadingTasks,
-  } = useSWR<TasksResponse>(
-    firstListId ? `/api/google/tasks?taskListId=${encodeURIComponent(firstListId)}&showCompleted=false&maxResults=15` : null,
-    fetcher,
+    mutate: mutateTasks,
+  } = useSWR<Record<string, TaskItem[]>>(
+    allListsKey,
+    async () => {
+      const results = await Promise.all(
+        listIds.map(async (id) => {
+          const res = await fetch(
+            `/api/google/tasks?taskListId=${encodeURIComponent(id)}&showCompleted=false&maxResults=20`
+          )
+          if (!res.ok) return { id, tasks: [] }
+          const data: TasksResponse = await res.json()
+          return { id, tasks: data.tasks ?? [] }
+        })
+      )
+      const map: Record<string, TaskItem[]> = {}
+      for (const { id, tasks } of results) map[id] = tasks
+      return map
+    },
     { refreshInterval: 30_000, revalidateOnFocus: false }
   )
 
   const isLoading = !listData && !listError
-  const error = listError || taskError
+  const error = listError || tasksError
 
   return {
-    tasks: taskData?.tasks ?? [],
-    taskListId: firstListId ?? null,
+    taskLists,
+    tasksByList: allTasksData ?? {},
     isLoading: isLoading || isLoadingTasks,
     error,
+    mutate: mutateTasks,
   }
 }
 
@@ -138,7 +160,7 @@ interface CalendarResponse {
  * Fetch upcoming calendar events. Refreshes every 60 seconds.
  */
 export function useCalendar() {
-  const { data, error, isLoading } = useSWR<CalendarResponse>(
+  const { data, error, isLoading, mutate } = useSWR<CalendarResponse>(
     '/api/google/calendar?maxResults=8',
     fetcher,
     { refreshInterval: 60_000, revalidateOnFocus: false }
@@ -148,6 +170,7 @@ export function useCalendar() {
     events: data?.events ?? [],
     isLoading,
     error,
+    mutate,
   }
 }
 
