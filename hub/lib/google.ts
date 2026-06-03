@@ -160,17 +160,32 @@ export async function listCalendars(accessToken: string): Promise<GoogleCalendar
   return data.items ?? []
 }
 
-/** List upcoming events from the user's primary calendar */
+/** List calendar events within a time window.
+ * Defaults: timeMin = start of today (not NOW — so past events from today remain visible)
+ *           timeMax = 30 days from now
+ *           maxResults = 50
+ */
 export async function listUpcomingEvents(
   accessToken: string,
-  opts?: { maxResults?: number; calendarId?: string }
+  opts?: { maxResults?: number; calendarId?: string; timeMin?: string; timeMax?: string }
 ): Promise<GoogleCalendarEvent[]> {
   const calendarId = encodeURIComponent(opts?.calendarId ?? 'primary')
+
+  // Default timeMin = 7 days ago so past week is navigable in the week strip
+  const sevenDaysAgo = new Date()
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
+  sevenDaysAgo.setHours(0, 0, 0, 0)
+
+  // Default timeMax = 60 days from now for 2-month forward coverage
+  const sixtyDaysOut = new Date()
+  sixtyDaysOut.setDate(sixtyDaysOut.getDate() + 60)
+
   const params = new URLSearchParams({
-    timeMin: new Date().toISOString(),
+    timeMin: opts?.timeMin ?? sevenDaysAgo.toISOString(),
+    timeMax: opts?.timeMax ?? sixtyDaysOut.toISOString(),
     orderBy: 'startTime',
     singleEvents: 'true',
-    maxResults: String(opts?.maxResults ?? 10),
+    maxResults: String(opts?.maxResults ?? 50),
   })
 
   const data = await googleFetch<{ items?: GoogleCalendarEvent[] }>(

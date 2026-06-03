@@ -160,8 +160,9 @@ interface CalendarResponse {
  * Fetch upcoming calendar events. Refreshes every 60 seconds.
  */
 export function useCalendar() {
+  // Request up to 100 events covering 30 days from today (server sets timeMin=today, timeMax=+30d)
   const { data, error, isLoading, mutate } = useSWR<CalendarResponse>(
-    '/api/google/calendar?maxResults=8',
+    '/api/google/calendar?maxResults=100',
     fetcher,
     { refreshInterval: 60_000, revalidateOnFocus: false }
   )

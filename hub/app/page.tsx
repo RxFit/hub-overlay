@@ -660,8 +660,10 @@ export default function HubPage() {
   const doSend = useCallback((message: string, msgAttachments?: ChatAttachment[]) => {
     haptic()
     // If there's a quoted reply, prepend it as context
+    const quoteText = quotedReply?.content ?? ''
+    const isTruncated = quoteText.length > 200
     const contextPrefix = quotedReply
-      ? `> Replying to: ${quotedReply.content.slice(0, 200)}...\n\n`
+      ? `> Replying to: ${quoteText.slice(0, 200)}${isTruncated ? '...' : ''}\n\n`
       : ''
     const fullMessage = contextPrefix + message
     if (quotedReply) setQuotedReply(null)
@@ -1487,7 +1489,7 @@ export default function HubPage() {
                         <CopyButton text={msg.content} />
                         <button
                           className="chat-reply-btn"
-                          onClick={() => setQuotedReply({ id: msg.id, content: msg.content.slice(0, 300) })}
+                          onClick={() => setQuotedReply({ id: msg.id, content: msg.content.slice(0, 200) })}
                           aria-label="Reply to this message"
                         >
                           ↩️ Reply

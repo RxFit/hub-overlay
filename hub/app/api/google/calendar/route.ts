@@ -23,32 +23,35 @@ export async function GET(req: NextRequest) {
   const calendarId = searchParams.get('calendarId') ?? undefined
 
   try {
-    const maxResNum = maxResults ? parseInt(maxResults, 10) : 10
+    // How many events to show in the final list (caller-controlled, default 100)
+    const displayMax = maxResults ? parseInt(maxResults, 10) : 100
+    // Fetch generously per-calendar so we don't miss events after sorting
+    const perCalMax = 50
     let events: GoogleCalendarEvent[] = []
 
     if (calendarId) {
-      events = await listUpcomingEvents(accessToken, { maxResults: maxResNum, calendarId })
+      events = await listUpcomingEvents(accessToken, { maxResults: perCalMax, calendarId })
     } else {
       const cals = await listCalendars(accessToken)
-      // Only fetch from selected calendars to avoid overwhelming API / returning too much
+      // Only fetch from selected/primary calendars
       const selectedCals = cals.filter(c => c.selected || c.primary)
-      
+
       const allEvents = await Promise.all(
-        selectedCals.map(cal => 
-          listUpcomingEvents(accessToken, { maxResults: maxResNum, calendarId: cal.id }).catch(() => [])
+        selectedCals.map(cal =>
+          listUpcomingEvents(accessToken, { maxResults: perCalMax, calendarId: cal.id }).catch(() => [])
         )
       )
-      
+
       events = allEvents.flat()
-      // Sort by start time
+      // Sort merged events by start time
       events.sort((a, b) => {
         const aTime = new Date(a.start.dateTime || a.start.date || 0).getTime()
         const bTime = new Date(b.start.dateTime || b.start.date || 0).getTime()
         return aTime - bTime
       })
-      // Slice to maxResults so we don't return 100 events
-      if (events.length > maxResNum) {
-        events = events.slice(0, maxResNum)
+      // Cap to displayMax to avoid excessive payload
+      if (events.length > displayMax) {
+        events = events.slice(0, displayMax)
       }
     }
     return NextResponse.json({ events })

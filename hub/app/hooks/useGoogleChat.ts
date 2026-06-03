@@ -227,60 +227,56 @@ interface ReadStateResponse {
  * Polls every 60s (slower than messages to stay under rate limits).
  */
 export function useUnreadCounts(spaces: ChatSpace[]) {
-  // Fetch read states for all visible spaces in a single SWR key
-  // We batch by serializing space IDs into the key
   const spaceIds = spaces.map(s => s.name).sort().join(',')
-  const key = spaceIds ? `/api/google/chat/readstate/batch?ids=${encodeURIComponent(spaceIds)}` : null
-
-  // Since we don't have a batch endpoint, we fetch individual read states
-  // and aggregate client-side using individual SWR hooks per space.
-  // For simplicity, we'll use a single effect-based approach.
 
   const [unreadMap, setUnreadMap] = useState<Map<string, number>>(new Map())
   const [totalUnread, setTotalUnread] = useState(0)
 
-  // Poll for unread counts
   useEffect(() => {
     if (spaces.length === 0) return
 
     let cancelled = false
+    const MAX_CONCURRENT = 5 // Throttle to avoid Google API rate limits
 
     async function computeUnreads() {
       const map = new Map<string, number>()
       let total = 0
 
-      await Promise.all(
-        spaces.map(async (space) => {
-          try {
-            // Fetch read state
-            const rsRes = await fetch(
-              `/api/google/chat/readstate?spaceId=${encodeURIComponent(space.name)}`
-            )
-            if (!rsRes.ok) return
-            const rs: ReadStateResponse = await rsRes.json()
+      // Process spaces in batches of MAX_CONCURRENT
+      for (let i = 0; i < spaces.length; i += MAX_CONCURRENT) {
+        if (cancelled) return
+        const batch = spaces.slice(i, i + MAX_CONCURRENT)
 
-            if (!rs.lastReadTime) return // Scope not granted yet
+        await Promise.all(
+          batch.map(async (space) => {
+            try {
+              const rsRes = await fetch(
+                `/api/google/chat/readstate?spaceId=${encodeURIComponent(space.name)}`
+              )
+              if (!rsRes.ok) return
+              const rs: ReadStateResponse = await rsRes.json()
 
-            // Fetch latest messages
-            const msgRes = await fetch(
-              `/api/google/chat/messages?spaceId=${encodeURIComponent(space.name)}&pageSize=50`
-            )
-            if (!msgRes.ok) return
-            const msgData: { messages: ChatMessage[] } = await msgRes.json()
+              if (!rs.lastReadTime) return
 
-            // Count messages newer than lastReadTime
-            const lastRead = new Date(rs.lastReadTime).getTime()
-            const unread = (msgData.messages ?? []).filter(
-              m => new Date(m.createTime).getTime() > lastRead
-            ).length
+              const msgRes = await fetch(
+                `/api/google/chat/messages?spaceId=${encodeURIComponent(space.name)}&pageSize=50`
+              )
+              if (!msgRes.ok) return
+              const msgData: { messages: ChatMessage[] } = await msgRes.json()
 
-            map.set(space.name, unread)
-            total += unread
-          } catch {
-            // Individual space failure — skip silently
-          }
-        })
-      )
+              const lastRead = new Date(rs.lastReadTime).getTime()
+              const unread = (msgData.messages ?? []).filter(
+                m => new Date(m.createTime).getTime() > lastRead
+              ).length
+
+              map.set(space.name, unread)
+              total += unread
+            } catch {
+              // Individual space failure — skip silently
+            }
+          })
+        )
+      }
 
       if (!cancelled) {
         setUnreadMap(map)
@@ -289,13 +285,13 @@ export function useUnreadCounts(spaces: ChatSpace[]) {
     }
 
     computeUnreads()
-    const interval = setInterval(computeUnreads, 60_000) // 60s poll
+    const interval = setInterval(computeUnreads, 60_000)
 
     return () => {
       cancelled = true
       clearInterval(interval)
     }
-  }, [spaceIds]) // Re-run when visible spaces change
+  }, [spaceIds])
 
   return { unreadMap, totalUnread }
 }

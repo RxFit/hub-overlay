@@ -663,7 +663,8 @@ export function CalendarSection({ onInjectChat }: { onInjectChat: (msg: string) 
                   onDelete={() => setDeleteConfirm({
                     id: event.id,
                     summary: event.summary,
-                    calendarId: (event as any).organizer?.email,
+                    // calendarId is left undefined — server defaults to 'primary'
+                    // (organizer.email is NOT the calendar ID)
                   })}
                 />
               ))}

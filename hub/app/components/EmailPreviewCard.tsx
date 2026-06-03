@@ -15,8 +15,11 @@ export function EmailPreviewCard({ htmlContent, subject, recipient }: EmailPrevi
   // Auto-resize iframe based on content height
   useEffect(() => {
     const handleMessage = (e: MessageEvent) => {
+      // Validate the message came from our iframe
+      if (e.source !== iframeRef.current?.contentWindow) return
       if (e.data && e.data.type === 'resize' && e.data.height) {
-        setHeight(`${e.data.height + 32}px`) // Add some padding
+        const capped = Math.min(e.data.height + 32, 600) // Cap at 600px
+        setHeight(`${capped}px`)
       }
     }
     window.addEventListener('message', handleMessage)
@@ -81,7 +84,7 @@ export function EmailPreviewCard({ htmlContent, subject, recipient }: EmailPrevi
           ref={iframeRef}
           srcDoc={safeHtml}
           title="Email Preview"
-          sandbox="allow-scripts allow-same-origin"
+          sandbox="allow-scripts"
           style={{
             width: '100%',
             height,
