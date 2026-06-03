@@ -1375,7 +1375,7 @@ export default function HubPage() {
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <span className="panel-title-dot" aria-hidden="true" />
                 <h2 className="chat-header-title">
-                  <span className="skills-sparkle">
+                  <span style={{ color: 'var(--text-muted)', animation: 'sparkle-breathe 3s ease-in-out infinite' }}>
                     ✦
                   </span>
                   {' '}AI Assistant
@@ -1458,7 +1458,7 @@ export default function HubPage() {
                   {msg.role === 'assistant' ? (
                     <button
                       className="chat-message-avatar chat-message-avatar-ai clickable"
-                      onClick={() => setSkillsPopoverOpen(!skillsPopoverOpen)}
+                      onClick={() => setSkillsPopoverOpen(true)}
                       aria-label="Open skills menu"
                       title="Open AI Skills"
                     >

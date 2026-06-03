@@ -883,7 +883,13 @@ export default function SettingsPage() {
               <button className="settings-link-btn" onClick={() => { setChatSaveStatus('idle'); setPinnedSpacesState(allSpaces.map(s => s.name)) }}>Show all</button>
               <button className="settings-link-btn" onClick={() => { setChatSaveStatus('idle'); setPinnedSpacesState([]) }}>Hide all</button>
             </div>
-            <details className="settings-collapsible">
+            <details
+              className="settings-collapsible"
+              open={(() => { try { return localStorage.getItem('hub-settings-spaces-open') === 'true' } catch { return false } })()}
+              onToggle={(e: React.SyntheticEvent<HTMLDetailsElement>) => {
+                try { localStorage.setItem('hub-settings-spaces-open', String((e.target as HTMLDetailsElement).open)) } catch {}
+              }}
+            >
               <summary className="settings-collapsible__trigger">
                 <span className="settings-collapsible__arrow">▶</span>
                 {allSpaces.length} spaces · {(pinnedSpaces ?? allSpaces.map(s => s.name)).length} visible
