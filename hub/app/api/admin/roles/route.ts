@@ -118,6 +118,11 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    // Log a warning if staff gets no project assignments (they'll see nothing useful)
+    if (role === 'staff' && (!assignedProjects || assignedProjects.length === 0)) {
+      console.warn(`[admin/roles] Staff user ${email} assigned with no projects — they will see an empty dashboard until projects are assigned`)
+    }
+
     await upsertUserRole(
       { email, role, assignedProjects: assignedProjects || [], assignedBy: callerEmail },
       accessToken,

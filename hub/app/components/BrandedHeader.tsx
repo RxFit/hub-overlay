@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { signOut, useSession } from 'next-auth/react'
 import Link from 'next/link'
 import { useTenant } from './TenantProvider'
+import { useCompanies } from '@/app/hooks/useCompanies'
 
 /* ── BrandedHeader ── */
 
@@ -28,6 +29,9 @@ export function BrandedHeader({
   const { data: session } = useSession()
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
+
+  // Live company list — scoped server-side by role
+  const { companies, isLoading: companiesLoading } = useCompanies()
 
   // Close menu on outside click
   useEffect(() => {
@@ -64,18 +68,12 @@ export function BrandedHeader({
     .join('')
     .toUpperCase()
 
-  // Role-aware project visibility
-  // superadmin / admin: see all projects
-  // staff: see only their assigned projects (or all if assignedProjects includes '*')
-  // onboarding: project selector hidden
-  const assignedProjects = ((session?.user as Record<string, unknown>)?.assignedProjects as string[]) ?? []
-  const visibleProjects = (() => {
-    if (!userRole || userRole === 'onboarding') return []
-    if (userRole === 'superadmin' || userRole === 'admin') return tenant.projects
-    // staff — filter to assigned
-    if (assignedProjects.includes('*')) return tenant.projects
-    return tenant.projects.filter(p => assignedProjects.includes(p.id))
-  })()
+  // Selector visibility:
+  //  - onboarding: always hidden
+  //  - loading: show skeleton
+  //  - others: show live dropdown
+  const isAdminOrAbove = userRole === 'superadmin' || userRole === 'admin'
+  const showSelector = userRole && userRole !== 'onboarding'
 
   return (
     <header className="hub-header" role="banner">
@@ -87,24 +85,46 @@ export function BrandedHeader({
       </div>
 
       <nav className="header-actions" aria-label="Hub controls">
-        {/* Only show project selector if user has project access */}
-        {visibleProjects.length > 0 && (
+        {/* Project selector — hidden for onboarding, skeleton while loading */}
+        {showSelector && (
           <>
             <label htmlFor="project-selector" className="sr-only">Select project</label>
-            <select
-              id="project-selector"
-              value={activeProject}
-              onChange={e => onProjectChange(e.target.value)}
-              aria-label="Select project"
-              className="project-selector"
-            >
-              {(userRole === 'superadmin' || userRole === 'admin') && (
-                <option value="all">All Projects</option>
-              )}
-              {visibleProjects.map(p => (
-                <option key={p.id} value={p.id}>[{p.abbr}] {p.name}</option>
-              ))}
-            </select>
+            {companiesLoading ? (
+              /* Skeleton placeholder — same width as the real select */
+              <div
+                aria-hidden="true"
+                style={{
+                  width: '140px',
+                  height: '32px',
+                  borderRadius: '6px',
+                  background: 'rgba(255,255,255,0.06)',
+                  animation: 'pulse 1.5s ease-in-out infinite',
+                }}
+              />
+            ) : (
+              <select
+                id="project-selector"
+                value={activeProject}
+                onChange={e => onProjectChange(e.target.value)}
+                aria-label="Select project"
+                className="project-selector"
+                disabled={companies.length === 0}
+              >
+                {/* Admins and above get the "All" aggregated view */}
+                {isAdminOrAbove && (
+                  <option value="all">All Projects</option>
+                )}
+                {companies.length === 0 && !isAdminOrAbove ? (
+                  <option value="" disabled>No projects assigned</option>
+                ) : (
+                  companies.map(c => (
+                    <option key={c.id} value={c.id}>
+                      [{c.identifier?.slice(0, 2).toUpperCase() ?? c.id.slice(0, 2).toUpperCase()}] {c.name}
+                    </option>
+                  ))
+                )}
+              </select>
+            )}
           </>
         )}
 
@@ -134,6 +154,7 @@ export function BrandedHeader({
             )}
           </button>
         )}
+
         <button
           className="theme-toggle-btn"
           onClick={onThemeToggle}

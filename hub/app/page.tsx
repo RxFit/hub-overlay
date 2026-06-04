@@ -196,7 +196,7 @@ function MessageContent({ content, onToolActivate }: { content: string; onToolAc
 }
 
 /* ── Right Panel: Execution Layer ── */
-function RightPanel({ isOpen, onClose, onInjectChat, panelRef, style, projects, activeProject }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string, useCase?: string) => void; panelRef?: React.Ref<HTMLElement>; style?: React.CSSProperties; projects?: import('@/types').ProjectKPI[]; activeProject?: string }) {
+function RightPanel({ isOpen, onClose, onInjectChat, panelRef, style, projects, activeProject, userRole, kpiLoading }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string, useCase?: string) => void; panelRef?: React.Ref<HTMLElement>; style?: React.CSSProperties; projects?: import('@/types').ProjectKPI[]; activeProject?: string; userRole?: string; kpiLoading?: boolean }) {
   // Build Paperclip workspace URL from the active project
   const paperclipBaseUrl = process.env.NEXT_PUBLIC_PAPERCLIP_URL || 'https://rxfit-paperclip-11747747730.us-central1.run.app'
   const activeCompany = projects?.find(p => p.identifier?.toLowerCase() === activeProject?.toLowerCase() || p.companyName?.toLowerCase().includes(activeProject?.toLowerCase() || ''))
@@ -244,7 +244,7 @@ function RightPanel({ isOpen, onClose, onInjectChat, panelRef, style, projects, 
       </div>
 
       <div className="panel-content">
-        <ProjectHealthSection projects={projects} onInjectChat={onInjectChat} />
+        <ProjectHealthSection projects={projects} onInjectChat={onInjectChat} userRole={userRole} isLoading={kpiLoading} />
         <ExecutionFeed onInjectChat={onInjectChat} />
       </div>
     </aside>
@@ -297,7 +297,7 @@ export default function HubPage() {
   const { data: session } = useSession()
   const router = useRouter()
   const [activeProject, setActiveProject] = useState('all')
-  const { projects } = useKPIData(activeProject)
+  const { projects, isLoading: kpiLoading } = useKPIData(activeProject)
   const [mobileLeftOpen, setMobileLeftOpen] = useState(false)
   const [mobileRightOpen, setMobileRightOpen] = useState(false)
   const [mobileTab, setMobileTab] = useState<MobileTab>('chat')
@@ -1957,7 +1957,7 @@ I need more detail before this can execute safely. The weakest area is **${(fina
         </main>
 
         {!isOnboarding && (
-          <RightPanel isOpen={mobileRightOpen} onClose={handleClosePanels} onInjectChat={(msg) => handleChatInject(msg, 'execute')} panelRef={rightPanelRef} projects={projects} activeProject={activeProject} />
+          <RightPanel isOpen={mobileRightOpen} onClose={handleClosePanels} onInjectChat={(msg) => handleChatInject(msg, 'execute')} panelRef={rightPanelRef} projects={projects} activeProject={activeProject} userRole={userRole} kpiLoading={kpiLoading} />
         )}
 
         {/* Onboarding: hide right panel placeholder for onboarding users */}

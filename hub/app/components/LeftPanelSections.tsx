@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, ReactNode } from 'react'
+import { useState, useEffect, ReactNode } from 'react'
 import { useTasks, useCalendar, useDrive } from '@/app/hooks/useHubData'
 import type { TaskItem, CalendarEvent, DriveFile } from '@/app/hooks/useHubData'
 import { useKPIData } from '@/app/hooks/useKPIData'
@@ -122,8 +122,16 @@ export function TasksSection({ onInjectChat }: { onInjectChat: (msg: string) => 
   const [togglingIds, setTogglingIds] = useState<Set<string>>(new Set())
   // IDs that have been completed and are fading out
   const [fadingIds, setFadingIds] = useState<Set<string>>(new Set())
-  // IDs to hide from the list (after fade)
+  // IDs to hide from the list (after fade completes)
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set())
+
+  // Clear all optimistic state when switching lists — prevents hidden/fading
+  // tasks from one list bleeding into another tab's view
+  useEffect(() => {
+    setFadingIds(new Set())
+    setHiddenIds(new Set())
+    setTogglingIds(new Set())
+  }, [resolvedListId])
 
   if (isLoading) {
     return (
@@ -971,14 +979,36 @@ const HEALTH_COLORS: Record<string, string> = {
 export function ProjectHealthSection({
   projects,
   onInjectChat,
+  userRole,
+  isLoading,
 }: {
   projects?: ProjectKPI[]
   onInjectChat: (msg: string) => void
+  userRole?: string
+  isLoading?: boolean
 }) {
-  if (!projects || projects.length === 0) {
+  if (isLoading) {
     return (
       <CollapsibleSection title="Project Health" protocolNum="05" defaultOpen>
-        <SectionMessage message="No project data" type="empty" />
+        <div className="lps-skeleton-block" aria-label="Loading project health" role="status">
+          {[1, 2, 3].map(i => (
+            <div key={i} className="lps-skeleton-line" style={{ width: `${85 - i * 10}%`, height: '38px', marginBottom: '6px', borderRadius: '8px' }} />
+          ))}
+        </div>
+      </CollapsibleSection>
+    )
+  }
+
+  if (!projects || projects.length === 0) {
+    const emptyMsg =
+      userRole === 'superadmin' || userRole === 'admin'
+        ? 'No companies in Paperclip yet.'
+        : userRole === 'staff'
+          ? 'No projects assigned — contact your admin to get access.'
+          : 'No project data'
+    return (
+      <CollapsibleSection title="Project Health" protocolNum="05" defaultOpen>
+        <SectionMessage message={emptyMsg} type="empty" />
       </CollapsibleSection>
     )
   }
