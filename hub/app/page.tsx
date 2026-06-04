@@ -339,6 +339,11 @@ export default function HubPage() {
   const [injectedContext, setInjectedContext] = useState<string | null>(null)
   const [actionSpec, setActionSpec] = useState<InterviewState['spec']>(null)
 
+  // Context Sufficiency Score — live gate state
+  const [contextScore, setContextScore] = useState<number | undefined>(undefined)
+  const [contextWeakDim, setContextWeakDim] = useState<string | null>(null)
+  const [isScoring, setIsScoring] = useState(false)
+
   // Context attachments state
   const [attachments, setAttachments] = useState<ChatAttachment[]>([])
 
@@ -718,115 +723,195 @@ export default function HubPage() {
         const nextState = advanceInterview(interviewState, message)
         setInterviewState(nextState)
 
-        if (!nextState.active && nextState.spec) {
-          // Interview complete — check if this is a CEO-routed intent needing AI quality gate
-          if (isCeoRoutedIntent(nextState.spec.intent)) {
-            // Send spec to AI for quality evaluation before showing confirm card
-            const specSummary = Object.entries(nextState.spec.details)
-              .map(([k, v]) => `${k}: ${v}`)
-              .join('\n')
-            
-            const evalPrompt = `You are evaluating whether a briefing for the Paperclip CEO Agent is sufficient. The user wants to: ${nextState.spec.summary}\n\nCollected details:\n${specSummary}\n\nIs this briefing detailed enough for the CEO Agent to take action? Consider:\n- Is the goal clear?\n- Is there enough context for the CEO to decide which agents to create?\n- Are success criteria defined?\n\nRespond with EXACTLY one of:\n1. "SUFFICIENT" if the brief is ready\n2. A single follow-up question if more context is needed (just the question, nothing else)`
+        // ── Context Sufficiency Score Gate ──
+        // Fire score check asynchronously after every answer so the badge
+        // updates in real-time without blocking the UI.
+        const intentForScore = nextState.intent ?? interviewState.intent
+        const contextForScore = nextState.context
+        if (intentForScore) {
+          setIsScoring(true)
+          fetch('/api/chat/score-context', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              intent: intentForScore,
+              context: contextForScore,
+              currentStep: nextState.step,
+              totalSteps: getTotalQuestions(intentForScore),
+            }),
+          })
+            .then(r => r.json())
+            .then((result: { score?: number; weakDimension?: string | null }) => {
+              if (typeof result.score === 'number') {
+                setContextScore(result.score)
+                setContextWeakDim(result.weakDimension ?? null)
+              }
+            })
+            .catch(() => { /* fail silently — score stays at previous value */ })
+            .finally(() => setIsScoring(false))
+        }
 
-            // Show a thinking indicator
-            const thinkingMsg: ChatMsg = {
+        if (!nextState.active && nextState.spec) {
+          // Interview answers collected — but check context score gate before showing confirm card
+          const runQualityGate = async (spec: typeof nextState.spec) => {
+            if (!spec) return
+
+            // Always re-score at completion with Gemini to get the definitive verdict
+            let finalScore = contextScore ?? 80
+            let finalWeak: string | null = contextWeakDim
+            let followUpQuestion: string | null = null
+
+            try {
+              setIsScoring(true)
+              const scoreRes = await fetch('/api/chat/score-context', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  intent: spec.intent,
+                  context: spec.details,
+                  currentStep: nextState.step,
+                  totalSteps: getTotalQuestions(spec.intent),
+                }),
+              })
+              const scoreResult = await scoreRes.json()
+              if (typeof scoreResult.score === 'number') {
+                finalScore = scoreResult.score
+                finalWeak = scoreResult.weakDimension ?? null
+                followUpQuestion = scoreResult.followUpQuestion ?? null
+                setContextScore(finalScore)
+                setContextWeakDim(finalWeak)
+              }
+            } catch {
+              // Fail open — gate passes on error
+              finalScore = 80
+            } finally {
+              setIsScoring(false)
+            }
+
+            if (finalScore < 80 && followUpQuestion) {
+              // ── BLOCKED — context insufficient ──
+              // Re-activate interview for a follow-up question, don't show confirm card
+              setInterviewState({
+                ...nextState,
+                active: true,
+                spec: null,
+              })
+              setMessages(prev => [...prev, {
+                id: crypto.randomUUID(),
+                role: 'assistant' as const,
+                content: `🧠 **Context Score: ${finalScore}% — Below the 80% threshold**
+
+I need more detail before this can execute safely. The weakest area is **${(finalWeak ?? 'context').replace(/_/g, ' ')}**.
+
+**${followUpQuestion}**`,
+                timestamp: new Date().toISOString(),
+              }])
+              return
+            }
+
+            // ── PASSED — proceed with existing quality gate logic ──
+            if (isCeoRoutedIntent(spec.intent)) {
+              // CEO-routed: additional AI quality check for briefing richness
+              const specSummary = Object.entries(spec.details)
+                .map(([k, v]) => `${k}: ${v}`)
+                .join('\n')
+
+              const evalPrompt = `You are evaluating whether a briefing for the Paperclip CEO Agent is sufficient. The user wants to: ${spec.summary}\n\nCollected details:\n${specSummary}\n\nIs this briefing detailed enough for the CEO Agent to take action? Consider:\n- Is the goal clear?\n- Is there enough context for the CEO to decide which agents to create?\n- Are success criteria defined?\n\nRespond with EXACTLY one of:\n1. "SUFFICIENT" if the brief is ready\n2. A single follow-up question if more context is needed (just the question, nothing else)`
+
+              const thinkingId = crypto.randomUUID()
+              setMessages(prev => [...prev, {
+                id: thinkingId,
+                role: 'assistant' as const,
+                content: '🧠 Evaluating briefing quality for CEO handoff...',
+                timestamp: new Date().toISOString(),
+              }])
+
+              fetch('/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  messages: [{ role: 'user', content: evalPrompt }],
+                  useCase: 'deep_dive',
+                }),
+              }).then(async (res) => {
+                const reader = res.body?.getReader()
+                if (!reader) return
+                let fullText = ''
+                const decoder = new TextDecoder()
+                while (true) {
+                  const { done, value } = await reader.read()
+                  if (done) break
+                  const chunk = decoder.decode(value)
+                  const lines = chunk.split('\n').filter(l => l.startsWith('data: '))
+                  for (const line of lines) {
+                    const data = line.slice(6)
+                    if (data === '[DONE]') continue
+                    try { const p = JSON.parse(data); if (p.text) fullText += p.text } catch { /* skip */ }
+                  }
+                }
+                const cleanResponse = fullText.replace(/<!--suggestedTools:\[.*?\]-->/g, '').trim()
+                if (cleanResponse.toUpperCase().includes('SUFFICIENT')) {
+                  setActionSpec(spec)
+                  setMessages(prev => {
+                    const filtered = prev.filter(m => m.id !== thinkingId)
+                    return [...filtered, {
+                      id: crypto.randomUUID(), role: 'assistant' as const,
+                      content: '✅ Briefing approved by AI quality gate. Please review the action below and approve, edit, or cancel.',
+                      timestamp: new Date().toISOString(),
+                    }]
+                  })
+                } else {
+                  setInterviewState({ ...nextState, active: true, spec: null })
+                  setMessages(prev => {
+                    const filtered = prev.filter(m => m.id !== thinkingId)
+                    return [...filtered, {
+                      id: crypto.randomUUID(), role: 'assistant' as const,
+                      content: `🧠 **AI Quality Gate** — The briefing needs more detail before handing off to the CEO:\n\n**${cleanResponse}**`,
+                      timestamp: new Date().toISOString(),
+                    }]
+                  })
+                }
+              }).catch(() => {
+                setActionSpec(spec)
+                setMessages(prev => {
+                  const filtered = prev.filter(m => m.id !== thinkingId)
+                  return [...filtered, {
+                    id: crypto.randomUUID(), role: 'assistant' as const,
+                    content: '✅ Interview complete! Please review the action below and approve, edit, or cancel.',
+                    timestamp: new Date().toISOString(),
+                  }]
+                })
+              })
+              return
+            }
+
+            // Non-CEO-routed: show confirm card directly
+            setActionSpec(spec)
+            setMessages(prev => [...prev, {
               id: crypto.randomUUID(),
               role: 'assistant' as const,
-              content: '🧠 Evaluating briefing quality for CEO handoff...',
+              content: '✅ Interview complete! Please review the action below and approve, edit, or cancel.',
               timestamp: new Date().toISOString(),
-            }
-            
-            // Fire the quality gate asynchronously
-            fetch('/api/chat', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                messages: [{ role: 'user', content: evalPrompt }],
-                useCase: 'deep_dive',
-              }),
-            }).then(async (res) => {
-              const reader = res.body?.getReader()
-              if (!reader) return
-              
-              let fullText = ''
-              const decoder = new TextDecoder()
-              while (true) {
-                const { done, value } = await reader.read()
-                if (done) break
-                const chunk = decoder.decode(value)
-                const lines = chunk.split('\n').filter(l => l.startsWith('data: '))
-                for (const line of lines) {
-                  const data = line.slice(6)
-                  if (data === '[DONE]') continue
-                  try {
-                    const parsed = JSON.parse(data)
-                    if (parsed.text) fullText += parsed.text
-                  } catch { /* skip */ }
-                }
-              }
-              
-              const cleanResponse = fullText.replace(/<!--suggestedTools:\[.*?\]-->/g, '').trim()
-
-              if (cleanResponse.toUpperCase().includes('SUFFICIENT')) {
-                // Brief is good — show the confirm card
-                setActionSpec(nextState.spec)
-                setMessages(prev => {
-                  const filtered = prev.filter(m => m.content !== '🧠 Evaluating briefing quality for CEO handoff...')
-                  return [...filtered, {
-                    id: crypto.randomUUID(),
-                    role: 'assistant' as const,
-                    content: '✅ Briefing approved by AI quality gate. Please review the action below and approve, edit, or cancel.',
-                    timestamp: new Date().toISOString(),
-                  }]
-                })
-              } else {
-                // AI needs more context — ask the follow-up question
-                // Re-activate interview with an extra question
-                setInterviewState({
-                  ...nextState,
-                  active: true,
-                  spec: null,
-                })
-                setMessages(prev => {
-                  const filtered = prev.filter(m => m.content !== '🧠 Evaluating briefing quality for CEO handoff...')
-                  return [...filtered, {
-                    id: crypto.randomUUID(),
-                    role: 'assistant' as const,
-                    content: `🧠 **AI Quality Gate** — The briefing needs more detail before handing off to the CEO:\n\n**${cleanResponse}**`,
-                    timestamp: new Date().toISOString(),
-                  }]
-                })
-              }
-            }).catch(() => {
-              // Quality gate failed — show confirm card anyway
-              setActionSpec(nextState.spec)
-              setMessages(prev => {
-                const filtered = prev.filter(m => m.content !== '🧠 Evaluating briefing quality for CEO handoff...')
-                return [...filtered, {
-                  id: crypto.randomUUID(),
-                  role: 'assistant' as const,
-                  content: '✅ Interview complete! Please review the action below and approve, edit, or cancel.',
-                  timestamp: new Date().toISOString(),
-                }]
-              })
-            })
-
-            return [...updated, thinkingMsg]
+            }])
           }
 
-          // Non-CEO-routed intent — show confirm card immediately
-          setActionSpec(nextState.spec)
-          const doneMsg: ChatMsg = {
+          // Show thinking indicator immediately, then run the gate
+          const thinkingMsg: ChatMsg = {
             id: crypto.randomUUID(),
             role: 'assistant' as const,
-            content: '✅ Interview complete! Please review the action below and approve, edit, or cancel.',
+            content: `🧠 **Scoring context quality…** (${isScoring ? 'evaluating' : 'finalizing'})`,
             timestamp: new Date().toISOString(),
           }
-          return [...updated, doneMsg]
+          // Run the async gate — we can't await inside setMessages callback,
+          // so start it immediately and let it update state
+          runQualityGate(nextState.spec)
+          return [...updated, thinkingMsg]
+
         } else {
           const question = getCurrentQuestionWithDefaults(nextState)
           if (question) {
-             const qMsg: ChatMsg = {
+            // Show the next question; score badge will update from the async score fetch above
+            const qMsg: ChatMsg = {
               id: crypto.randomUUID(),
               role: 'assistant' as const,
               content: `✦ **${question.question}**${question.defaultValue ? `\n\n_${nextState._editDefaults ? 'Previous answer' : 'Default'}: ${question.defaultValue}_` : ''}`,
@@ -840,6 +925,10 @@ export default function HubPage() {
 
       // No active interview — always use deep_dive for general chat
       const useCase = 'deep_dive'
+
+      // Reset context score when not in interview mode
+      setContextScore(undefined)
+      setContextWeakDim(null)
 
       // No interview — send to Gemini API
       sendToApi(message, updated, useCase, msgAttachments)
@@ -1645,12 +1734,18 @@ export default function HubPage() {
               />
             )}
 
-                        {/* Interview badge */}
+            {/* Interview badge — live context score */}
             {interviewState?.active && (
               <InterviewBadge
                 state={interviewState}
                 totalQuestions={interviewState.intent ? getTotalQuestions(interviewState.intent) : 0}
-                onCancel={() => { setInterviewState(null) }}
+                onCancel={() => {
+                  setInterviewState(null)
+                  setContextScore(undefined)
+                  setContextWeakDim(null)
+                }}
+                contextScore={isScoring ? undefined : contextScore}
+                weakDimension={contextWeakDim ?? undefined}
               />
             )}
 

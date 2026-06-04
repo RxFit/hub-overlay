@@ -284,3 +284,74 @@ export interface ActiveSkill {
   name: string
   plugin: SkillPlugin
 }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   BUSINESS MANAGER / CEO PULSE TYPES
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+export type AgentRoleKey = 'ceo' | 'cmo' | 'cto' | 'cfo' | 'coo' | 'marketing' | 'technical' | 'revenue'
+export type DepartmentHealth = 'ON_TRACK' | 'DRIFTING' | 'CRITICAL'
+export type StallStatus = 'normal' | 'amber' | 'red'
+
+export interface DepartmentPulse {
+  role: AgentRoleKey
+  status: DepartmentHealth
+  kpiActual?: string
+  kpiTarget?: string
+  kpiLabel?: string
+  lastTask?: string
+  lastTaskTime?: string
+  correctiveAction?: string | null
+  blockedTasks?: number
+}
+
+export interface CEOPulseRecord {
+  pulseId: string
+  org: string
+  orgId: string
+  globalHealthPct: number
+  departments: DepartmentPulse[]
+  escalations: string[]
+  lastPulseAt: string
+  nextPulseAt?: string
+}
+
+/** Stall detection state for a single in_progress feed item */
+export interface StallState {
+  itemId: string
+  status: StallStatus
+  stalledSinceMs?: number
+}
+
+/* ── Founder Lens Wizard Types ── */
+
+export type FounderLensRole = AgentRoleKey
+
+export interface FounderLensCustomSection {
+  role: FounderLensRole
+  okrs?: string
+  competitiveAdvantages?: string
+  idealCustomer?: string
+  quarterlyGoals?: string
+  annualGoals?: string
+  tonePreferences?: string
+  uniqueInstructions?: string
+}
+
+export interface FounderLensConfig {
+  orgId: string
+  roles: FounderLensCustomSection[]
+  updatedAt: string
+}
+
+/* ── Extended Interview Mode Types — Context Sufficiency Gate ── */
+
+export interface ContextScoreResult {
+  score: number                    // 0–100
+  passed: boolean                  // score >= 80
+  weakDimension: string | null     // e.g. "outcome", "timeline", "constraints"
+  followUpQuestion: string | null  // AI-generated clarifying question when score < 80
+}
+
+export type ExtendedInterviewIntent = InterviewIntent | 'create_task_for_agent'
+

@@ -46,7 +46,7 @@ function useSwipeDismiss(onDismiss: () => void) {
    Shows when Interview Mode is active — gold pulsing border, step progress
    ══════════════════════════════════════════════════════════════════════════════ */
 
-const INTENT_LABELS: Record<InterviewIntent, string> = {
+const INTENT_LABELS: Record<string, string> = {
   create_task: 'Create Task',
   schedule_event: 'Schedule Event',
   send_communication: 'Send Communication',
@@ -62,29 +62,44 @@ const INTENT_LABELS: Record<InterviewIntent, string> = {
   create_workspace: 'Create Workspace',
   delete_workspace: 'Delete Workspace',
   delete_agent: 'Delete Agent',
+  create_task_for_agent: 'Create Agent Task',
 }
 
 export function InterviewBadge({
   state,
   totalQuestions,
   onCancel,
+  contextScore,
+  weakDimension,
 }: {
   state: InterviewState
   totalQuestions: number
   onCancel: () => void
+  /** Context sufficiency score 0–100. When < 80, displayed with a warning. */
+  contextScore?: number
+  /** Which dimension is weakest — shown to user when score < 80 */
+  weakDimension?: string | null
 }) {
   const swipe = useSwipeDismiss(onCancel)
 
   if (!state.active || !state.intent) return null
 
-  const intentLabel = INTENT_LABELS[state.intent]
+  const intentLabel = INTENT_LABELS[state.intent] ?? state.intent
   const stepDisplay = `Question ${Math.min(state.step + 1, totalQuestions)} of ${totalQuestions}`
+
+  // Context score display: only show when a score exists and < 80
+  const showScore = typeof contextScore === 'number'
+  const scorePassed = contextScore !== undefined && contextScore >= 80
+  const scoreColor = contextScore === undefined ? undefined
+    : contextScore >= 80 ? 'var(--bm-green, #22c55e)'
+    : contextScore >= 60 ? 'var(--bm-amber, #f59e0b)'
+    : 'var(--bm-red, #ef4444)'
 
   return (
     <div
       role="alert"
       aria-live="polite"
-      className="interview-badge"
+      className={`interview-badge${showScore && !scorePassed ? ' interview-badge--scoring' : ''}`}
       onTouchStart={swipe.onTouchStart}
       onTouchMove={swipe.onTouchMove}
       onTouchEnd={swipe.onTouchEnd}
@@ -95,7 +110,7 @@ export function InterviewBadge({
         🎯
       </span>
 
-      {/* Label + Step */}
+      {/* Label + Step + Score */}
       <div className="interview-badge__body">
         <div className="interview-badge__title">
           Interview Mode — {intentLabel}
@@ -103,6 +118,32 @@ export function InterviewBadge({
         <div className="interview-badge__step">
           {stepDisplay}
         </div>
+
+        {/* Context score bar — only shown during scoring phase */}
+        {showScore && (
+          <div className="interview-badge__score-row" aria-label={`Context score: ${contextScore}%`}>
+            <div className="interview-badge__score-bar-track">
+              <div
+                className="interview-badge__score-bar-fill"
+                style={{
+                  width: `${contextScore}%`,
+                  background: scoreColor,
+                  transition: 'width 0.5s cubic-bezier(0.16,1,0.3,1)',
+                }}
+              />
+            </div>
+            <span className="interview-badge__score-label" style={{ color: scoreColor }}>
+              {scorePassed ? `✓ ${contextScore}%` : `${contextScore}% context`}
+            </span>
+          </div>
+        )}
+
+        {/* Weak dimension hint — only when score < 80 and we know which dim */}
+        {showScore && !scorePassed && weakDimension && (
+          <div className="interview-badge__weak-dim">
+            Need more specificity on: <strong>{weakDimension}</strong>
+          </div>
+        )}
       </div>
 
       {/* Cancel button */}
@@ -169,7 +210,7 @@ export function ContextInjectionBanner({
    Renders the structured action spec for user approval after interview
    ══════════════════════════════════════════════════════════════════════════════ */
 
-const INTENT_DISPLAY_LABELS: Record<InterviewIntent, string> = {
+const INTENT_DISPLAY_LABELS: Record<string, string> = {
   create_task: '📋 Create Task',
   schedule_event: '📅 Schedule Event',
   send_communication: '✉️ Send Communication',
@@ -185,6 +226,7 @@ const INTENT_DISPLAY_LABELS: Record<InterviewIntent, string> = {
   create_workspace: '🏢 Create Workspace',
   delete_workspace: '🗑️ Delete Workspace',
   delete_agent: '🗑️ Delete Agent',
+  create_task_for_agent: '📋 Create Agent Task',
 }
 
 export function ActionConfirmCard({

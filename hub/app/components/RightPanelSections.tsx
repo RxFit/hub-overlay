@@ -2,6 +2,8 @@
 
 import { useState, useMemo, useCallback } from 'react'
 import { useFeed } from '@/app/hooks/useHubData'
+import { useStallDetector } from '@/app/hooks/useStallDetector'
+import { BusinessManagerPanel } from '@/app/components/BusinessManagerPanel'
 import type { FeedItem } from '@/app/hooks/useHubData'
 
 /* ══════════════════════════════════════════════════════════════════════════════
@@ -182,10 +184,24 @@ function DateGroupLabel({ label }: { label: string }) {
    EXECUTION FEED (main export)
    ══════════════════════════════════════════════════════════════════════════════ */
 
-export function ExecutionFeed({ onInjectChat }: { onInjectChat: (msg: string) => void }) {
+export function ExecutionFeed({
+  onInjectChat,
+  orgId,
+}: {
+  onInjectChat: (msg: string) => void
+  orgId?: string
+}) {
   const { items, isLoading, error } = useFeed()
   const [activeFilter, setActiveFilter] = useState<FilterTab>('all')
   const [retrying, setRetrying] = useState(false)
+
+  // Stall detection — monitors in_progress items
+  const { stalledItems } = useStallDetector(items)
+
+  // Handler: Create Task CTA → injects interview mode prompt
+  const handleCreateTask = useCallback(() => {
+    onInjectChat('I want to create a task for one of my agents')
+  }, [onInjectChat])
 
   // Compute counts per filter tab
   const counts = useMemo(() => {
@@ -231,79 +247,92 @@ export function ExecutionFeed({ onInjectChat }: { onInjectChat: (msg: string) =>
     window.location.reload()
   }, [])
 
-  // Loading state
-  if (isLoading) {
-    return (
-      <div style={{ padding: 'var(--space-4, 16px)' }}>
-        <FeedFilterBar active={activeFilter} onChange={setActiveFilter} counts={{ all: 0, needs_you: 0, completed: 0, in_progress: 0 }} />
-        <FeedSkeleton />
-      </div>
-    )
-  }
-
-  // Error state
-  if (error) {
-    return (
-      <div style={{ padding: 'var(--space-4, 16px)' }}>
-        <FeedFilterBar active={activeFilter} onChange={setActiveFilter} counts={counts} />
-        <div className="feed-empty" role="alert">
-          <div className="feed-empty__icon">⚠️</div>
-          <div className="feed-empty__text">Unable to load activity feed — try refreshing</div>
-          <button
-            className="feed-filter-btn"
-            onClick={handleRetry}
-            disabled={retrying}
-            style={{ marginTop: 'var(--space-3)' }}
-          >
-            {retrying ? 'Retrying…' : 'Retry'}
-          </button>
-        </div>
-      </div>
-    )
-  }
-
-  // Empty state
-  if (filteredItems.length === 0) {
-    return (
-      <div style={{ padding: 'var(--space-4, 16px)' }}>
-        <FeedFilterBar active={activeFilter} onChange={setActiveFilter} counts={counts} />
-        <div className="feed-empty" role="status">
-          <div className="feed-empty__icon">💤</div>
-          <div className="feed-empty__text">
-            {activeFilter === 'all'
-              ? 'No activity yet — your agents are idle'
-              : `No ${activeFilter.replace('_', ' ')} items`}
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  // Feed content
   return (
-    <div style={{ padding: 'var(--space-4, 16px)' }}>
-      <FeedFilterBar active={activeFilter} onChange={setActiveFilter} counts={counts} />
+    <>
+      {/* ── Business Manager Panel (CEO-lens header) ── */}
+      <BusinessManagerPanel
+        orgId={orgId}
+        onCreateTask={handleCreateTask}
+        stalledCount={stalledItems.length}
+      />
 
-      <div role="list" aria-label="Activity feed">
-        {grouped.map((group) => (
-          <div key={group.label}>
-            <DateGroupLabel label={group.label} />
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2, 8px)' }}>
-              {group.items.map(({ item, globalIndex }) => (
-                <FeedCard
-                  key={item.id}
-                  item={item}
-                  index={globalIndex}
-                  onInjectChat={onInjectChat}
-                />
+      {/* ── Divider ── */}
+      <div className="bm-feed-divider" aria-hidden="true" />
+
+      {/* ── Activity Feed ── */}
+      <div style={{ padding: 'var(--space-4, 16px)' }}>
+
+        {/* Loading state */}
+        {isLoading && (
+          <>
+            <FeedFilterBar active={activeFilter} onChange={setActiveFilter} counts={{ all: 0, needs_you: 0, completed: 0, in_progress: 0 }} />
+            <FeedSkeleton />
+          </>
+        )}
+
+        {/* Error state */}
+        {!isLoading && error && (
+          <>
+            <FeedFilterBar active={activeFilter} onChange={setActiveFilter} counts={counts} />
+            <div className="feed-empty" role="alert">
+              <div className="feed-empty__icon">⚠️</div>
+              <div className="feed-empty__text">Unable to load activity feed — try refreshing</div>
+              <button
+                className="feed-filter-btn"
+                onClick={handleRetry}
+                disabled={retrying}
+                style={{ marginTop: 'var(--space-3)' }}
+              >
+                {retrying ? 'Retrying…' : 'Retry'}
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* Empty state */}
+        {!isLoading && !error && filteredItems.length === 0 && (
+          <>
+            <FeedFilterBar active={activeFilter} onChange={setActiveFilter} counts={counts} />
+            <div className="feed-empty" role="status">
+              <div className="feed-empty__icon">💤</div>
+              <div className="feed-empty__text">
+                {activeFilter === 'all'
+                  ? 'No activity yet — your agents are idle'
+                  : `No ${activeFilter.replace('_', ' ')} items`}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Feed content */}
+        {!isLoading && !error && filteredItems.length > 0 && (
+          <>
+            <FeedFilterBar active={activeFilter} onChange={setActiveFilter} counts={counts} />
+            <div role="list" aria-label="Activity feed">
+              {grouped.map((group) => (
+                <div key={group.label}>
+                  <DateGroupLabel label={group.label} />
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2, 8px)' }}>
+                    {group.items.map(({ item, globalIndex }) => (
+                      <FeedCard
+                        key={item.id}
+                        item={item}
+                        index={globalIndex}
+                        onInjectChat={onInjectChat}
+                      />
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
-          </div>
-        ))}
+          </>
+        )}
+
       </div>
-    </div>
+    </>
   )
 }
+
 
 /* ══════════════════════════════════════════════════════════════════════════════
    UTILITY
