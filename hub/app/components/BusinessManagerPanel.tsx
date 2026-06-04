@@ -178,7 +178,7 @@ function DriftAlerts({
       {stalledCount > 0 && (
         <div className="bm-alert bm-alert--amber">
           <span aria-hidden="true">⏸ </span>
-          {stalledCount} agent task{stalledCount > 1 ? 's' : ''} appear stalled — check the feed below
+          {stalledCount} automated task{stalledCount > 1 ? 's' : ''} appear stalled — check the feed below
         </div>
       )}
     </div>
@@ -317,7 +317,7 @@ export function BusinessManagerPanel({
             id="bm-customize-csuite-btn"
             className="bm-cta bm-cta--secondary"
             onClick={() => setShowWizard(true)}
-            aria-label="Customize your C-Suite agents"
+            aria-label="Customize your C-Suite"
           >
             <span aria-hidden="true">⚙</span>
             Customize C-Suite

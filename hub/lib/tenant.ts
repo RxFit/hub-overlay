@@ -127,7 +127,7 @@ export const TENANT_CONFIGS: Record<string, TenantConfig> = {
       { id: 'jadecoss',    name: 'JadeCoS',     abbr: 'JC', color: '#8a6e3e' },
       { id: 'wellnessapp', name: 'WellnessApp', abbr: 'WA', color: '#d4b572' },
       { id: 'notebookrx',  name: 'NotebookRx',  abbr: 'NR', color: '#9aa8c6' },
-      { id: 'seo-agent',   name: 'SEO Agent',   abbr: 'SE', color: '#ef4444' },
+      { id: 'seo-agent',   name: 'RxFit SEO',   abbr: 'SE', color: '#ef4444' },
     ],
   },
 

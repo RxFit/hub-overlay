@@ -200,7 +200,7 @@ export function ExecutionFeed({
 
   // Handler: Create Task CTA → injects interview mode prompt
   const handleCreateTask = useCallback(() => {
-    onInjectChat('I want to create a task for one of my agents')
+    onInjectChat('I want to create a new automated task, guide me')
   }, [onInjectChat])
 
   // Compute counts per filter tab

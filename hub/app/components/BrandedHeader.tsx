@@ -64,6 +64,19 @@ export function BrandedHeader({
     .join('')
     .toUpperCase()
 
+  // Role-aware project visibility
+  // superadmin / admin: see all projects
+  // staff: see only their assigned projects (or all if assignedProjects includes '*')
+  // onboarding: project selector hidden
+  const assignedProjects = ((session?.user as Record<string, unknown>)?.assignedProjects as string[]) ?? []
+  const visibleProjects = (() => {
+    if (!userRole || userRole === 'onboarding') return []
+    if (userRole === 'superadmin' || userRole === 'admin') return tenant.projects
+    // staff — filter to assigned
+    if (assignedProjects.includes('*')) return tenant.projects
+    return tenant.projects.filter(p => assignedProjects.includes(p.id))
+  })()
+
   return (
     <header className="hub-header" role="banner">
       <div className="hub-logo">
@@ -74,19 +87,26 @@ export function BrandedHeader({
       </div>
 
       <nav className="header-actions" aria-label="Hub controls">
-        <label htmlFor="project-selector" className="sr-only">Select project</label>
-        <select
-          id="project-selector"
-          value={activeProject}
-          onChange={e => onProjectChange(e.target.value)}
-          aria-label="Select project"
-          className="project-selector"
-        >
-          <option value="all">All Projects</option>
-          {tenant.projects.map(p => (
-            <option key={p.id} value={p.id}>[{p.abbr}] {p.name}</option>
-          ))}
-        </select>
+        {/* Only show project selector if user has project access */}
+        {visibleProjects.length > 0 && (
+          <>
+            <label htmlFor="project-selector" className="sr-only">Select project</label>
+            <select
+              id="project-selector"
+              value={activeProject}
+              onChange={e => onProjectChange(e.target.value)}
+              aria-label="Select project"
+              className="project-selector"
+            >
+              {(userRole === 'superadmin' || userRole === 'admin') && (
+                <option value="all">All Projects</option>
+              )}
+              {visibleProjects.map(p => (
+                <option key={p.id} value={p.id}>[{p.abbr}] {p.name}</option>
+              ))}
+            </select>
+          </>
+        )}
 
         {/* Google Chat button — desktop view */}
         {session && onOpenGoogleChat && (
