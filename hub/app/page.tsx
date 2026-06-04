@@ -33,6 +33,7 @@ import {
   isReadOnlyIntent,
   isCeoRoutedIntent,
 } from '@/lib/interview'
+import { RXFIT_COMPANY_ID, RXFIT_COO_AGENT_ID } from '@/lib/paperclipConfig'
 import type { InterviewState, ActionSpec, ChatAttachment, ActiveSkill } from '@/types'
 
 const CHAT_SUGGESTIONS = [
@@ -1104,47 +1105,23 @@ I need more detail before this can execute safely. The weakest area is **${(fina
         }
 
         case 'send_communication': {
-          // Route through Paperclip COO agent
-          const scCompaniesRes = await fetch('/api/paperclip/api/companies')
-          if (!scCompaniesRes.ok) throw new Error('Failed to fetch companies')
-          const scCompaniesData = await scCompaniesRes.json()
-          const scCompanies = Array.isArray(scCompaniesData) ? scCompaniesData : scCompaniesData.companies ?? []
-
-          // Find the first company with a COO agent (or fall back to CEO)
-          let scAssignee: { id: string; name: string } | null = null
-          let scCompanyId: string | null = null
-
-          for (const company of scCompanies) {
-            try {
-              const agentsRes = await fetch(`/api/paperclip/api/companies/${company.id}/agents`)
-              if (!agentsRes.ok) continue
-              const agData = await agentsRes.json()
-              const agents = agData.agents ?? []
-              // Prefer COO, then CEO, then first agent
-              const coo = agents.find((a: { name: string }) => a.name.toLowerCase().includes('coo'))
-              const ceo = agents.find((a: { name: string }) => a.name.toLowerCase().includes('ceo'))
-              const fallback = agents.length > 0 ? agents[0] : null
-              const chosen = coo || ceo || fallback
-              if (chosen) {
-                scAssignee = { id: chosen.id, name: chosen.name }
-                scCompanyId = company.id
-                if (coo) break // COO is the ideal target, stop searching
-              }
-            } catch { /* skip */ }
-          }
-
-          if (!scCompanyId) throw new Error('No Paperclip workspace found with available agents')
-
-          const commDetails = spec.details.details || spec.summary
-          const commTitle = `Communication Request: ${commDetails.slice(0, 80)}`
+          // Route communication requests directly to the COO via Paperclip.
+          // The COO (General/Operations agent) handles all Austin client comms.
+          // We use the hardcoded RXFIT org IDs — no dynamic lookup needed.
+          const commDetails = spec.details.details || spec.details.description || spec.summary
+          const commTo = spec.details.to || spec.details.recipient || ''
+          const commChannel = spec.details.channel || spec.details.medium || 'email'
+          const commTitle = `Communication Request: ${(commDetails || commTo).slice(0, 80)}`
           const commDesc = [
             `## Communication Request`,
             ``,
+            commTo ? `**To:** ${commTo}` : '',
+            `**Channel:** ${commChannel}`,
             `**Details:** ${commDetails}`,
             ``,
             `### Directive`,
-            `The human operator has requested a communication be sent. COO: determine the appropriate channel (email, Slack, etc.), compose the message based on the details above, and execute delivery. Report back with confirmation of what was sent and to whom.`,
-          ].join('\n')
+            `The human operator has requested a communication be sent. COO: compose the message based on the details above and execute delivery via ${commChannel}. Report back with confirmation of what was sent, to whom, and when.`,
+          ].filter(Boolean).join('\n')
 
           const scIssueRes = await fetch('/api/paperclip/issues', {
             method: 'POST',
@@ -1152,20 +1129,21 @@ I need more detail before this can execute safely. The weakest area is **${(fina
             body: JSON.stringify({
               title: commTitle,
               description: commDesc,
-              priority: 'medium',
-              companyId: scCompanyId,
-              assigneeId: scAssignee?.id || undefined,
+              priority: 'high',
+              companyId: RXFIT_COMPANY_ID,
+              assigneeId: RXFIT_COO_AGENT_ID,
             }),
           })
           if (!scIssueRes.ok) throw new Error(`Communication issue creation failed: ${scIssueRes.status}`)
           const scIssueData = await scIssueRes.json()
 
-          resultMsg = `✉️ **Communication Routed to ${scAssignee?.name || 'COO Agent'}**\n\nIssue "${scIssueData.issue?.title || commTitle}" has been created and assigned. The agent will determine the channel, compose the message, and send it.\n\nTrack progress in the Execution Feed.`
+          resultMsg = `✉️ **Communication Routed to COO Agent**\n\nIssue "${scIssueData.issue?.title || commTitle}" has been created and assigned to the COO. The agent will compose and send the message.\n\n▶ Track progress in the **Execution Feed** (right panel).`
           mutate('/api/feed')
           break
         }
 
         case 'create_paperclip_issue': {
+
           const issueTitle = spec.details.title || spec.summary
           const issueDesc = spec.details.description || ''
           const issuePriority = spec.details.priority || 'medium'
