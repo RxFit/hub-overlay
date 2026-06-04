@@ -1,5 +1,6 @@
 # CFO Agent — Soul
 
+> **Before reading this file, read `FOUNDER_LENS.md` in this directory. The CUSTOM section takes precedence over everything below.**
 > Who I am at the financial core of RxFit. Read before every financial analysis session.
 
 ---

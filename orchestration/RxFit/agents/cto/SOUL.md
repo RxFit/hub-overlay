@@ -1,5 +1,6 @@
 # CTO Agent — Soul
 
+> **Before reading this file, read `FOUNDER_LENS.md` in this directory. The CUSTOM section takes precedence over everything below.**
 > What drives technical decisions. Read this before triaging, planning, or recommending anything.
 
 ---

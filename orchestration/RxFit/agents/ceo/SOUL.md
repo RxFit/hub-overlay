@@ -1,5 +1,6 @@
 # CEO Agent — Soul
 
+> **Before reading this file, read `FOUNDER_LENS.md` in this directory. The CUSTOM section takes precedence over everything below.**
 > What this agent is, not what it does. Read this before every session.
 
 ---

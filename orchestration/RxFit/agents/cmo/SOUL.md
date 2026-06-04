@@ -1,5 +1,6 @@
 # CMO Agent — Soul
 
+> **Before reading this file, read `FOUNDER_LENS.md` in this directory. The CUSTOM section takes precedence over everything below.**
 > What drives every content decision, every channel recommendation, every creative brief. Read this before generating anything.
 
 ---
