@@ -219,11 +219,11 @@ const INTERVIEW_SEQUENCES: Record<InterviewIntent, InterviewStep[]> = {
 
   send_communication: [
     {
-      question: 'Who should receive this and what should the message say? Provide the recipient and the content.',
+      question: 'Who should receive this and what should the message say? Provide the recipient, channel (email/slack/etc.), and the content.',
       key: 'details',
     },
     {
-      question: 'I\'ll prepare this communication with the details above. Confirm? (yes / edit / cancel)',
+      question: 'I\'ll brief the COO Agent to send this communication. Confirm? (yes / edit / cancel)',
       key: '_confirm',
     },
   ],
@@ -543,7 +543,7 @@ const INTENT_LABELS: Record<InterviewIntent, string> = {
 const INTENT_TARGET_SYSTEMS: Record<InterviewIntent, string[]> = {
   create_task: ['Google Tasks', 'Paperclip'],
   schedule_event: ['Google Calendar'],
-  send_communication: ['Gmail', 'Slack'],
+  send_communication: ['Paperclip AI — COO Routed'],
   create_paperclip_issue: ['Paperclip AI'],
   check_agent_status: ['Paperclip AI'],
   view_runs: ['Paperclip AI'],
@@ -615,4 +615,40 @@ export function isReadOnlyIntent(intent: InterviewIntent): boolean {
  */
 export function isCeoRoutedIntent(intent: InterviewIntent): boolean {
   return intent === 'create_agent' || intent === 'launch_campaign'
+}
+
+/**
+ * Re-enter a completed interview at step 0, preserving existing answers
+ * as the new defaultValues for each question.
+ */
+export function restartInterview(
+  intent: InterviewIntent,
+  previousContext: Record<string, string>
+): InterviewState {
+  return {
+    active: true,
+    intent,
+    step: 0,
+    questionsAsked: 0,
+    context: {},
+    spec: null,
+    _editDefaults: previousContext,
+  } as InterviewState
+}
+
+/**
+ * Get the current question for an active interview,
+ * merging any edit defaults into the step's defaultValue.
+ */
+export function getCurrentQuestionWithDefaults(
+  state: InterviewState
+): InterviewStep | null {
+  if (!state.active || !state.intent) return null
+  const steps = INTERVIEW_SEQUENCES[state.intent]
+  if (state.step >= steps.length) return null
+  const step = steps[state.step]
+  if (state._editDefaults && state._editDefaults[step.key]) {
+    return { ...step, defaultValue: state._editDefaults[step.key] }
+  }
+  return step
 }

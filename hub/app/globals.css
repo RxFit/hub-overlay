@@ -8,14 +8,14 @@
 
 /* ──────────────────────── CSS Custom Properties ──────────────────────── */
 :root {
-  /* Backgrounds — Deep Navy Scale */
-  --bg-void:    hsl(224, 42%, 10%);
-  --bg-primary: hsl(224, 39%, 14%);
-  --bg-card:    hsl(224, 37%, 18%);
-  --bg-elevated:hsl(224, 35%, 22%);
-  --bg-hover:   hsl(224, 33%, 25%);
-  --bg-active:  hsl(224, 31%, 28%);
-  --bg-input:   hsl(224, 44%, 10%);
+  /* Backgrounds — Charcoal Scale (de-saturated, warmer near-black) */
+  --bg-void:    hsl(224, 28%, 11%);
+  --bg-primary: hsl(224, 28%, 14%);
+  --bg-card:    hsl(224, 22%, 18%);
+  --bg-elevated:hsl(224, 20%, 22%);
+  --bg-hover:   hsl(224, 18%, 25%);
+  --bg-active:  hsl(224, 16%, 28%);
+  --bg-input:   hsl(224, 28%, 10%);
 
   /* Accent – Trejo Gold */
   --accent:         #C5A059;
@@ -52,8 +52,8 @@
   --shadow-glow-strong: 0 0 40px rgba(197, 160, 89, 0.22);
 
   /* Glassmorphism */
-  --glass-bg:        rgba(14, 25, 51, 0.78);
-  --glass-bg-light:  rgba(24, 42, 86, 0.65);
+  --glass-bg:        rgba(18, 20, 33, 0.80);
+  --glass-bg-light:  rgba(28, 32, 52, 0.65);
   --glass-border:    rgba(255, 255, 255, 0.07);
 
   /* Button text (navy on gold) */
@@ -1918,7 +1918,7 @@ a:hover .rx-arrow {
     display: block;
     position: fixed;
     inset: 0;
-    background: rgba(10, 17, 40, 0.7);
+    background: rgba(15, 18, 30, 0.7);
     backdrop-filter: blur(4px);
     -webkit-backdrop-filter: blur(4px);
     z-index: 999;
@@ -1962,7 +1962,7 @@ a:hover .rx-arrow {
     display: flex;
     align-items: stretch;
     height: var(--bottom-nav-height);
-    background: rgba(6, 13, 31, 0.92);
+    background: rgba(15, 17, 26, 0.92);
     backdrop-filter: blur(24px) saturate(180%);
     -webkit-backdrop-filter: blur(24px) saturate(180%);
     border-top: 1px solid rgba(197, 160, 89, 0.08);

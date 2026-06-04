@@ -24,7 +24,9 @@ import {
   detectIntent,
   startInterview,
   advanceInterview,
+  restartInterview,
   getCurrentQuestion,
+  getCurrentQuestionWithDefaults,
   getTotalQuestions,
   hasPermission,
   getRequiredPermission,
@@ -822,12 +824,12 @@ export default function HubPage() {
           }
           return [...updated, doneMsg]
         } else {
-          const question = getCurrentQuestion(nextState)
+          const question = getCurrentQuestionWithDefaults(nextState)
           if (question) {
              const qMsg: ChatMsg = {
               id: crypto.randomUUID(),
               role: 'assistant' as const,
-              content: `✦ **${question.question}**${question.defaultValue ? `\n\n_Default: ${question.defaultValue}_` : ''}`,
+              content: `✦ **${question.question}**${question.defaultValue ? `\n\n_${nextState._editDefaults ? 'Previous answer' : 'Default'}: ${question.defaultValue}_` : ''}`,
               timestamp: new Date().toISOString(),
             }
             return [...updated, qMsg]
@@ -1013,12 +1015,64 @@ export default function HubPage() {
         }
 
         case 'send_communication': {
-          // Route through Paperclip agent
-          const res = await fetch('/api/paperclip/api/companies', {
-            method: 'GET',
+          // Route through Paperclip COO agent
+          const scCompaniesRes = await fetch('/api/paperclip/api/companies')
+          if (!scCompaniesRes.ok) throw new Error('Failed to fetch companies')
+          const scCompaniesData = await scCompaniesRes.json()
+          const scCompanies = Array.isArray(scCompaniesData) ? scCompaniesData : scCompaniesData.companies ?? []
+
+          // Find the first company with a COO agent (or fall back to CEO)
+          let scAssignee: { id: string; name: string } | null = null
+          let scCompanyId: string | null = null
+
+          for (const company of scCompanies) {
+            try {
+              const agentsRes = await fetch(`/api/paperclip/api/companies/${company.id}/agents`)
+              if (!agentsRes.ok) continue
+              const agData = await agentsRes.json()
+              const agents = agData.agents ?? []
+              // Prefer COO, then CEO, then first agent
+              const coo = agents.find((a: { name: string }) => a.name.toLowerCase().includes('coo'))
+              const ceo = agents.find((a: { name: string }) => a.name.toLowerCase().includes('ceo'))
+              const fallback = agents.length > 0 ? agents[0] : null
+              const chosen = coo || ceo || fallback
+              if (chosen) {
+                scAssignee = { id: chosen.id, name: chosen.name }
+                scCompanyId = company.id
+                if (coo) break // COO is the ideal target, stop searching
+              }
+            } catch { /* skip */ }
+          }
+
+          if (!scCompanyId) throw new Error('No Paperclip workspace found with available agents')
+
+          const commDetails = spec.details.details || spec.summary
+          const commTitle = `Communication Request: ${commDetails.slice(0, 80)}`
+          const commDesc = [
+            `## Communication Request`,
+            ``,
+            `**Details:** ${commDetails}`,
+            ``,
+            `### Directive`,
+            `The human operator has requested a communication be sent. COO: determine the appropriate channel (email, Slack, etc.), compose the message based on the details above, and execute delivery. Report back with confirmation of what was sent and to whom.`,
+          ].join('\n')
+
+          const scIssueRes = await fetch('/api/paperclip/issues', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              title: commTitle,
+              description: commDesc,
+              priority: 'medium',
+              companyId: scCompanyId,
+              assigneeId: scAssignee?.id || undefined,
+            }),
           })
-          // For now, log the intent — full Paperclip communication routing TBD
-          resultMsg = `✅ **Communication queued!**\n\n"${spec.details.subject || spec.summary}" will be sent via ${spec.targetSystems.join(', ')}.`
+          if (!scIssueRes.ok) throw new Error(`Communication issue creation failed: ${scIssueRes.status}`)
+          const scIssueData = await scIssueRes.json()
+
+          resultMsg = `✉️ **Communication Routed to ${scAssignee?.name || 'COO Agent'}**\n\nIssue "${scIssueData.issue?.title || commTitle}" has been created and assigned. The agent will determine the channel, compose the message, and send it.\n\nTrack progress in the Execution Feed.`
+          mutate('/api/feed')
           break
         }
 
@@ -1110,14 +1164,105 @@ export default function HubPage() {
         }
 
         case 'assign_issue': {
-          // For now, display a message that the issue will be reassigned
-          resultMsg = `✅ **Issue Reassigned**\n\n"${spec.details.issueRef}" has been assigned to **${spec.details.agent}**.`
+          // Resolve issue and agent, then PATCH the assignment
+          const aiCompaniesRes = await fetch('/api/paperclip/api/companies')
+          if (!aiCompaniesRes.ok) throw new Error('Failed to fetch companies')
+          const aiCompaniesData = await aiCompaniesRes.json()
+          const aiCompanies = Array.isArray(aiCompaniesData) ? aiCompaniesData : aiCompaniesData.companies ?? []
+
+          const issueRef = (spec.details.issueRef || '').toLowerCase()
+          const agentRef = (spec.details.agent || '').toLowerCase()
+          let foundIssue: { id: string; title: string; companyId: string } | null = null
+          let foundAgent: { id: string; name: string } | null = null
+
+          for (const company of aiCompanies) {
+            try {
+              const [issuesRes, agentsRes] = await Promise.all([
+                fetch(`/api/paperclip/api/companies/${company.id}/issues?limit=50`),
+                fetch(`/api/paperclip/api/companies/${company.id}/agents`),
+              ])
+              if (issuesRes.ok && !foundIssue) {
+                const issData = await issuesRes.json()
+                const issues = issData.issues ?? []
+                const match = issues.find((i: { identifier: string; title: string }) =>
+                  i.identifier?.toLowerCase().includes(issueRef) ||
+                  i.title?.toLowerCase().includes(issueRef)
+                )
+                if (match) foundIssue = { id: match.id, title: match.title, companyId: company.id }
+              }
+              if (agentsRes.ok && !foundAgent) {
+                const agData = await agentsRes.json()
+                const agents = agData.agents ?? []
+                const match = agents.find((a: { name: string }) =>
+                  a.name?.toLowerCase().includes(agentRef)
+                )
+                if (match) foundAgent = { id: match.id, name: match.name }
+              }
+            } catch { /* skip */ }
+          }
+
+          if (!foundIssue) throw new Error(`Could not find issue matching "${spec.details.issueRef}"`)
+          if (!foundAgent) throw new Error(`Could not find agent matching "${spec.details.agent}"`)
+
+          const assignRes = await fetch(`/api/paperclip/api/companies/${foundIssue.companyId}/issues/${foundIssue.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ assigneeAgentId: foundAgent.id }),
+          })
+          if (!assignRes.ok) throw new Error(`Failed to reassign issue: ${assignRes.status}`)
+
+          resultMsg = `✅ **Issue Reassigned**\n\n"${foundIssue.title}" has been assigned to **${foundAgent.name}**.`
           mutate('/api/feed')
           break
         }
 
         case 'update_issue_state': {
-          resultMsg = `✅ **Issue Updated**\n\n"${spec.details.issueRef}" state changed to **${spec.details.newState}**.`
+          // Resolve issue, then PATCH the status
+          const usCompaniesRes = await fetch('/api/paperclip/api/companies')
+          if (!usCompaniesRes.ok) throw new Error('Failed to fetch companies')
+          const usCompaniesData = await usCompaniesRes.json()
+          const usCompanies = Array.isArray(usCompaniesData) ? usCompaniesData : usCompaniesData.companies ?? []
+
+          const usIssueRef = (spec.details.issueRef || '').toLowerCase()
+          let usFoundIssue: { id: string; title: string; companyId: string } | null = null
+
+          for (const company of usCompanies) {
+            try {
+              const issuesRes = await fetch(`/api/paperclip/api/companies/${company.id}/issues?limit=50`)
+              if (!issuesRes.ok) continue
+              const issData = await issuesRes.json()
+              const issues = issData.issues ?? []
+              const match = issues.find((i: { identifier: string; title: string }) =>
+                i.identifier?.toLowerCase().includes(usIssueRef) ||
+                i.title?.toLowerCase().includes(usIssueRef)
+              )
+              if (match) {
+                usFoundIssue = { id: match.id, title: match.title, companyId: company.id }
+                break
+              }
+            } catch { /* skip */ }
+          }
+
+          if (!usFoundIssue) throw new Error(`Could not find issue matching "${spec.details.issueRef}"`)
+
+          // Map user-friendly state names to Paperclip status values
+          const stateMap: Record<string, string> = {
+            'open': 'todo', 'todo': 'todo',
+            'in-progress': 'in_progress', 'in progress': 'in_progress', 'started': 'in_progress',
+            'done': 'done', 'complete': 'done', 'completed': 'done',
+            'cancelled': 'cancelled', 'canceled': 'cancelled',
+          }
+          const rawState = (spec.details.newState || '').toLowerCase()
+          const mappedStatus = stateMap[rawState] || rawState
+
+          const stateRes = await fetch(`/api/paperclip/api/companies/${usFoundIssue.companyId}/issues/${usFoundIssue.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: mappedStatus }),
+          })
+          if (!stateRes.ok) throw new Error(`Failed to update issue state: ${stateRes.status}`)
+
+          resultMsg = `✅ **Issue Updated**\n\n"${usFoundIssue.title}" state changed to **${spec.details.newState}**.`
           mutate('/api/feed')
           break
         }
@@ -1219,7 +1364,45 @@ export default function HubPage() {
         }
 
         case 'restart_agent': {
-          resultMsg = `✅ **Agent Restart Requested**\n\n"${spec.details.agent}" in **${spec.details.project}** has been sent a restart signal.`
+          // Resolve the agent by name, then PATCH status to idle
+          const raCompaniesRes = await fetch('/api/paperclip/api/companies')
+          if (!raCompaniesRes.ok) throw new Error('Failed to fetch companies')
+          const raCompaniesData = await raCompaniesRes.json()
+          const raCompanies = Array.isArray(raCompaniesData) ? raCompaniesData : raCompaniesData.companies ?? []
+
+          const raProjectRef = (spec.details.project || '').toLowerCase()
+          const raAgentRef = (spec.details.agent || '').toLowerCase()
+          const raTargetCompanies = raProjectRef === 'all'
+            ? raCompanies
+            : raCompanies.filter((c: { name: string }) => c.name.toLowerCase().includes(raProjectRef))
+
+          let raFoundAgent: { id: string; name: string; companyId: string } | null = null
+          for (const company of raTargetCompanies) {
+            try {
+              const agentsRes = await fetch(`/api/paperclip/api/companies/${company.id}/agents`)
+              if (!agentsRes.ok) continue
+              const agData = await agentsRes.json()
+              const agents = agData.agents ?? []
+              const match = agents.find((a: { name: string }) =>
+                a.name?.toLowerCase().includes(raAgentRef)
+              )
+              if (match) {
+                raFoundAgent = { id: match.id, name: match.name, companyId: company.id }
+                break
+              }
+            } catch { /* skip */ }
+          }
+
+          if (!raFoundAgent) throw new Error(`Could not find agent matching "${spec.details.agent}" in "${spec.details.project}"`)
+
+          const raRes = await fetch(`/api/paperclip/api/companies/${raFoundAgent.companyId}/agents/${raFoundAgent.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: 'idle' }),
+          })
+          if (!raRes.ok) throw new Error(`Failed to restart agent: ${raRes.status}`)
+
+          resultMsg = `✅ **Agent Restarted**\n\n"${raFoundAgent.name}" in **${spec.details.project}** has been reset to idle and is ready for new tasks.`
           break
         }
 
@@ -1279,7 +1462,23 @@ export default function HubPage() {
             resultMsg = `❌ **Deletion cancelled.** The confirmation name didn't match. You typed "${spec.details.confirmName}" but the workspace is "${spec.details.name}".`
             break
           }
-          resultMsg = `🗑️ **Workspace Deletion Requested**\n\nWorkspace "${spec.details.name}" has been queued for deletion. This may take a moment.`
+
+          // Resolve workspace by name then DELETE
+          const dwCompaniesRes = await fetch('/api/paperclip/api/companies')
+          if (!dwCompaniesRes.ok) throw new Error('Failed to fetch companies')
+          const dwCompaniesData = await dwCompaniesRes.json()
+          const dwCompanies = Array.isArray(dwCompaniesData) ? dwCompaniesData : dwCompaniesData.companies ?? []
+          const dwMatch = dwCompanies.find((c: { name: string }) =>
+            c.name.toLowerCase() === spec.details.name?.toLowerCase()
+          )
+          if (!dwMatch) throw new Error(`Workspace "${spec.details.name}" not found`)
+
+          const dwRes = await fetch(`/api/paperclip/api/companies/${dwMatch.id}`, {
+            method: 'DELETE',
+          })
+          if (!dwRes.ok) throw new Error(`Workspace deletion failed: ${dwRes.status}`)
+
+          resultMsg = `🗑️ **Workspace Deleted**\n\n"${spec.details.name}" and all its agents, issues, and data have been permanently removed.`
           mutate('/api/feed')
           break
         }
@@ -1290,7 +1489,42 @@ export default function HubPage() {
             resultMsg = `❌ **Deletion cancelled.** The confirmation name didn't match. You typed "${spec.details.confirmName}" but the agent is "${spec.details.agent}".`
             break
           }
-          resultMsg = `🗑️ **Agent Deleted**\n\n"${spec.details.agent}" has been removed from **${spec.details.project}**.`
+
+          // Resolve agent by name then DELETE
+          const daCompaniesRes = await fetch('/api/paperclip/api/companies')
+          if (!daCompaniesRes.ok) throw new Error('Failed to fetch companies')
+          const daCompaniesData = await daCompaniesRes.json()
+          const daCompanies = Array.isArray(daCompaniesData) ? daCompaniesData : daCompaniesData.companies ?? []
+
+          const daProjectRef = (spec.details.project || '').toLowerCase()
+          const daAgentRef = (spec.details.agent || '').toLowerCase()
+          let daFoundAgent: { id: string; name: string; companyId: string } | null = null
+
+          for (const company of daCompanies) {
+            if (daProjectRef && !company.name.toLowerCase().includes(daProjectRef)) continue
+            try {
+              const agentsRes = await fetch(`/api/paperclip/api/companies/${company.id}/agents`)
+              if (!agentsRes.ok) continue
+              const agData = await agentsRes.json()
+              const agents = agData.agents ?? []
+              const match = agents.find((a: { name: string }) =>
+                a.name?.toLowerCase().includes(daAgentRef)
+              )
+              if (match) {
+                daFoundAgent = { id: match.id, name: match.name, companyId: company.id }
+                break
+              }
+            } catch { /* skip */ }
+          }
+
+          if (!daFoundAgent) throw new Error(`Could not find agent matching "${spec.details.agent}"`)
+
+          const daRes = await fetch(`/api/paperclip/api/companies/${daFoundAgent.companyId}/agents/${daFoundAgent.id}`, {
+            method: 'DELETE',
+          })
+          if (!daRes.ok) throw new Error(`Agent deletion failed: ${daRes.status}`)
+
+          resultMsg = `🗑️ **Agent Deleted**\n\n"${daFoundAgent.name}" has been permanently removed from **${spec.details.project}**.`
           mutate('/api/feed')
           break
         }
@@ -1505,7 +1739,28 @@ export default function HubPage() {
                 <ActionConfirmCard
                   spec={actionSpec}
                   onApprove={() => handleActionApprove(actionSpec)}
-                  onEdit={() => { /* could re-enter interview */ }}
+                  onEdit={() => {
+                    // Re-enter interview with previous answers as defaults
+                    if (actionSpec.intent) {
+                      const editState = restartInterview(actionSpec.intent, actionSpec.details)
+                      setInterviewState(editState)
+                      setActionSpec(null)
+                      // Remove the "interview complete" message
+                      setMessages(prev => prev.filter(m => !m.content.includes('Interview complete!') && !m.content.includes('Briefing approved')))
+                      // Show the first question with the previous answer as default
+                      const question = getCurrentQuestionWithDefaults(editState)
+                      if (question) {
+                        const totalQ = getTotalQuestions(actionSpec.intent)
+                        const editMsg: ChatMsg = {
+                          id: crypto.randomUUID(),
+                          role: 'assistant' as const,
+                          content: `✏️ **Editing — ${actionSpec.intent.replace(/_/g, ' ')}**\n\n**Question 1 of ${totalQ}:**\n${question.question}${question.defaultValue ? `\n\n_Previous answer: ${question.defaultValue}_` : ''}`,
+                          timestamp: new Date().toISOString(),
+                        }
+                        setMessages(prev => [...prev, editMsg])
+                      }
+                    }
+                  }}
                   onCancel={() => {
                     setActionSpec(null)
                     setInterviewState(null)

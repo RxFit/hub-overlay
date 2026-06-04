@@ -215,6 +215,8 @@ export interface InterviewState {
   questionsAsked: number
   context: Record<string, string>
   spec: ActionSpec | null
+  /** When re-editing, holds the previous answers as defaults for each question */
+  _editDefaults?: Record<string, string>
 }
 
 export interface ActionSpec {
