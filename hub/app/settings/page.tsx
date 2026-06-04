@@ -673,13 +673,13 @@ function KPIEditorCard({ isAdmin }: { isAdmin: boolean }) {
                       {editingId === kpi.id ? (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                           <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '6px' }}>
-                            <input style={inputStyle} placeholder="Label" value={editDraft.label ?? kpi.label} onChange={e => setEditDraft(p => ({ ...p, label: e.target.value }))} />
-                            <input style={inputStyle} placeholder="Value" value={editDraft.value ?? kpi.value} onChange={e => setEditDraft(p => ({ ...p, value: e.target.value }))} />
-                            <input style={inputStyle} placeholder="Trend" value={editDraft.trend ?? (kpi.trend || '')} onChange={e => setEditDraft(p => ({ ...p, trend: e.target.value }))} />
+                            <input style={inputStyle} placeholder="Label" maxLength={255} value={editDraft.label ?? kpi.label} onChange={e => setEditDraft(p => ({ ...p, label: e.target.value }))} />
+                            <input style={inputStyle} placeholder="Value" maxLength={255} value={editDraft.value ?? kpi.value} onChange={e => setEditDraft(p => ({ ...p, value: e.target.value }))} />
+                            <input style={inputStyle} placeholder="Trend" maxLength={255} value={editDraft.trend ?? (kpi.trend || '')} onChange={e => setEditDraft(p => ({ ...p, trend: e.target.value }))} />
                           </div>
                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
                             <select style={selectStyle} value={editDraft.trendDirection ?? (kpi.trendDirection || 'neutral')} onChange={e => setEditDraft(p => ({ ...p, trendDirection: e.target.value as KpiDraft['trendDirection'] }))}>{DIRECTION_OPTS.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}</select>
-                            <input style={inputStyle} placeholder="Unit" value={editDraft.unit ?? (kpi.unit || '')} onChange={e => setEditDraft(p => ({ ...p, unit: e.target.value }))} />
+                            <input style={inputStyle} placeholder="Unit" maxLength={50} value={editDraft.unit ?? (kpi.unit || '')} onChange={e => setEditDraft(p => ({ ...p, unit: e.target.value }))} />
                             <select style={selectStyle} value={editDraft.visibility ?? (kpi.visibility || 'staff')} onChange={e => setEditDraft(p => ({ ...p, visibility: e.target.value as KpiDraft['visibility'] }))}>{VIS_OPTS.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}</select>
                           </div>
                           <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
@@ -710,13 +710,13 @@ function KPIEditorCard({ isAdmin }: { isAdmin: boolean }) {
                 <div style={{ border: '1px dashed var(--border)', borderRadius: '8px', padding: '12px', marginTop: '4px' }}>
                   <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px' }}>Add Manual KPI</div>
                   <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '6px', marginBottom: '6px' }}>
-                    <input id="kpi-new-label" style={inputStyle} placeholder="Label (e.g. Monthly Revenue)" value={newDraft.label} onChange={e => setNewDraft(p => ({ ...p, label: e.target.value }))} onKeyDown={e => { if (e.key === 'Enter') handleAdd() }} />
-                    <input id="kpi-new-value" style={inputStyle} placeholder="Value (e.g. $42k)" value={newDraft.value} onChange={e => setNewDraft(p => ({ ...p, value: e.target.value }))} />
-                    <input id="kpi-new-trend" style={inputStyle} placeholder="Trend (e.g. +12%)" value={newDraft.trend} onChange={e => setNewDraft(p => ({ ...p, trend: e.target.value }))} />
+                    <input id="kpi-new-label" style={inputStyle} placeholder="Label (e.g. Monthly Revenue)" maxLength={255} value={newDraft.label} onChange={e => setNewDraft(p => ({ ...p, label: e.target.value }))} onKeyDown={e => { if (e.key === 'Enter') handleAdd() }} />
+                    <input id="kpi-new-value" style={inputStyle} placeholder="Value (e.g. $42k)" maxLength={255} value={newDraft.value} onChange={e => setNewDraft(p => ({ ...p, value: e.target.value }))} />
+                    <input id="kpi-new-trend" style={inputStyle} placeholder="Trend (e.g. +12%)" maxLength={255} value={newDraft.trend} onChange={e => setNewDraft(p => ({ ...p, trend: e.target.value }))} />
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: '6px', alignItems: 'center' }}>
                     <select id="kpi-new-direction" style={selectStyle} value={newDraft.trendDirection} onChange={e => setNewDraft(p => ({ ...p, trendDirection: e.target.value as KpiDraft['trendDirection'] }))}>{DIRECTION_OPTS.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}</select>
-                    <input id="kpi-new-unit" style={inputStyle} placeholder="Unit (% / $)" value={newDraft.unit} onChange={e => setNewDraft(p => ({ ...p, unit: e.target.value }))} />
+                    <input id="kpi-new-unit" style={inputStyle} placeholder="Unit (% / $)" maxLength={50} value={newDraft.unit} onChange={e => setNewDraft(p => ({ ...p, unit: e.target.value }))} />
                     <select id="kpi-new-visibility" style={selectStyle} value={newDraft.visibility} onChange={e => setNewDraft(p => ({ ...p, visibility: e.target.value as KpiDraft['visibility'] }))}>{VIS_OPTS.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}</select>
                     <button id="kpi-add-btn" onClick={handleAdd} disabled={adding || !newDraft.label.trim()} style={{ background: 'var(--accent)', border: 'none', borderRadius: '6px', color: '#000', fontWeight: 700, cursor: adding || !newDraft.label.trim() ? 'not-allowed' : 'pointer', padding: '6px 14px', fontSize: '0.75rem', opacity: adding || !newDraft.label.trim() ? 0.5 : 1, whiteSpace: 'nowrap', transition: 'opacity 0.15s ease' }}>{adding ? '…' : '+ Add'}</button>
                   </div>
@@ -937,10 +937,8 @@ export default function SettingsPage() {
 
       {/* ── Onboarding Users (admin + superadmin only) ── */}
       {isAdmin && (
-        <OnboardingUsersCard callerRole={userRole ?? 'admin'} />
+        <OnboardingUsersCard callerRole={userRole ?? 'staff'} />
       )}
-
     </div>
   )
 }
-

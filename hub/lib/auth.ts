@@ -102,9 +102,19 @@ async function resolveUserRole(
       return { role: existingEntry.role, assignedProjects: existingEntry.assignedProjects }
     }
 
-    // User not found in sheet — return onboarding role.
-    // Self-registration is handled client-side via /api/auth/register
-    // (called from OnboardingCard on mount) using the user's established session.
+    // User not found in DB — auto-create as onboarding
+    try {
+      const { upsertUserRole } = await import('@/lib/userRoles')
+      await upsertUserRole({
+        email: normalized,
+        role: 'onboarding',
+        assignedProjects: [],
+        assignedBy: 'system',
+      }, accessToken, sheetId)
+    } catch (err) {
+      console.error('[auth] Failed to auto-create user row:', err)
+    }
+
     return { role: 'onboarding', assignedProjects: [] }
   } catch {
     return { role: 'onboarding', assignedProjects: [] }

@@ -33,6 +33,6 @@ export const config = {
      * - /api/auth (NextAuth endpoints)
      * - /_next (Next.js internals)
      */
-    '/((?!login|api/auth|api/chat|api/debug-auth|_next|favicon\\.svg|static).*)',
+    '/((?!login|api/auth|api/chat|_next|favicon\\.svg|static).*)',
   ],
 }

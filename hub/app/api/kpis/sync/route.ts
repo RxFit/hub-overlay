@@ -117,6 +117,8 @@ export async function POST(req: NextRequest) {
     // ── Upsert loop — one write per KPI ──
     let upserted = 0
     for (const kpi of syncedKPIs) {
+      if (!kpi.label?.trim()) continue // Skip KPIs with empty labels
+
       // Round raw value to 2dp before storage
       const roundedValue = Math.round(kpi.rawValue * 100) / 100
 
