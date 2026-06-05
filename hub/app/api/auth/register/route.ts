@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { getToken } from 'next-auth/jwt'
 import { authOptions } from '@/lib/auth'
 import { getAllRoleEntries, upsertUserRole } from '@/lib/userRoles'
+import { recordEvent } from '@/lib/event-logger'
 
 export const runtime = 'nodejs'
 
@@ -56,6 +57,16 @@ export async function POST(req: NextRequest) {
       accessToken,
       sheetId
     )
+
+    await recordEvent({
+      eventType: 'auth.registered',
+      actor: `hub-user:${email}`,
+      resourceType: 'user',
+      resourceId: email,
+      payload: {
+        role: 'onboarding',
+      },
+    })
 
     console.log(`[register] Self-registered onboarding user: ${email}`)
     return NextResponse.json({ registered: true, email })

@@ -67,9 +67,59 @@ async function run() {
     ALTER TABLE kpis
       ADD COLUMN IF NOT EXISTS previous_value   TEXT,
       ADD COLUMN IF NOT EXISTS source_config    JSONB,
-      ADD COLUMN IF NOT EXISTS last_synced_at   TIMESTAMPTZ
+      ADD COLUMN IF NOT EXISTS last_synced_at   TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS version          INTEGER DEFAULT 1 NOT NULL,
+      ADD COLUMN IF NOT EXISTS description      TEXT
   `
-  console.log('[migrate] ✓ kpis sync columns (0001)')
+  console.log('[migrate] ✓ kpis sync columns & version (0001)')
+
+  // Event Log Table
+  await sql`
+    CREATE TABLE IF NOT EXISTS event_log (
+      id             TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id      TEXT NOT NULL REFERENCES tenants(id),
+      event_type     TEXT NOT NULL,
+      actor          TEXT NOT NULL,
+      resource_type  TEXT,
+      resource_id    TEXT,
+      payload        JSONB,
+      correlation_id TEXT,
+      created_at     TIMESTAMPTZ DEFAULT now() NOT NULL
+    )
+  `
+  console.log('[migrate] ✓ event_log table')
+
+  // Agent Memory Table
+  await sql`
+    CREATE TABLE IF NOT EXISTS agent_memory (
+      id              TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id       TEXT NOT NULL REFERENCES tenants(id),
+      agent_id        TEXT NOT NULL,
+      memory_type     TEXT NOT NULL,
+      content         TEXT NOT NULL,
+      context         JSONB,
+      relevance_score INTEGER,
+      expires_at      TIMESTAMPTZ,
+      created_at      TIMESTAMPTZ DEFAULT now() NOT NULL,
+      updated_at      TIMESTAMPTZ DEFAULT now() NOT NULL
+    )
+  `
+  console.log('[migrate] ✓ agent_memory table')
+
+  // Entity Links Table
+  await sql`
+    CREATE TABLE IF NOT EXISTS entity_links (
+      id          TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id   TEXT NOT NULL REFERENCES tenants(id),
+      source_type TEXT NOT NULL,
+      source_id   TEXT NOT NULL,
+      target_type TEXT NOT NULL,
+      target_id   TEXT NOT NULL,
+      label       TEXT,
+      created_at  TIMESTAMPTZ DEFAULT now() NOT NULL
+    )
+  `
+  console.log('[migrate] ✓ entity_links table')
 
   // Seed rxfit tenant
   await sql`

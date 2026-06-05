@@ -4,6 +4,8 @@ import { PAPERCLIP_BASE_URL } from '@/lib/paperclipConfig'
 import { createLogger } from '@/lib/logger'
 import { breaker } from '@/lib/circuit-breaker'
 import { withRetry } from '@/lib/retry'
+import { loopDetector } from '@/lib/loop-detector'
+import crypto from 'crypto'
 import {
   CompaniesResponseSchema,
   CompanySchema,
@@ -33,21 +35,39 @@ async function paperclipFetch<T>(
   schema?: ZodType<T>,
 ): Promise<T> {
   const url = `${PAPERCLIP_BASE}${path}`
+  const method = opts?.method || 'GET'
+  const body = opts?.body
+
+  // 1. Loop detection: Throw error and block sequential redundant writes
+  loopDetector.detectAndRecord(method, path, body)
+
+  // 2. Idempotency headers: Attach unique key for writes to prevent duplicate execution on retry
+  let finalOpts = opts
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method.toUpperCase())) {
+    const headers = new Headers(opts?.headers)
+    if (!headers.has('Idempotency-Key')) {
+      headers.set('Idempotency-Key', crypto.randomUUID())
+    }
+    finalOpts = {
+      ...opts,
+      headers: Object.fromEntries(headers.entries()),
+    }
+  }
 
   const execute = async () => {
     // First attempt
-    let res = await doPaperclipFetch(url, opts)
+    let res = await doPaperclipFetch(url, finalOpts)
 
     // F4 fix: On 401, clear session, re-authenticate, and retry once
     if (res.status === 401) {
       log.warn({ path, status: 401 }, 'Auth expired, re-authenticating')
       clearPaperclipSession()
-      res = await doPaperclipFetch(url, opts)
+      res = await doPaperclipFetch(url, finalOpts)
     }
 
     if (!res.ok) {
-      const body = await res.text().catch(() => 'Unknown error')
-      throw new Error(`Paperclip API error ${res.status}: ${body}`)
+      const bodyText = await res.text().catch(() => 'Unknown error')
+      throw new Error(`Paperclip API error ${res.status}: ${bodyText}`)
     }
 
     const json = await res.json()

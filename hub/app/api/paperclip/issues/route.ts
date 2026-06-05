@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { createLogger } from '@/lib/logger'
 import { createIssue, getAgents } from '@/lib/paperclip'
+import { recordEvent } from '@/lib/event-logger'
 import { RXFIT_COMPANY_ID, RXFIT_CEO_AGENT_ID } from '@/lib/paperclipConfig'
 import { CreateIssueRequestSchema } from '@/lib/zod-schemas'
 import type { HubUser } from '@/types'
@@ -91,10 +92,35 @@ export async function POST(req: Request) {
       assigneeId,
     })
 
+    await recordEvent({
+      eventType: 'issue.created',
+      actor: `hub-user:${user.email || 'unknown'}`,
+      resourceType: 'issue',
+      resourceId: issue.id,
+      payload: {
+        title: issue.title,
+        identifier: issue.identifier,
+        companyId,
+        assigneeId,
+      },
+    })
+
     return NextResponse.json({ issue })
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Failed to create issue'
     log.error({ err: error }, 'Issue creation failed')
+
+    recordEvent({
+      eventType: 'issue.creation_failed',
+      actor: `hub-user:${user.email || 'unknown'}`,
+      resourceType: 'issue',
+      payload: {
+        title,
+        companyId,
+        error: message,
+      },
+    }).catch(() => {})
+
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }

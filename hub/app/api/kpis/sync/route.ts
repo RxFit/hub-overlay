@@ -8,6 +8,8 @@ import { eq, and, inArray } from 'drizzle-orm'
 import { timingSafeEqual } from 'crypto'
 import { runAllSources } from '@/lib/kpi-sources'
 import { createLogger } from '@/lib/logger'
+import { recordEvent } from '@/lib/event-logger'
+import { pruneExpiredMemories, pruneOldEventLogs } from '@/lib/agent-memory'
 
 export const runtime = 'nodejs'
 
@@ -57,8 +59,8 @@ export async function POST(req: NextRequest) {
     ? verifyCronSecret(req.headers.get('x-cron-secret'), cronSecret)
     : false
 
+  const session = await getServerSession(authOptions)
   if (!isCron) {
-    const session = await getServerSession(authOptions)
     const role = (session?.user as Record<string, unknown>)?.role as string
     if (!session?.user || (role !== 'admin' && role !== 'superadmin')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -173,6 +175,19 @@ export async function POST(req: NextRequest) {
 
     log.info({ synced: upserted, sources }, 'KPI sync completed')
 
+    await recordEvent({
+      eventType: 'kpi.synced',
+      actor: isCron ? 'system:cron' : `hub-user:${session?.user?.email || 'admin'}`,
+      payload: {
+        syncedCount: upserted,
+        sources: Object.keys(sources),
+      },
+    })
+
+    // Trigger background database pruning asynchronously
+    pruneExpiredMemories(TENANT_ID).catch((e) => log.error({ err: e }, 'Failed to prune expired memories'))
+    pruneOldEventLogs(TENANT_ID).catch((e) => log.error({ err: e }, 'Failed to prune old event logs'))
+
     return NextResponse.json({
       synced: upserted,
       sources,
@@ -181,6 +196,15 @@ export async function POST(req: NextRequest) {
 
   } catch (err) {
     log.error({ err }, 'KPI sync failed')
+
+    recordEvent({
+      eventType: 'sync.failed',
+      actor: isCron ? 'system:cron' : `hub-user:${session?.user?.email || 'admin'}`,
+      payload: {
+        error: err instanceof Error ? err.message : 'Unknown error',
+      },
+    }).catch(() => {})
+
     // Do NOT include raw error string in response — may expose env context
     const message = err instanceof Error ? err.message : 'Internal sync error'
     return NextResponse.json({ error: message }, { status: 500 })

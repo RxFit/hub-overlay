@@ -1,3 +1,8 @@
+import { recordEvent } from './event-logger'
+import { createLogger } from './logger'
+
+const log = createLogger('circuit-breaker')
+
 export class CircuitOpenError extends Error {
   constructor(key: string) {
     super(`Circuit open for "${key}"`)
@@ -39,11 +44,13 @@ export class CircuitBreaker {
     const threshold = opts?.threshold ?? this.threshold
     const resetMs = opts?.resetMs ?? this.resetMs
     const entry = this.getEntry(key)
+    const previousState = entry.state
 
     // Check if open circuit should transition to half-open
     if (entry.state === 'open') {
       if (Date.now() - entry.lastFailure >= resetMs) {
         entry.state = 'half-open'
+        log.info({ key }, `Circuit transitioning to HALF-OPEN for key: ${key}`)
       } else {
         throw new CircuitOpenError(key)
       }
@@ -54,13 +61,36 @@ export class CircuitBreaker {
       // Success — reset
       entry.state = 'closed'
       entry.failures = 0
+
+      if (previousState !== 'closed') {
+        log.info({ key, previousState }, `Circuit recovered to CLOSED for key: ${key}`)
+        recordEvent({
+          eventType: 'circuit.reset',
+          actor: 'system:circuit-breaker',
+          resourceType: 'api',
+          resourceId: key,
+          payload: { previousState, state: 'closed' },
+        }).catch(() => {})
+      }
+
       return result
     } catch (err) {
       entry.failures++
       entry.lastFailure = Date.now()
 
-      if (entry.failures >= threshold) {
+      if (entry.failures >= threshold && previousState !== 'open') {
         entry.state = 'open'
+        log.error(
+          { key, failures: entry.failures, threshold },
+          `Circuit tripped to OPEN for key: ${key}`,
+        )
+        recordEvent({
+          eventType: 'circuit.tripped',
+          actor: 'system:circuit-breaker',
+          resourceType: 'api',
+          resourceId: key,
+          payload: { failures: entry.failures, threshold, state: 'open' },
+        }).catch(() => {})
       }
 
       throw err

@@ -4,6 +4,7 @@ import { getToken } from 'next-auth/jwt'
 import { authOptions } from '@/lib/auth'
 import { getAllRoleEntries, upsertUserRole, ensureSheetHeaders } from '@/lib/userRoles'
 import { canAssignRole } from '@/lib/roles'
+import { recordEvent } from '@/lib/event-logger'
 
 export const runtime = 'nodejs'
 
@@ -128,6 +129,18 @@ export async function POST(req: NextRequest) {
       accessToken,
       process.env.HUB_ROLES_SHEET_ID
     )
+
+    await recordEvent({
+      eventType: 'role.updated',
+      actor: `hub-user:${callerEmail}`,
+      resourceType: 'user_role',
+      resourceId: email,
+      payload: {
+        newRole: role,
+        assignedProjects: assignedProjects || [],
+      },
+    })
+
     return NextResponse.json({ success: true, email, role })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error'

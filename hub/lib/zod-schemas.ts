@@ -130,3 +130,28 @@ export type ValidatedCompany = z.infer<typeof CompanySchema>
 export type ValidatedChatMessage = z.infer<typeof ChatMessageSchema>
 export type ValidatedChatRequest = z.infer<typeof ChatRequestSchema>
 export type ValidatedCreateIssueRequest = z.infer<typeof CreateIssueRequestSchema>
+
+/* ── Agent Memory Schemas ── */
+
+export const MemoryTypeSchema = z.enum(['insight', 'decision', 'error_pattern', 'success_pattern'])
+
+export const StoreMemoryRequestSchema = z.object({
+  agentId: z.string().min(1, 'agentId is required'),
+  memoryType: MemoryTypeSchema,
+  content: z.string().min(1, 'content is required'),
+  context: z.record(z.any()).nullable().optional(),
+  relevanceScore: z.number().int().min(1).max(10).optional(),
+  expiresAt: z.string().datetime().nullable().optional(),
+})
+
+export const QueryMemoryRequestSchema = z.object({
+  agentId: z.string().optional(),
+  memoryType: MemoryTypeSchema.optional(),
+  searchQuery: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+})
+
+export type ValidatedMemoryType = z.infer<typeof MemoryTypeSchema>
+export type ValidatedStoreMemoryRequest = z.infer<typeof StoreMemoryRequestSchema>
+export type ValidatedQueryMemoryRequest = z.infer<typeof QueryMemoryRequestSchema>
+

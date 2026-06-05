@@ -61,6 +61,7 @@ export const kpis = pgTable('kpis', {
   lastSyncedAt:   timestamp('last_synced_at'),                // when this row was last auto-refreshed
   updatedAt:      timestamp('updated_at').defaultNow(),
   updatedBy:      text('updated_by'),
+  description:    text('description'),                        // markdown note content for the Graph
 })
 
 /* ── Event Log (append-only — captures every significant system action) ── */
@@ -90,4 +91,17 @@ export const agentMemory = pgTable('agent_memory', {
   expiresAt:       timestamp('expires_at'),             // Optional TTL for time-bound knowledge
   createdAt:       timestamp('created_at').defaultNow().notNull(),
   updatedAt:       timestamp('updated_at').defaultNow().notNull(),
+})
+
+/* ── Entity Links (The Graph Edges) ──────────────────────────────────────── */
+
+export const entityLinks = pgTable('entity_links', {
+  id:          text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+  tenantId:    text('tenant_id').notNull().references(() => tenants.id),
+  sourceType:  text('source_type').notNull(), // 'kpi', 'agent_memory', 'hub_user', etc.
+  sourceId:    text('source_id').notNull(),
+  targetType:  text('target_type').notNull(), // 'kpi', 'agent_memory', etc.
+  targetId:    text('target_id').notNull(),
+  label:       text('label'),                 // Optional context for the edge (e.g., "mentioned in")
+  createdAt:   timestamp('created_at').defaultNow().notNull(),
 })
