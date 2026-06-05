@@ -99,9 +99,12 @@ export async function createIssue(
   companyId: string,
   data: { title: string; description?: string; priority?: string; assigneeId?: string }
 ): Promise<Issue> {
+  // Paperclip API expects `assigneeAgentId`, not `assigneeId`
+  const { assigneeId, ...rest } = data
+  const payload = assigneeId ? { ...rest, assigneeAgentId: assigneeId } : rest
   const res = await paperclipFetch<{ issue: Issue }>(`/api/companies/${companyId}/issues`, {
     method: 'POST',
-    body: JSON.stringify(data),
+    body: JSON.stringify(payload),
   })
   return res.issue
 }
