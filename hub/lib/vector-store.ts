@@ -13,8 +13,11 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '')
  */
 export async function generateEmbedding(text: string): Promise<number[]> {
   try {
-    const model = genAI.getGenerativeModel({ model: 'text-embedding-004' })
-    const result = await model.embedContent(text)
+    const model = genAI.getGenerativeModel({ model: 'gemini-embedding-001' })
+    const result = await model.embedContent({
+      content: text,
+      outputDimensionality: 768,
+    } as any)
     return result.embedding.values
   } catch (err) {
     log.error({ err }, 'Failed to generate embedding')
@@ -40,7 +43,7 @@ export async function searchSimilarDocuments(tenantId: string, query: string, li
         similarity,
       })
       .from(documentChunks)
-      .where(sql`${documentChunks.tenantId} = ${tenantId}`)
+      .where(sql`${documentChunks.tenantId} = ${tenantId} AND 1 - (${documentChunks.embedding} <=> ${JSON.stringify(queryEmbedding)}::vector) > 0.65`)
       .orderBy(desc(similarity))
       .limit(limit)
 

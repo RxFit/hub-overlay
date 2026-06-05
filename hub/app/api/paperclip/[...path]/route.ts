@@ -4,6 +4,10 @@ import { authOptions } from '@/lib/auth'
 import { createLogger } from '@/lib/logger'
 import { getPaperclipAuthHeaders, clearPaperclipSession } from '@/lib/paperclipSession'
 import { PAPERCLIP_BASE_URL } from '@/lib/paperclipConfig'
+import { loopDetector } from '@/lib/loop-detector'
+import { breaker } from '@/lib/circuit-breaker'
+import { withRetry } from '@/lib/retry'
+import crypto from 'crypto'
 
 const log = createLogger('paperclip/proxy')
 
@@ -93,6 +97,19 @@ async function proxyRequest(
     }
   }
 
+  // 1. Loop detection: Throw error and block sequential redundant writes
+  if (requestBody && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method.toUpperCase())) {
+    try {
+      loopDetector.detectAndRecord(method, apiPath, requestBody)
+    } catch (err) {
+      log.error({ err, path: apiPath, method }, 'Loop detected in proxy')
+      return NextResponse.json(
+        { error: err instanceof Error ? err.message : 'Write loop detected' },
+        { status: 400 }
+      )
+    }
+  }
+
   /** Build fetch options with current auth headers */
   async function buildFetchOpts(): Promise<RequestInit> {
     let authHeaders: Record<string, string>
@@ -101,13 +118,23 @@ async function proxyRequest(
     } catch (err) {
       throw new Error(err instanceof Error ? err.message : 'Paperclip auth failed')
     }
+
+    const headers = new Headers({
+      'Content-Type': 'application/json',
+      Origin: PAPERCLIP_BASE,
+      ...authHeaders,
+    })
+
+    // 2. Idempotency headers: Attach unique key for writes to prevent duplicate execution on retry
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method.toUpperCase())) {
+      if (!headers.has('Idempotency-Key')) {
+        headers.set('Idempotency-Key', crypto.randomUUID())
+      }
+    }
+
     const opts: RequestInit = {
       method,
-      headers: {
-        'Content-Type': 'application/json',
-        Origin: PAPERCLIP_BASE,
-        ...authHeaders,
-      },
+      headers: Object.fromEntries(headers.entries()),
       signal: AbortSignal.timeout(10_000),
     }
     if (requestBody) opts.body = requestBody
@@ -115,15 +142,26 @@ async function proxyRequest(
   }
 
   try {
-    let upstream = await fetch(url, await buildFetchOpts())
+    const execute = async () => {
+      let upstream = await fetch(url, await buildFetchOpts())
 
-    // Auto-retry on 401: clear session, re-authenticate, retry once
-    if (upstream.status === 401) {
-      log.warn({ path: apiPath }, 'Upstream 401, re-authenticating')
-      clearPaperclipSession()
-      upstream = await fetch(url, await buildFetchOpts())
+      // Auto-retry on 401: clear session, re-authenticate, retry once
+      if (upstream.status === 401) {
+        log.warn({ path: apiPath }, 'Upstream 401, re-authenticating')
+        clearPaperclipSession()
+        upstream = await fetch(url, await buildFetchOpts())
+      }
+
+      // Throw retryable errors so withRetry triggers
+      if (upstream.status >= 500 && upstream.status <= 504) {
+        throw new Error(`Paperclip proxy error status ${upstream.status}`)
+      }
+
+      return upstream
     }
 
+    // 3. Circuit breaker & Retry wrapper
+    const upstream = await breaker.execute('paperclip-api', () => withRetry(execute))
     const data = await upstream.text()
 
     // If the user is staff (not admin) and this is a companies list,

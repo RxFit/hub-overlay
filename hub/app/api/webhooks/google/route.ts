@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server';
+import { getServiceAccountAccessToken } from '@/lib/google-auth';
+import { fetchDriveDocContent } from '@/lib/content-fetch';
 
 /**
  * Google Workspace Webhook Receiver
@@ -31,12 +33,10 @@ export async function POST(req: Request) {
     const resourceId = req.headers.get('x-goog-resource-id') || 'unknown';
     const resourceUri = req.headers.get('x-goog-resource-uri') || '';
 
-    // 4. Trigger Paperclip Execution Layer asynchronously
-    // Paperclip AI will fetch the resource, chunk it, embed it to pgvector, and map the Graph.
-    console.log(`[Google Webhook] Triggering Paperclip for resource: ${resourceId}`);
-    
-    // TODO: Await pubsub or background job queue (e.g., Inngest or simple fetch)
-    // await enqueuePaperclipTask('process-google-delta', { resourceId, resourceUri });
+    // 4. Process the delta asynchronously so we can return 200 quickly
+    processGoogleDelta(resourceId, resourceUri).catch(err => {
+      console.error('[Google Webhook Error in Background]', err);
+    });
 
     // 5. Always return 200 quickly so Google doesn't retry
     return NextResponse.json({ status: 'Processing delta' }, { status: 200 });
@@ -44,4 +44,65 @@ export async function POST(req: Request) {
     console.error('[Google Webhook Error]', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
+}
+
+async function processGoogleDelta(resourceId: string, resourceUri: string) {
+  console.log(`[Google Webhook] Processing delta for resource: ${resourceId}, URI: ${resourceUri}`);
+
+  const accessToken = await getServiceAccountAccessToken('https://www.googleapis.com/auth/drive.readonly');
+  if (!accessToken) {
+    throw new Error('Failed to obtain Google Drive access token');
+  }
+
+  // Extract file ID from resourceUri or resourceId
+  let fileId = resourceId;
+  if (resourceUri) {
+    const match = resourceUri.match(/\/files\/([a-zA-Z0-9-_]+)/);
+    if (match) {
+      fileId = match[1];
+    }
+  }
+
+  // Fetch file metadata to get name, mimeType, webViewLink
+  const metaRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name,mimeType,webViewLink`, {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+  if (!metaRes.ok) {
+    throw new Error(`Failed to fetch file metadata for ${fileId}: ${metaRes.status}`);
+  }
+  const metadata = await metaRes.json() as { name: string; mimeType: string; webViewLink?: string };
+
+  // Fetch the plain text content
+  const content = await fetchDriveDocContent(accessToken, fileId, metadata.mimeType);
+  if (content.startsWith('[Failed') || content.startsWith('[Binary')) {
+    console.warn(`[Google Webhook] Skipped file ${fileId} content extraction: ${content}`);
+    return;
+  }
+
+  // POST to pgvector ingestion endpoint
+  const hubUrl = process.env.NEXTAUTH_URL || 'https://hub.casatrejo.com';
+  const upsertUrl = `${hubUrl}/api/embeddings/upsert`;
+  const apiKey = process.env.PAPERCLIP_API_KEY;
+  const tenantId = process.env.NEXT_PUBLIC_TENANT_ID || 'rxfit';
+  const sourceUrl = metadata.webViewLink || `https://docs.google.com/document/d/${fileId}/edit`;
+
+  const postRes = await fetch(upsertUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      tenantId,
+      sourceUrl,
+      content
+    })
+  });
+
+  if (!postRes.ok) {
+    const bodyText = await postRes.text().catch(() => '');
+    throw new Error(`Failed to POST embedding: ${postRes.status} ${bodyText}`);
+  }
+
+  console.log(`[Google Webhook] Successfully indexed document ${fileId}`);
 }

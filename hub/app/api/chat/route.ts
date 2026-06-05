@@ -17,6 +17,17 @@ const log = createLogger('chat')
 export const runtime = 'nodejs'
 export const maxDuration = 60
 
+const internalSignals = [
+  'our ', 'my ', 'kpi', 'paperclip', 'workspace',
+  'project status', 'team ', 'sprint', 'issue ',
+  'casa trejo', 'rxfit',
+]
+
+function needsInternalSearch(message: string): boolean {
+  const lower = message.toLowerCase()
+  return internalSignals.some(s => lower.includes(s))
+}
+
 /**
  * Detect if a user message likely needs external web data.
  * Returns true for queries about public info, competitors, news, markets, etc.
@@ -25,12 +36,7 @@ function needsExternalSearch(message: string): boolean {
   const lower = message.toLowerCase()
 
   // Skip if clearly about internal data
-  const internalSignals = [
-    'our ', 'my ', 'kpi', 'paperclip', 'workspace',
-    'project status', 'team ', 'sprint', 'issue ',
-    'casa trejo', 'rxfit',
-  ]
-  if (internalSignals.some(s => lower.includes(s))) return false
+  if (needsInternalSearch(message)) return false
 
   const externalSignals = [
     // Explicit web/research intent
@@ -132,41 +138,54 @@ export async function POST(req: NextRequest) {
     // Run searches in parallel based on query intent
     const searchPromises: Promise<void>[] = []
 
-    // Always try Vertex AI for internal context (lightweight, always useful)
-    searchPromises.push(
-      (async () => {
-        try {
-          const vertexResults = await searchSemanticBrain(query)
-          if (vertexResults && vertexResults.length > 0) {
-            const vertexContext = vertexResults
-              .map(r => `**${r.title}** ${r.uri ? `(${r.uri})` : ''}\n${r.snippet}`)
-              .join('\n\n---\n\n')
-            searchContext += `## Internal Knowledge (Vertex AI — Google Drive/Workspace)\n\n${vertexContext}\n\n`
+    const explicitInternalReq = needsInternalSearch(query)
+    const shouldRunVertex = useCase === 'deep_dive' || (useCase === 'execute' && explicitInternalReq)
+    const shouldRunPgVector = useCase === 'recall' || useCase === 'deep_dive' || (useCase === 'execute' && explicitInternalReq)
+
+    // Try Vertex AI for internal context
+    if (shouldRunVertex) {
+      searchPromises.push(
+        (async () => {
+          try {
+            const vertexResults = await searchSemanticBrain(query)
+            if (vertexResults && vertexResults.length > 0) {
+              const vertexContext = vertexResults
+                .map(r => `**${r.title}** ${r.uri ? `(${r.uri})` : ''}\n${r.snippet}`)
+                .join('\n\n---\n\n')
+              searchContext += `## Internal Knowledge (Vertex AI — Google Drive/Workspace)\n\n${vertexContext}\n\n`
+            }
+          } catch (err) {
+            log.warn({ err }, 'Vertex AI search failed')
           }
-        } catch (err) {
-          log.warn({ err }, 'Vertex AI search failed')
-        }
-      })()
-    )
+        })()
+      )
+    }
 
     // Query pgvector Obsidian semantic database for project insights
-    searchPromises.push(
-      (async () => {
-        try {
-          const tenantId = process.env.NEXT_PUBLIC_TENANT_ID || 'rxfit'
-          const { searchSimilarDocuments } = await import('@/lib/vector-store')
-          const pgvectorResults = await searchSimilarDocuments(tenantId, query, 3)
-          if (pgvectorResults && pgvectorResults.length > 0) {
-            const pgvectorContext = pgvectorResults
-              .map(r => `**Source: ${r.sourceUrl}** (Similarity: ${(Number(r.similarity) * 100).toFixed(1)}%)\n${r.content}`)
-              .join('\n\n---\n\n')
-            searchContext += `## Internal Knowledge (Obsidian Semantic Database)\n\n${pgvectorContext}\n\n`
+    if (shouldRunPgVector) {
+      searchPromises.push(
+        (async () => {
+          try {
+            const tenantId = process.env.NEXT_PUBLIC_TENANT_ID || 'rxfit'
+            const { searchSimilarDocuments } = await import('@/lib/vector-store')
+            const pgvectorResults = await searchSimilarDocuments(tenantId, query, 3)
+            
+            if (pgvectorResults && pgvectorResults.length < 3) {
+              log.info({ count: pgvectorResults.length }, 'Semantic chunks discarded due to low relevance threshold')
+            }
+            
+            if (pgvectorResults && pgvectorResults.length > 0) {
+              const pgvectorContext = pgvectorResults
+                .map(r => `**Source: ${r.sourceUrl}** (Similarity: ${(Number(r.similarity) * 100).toFixed(1)}%)\n${r.content}`)
+                .join('\n\n---\n\n')
+              searchContext += `## Internal Knowledge (Obsidian Semantic Database)\n\n${pgvectorContext}\n\n`
+            }
+          } catch (err) {
+            log.warn({ err }, 'pgvector semantic search failed')
           }
-        } catch (err) {
-          log.warn({ err }, 'pgvector semantic search failed')
-        }
-      })()
-    )
+        })()
+      )
+    }
 
     // Use Exa.AI for external queries
     if (needsExternalSearch(query)) {
