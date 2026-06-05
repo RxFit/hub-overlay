@@ -15,6 +15,13 @@
       "when": 1780681733705,
       "tag": "0001_petite_living_tribunal",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1780692525308,
+      "tag": "0002_condemned_whizzer",
+      "breakpoints": true
     }
   ]
 }

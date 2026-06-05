@@ -195,7 +195,7 @@ export async function* streamGeminiChat(
   useCase: string = 'deep_dive'
 ): AsyncGenerator<string> {
   let modelName = 'gemini-2.5-pro' // Default for deep_dive and interview
-  if (useCase === 'recall') {
+  if (useCase === 'recall' || useCase === 'execute') {
     modelName = 'gemini-2.5-flash'
   }
 

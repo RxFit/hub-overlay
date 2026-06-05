@@ -113,6 +113,6 @@ export const documentChunks = pgTable('document_chunks', {
   tenantId:   text('tenant_id').notNull().references(() => tenants.id),
   sourceUrl:  text('source_url').notNull(),                        // Link to Google Doc/Email
   content:    text('content').notNull(),                           // The raw text chunk
-  embedding:  vector('embedding', { dimensions: 1536 }),           // e.g. OpenAI text-embedding-3-small
+  embedding:  vector('embedding', { dimensions: 768 }),            // Google Gemini text-embedding-004
   createdAt:  timestamp('created_at').defaultNow().notNull(),
 })

@@ -149,6 +149,25 @@ export async function POST(req: NextRequest) {
       })()
     )
 
+    // Query pgvector Obsidian semantic database for project insights
+    searchPromises.push(
+      (async () => {
+        try {
+          const tenantId = process.env.NEXT_PUBLIC_TENANT_ID || 'rxfit'
+          const { searchSimilarDocuments } = await import('@/lib/vector-store')
+          const pgvectorResults = await searchSimilarDocuments(tenantId, query, 3)
+          if (pgvectorResults && pgvectorResults.length > 0) {
+            const pgvectorContext = pgvectorResults
+              .map(r => `**Source: ${r.sourceUrl}** (Similarity: ${(Number(r.similarity) * 100).toFixed(1)}%)\n${r.content}`)
+              .join('\n\n---\n\n')
+            searchContext += `## Internal Knowledge (Obsidian Semantic Database)\n\n${pgvectorContext}\n\n`
+          }
+        } catch (err) {
+          log.warn({ err }, 'pgvector semantic search failed')
+        }
+      })()
+    )
+
     // Use Exa.AI for external queries
     if (needsExternalSearch(query)) {
       searchPromises.push(
