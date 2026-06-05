@@ -12,14 +12,25 @@ async function run() {
   console.log('[migrate] Connecting to Railway Postgres...')
 
   await sql`
+    CREATE EXTENSION IF NOT EXISTS vector;
+  `
+  console.log('[migrate] ✓ vector extension')
+
+  await sql`
     CREATE TABLE IF NOT EXISTS tenants (
       id          TEXT PRIMARY KEY,
       name        TEXT NOT NULL,
       domain      TEXT,
-      created_at  TIMESTAMPTZ DEFAULT now()
+      created_at  TIMESTAMPTZ DEFAULT now(),
+      updated_at  TIMESTAMPTZ DEFAULT now()
     )
   `
   console.log('[migrate] ✓ tenants table')
+
+  await sql`
+    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
+  `
+  console.log('[migrate] ✓ tenants updated_at column check')
 
   await sql`
     CREATE TABLE IF NOT EXISTS hub_users (
@@ -120,6 +131,19 @@ async function run() {
     )
   `
   console.log('[migrate] ✓ entity_links table')
+
+  // Document Chunks Table (for pgvector semantic search)
+  await sql`
+    CREATE TABLE IF NOT EXISTS document_chunks (
+      id          TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id   TEXT NOT NULL REFERENCES tenants(id),
+      source_url  TEXT NOT NULL,
+      content     TEXT NOT NULL,
+      embedding   VECTOR(768),
+      created_at  TIMESTAMPTZ DEFAULT now() NOT NULL
+    )
+  `
+  console.log('[migrate] ✓ document_chunks table')
 
   // Seed rxfit tenant
   await sql`

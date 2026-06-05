@@ -6,16 +6,23 @@ import { createLogger } from './logger'
 
 const log = createLogger('vector-store')
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '')
+let genAI: GoogleGenerativeAI | null = null
+
+function getGenAI() {
+  if (!genAI) {
+    genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '')
+  }
+  return genAI
+}
 
 /**
  * Generate a 768-dimensional embedding using Gemini
  */
 export async function generateEmbedding(text: string): Promise<number[]> {
   try {
-    const model = genAI.getGenerativeModel({ model: 'gemini-embedding-001' })
+    const model = getGenAI().getGenerativeModel({ model: 'gemini-embedding-001' })
     const result = await model.embedContent({
-      content: text,
+      content: { parts: [{ text: text }] },
       outputDimensionality: 768,
     } as any)
     return result.embedding.values
