@@ -78,8 +78,8 @@ export async function POST(req: NextRequest) {
   // Auth guard — superadmin only
   const session = await getServerSession(authOptions)
   const userRole = (session?.user as Record<string, unknown>)?.role as string
-  if (userRole !== 'superadmin') {
-    return NextResponse.json({ error: 'Forbidden — superadmin required' }, { status: 403 })
+  if (userRole !== 'superadmin' && userRole !== 'admin') {
+    return NextResponse.json({ error: 'Forbidden — admin or superadmin required' }, { status: 403 })
   }
 
   let body: {
@@ -140,9 +140,17 @@ export async function POST(req: NextRequest) {
           role: template.role,
           instructions: template.instructions(companyName.trim()),
           canCreateAgents: template.canCreateAgents,
+          status: 'active',
           adapterType: 'gemini_local',
           adapterConfig: {
             baseUrl: 'https://rxfit-llm-proxy-6r2wdzwkoq-uc.a.run.app',
+            model: 'auto',
+          },
+          runtimeConfig: {
+            heartbeat: {
+              intervalSec: 86400,
+              enabled: true,
+            },
           },
           reportsTo: reportsToId,
         })
