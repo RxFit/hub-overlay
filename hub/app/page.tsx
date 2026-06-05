@@ -31,7 +31,7 @@ import {
   hasPermission,
   getRequiredPermission,
   isReadOnlyIntent,
-  isCeoRoutedIntent,
+  isHighStakesIntent,
 } from '@/lib/interview'
 import { RXFIT_COMPANY_ID, RXFIT_COO_AGENT_ID, PAPERCLIP_BASE_URL } from '@/lib/paperclipConfig'
 import type { InterviewState, ActionSpec, ChatAttachment, ActiveSkill } from '@/types'
@@ -811,13 +811,25 @@ I need more detail before this can execute safely. The weakest area is **${(fina
             }
 
             // ── PASSED — proceed with existing quality gate logic ──
-            if (isCeoRoutedIntent(spec.intent)) {
-              // CEO-routed: additional AI quality check for briefing richness
+            if (isHighStakesIntent(spec.intent)) {
+              // High-Stakes Pre-Cog Validation: AI verifies edge cases before generating Confirm Card
               const specSummary = Object.entries(spec.details)
                 .map(([k, v]) => `${k}: ${v}`)
                 .join('\n')
 
-              const evalPrompt = `You are evaluating whether a briefing for the Paperclip CEO Agent is sufficient. The user wants to: ${spec.summary}\n\nCollected details:\n${specSummary}\n\nIs this briefing detailed enough for the CEO Agent to take action? Consider:\n- Is the goal clear?\n- Is there enough context for the CEO to decide which agents to create?\n- Are success criteria defined?\n\nRespond with EXACTLY one of:\n1. "SUFFICIENT" if the brief is ready\n2. A single follow-up question if more context is needed (just the question, nothing else)`
+              const evalPrompt = `You are the Hub's Autonomous Strategic Validator (Pre-Cog).
+The user wants to execute a high-stakes action: ${spec.summary}
+Collected details:
+${specSummary}
+
+Evaluate this spec for critical edge cases based on the action type:
+- If this is an external communication (email, etc.): Are we ensuring idempotency? What happens if the target is missing? Is the brand voice defined?
+- If this is an automation / issue: Is the goal clear? Are success criteria defined? What happens if the trigger fails?
+- If this is a CEO handoff (create agent / launch campaign): Is there enough context for the CEO to decide which agents to create?
+
+Respond with EXACTLY one of:
+1. "SUFFICIENT" if the brief has no glaring holes or edge cases and is ready to execute safely.
+2. A single follow-up question if you identify an edge case, risk, or missing detail that the user MUST address before execution (e.g., "What should we do if the client doesn't have an email on file?"). Do not include any other text.`
 
               const thinkingId = crypto.randomUUID()
               setMessages(prev => [...prev, {

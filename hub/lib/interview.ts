@@ -610,11 +610,16 @@ export function isReadOnlyIntent(intent: InterviewIntent): boolean {
 }
 
 /**
- * Check if an intent should be routed through the CEO Agent via an Issue
- * instead of executing directly.
+ * Check if an intent is high-stakes (e.g., external comms, automations, or CEO handoffs).
+ * These intents are routed through the AI Quality Gate for Pre-Cog validation.
  */
-export function isCeoRoutedIntent(intent: InterviewIntent): boolean {
-  return intent === 'create_agent' || intent === 'launch_campaign'
+export function isHighStakesIntent(intent: InterviewIntent): boolean {
+  return (
+    intent === 'create_agent' || 
+    intent === 'launch_campaign' ||
+    intent === 'send_communication' ||
+    intent === 'create_paperclip_issue'
+  )
 }
 
 /**
