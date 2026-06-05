@@ -33,7 +33,7 @@ import {
   isReadOnlyIntent,
   isCeoRoutedIntent,
 } from '@/lib/interview'
-import { RXFIT_COMPANY_ID, RXFIT_COO_AGENT_ID } from '@/lib/paperclipConfig'
+import { RXFIT_COMPANY_ID, RXFIT_COO_AGENT_ID, PAPERCLIP_BASE_URL } from '@/lib/paperclipConfig'
 import type { InterviewState, ActionSpec, ChatAttachment, ActiveSkill } from '@/types'
 
 const CHAT_SUGGESTIONS = [
@@ -1136,8 +1136,11 @@ I need more detail before this can execute safely. The weakest area is **${(fina
           })
           if (!scIssueRes.ok) throw new Error(`Communication issue creation failed: ${scIssueRes.status}`)
           const scIssueData = await scIssueRes.json()
+          
+          const issueId = scIssueData.issue?.identifier || scIssueData.issue?.id || ''
+          const inboxUrl = `${PAPERCLIP_BASE_URL}/RXF/inbox/mine`
 
-          resultMsg = `✉️ **Communication Routed to COO Agent**\n\nIssue "${scIssueData.issue?.title || commTitle}" has been created and assigned to the COO. The agent will compose and send the message.\n\n▶ Track progress in the **Execution Feed** (right panel).`
+          resultMsg = `✉️ **Communication Routed to COO Agent**\n\nIssue **${issueId}** ("${scIssueData.issue?.title || commTitle}") has been created and assigned to the COO. The agent will compose and send the message.\n\n▶ Track progress in the **Execution Feed** (right panel) or view it directly in your [Paperclip Inbox](${inboxUrl}).`
           mutate('/api/feed')
           break
         }
@@ -1159,7 +1162,11 @@ I need more detail before this can execute safely. The weakest area is **${(fina
           })
           if (!res.ok) throw new Error(`Paperclip Issue creation failed: ${res.status}`)
           const data = await res.json()
-          resultMsg = `✅ **Agent Triggered!**\n\n"${data.issue?.title || issueTitle}" has been assigned to the CEO Agent. You can track progress in the Execution Feed.`
+          
+          const issueId = data.issue?.identifier || data.issue?.id || ''
+          const inboxUrl = `${PAPERCLIP_BASE_URL}/RXF/inbox/mine`
+          
+          resultMsg = `✅ **Agent Triggered!**\n\nIssue **${issueId}** ("${data.issue?.title || issueTitle}") has been assigned to the CEO Agent.\n\n▶ Track progress in the **Execution Feed** (right panel) or view it directly in your [Paperclip Inbox](${inboxUrl}).`
           
           // Force refresh the Right Panel feed immediately
           mutate('/api/feed')

@@ -406,6 +406,9 @@ function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => void }) {
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
   const [mobileView, setMobileView] = useState<'list' | 'thread'>('list')
+  const [isComposing, setIsComposing] = useState(false)
+  const [composeTo, setComposeTo] = useState('')
+  const [composeSubject, setComposeSubject] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -420,6 +423,7 @@ function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => void }) {
   }, [onUnreadCount])
 
   const openThread = async (id: string) => {
+    setIsComposing(false)
     setThreadLoading(true)
     setMobileView('thread')
     try {
@@ -430,6 +434,50 @@ function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => void }) {
       setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
     } catch {}
     setThreadLoading(false)
+  }
+
+  const handleComposeNew = () => {
+    setSelectedThread(null)
+    setIsComposing(true)
+    setComposeTo('')
+    setComposeSubject('')
+    setReply('')
+    setMobileView('thread')
+  }
+
+  const handleSendCompose = async () => {
+    if (!composeTo.trim() || !reply.trim()) return
+    setSending(true)
+    setSendError(null)
+    try {
+      const res = await fetch('/api/google/gmail', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: composeTo,
+          subject: composeSubject,
+          message: reply,
+        }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      
+      // Reset compose state
+      setIsComposing(false)
+      setComposeTo('')
+      setComposeSubject('')
+      setReply('')
+      setMobileView('list')
+      // Optimistically reload threads to see the new message
+      fetch('/api/google/gmail?view=inbox&maxResults=20')
+        .then(r => r.json())
+        .then(d => {
+          setThreads(d.threads ?? [])
+        })
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : 'Failed to send')
+    }
+    setSending(false)
   }
 
   const handleSend = async () => {
@@ -501,6 +549,24 @@ function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => void }) {
       }}
         className="chat-panel-spaces"
       >
+        <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
+          <button 
+            onClick={handleComposeNew}
+            style={{
+              width: '100%',
+              padding: '6px 12px',
+              background: 'var(--accent)',
+              color: '#000',
+              border: 'none',
+              borderRadius: '6px',
+              fontSize: '0.75rem',
+              fontWeight: 700,
+              cursor: 'pointer'
+            }}
+          >
+            + Compose
+          </button>
+        </div>
         {loading ? (
           [1,2,3,4,5].map(i => (
             <div key={i} style={{ padding: '12px', borderBottom: '1px solid var(--border)', opacity: 0.4 }}>
@@ -592,6 +658,60 @@ function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => void }) {
         {threadLoading ? (
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
             Loading…
+          </div>
+        ) : isComposing ? (
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '12px', gap: '12px' }}>
+            <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '8px' }}>
+              New Message
+            </div>
+            {sendError && (
+              <div style={{ padding: '6px 12px', color: 'var(--danger)', fontSize: '0.72rem', background: 'rgba(255,50,50,0.1)', borderRadius: '6px' }}>
+                ⚠️ {sendError}
+              </div>
+            )}
+            <input
+              value={composeTo}
+              onChange={e => setComposeTo(e.target.value)}
+              placeholder="To: email@address.com"
+              style={{
+                background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: '6px',
+                padding: '8px 12px', color: 'var(--text-primary)', fontSize: '0.8rem', outline: 'none'
+              }}
+            />
+            <input
+              value={composeSubject}
+              onChange={e => setComposeSubject(e.target.value)}
+              placeholder="Subject"
+              style={{
+                background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: '6px',
+                padding: '8px 12px', color: 'var(--text-primary)', fontSize: '0.8rem', outline: 'none'
+              }}
+            />
+            <textarea
+              value={reply}
+              onChange={e => setReply(e.target.value)}
+              placeholder="Write your message..."
+              style={{
+                background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: '6px',
+                padding: '12px', color: 'var(--text-primary)', fontSize: '0.8rem', outline: 'none',
+                flex: 1, resize: 'none'
+              }}
+            />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+              <button 
+                onClick={() => { setIsComposing(false); setMobileView('list') }}
+                style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-secondary)', padding: '6px 16px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.75rem' }}
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={handleSendCompose}
+                disabled={sending || !composeTo || !reply}
+                style={{ background: 'var(--accent)', border: 'none', color: '#000', padding: '6px 16px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600, opacity: (sending || !composeTo || !reply) ? 0.5 : 1 }}
+              >
+                {sending ? 'Sending...' : 'Send Message'}
+              </button>
+            </div>
           </div>
         ) : selectedThread ? (
           <>
