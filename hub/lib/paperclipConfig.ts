@@ -4,26 +4,29 @@
  *
  * RxFit Org: https://rxfit-paperclip-11747747730.us-central1.run.app
  * Local dev:  http://127.0.0.1:3100
+ *
+ * IDs updated 2026-06-04 from live Cloud Run audit by Antigravity.
  */
 
 export const PAPERCLIP_BASE_URL =
   process.env.PAPERCLIP_BASE_URL || 'https://rxfit-paperclip-11747747730.us-central1.run.app'
 
-/* ── RxFit AI Org — canonical IDs ── */
+/* ── RxFit AI Org — canonical IDs (Cloud Run) ── */
 /** The single RxFit company workspace in Paperclip. All issues route here. */
-export const RXFIT_COMPANY_ID = '406f1235-9de9-4e58-8388-9e6a4a32c227'
+export const RXFIT_COMPANY_ID = '829b2493-97ed-4cb9-8775-ff8298dcf650'
 
-/** CEO 2 — receives all inbound issues as orchestrator. */
-export const RXFIT_CEO_AGENT_ID = '2f515236-8b0c-4de4-b598-5f885d96a837'
+/** CEO — receives all inbound issues as orchestrator. */
+export const RXFIT_CEO_AGENT_ID = '82984f59-633e-4cdf-b8a1-d0499f6c226a'
 
-/** COO (General) — handles Austin operations, client comms, onboarding. */
-export const RXFIT_COO_AGENT_ID = '81b229dc-b383-4916-a783-38e252097412'
+/** COO — handles Austin operations, client comms, onboarding. */
+export const RXFIT_COO_AGENT_ID = '002a8e1c-9206-46a2-bf6e-4ffb46cbb254'
 
 /** CTO — platform, infrastructure, tech. */
-export const RXFIT_CTO_AGENT_ID = '62a78441-97ff-4795-91d8-7bcaf778ef74'
+export const RXFIT_CTO_AGENT_ID = '91873c35-2586-4623-bb78-23627d3c5ca9'
 
 /** CMO — growth, marketing, leads. */
-export const RXFIT_CMO_AGENT_ID = 'b5d6a9e5-c991-449a-8639-d5895b6b1dc4'
+export const RXFIT_CMO_AGENT_ID = '360e4642-135a-493d-b500-a532d23b3714'
 
 /** CFO — revenue, finance, MRR. */
-export const RXFIT_CFO_AGENT_ID = '871c1cd8-0c4a-4fef-89cd-d11f9afcad81'
+export const RXFIT_CFO_AGENT_ID = '4f4548b7-9f7d-458b-b4ec-3b373a0fff57'
+
