@@ -24,12 +24,6 @@ export interface TenantBrandColors {
   bgPrimary: string
 }
 
-export interface TenantProject {
-  id: string
-  name: string
-  abbr: string
-  color: string
-}
 
 export interface TenantConfig {
   id: string
@@ -44,7 +38,6 @@ export interface TenantConfig {
   kpiSheetRange?: string           // default 'KPIs!A2:D10'
   hubRolesSheetId?: string         // Hub Roles Google Sheet ID for role management
   roles: Record<string, RoleConfig>
-  projects: TenantProject[]
 }
 
 /* ── Default Role Configs ── */
@@ -121,14 +114,6 @@ export const TENANT_CONFIGS: Record<string, TenantConfig> = {
     kpiSheetRange: 'KPIs!A2:D10',
     hubRolesSheetId: process.env.HUB_ROLES_SHEET_ID,
     roles: { superadmin: SUPERADMIN_ROLE, admin: ADMIN_ROLE, staff: STAFF_ROLE, onboarding: ONBOARDING_ROLE },
-    projects: [
-      { id: 'rxfit',       name: 'RxFit',       abbr: 'RX', color: '#C5A059' },
-      { id: 'fridgesnap',  name: 'FridgeSnap',  abbr: 'FS', color: '#4A6FA5' },
-      { id: 'jadecoss',    name: 'JadeCoS',     abbr: 'JC', color: '#8a6e3e' },
-      { id: 'wellnessapp', name: 'WellnessApp', abbr: 'WA', color: '#d4b572' },
-      { id: 'notebookrx',  name: 'NotebookRx',  abbr: 'NR', color: '#9aa8c6' },
-      { id: 'seo-agent',   name: 'RxFit SEO',   abbr: 'SE', color: '#ef4444' },
-    ],
   },
 
   rosepop: {
@@ -148,12 +133,6 @@ export const TENANT_CONFIGS: Record<string, TenantConfig> = {
     kpiSheetRange: 'KPIs!A2:D10',
     hubRolesSheetId: process.env.HUB_ROLES_SHEET_ID,
     roles: { superadmin: SUPERADMIN_ROLE, admin: ADMIN_ROLE, staff: STAFF_ROLE, onboarding: ONBOARDING_ROLE },
-    projects: [
-      { id: 'events',     name: 'Events',      abbr: 'EV', color: '#E91E8C' },
-      { id: 'venues',     name: 'Venues',       abbr: 'VN', color: '#FF69B4' },
-      { id: 'vendors',    name: 'Vendors',      abbr: 'VD', color: '#B0156A' },
-      { id: 'marketing',  name: 'Marketing',    abbr: 'MK', color: '#FF1493' },
-    ],
   },
 }
 

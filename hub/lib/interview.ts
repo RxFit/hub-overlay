@@ -33,9 +33,9 @@ const INTENT_PERMISSIONS: Record<InterviewIntent, ActionPermission> = {
   launch_campaign: 'admin',
   restart_agent: 'admin',
   run_audit: 'admin',
-  // Superadmin-level (destructive)
-  create_workspace: 'superadmin',
-  delete_workspace: 'superadmin',
+  // Admin-level (workspace lifecycle)
+  create_workspace: 'admin',
+  delete_workspace: 'admin',
   delete_agent: 'superadmin',
 }
 
@@ -387,12 +387,21 @@ const INTERVIEW_SEQUENCES: Record<InterviewIntent, InterviewStep[]> = {
       key: 'name',
     },
     {
+      question: 'Issue prefix? This is a 2–5 letter abbreviation used for issue IDs (e.g., "RXF", "FSR", "JCS").',
+      key: 'issuePrefix',
+    },
+    {
+      question: 'Brand color? (hex code, e.g., "#C5A059" — or press Enter for default gold)',
+      key: 'brandColor',
+      defaultValue: '#C5A059',
+    },
+    {
       question: 'Agent template? (csuite = CEO+CMO+CTO+CFO+COO / ceo-only = just CEO)',
       key: 'template',
       defaultValue: 'csuite',
     },
     {
-      question: '🔒 This requires superadmin privileges. I\'ll create the workspace and seed the agents. Confirm? (yes / cancel)',
+      question: '🔒 This requires admin privileges. I\'ll create the workspace and seed the agents. Confirm? (yes / cancel)',
       key: '_confirm',
     },
   ],

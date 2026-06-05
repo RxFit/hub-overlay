@@ -63,9 +63,9 @@ You are the master orchestrator for the Paperclip AI platform. Through Interview
 - Create new AI agents with custom instructions
 - Restart agents that are in error state
 - Run workspace audits
+- Create/delete entire workspaces with agent templates
 
 **Superadmin Actions** (superadmin only):
-- Create/delete entire workspaces with agent templates
 - Delete agents permanently
 
 When a user requests any of these, activate Interview Mode to collect the details.
@@ -157,8 +157,8 @@ Question sequences by intent:
 • create_agent: Which project? → Name? → Instructions? → Confirm
 • restart_agent: Which project? → Which agent? → Confirm
 • run_audit: Which project? → Scope? → Confirm
-• create_workspace: Name? → Template? → Confirm (🔒 superadmin)
-• delete_workspace: Name? → Type name to confirm → Final confirm (🔴 destructive)
+• create_workspace: Name? → Issue Prefix? → Brand Color? → Template? → Confirm (🔒 admin+)
+• delete_workspace: Name? → Type name to confirm → Final confirm (🔴 destructive, admin+)
 • delete_agent: Project? → Agent? → Type name to confirm → Final confirm (🔴 destructive)
 
 `

@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { useSession, signOut } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { getTenantConfig } from '@/lib/tenant'
+import { useCompanies } from '@/app/hooks/useCompanies'
+import type { Company } from '@/types'
 
 const tenant = getTenantConfig()
 
@@ -47,6 +49,7 @@ export default function AdminPage() {
   const [rows, setRows] = useState<RowState[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const { companies } = useCompanies()
 
   // Redirect non-admins
   useEffect(() => {
@@ -182,8 +185,8 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* Superadmin: New Workspace Provisioner */}
-        {callerRole === 'superadmin' && (
+        {/* Workspace Provisioner — admin+ */}
+        {(callerRole === 'superadmin' || callerRole === 'admin') && (
           <WorkspaceProvisioner />
         )}
 
@@ -224,7 +227,7 @@ export default function AdminPage() {
               rows={onboardingUsers}
               roleOptions={roleOptions}
               callerRole={callerRole}
-              projects={tenant.projects}
+              projects={companies}
               onRoleChange={(email, role) => setRows(prev => prev.map(r => r.email === email ? { ...r, pendingRole: role } : r))}
               onProjectToggle={(email, pid) => setRows(prev => prev.map(r => {
                 if (r.email !== email) return r
@@ -252,7 +255,7 @@ export default function AdminPage() {
               rows={assignedUsers}
               roleOptions={roleOptions}
               callerRole={callerRole}
-              projects={tenant.projects}
+              projects={companies}
               onRoleChange={(email, role) => setRows(prev => prev.map(r => r.email === email ? { ...r, pendingRole: role } : r))}
               onProjectToggle={(email, pid) => setRows(prev => prev.map(r => {
                 if (r.email !== email) return r
@@ -282,7 +285,7 @@ function UserTable({
   rows: RowState[]
   roleOptions: RoleOption[]
   callerRole: string
-  projects: { id: string; name: string; abbr: string; color: string }[]
+  projects: Company[]
   onRoleChange: (email: string, role: string) => void
   onProjectToggle: (email: string, projectId: string) => void
   onSave: (email: string) => void
@@ -344,16 +347,17 @@ function UserTable({
                   <div className="admin-projects__chips">
                     {projects.map(p => {
                       const selected = row.pendingProjects.includes(p.id) || row.pendingProjects.includes('*')
+                      const abbr = p.identifier?.slice(0, 2).toUpperCase() ?? p.id.slice(0, 2).toUpperCase()
                       return (
                         <button
                           key={p.id}
                           className={`admin-project-chip ${selected ? 'admin-project-chip--active' : ''}`}
-                          style={selected ? { borderColor: p.color, background: p.color + '22', color: p.color } : {}}
+                          style={selected ? { borderColor: 'var(--accent)', background: 'var(--accent-glow)', color: 'var(--accent)' } : {}}
                           onClick={() => onProjectToggle(row.email, p.id)}
                           aria-pressed={selected}
                           aria-label={`${selected ? 'Remove' : 'Add'} ${p.name}`}
                         >
-                          {p.abbr}
+                          {abbr}
                         </button>
                       )
                     })}

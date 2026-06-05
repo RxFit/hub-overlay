@@ -1531,13 +1531,16 @@ Respond with EXACTLY one of:
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              name: spec.details.name,
-              template: spec.details.template || 'csuite',
+              companyName: spec.details.name,
+              issuePrefix: spec.details.issuePrefix || spec.details.name?.slice(0, 3).toUpperCase() || 'NEW',
+              brandColor: spec.details.brandColor || '#C5A059',
+              agentTemplate: spec.details.template || 'csuite',
             }),
           })
           if (!res.ok) throw new Error(`Workspace creation failed: ${res.status}`)
           const data = await res.json()
-          resultMsg = `✅ **Workspace Created**\n\n"${data.company?.name || spec.details.name}" has been provisioned with ${spec.details.template === 'ceo-only' ? 'a CEO agent' : 'the full C-Suite (CEO, CMO, CTO, CFO, COO)'}.`
+          resultMsg = `✅ **Workspace Created**\n\n"${data.companyName || spec.details.name}" [${data.issuePrefix || spec.details.issuePrefix}] has been provisioned with ${spec.details.template === 'ceo-only' ? 'a CEO agent' : 'the full C-Suite (CEO, CMO, CTO, CFO, COO)'}.\n\n🔄 The project dropdown has been updated.`
+          mutate('/api/companies')  // Instant dropdown refresh
           mutate('/api/feed')
           break
         }
@@ -1564,7 +1567,8 @@ Respond with EXACTLY one of:
           })
           if (!dwRes.ok) throw new Error(`Workspace deletion failed: ${dwRes.status}`)
 
-          resultMsg = `🗑️ **Workspace Deleted**\n\n"${spec.details.name}" and all its agents, issues, and data have been permanently removed.`
+          resultMsg = `🗑️ **Workspace Deleted**\n\n"${spec.details.name}" and all its agents, issues, and data have been permanently removed.\n\n🔄 The project dropdown has been updated.`
+          mutate('/api/companies')  // Instant dropdown refresh
           mutate('/api/feed')
           break
         }
