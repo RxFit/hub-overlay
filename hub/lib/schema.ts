@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, uniqueIndex, jsonb, integer } from 'drizzle-orm/pg-core'
+import { pgTable, text, timestamp, uniqueIndex, jsonb, integer, vector } from 'drizzle-orm/pg-core'
 
 /**
  * Hub database schema — Railway Postgres
@@ -104,4 +104,15 @@ export const entityLinks = pgTable('entity_links', {
   targetId:    text('target_id').notNull(),
   label:       text('label'),                 // Optional context for the edge (e.g., "mentioned in")
   createdAt:   timestamp('created_at').defaultNow().notNull(),
+})
+
+/* ── Vector Embeddings (Semantic Search via pgvector) ────────────────────── */
+
+export const documentChunks = pgTable('document_chunks', {
+  id:         text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+  tenantId:   text('tenant_id').notNull().references(() => tenants.id),
+  sourceUrl:  text('source_url').notNull(),                        // Link to Google Doc/Email
+  content:    text('content').notNull(),                           // The raw text chunk
+  embedding:  vector('embedding', { dimensions: 1536 }),           // e.g. OpenAI text-embedding-3-small
+  createdAt:  timestamp('created_at').defaultNow().notNull(),
 })

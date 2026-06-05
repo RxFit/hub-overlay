@@ -61,135 +61,109 @@ export function getRequiredPermission(intent: InterviewIntent): ActionPermission
   return INTENT_PERMISSIONS[intent]
 }
 
-/* ── Intent Detection ── */
+/* ── Intent Definitions ── */
 
-const INTENT_PATTERNS: Array<{ intent: InterviewIntent; patterns: RegExp[] }> = [
+const INTENT_DEFINITIONS: Array<{ id: InterviewIntent; description: string; expectedEntities: string[] }> = [
   {
-    intent: 'create_task',
-    patterns: [
-      /\b(create|add|make|need to|let'?s|we should|i want to)\b.*\b(task|todo|item|ticket)\b/i,
-      /\b(assign|delegate)\b.*\b(to|for)\b/i,
-      /\badd a task\b/i,
-    ],
+    id: 'create_task',
+    description: 'User wants to create, add, or delegate a new task, todo item, or ticket.',
+    expectedEntities: ['description'],
   },
   {
-    intent: 'schedule_event',
-    patterns: [
-      /\b(schedule|book|set up|plan|arrange)\b.*\b(meeting|event|call|session|appointment|sync)\b/i,
-      /\b(block|reserve)\b.*\b(time|slot|calendar)\b/i,
-      /\bput.*on.*calendar\b/i,
-    ],
+    id: 'schedule_event',
+    description: 'User wants to schedule, book, or set up a meeting or calendar event.',
+    expectedEntities: ['details'],
   },
   {
-    intent: 'send_communication',
-    patterns: [
-      /\b(send|draft|write|compose)\b.*\b(email|message|slack|notification|memo|update)\b/i,
-      /\b(notify|alert|inform|reach out)\b/i,
-      /\blet.*know\b/i,
-    ],
+    id: 'send_communication',
+    description: 'User wants to send, draft, or compose a communication like an email, slack, or memo.',
+    expectedEntities: ['details'],
   },
   {
-    intent: 'create_paperclip_issue',
-    patterns: [
-      /\b(run|start|trigger|ask)\b.*\b(agent|paperclip|ai|bot)\b/i,
-      /\b(audit|analyze|research)\b.*\b(codebase|metrics|data)\b/i,
-      /\bcreate\b.*\b(issue)\b/i,
-    ],
-  },
-  // Phase 3: Paperclip orchestrator intents
-  {
-    intent: 'check_agent_status',
-    patterns: [
-      /\b(check|show|what'?s|how'?s|status of|get)\b.*\b(agent|agents|bot|bots)\b/i,
-      /\bagent.*(status|state|health|running|error)\b/i,
-      /\b(who|which).*agents?.*\b(running|active|idle|error)\b/i,
-    ],
+    id: 'create_paperclip_issue',
+    description: 'User wants to run an agent, audit the codebase, or trigger a Paperclip AI issue.',
+    expectedEntities: ['description'],
   },
   {
-    intent: 'view_runs',
-    patterns: [
-      /\b(show|list|view|get|recent)\b.*\b(runs|executions|history|logs)\b/i,
-      /\b(what|which).*\b(ran|executed|completed|failed)\b/i,
-      /\brun history\b/i,
-    ],
+    id: 'check_agent_status',
+    description: 'User wants to check the status or health of one or more agents.',
+    expectedEntities: ['project', 'agent'],
   },
   {
-    intent: 'assign_issue',
-    patterns: [
-      /\b(assign|reassign|give|hand off|transfer)\b.*\b(issue|task|ticket)\b.*\b(to|agent)\b/i,
-      /\b(move|switch)\b.*\b(issue)\b.*\b(to)\b/i,
-    ],
+    id: 'view_runs',
+    description: 'User wants to view recent execution history or runs for an agent.',
+    expectedEntities: ['project', 'timeRange'],
   },
   {
-    intent: 'update_issue_state',
-    patterns: [
-      /\b(close|complete|resolve|reopen|start|begin)\b.*\b(issue|task|ticket)\b/i,
-      /\b(mark|set)\b.*\b(issue|task)\b.*\b(as|to)\b.*\b(done|complete|closed|open|in.?progress)\b/i,
-      /\b(update|change)\b.*\b(status|state)\b.*\b(issue|task)\b/i,
-    ],
+    id: 'assign_issue',
+    description: 'User wants to reassign an existing issue or task to a different agent or person.',
+    expectedEntities: ['issueRef', 'agent'],
   },
   {
-    intent: 'create_agent',
-    patterns: [
-      /\b(create|add|make|spin up|provision)\b.*\b(agent|bot)\b/i,
-      /\bnew agent\b/i,
-    ],
+    id: 'update_issue_state',
+    description: 'User wants to close, reopen, or change the status of an existing issue.',
+    expectedEntities: ['issueRef', 'newState'],
   },
   {
-    intent: 'launch_campaign',
-    patterns: [
-      /\b(launch|start|create|build|run)\b.*\b(campaign|strategy|initiative|program)\b/i,
-      /\b(content|blog|seo|marketing|social media|email)\b.*\b(campaign|strategy|plan|initiative)\b/i,
-      /\b(need|want)\b.*\b(copywriter|keyword|seo|content writer|marketing team)\b/i,
-      /\bmulti.?agent\b/i,
-    ],
+    id: 'create_agent',
+    description: 'User wants to spin up, provision, or create a new AI agent or bot role.',
+    expectedEntities: ['project', 'agentName', 'instructions'],
   },
   {
-    intent: 'restart_agent',
-    patterns: [
-      /\b(restart|reboot|reset|wake up|kick)\b.*\b(agent|bot)\b/i,
-      /\bagent.*(restart|reboot|reset)\b/i,
-    ],
+    id: 'launch_campaign',
+    description: 'User wants to launch a multi-agent campaign, marketing strategy, or initiative.',
+    expectedEntities: ['campaignGoal', 'project', 'suggestedRoles', 'constraints'],
   },
   {
-    intent: 'run_audit',
-    patterns: [
-      /\b(run|start|trigger|do)\b.*\b(audit|health.?check|diagnostic|scan)\b/i,
-      /\baudit\b.*\b(project|workspace|company|agents?)\b/i,
-    ],
+    id: 'restart_agent',
+    description: 'User wants to restart, reboot, or reset an AI agent.',
+    expectedEntities: ['project', 'agent'],
   },
   {
-    intent: 'create_workspace',
-    patterns: [
-      /\b(create|add|make|provision|set up)\b.*\b(workspace|company|organization|project)\b/i,
-      /\bnew (workspace|company|org)\b/i,
-    ],
+    id: 'run_audit',
+    description: 'User wants to run a health check, scan, or full audit on a workspace or project.',
+    expectedEntities: ['project', 'scope'],
   },
   {
-    intent: 'delete_workspace',
-    patterns: [
-      /\b(delete|remove|destroy|tear down|decommission)\b.*\b(workspace|company|organization)\b/i,
-    ],
+    id: 'create_workspace',
+    description: 'User wants to create or provision a new workspace, organization, or project.',
+    expectedEntities: ['name', 'issuePrefix', 'brandColor', 'template'],
   },
   {
-    intent: 'delete_agent',
-    patterns: [
-      /\b(delete|remove|destroy|decommission|kill)\b.*\b(agent|bot)\b/i,
-    ],
+    id: 'delete_workspace',
+    description: 'User wants to permanently delete or tear down a workspace.',
+    expectedEntities: ['name'],
+  },
+  {
+    id: 'delete_agent',
+    description: 'User wants to permanently delete or decommission an agent.',
+    expectedEntities: ['project', 'agent'],
   },
 ]
 
 /**
  * Detect whether a user message contains an actionable intent
- * that should trigger Interview Mode.
+ * that should trigger Interview Mode via Semantic classification API.
  */
-export function detectIntent(message: string): InterviewIntent | null {
-  for (const { intent, patterns } of INTENT_PATTERNS) {
-    if (patterns.some((p) => p.test(message))) {
-      return intent
+export async function detectIntent(message: string): Promise<{ intent: InterviewIntent | null; extractedEntities: Record<string, string> }> {
+  try {
+    const res = await fetch('/api/chat/detect-intent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, availableIntents: INTENT_DEFINITIONS }),
+    })
+    if (!res.ok) return { intent: null, extractedEntities: {} }
+    const data = await res.json()
+    // Validate that the returned intent is one of the valid InterviewIntents
+    const validIntent = INTENT_DEFINITIONS.find(d => d.id === data.intent)
+    if (validIntent) {
+      return { intent: data.intent as InterviewIntent, extractedEntities: data.extractedEntities || {} }
     }
+    return { intent: null, extractedEntities: {} }
+  } catch (err) {
+    console.error('detectIntent error:', err)
+    return { intent: null, extractedEntities: {} }
   }
-  return null
 }
 
 /* ── Question Sequences ── */
@@ -471,17 +445,45 @@ export function getTotalQuestions(intent: InterviewIntent): number {
 /* ── Interview State Management ── */
 
 /**
+ * Fast-forward the interview past any questions that already have answers in the context.
+ */
+function fastForwardInterview(state: InterviewState): InterviewState {
+  if (!state.active || !state.intent) return state
+  const steps = INTERVIEW_SEQUENCES[state.intent]
+  let currentStepIndex = state.step
+
+  while (currentStepIndex < steps.length) {
+    const currentStep = steps[currentStepIndex]
+    // If we have a non-empty answer for this step's key, skip it
+    if (state.context[currentStep.key] && state.context[currentStep.key].trim() !== '') {
+      currentStepIndex++
+    } else {
+      break
+    }
+  }
+
+  const isComplete = currentStepIndex >= steps.length
+  return {
+    ...state,
+    step: currentStepIndex,
+    active: !isComplete,
+    spec: isComplete ? buildConfirmationSpec(state.intent, state.context) : state.spec,
+  }
+}
+
+/**
  * Create a fresh InterviewState for a detected intent.
  */
-export function startInterview(intent: InterviewIntent): InterviewState {
-  return {
+export function startInterview(intent: InterviewIntent, prefilledContext?: Record<string, string>): InterviewState {
+  const initialState: InterviewState = {
     active: true,
     intent,
     step: 0,
     questionsAsked: 0,
-    context: {},
+    context: prefilledContext || {},
     spec: null,
   }
+  return fastForwardInterview(initialState)
 }
 
 /**
@@ -502,17 +504,14 @@ export function advanceInterview(
     [currentStep.key]: answer || currentStep.defaultValue || '',
   }
 
-  const nextStep = state.step + 1
-  const isComplete = nextStep >= steps.length
-
-  return {
+  const nextState: InterviewState = {
     ...state,
-    step: nextStep,
+    step: state.step + 1,
     questionsAsked: state.questionsAsked + 1,
     context: updatedContext,
-    spec: isComplete ? buildConfirmationSpec(state.intent, updatedContext) : null,
-    active: !isComplete,
   }
+
+  return fastForwardInterview(nextState)
 }
 
 /**

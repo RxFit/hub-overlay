@@ -688,34 +688,57 @@ export default function HubPage() {
       const updated = [...prev, newMessage]
 
       // Check if message triggers interview mode (disabled for onboarding users)
-      const intent = canUseInterviewMode ? detectIntent(message) : null
-      if (intent && !interviewState?.active) {
-        // Role gating: check if user has permission for this intent
-        if (!hasPermission(userRole, intent)) {
-          const required = getRequiredPermission(intent)
-          const deniedMsg: ChatMsg = {
-            id: crypto.randomUUID(),
-            role: 'assistant' as const,
-            content: `🔒 **Permission Denied**\n\nThis action requires **${required}** privileges. Your current role is **${userRole}**.\n\nPlease contact an administrator if you need elevated access.`,
-            timestamp: new Date().toISOString(),
-          }
-          return [...updated, deniedMsg]
-        }
+      if (canUseInterviewMode && !interviewState?.active) {
+        // Kick off async intent detection without blocking the UI rendering of the user message
+        detectIntent(message).then(({ intent, extractedEntities }) => {
+          if (intent) {
+            // Role gating: check if user has permission for this intent
+            if (!hasPermission(userRole, intent)) {
+              const required = getRequiredPermission(intent)
+              const deniedMsg: ChatMsg = {
+                id: crypto.randomUUID(),
+                role: 'assistant' as const,
+                content: `🔒 **Permission Denied**\n\nThis action requires **${required}** privileges. Your current role is **${userRole}**.\n\nPlease contact an administrator if you need elevated access.`,
+                timestamp: new Date().toISOString(),
+              }
+              setMessages(prevMsgs => [...prevMsgs, deniedMsg])
+              return
+            }
 
-        const newState = startInterview(intent)
-        setInterviewState(newState)
-        
-        const question = getCurrentQuestion(newState)
-        if (question) {
-          const totalQ = getTotalQuestions(intent)
-          const introMsg: ChatMsg = {
-            id: crypto.randomUUID(),
-            role: 'assistant' as const,
-            content: `✦ **Interview Mode Activated**\n\nI need to understand this fully before we proceed. I'll ask you ${totalQ} quick questions.\n\n**Question 1 of ${totalQ}:**\n${question.question}${question.defaultValue ? `\n\n_Default: ${question.defaultValue}_` : ''}`,
-            timestamp: new Date().toISOString(),
+            const newState = startInterview(intent, extractedEntities)
+            setInterviewState(newState)
+            
+            // If the state is still active, it means we have unanswered questions.
+            if (newState.active) {
+              const question = getCurrentQuestion(newState)
+              if (question) {
+                const totalQ = getTotalQuestions(intent)
+                const introMsg: ChatMsg = {
+                  id: crypto.randomUUID(),
+                  role: 'assistant' as const,
+                  content: `✦ **Interview Mode Activated**\n\nI need to understand this fully before we proceed. I'll ask you ${totalQ} quick questions.\n\n**Question 1 of ${totalQ}:**\n${question.question}${question.defaultValue ? `\n\n_Default: ${question.defaultValue}_` : ''}`,
+                  timestamp: new Date().toISOString(),
+                }
+                setMessages(prevMsgs => [...prevMsgs, introMsg])
+              }
+            } else if (newState.spec) {
+               // Power user provided all info, skip directly to confirm.
+               const followUpMsg: ChatMsg = {
+                id: crypto.randomUUID(),
+                role: 'assistant' as const,
+                content: `Thanks. I've drafted the action specification below for your review.`,
+                timestamp: new Date().toISOString(),
+              }
+              setMessages(prevMsgs => [...prevMsgs, followUpMsg])
+            }
+          } else {
+            // No intent detected, just send to normal chat API
+            sendToApi(fullMessage, updated, activeSkill ? 'deep_dive' : 'deep_dive', msgAttachments)
           }
-          return [...updated, introMsg]
-        }
+        }).catch(() => {
+          sendToApi(fullMessage, updated, activeSkill ? 'deep_dive' : 'deep_dive', msgAttachments)
+        })
+
         return updated
       }
 
@@ -753,43 +776,20 @@ export default function HubPage() {
         }
 
         if (!nextState.active && nextState.spec) {
-          // Interview answers collected — but check context score gate before showing confirm card
+          // Interview answers collected — show confirm card immediately to prevent latency.
+          // The background Context Sufficiency Score check may still be running (isScoring=true).
+          // If it resolves <80%, the UI will handle it asynchronously.
           const runQualityGate = async (spec: typeof nextState.spec) => {
             if (!spec) return
 
-            // Always re-score at completion with Gemini to get the definitive verdict
+            // Trust the real-time contextScore and contextWeakDim
             let finalScore = contextScore ?? 80
             let finalWeak: string | null = contextWeakDim
             let followUpQuestion: string | null = null
 
-            try {
-              setIsScoring(true)
-              const scoreRes = await fetch('/api/chat/score-context', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  intent: spec.intent,
-                  context: spec.details,
-                  currentStep: nextState.step,
-                  totalSteps: getTotalQuestions(spec.intent),
-                }),
-              })
-              const scoreResult = await scoreRes.json()
-              if (typeof scoreResult.score === 'number') {
-                finalScore = scoreResult.score
-                finalWeak = scoreResult.weakDimension ?? null
-                followUpQuestion = scoreResult.followUpQuestion ?? null
-                setContextScore(finalScore)
-                setContextWeakDim(finalWeak)
-              }
-            } catch {
-              // Fail open — gate passes on error
-              finalScore = 80
-            } finally {
-              setIsScoring(false)
-            }
-
-            if (finalScore < 80 && followUpQuestion) {
+            // If we already know the score is < 80, handle it directly.
+            // If the score is still processing, the Confirm Card UI itself will show a "Validating..." state and block approval until ready.
+            if (finalScore < 80) {
               // ── BLOCKED — context insufficient ──
               // Re-activate interview for a follow-up question, don't show confirm card
               setInterviewState({

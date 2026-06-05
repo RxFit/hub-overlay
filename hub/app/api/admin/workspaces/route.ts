@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { getPaperclipAuthHeaders, clearPaperclipSession } from '@/lib/paperclipSession'
-import { PAPERCLIP_BASE_URL } from '@/lib/paperclipConfig'
+import { paperclipFetch } from '@/lib/paperclip'
+import { recordEvent } from '@/lib/event-logger'
 
-const PAPERCLIP_BASE = PAPERCLIP_BASE_URL
 
 // Standard C-Suite agent template — seeded for every new workspace
 const AGENT_TEMPLATES = [
@@ -45,34 +44,8 @@ const AGENT_TEMPLATES = [
   },
 ]
 
-/**
- * Shared Paperclip POST helper using session auth.
- * Replaces the old paperclipPost that used Bearer API key auth.
- */
-async function paperclipPost(path: string, body: object) {
-  const authHeaders = await getPaperclipAuthHeaders()
+// Custom paperclipPost deprecated in favor of shared hardened paperclipFetch
 
-  const res = await fetch(`${PAPERCLIP_BASE}${path}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Origin: PAPERCLIP_BASE,
-      ...authHeaders,
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(10_000),
-  })
-
-  if (!res.ok) {
-    // On 401, clear session so next request re-authenticates
-    if (res.status === 401) {
-      clearPaperclipSession()
-    }
-    const text = await res.text().catch(() => `HTTP ${res.status}`)
-    throw new Error(`Paperclip API ${res.status}: ${text}`)
-  }
-  return res.json()
-}
 
 export async function POST(req: NextRequest) {
   // Auth guard — superadmin only
@@ -113,10 +86,13 @@ export async function POST(req: NextRequest) {
 
   // 1. Create company in Paperclip
   try {
-    const companyRes = await paperclipPost('/api/companies', {
-      name: companyName.trim(),
-      identifier: issuePrefix.trim().toUpperCase(),
-      description: `${companyName} workspace — provisioned via Hub Admin Panel`,
+    const companyRes = await paperclipFetch<any>('/api/companies', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: companyName.trim(),
+        identifier: issuePrefix.trim().toUpperCase(),
+        description: `${companyName} workspace — provisioned via Hub Admin Panel`,
+      }),
     })
     results.company = companyRes.company ?? companyRes
     const companyId = (results.company as Record<string, string>).id
@@ -135,24 +111,27 @@ export async function POST(req: NextRequest) {
           ? createdAgents[template.reportingRole] ?? null
           : null
 
-        const agentRes = await paperclipPost(`/api/companies/${companyId}/agents`, {
-          name: template.name(companyName.trim()),
-          role: template.role,
-          instructions: template.instructions(companyName.trim()),
-          canCreateAgents: template.canCreateAgents,
-          status: 'active',
-          adapterType: 'gemini_local',
-          adapterConfig: {
-            baseUrl: 'https://rxfit-llm-proxy-6r2wdzwkoq-uc.a.run.app',
-            model: 'auto',
-          },
-          runtimeConfig: {
-            heartbeat: {
-              intervalSec: 86400,
-              enabled: true,
+        const agentRes = await paperclipFetch<any>(`/api/companies/${companyId}/agents`, {
+          method: 'POST',
+          body: JSON.stringify({
+            name: template.name(companyName.trim()),
+            role: template.role,
+            instructions: template.instructions(companyName.trim()),
+            canCreateAgents: template.canCreateAgents,
+            status: 'active',
+            adapterType: 'gemini_local',
+            adapterConfig: {
+              baseUrl: 'https://rxfit-llm-proxy-6r2wdzwkoq-uc.a.run.app',
+              model: 'auto',
             },
-          },
-          reportsTo: reportsToId,
+            runtimeConfig: {
+              heartbeat: {
+                intervalSec: 86400,
+                enabled: true,
+              },
+            },
+            reportsTo: reportsToId,
+          }),
         })
         const agent = agentRes.agent ?? agentRes
         createdAgents[template.role] = agent.id
@@ -162,6 +141,18 @@ export async function POST(req: NextRequest) {
         results.errors.push(msg)
       }
     }
+
+    await recordEvent({
+      eventType: 'workspace.provisioned',
+      actor: `hub-user:${session?.user?.email || 'admin'}`,
+      resourceType: 'company',
+      resourceId: companyId,
+      payload: {
+        companyName,
+        issuePrefix,
+        agentsSeededCount: results.agents.length,
+      },
+    })
 
     return NextResponse.json({
       success: true,

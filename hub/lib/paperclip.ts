@@ -29,7 +29,7 @@ const PAPERCLIP_BASE = PAPERCLIP_BASE_URL
  * - Zod schema validation on responses
  * - 10s timeout on all requests
  */
-async function paperclipFetch<T>(
+export async function paperclipFetch<T>(
   path: string,
   opts?: RequestInit,
   schema?: ZodType<T>,
