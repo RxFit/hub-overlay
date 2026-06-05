@@ -4,22 +4,26 @@
  * Authenticates to Paperclip Cloud Run via email/password sign-in
  * and caches the session cookie for subsequent API calls.
  *
- * This replaces the API key auth (sk_pc_*) which requires manual
- * key generation in the Paperclip web UI. Session auth uses the
- * same credentials as the sync-railway-to-cloudrun.ps1 script.
- *
  * HARDENING:
  *  - Mutex prevents thundering-herd sign-in storms (F1)
  *  - No hardcoded credential fallbacks (F3)
  *  - API key kept as fallback if session auth fails entirely
+ *  - Circuit breaker prevents hammering a down auth endpoint
+ *  - Retry with backoff on transient sign-in failures
  */
+
+import { createLogger } from '@/lib/logger'
+import { breaker } from '@/lib/circuit-breaker'
+import { withRetry } from '@/lib/retry'
+
+const log = createLogger('paperclipSession')
 
 const PAPERCLIP_BASE = process.env.PAPERCLIP_BASE_URL ?? ''
 const PAPERCLIP_EMAIL = process.env.PAPERCLIP_AUTH_EMAIL ?? ''
 const PAPERCLIP_PASSWORD = process.env.PAPERCLIP_AUTH_PASSWORD ?? ''
 
 if (!PAPERCLIP_BASE) {
-  console.error('[paperclipSession] PAPERCLIP_BASE_URL is not set')
+  log.error('PAPERCLIP_BASE_URL is not set')
 }
 
 // Session cookie cache
@@ -48,7 +52,9 @@ async function signIn(): Promise<string> {
   }
 
   // Start the sign-in and store the promise so concurrent callers share it
-  signInPromise = doSignIn()
+  signInPromise = breaker.execute('paperclip-auth', () =>
+    withRetry(() => doSignIn(), { maxAttempts: 2, baseMs: 1000 }),
+  )
 
   try {
     const result = await signInPromise
@@ -84,14 +90,12 @@ async function doSignIn(): Promise<string> {
   }
 
   // Extract session cookie from Set-Cookie header
-  // getSetCookie() is available in Node >= 18.15 (undici-based fetch)
   const setCookieHeaders = res.headers.getSetCookie?.() ?? []
 
   // Fallback for environments where getSetCookie isn't available
   if (setCookieHeaders.length === 0) {
     const raw = res.headers.get('set-cookie')
     if (raw) {
-      // Split on comma-space but be careful not to split cookie values
       setCookieHeaders.push(...raw.split(/,(?=\s*\w+=)/))
     }
   }
@@ -102,11 +106,11 @@ async function doSignIn(): Promise<string> {
     .join('; ')
 
   if (!sessionCookie) {
-    // Fallback: use all cookies if no session_token found
     const allCookies = setCookieHeaders.map((h) => h.split(';')[0].trim()).join('; ')
     if (allCookies) {
       cachedCookie = allCookies
       cookieExpiresAt = Date.now() + 6 * 24 * 60 * 60 * 1000 // 6 days
+      log.info('Session established (fallback cookies)')
       return cachedCookie
     }
     throw new Error('Paperclip sign-in succeeded but no session cookie returned')
@@ -114,6 +118,7 @@ async function doSignIn(): Promise<string> {
 
   cachedCookie = sessionCookie
   cookieExpiresAt = Date.now() + 6 * 24 * 60 * 60 * 1000 // 6 days
+  log.info('Session established')
   return cachedCookie
 }
 
@@ -124,17 +129,15 @@ async function doSignIn(): Promise<string> {
 export async function getPaperclipAuthHeaders(): Promise<Record<string, string>> {
   const PAPERCLIP_KEY = process.env.PAPERCLIP_API_KEY || ''
 
-  // If session credentials are configured, use session auth
   if (PAPERCLIP_EMAIL && PAPERCLIP_PASSWORD) {
     try {
       const cookie = await signIn()
       return { Cookie: cookie }
     } catch (err) {
-      console.warn('[paperclipSession] Session auth failed, falling back to API key:', err)
+      log.warn({ err }, 'Session auth failed, falling back to API key')
     }
   }
 
-  // Fallback to API key
   if (PAPERCLIP_KEY) {
     return { Authorization: `Bearer ${PAPERCLIP_KEY}` }
   }
@@ -150,4 +153,5 @@ export async function getPaperclipAuthHeaders(): Promise<Record<string, string>>
 export function clearPaperclipSession(): void {
   cachedCookie = null
   cookieExpiresAt = 0
+  log.info('Session cleared')
 }

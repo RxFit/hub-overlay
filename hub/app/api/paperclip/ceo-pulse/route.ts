@@ -1,8 +1,11 @@
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
+import { createLogger } from '@/lib/logger'
 import { getCompanies, getAgents, getIssues, getRuns } from '@/lib/paperclip'
 import type { CEOPulseRecord, DepartmentPulse, DepartmentHealth, AgentRoleKey, Agent, Run } from '@/types'
+
+const log = createLogger('paperclip/ceo-pulse')
 
 export const runtime = 'nodejs'
 
@@ -183,7 +186,7 @@ export async function GET(req: Request) {
 
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Failed to generate CEO pulse'
-    console.error('[API] GET /api/paperclip/ceo-pulse error:', error)
+    log.error({ err: error }, 'CEO pulse generation failed')
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }

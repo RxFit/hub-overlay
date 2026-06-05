@@ -1,6 +1,9 @@
 import { drizzle } from 'drizzle-orm/postgres-js'
 import postgres from 'postgres'
 import * as schema from './schema'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('db')
 
 /**
  * Singleton Drizzle client for Railway Postgres.
@@ -16,6 +19,7 @@ function getDb() {
   if (!url) throw new Error('[db] DATABASE_URL is not set. Add it to Railway hub service env vars.')
   const client = postgres(url, { max: 10, idle_timeout: 20 })
   _db = drizzle(client, { schema })
+  log.info('Database connection initialized')
   return _db
 }
 
@@ -26,3 +30,18 @@ export const db = new Proxy({} as ReturnType<typeof drizzle>, {
   },
 })
 
+/**
+ * Execute a function within a database transaction.
+ * All operations inside the callback will be committed together
+ * or rolled back if any operation throws.
+ */
+export async function withTransaction<T>(
+  fn: (tx: Parameters<Parameters<ReturnType<typeof drizzle>['transaction']>[0]>[0]) => Promise<T>,
+): Promise<T> {
+  try {
+    return await getDb().transaction(fn)
+  } catch (err) {
+    log.error({ err }, 'Transaction failed — all changes rolled back')
+    throw err
+  }
+}

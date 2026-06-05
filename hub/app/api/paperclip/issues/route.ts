@@ -1,9 +1,13 @@
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
+import { createLogger } from '@/lib/logger'
 import { createIssue, getAgents } from '@/lib/paperclip'
 import { RXFIT_COMPANY_ID, RXFIT_CEO_AGENT_ID } from '@/lib/paperclipConfig'
+import { CreateIssueRequestSchema } from '@/lib/zod-schemas'
 import type { HubUser } from '@/types'
+
+const log = createLogger('paperclip/issues')
 
 export const runtime = 'nodejs'
 
@@ -19,20 +23,27 @@ export async function POST(req: Request) {
   const user = session.user as unknown as HubUser
   const userRole = (session.user as unknown as Record<string, unknown>).role as string
 
-  let body: { title?: string; description?: string; priority?: string; companyId?: string; assigneeId?: string }
+  let body: Record<string, unknown>
   try {
     body = await req.json()
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   }
 
+  const parsed = CreateIssueRequestSchema.safeParse(body)
+  if (!parsed.success) {
+    return NextResponse.json({ error: 'Validation failed', details: parsed.error.issues }, { status: 400 })
+  }
+
+  const { title, description, priority, companyId: bodyCompanyId, assigneeId: bodyAssigneeId } = parsed.data
+
   // Resolve the target company ID:
   // 1. Explicit companyId from request body (most specific)
   // 2. First assigned project (if not wildcard)
   // 3. Default CEO workspace (for superadmin or wildcard)
   let companyId: string
-  if (body.companyId) {
-    companyId = body.companyId
+  if (bodyCompanyId) {
+    companyId = bodyCompanyId
   } else if (
     user.assignedProjects &&
     user.assignedProjects.length > 0 &&
@@ -46,18 +57,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'No assigned projects' }, { status: 403 })
   }
 
-  const { title, description, priority } = body
-
-  if (!title) {
-    return NextResponse.json({ error: 'Title is required' }, { status: 400 })
-  }
-
   try {
     // Find the CEO agent — all inbound issues go to the CEO first (chain-of-command):
     // 1. Use explicit assigneeId from request body if provided
     // 2. Search for CEO by name in the workspace
     // 3. Fallback to RXFIT_CEO_AGENT_ID from centralized config
-    let assigneeId: string | undefined = body.assigneeId
+    let assigneeId: string | undefined = bodyAssigneeId
     if (!assigneeId) {
       try {
         const agents = await getAgents(companyId)
@@ -74,7 +79,7 @@ export async function POST(req: Request) {
           assigneeId = RXFIT_CEO_AGENT_ID
         }
       } catch (err) {
-        console.warn(`[Paperclip] Failed to fetch agents for company ${companyId}, using default CEO ID`, err)
+        log.warn({ companyId, err }, 'Failed to fetch agents, using default CEO ID')
         assigneeId = RXFIT_CEO_AGENT_ID
       }
     }
@@ -89,7 +94,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ issue })
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Failed to create issue'
-    console.error('[API] POST /api/paperclip/issues error:', error)
+    log.error({ err: error }, 'Issue creation failed')
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }

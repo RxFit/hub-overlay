@@ -1,33 +1,75 @@
 import type { Company, Issue, Run, Agent } from '@/types'
 import { getPaperclipAuthHeaders, clearPaperclipSession } from '@/lib/paperclipSession'
 import { PAPERCLIP_BASE_URL } from '@/lib/paperclipConfig'
+import { createLogger } from '@/lib/logger'
+import { breaker } from '@/lib/circuit-breaker'
+import { withRetry } from '@/lib/retry'
+import {
+  CompaniesResponseSchema,
+  CompanySchema,
+  IssuesResponseSchema,
+  IssueResponseSchema,
+  RunsResponseSchema,
+  AgentsResponseSchema,
+  AgentResponseSchema,
+} from '@/lib/zod-schemas'
+import type { ZodType } from 'zod'
 
+const log = createLogger('paperclip')
 const PAPERCLIP_BASE = PAPERCLIP_BASE_URL
 
 /**
  * Shared Paperclip fetch wrapper.
  * - Session-based auth via paperclipSession.ts
  * - Auto-retry once on 401 (re-authenticates then retries)
+ * - Circuit breaker prevents hammering a down API
+ * - Retry with exponential backoff on transient errors
+ * - Zod schema validation on responses
  * - 10s timeout on all requests
  */
-async function paperclipFetch<T>(path: string, opts?: RequestInit): Promise<T> {
+async function paperclipFetch<T>(
+  path: string,
+  opts?: RequestInit,
+  schema?: ZodType<T>,
+): Promise<T> {
   const url = `${PAPERCLIP_BASE}${path}`
 
-  // First attempt
-  let res = await doPaperclipFetch(url, opts)
+  const execute = async () => {
+    // First attempt
+    let res = await doPaperclipFetch(url, opts)
 
-  // F4 fix: On 401, clear session, re-authenticate, and retry once
-  if (res.status === 401) {
-    clearPaperclipSession()
-    res = await doPaperclipFetch(url, opts)
+    // F4 fix: On 401, clear session, re-authenticate, and retry once
+    if (res.status === 401) {
+      log.warn({ path, status: 401 }, 'Auth expired, re-authenticating')
+      clearPaperclipSession()
+      res = await doPaperclipFetch(url, opts)
+    }
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => 'Unknown error')
+      throw new Error(`Paperclip API error ${res.status}: ${body}`)
+    }
+
+    const json = await res.json()
+
+    // Validate response against Zod schema when provided
+    if (schema) {
+      const result = schema.safeParse(json)
+      if (!result.success) {
+        log.warn(
+          { path, errors: result.error.issues },
+          'Paperclip response schema mismatch — using raw data',
+        )
+        // Return raw data instead of crashing — graceful degradation
+        return json as T
+      }
+      return result.data
+    }
+
+    return json as T
   }
 
-  if (!res.ok) {
-    const body = await res.text().catch(() => 'Unknown error')
-    throw new Error(`Paperclip API error ${res.status}: ${body}`)
-  }
-
-  return res.json()
+  return breaker.execute('paperclip-api', () => withRetry(execute))
 }
 
 /** Build and execute a single fetch to Paperclip with current auth. */
@@ -49,13 +91,13 @@ async function doPaperclipFetch(url: string, opts?: RequestInit): Promise<Respon
 /* ── Companies ── */
 
 export async function getCompanies(): Promise<Company[]> {
-  const data = await paperclipFetch<{ companies: Company[] } | Company[]>('/api/companies')
+  const data = await paperclipFetch('/api/companies', undefined, CompaniesResponseSchema)
   if (Array.isArray(data)) return data
   return data.companies ?? []
 }
 
 export async function getCompany(companyId: string): Promise<Company> {
-  return paperclipFetch<Company>(`/api/companies/${companyId}`)
+  return paperclipFetch(`/api/companies/${companyId}`, undefined, CompanySchema)
 }
 
 export async function createCompany(data: {
@@ -82,15 +124,19 @@ export async function getIssues(
   if (opts?.limit) params.set('limit', String(opts.limit))
   if (opts?.stateGroup) params.set('state_group', opts.stateGroup)
   const qs = params.toString() ? `?${params}` : ''
-  const data = await paperclipFetch<{ issues: Issue[] }>(
-    `/api/companies/${companyId}/issues${qs}`
+  const data = await paperclipFetch(
+    `/api/companies/${companyId}/issues${qs}`,
+    undefined,
+    IssuesResponseSchema,
   )
   return data.issues ?? []
 }
 
 export async function getIssue(companyId: string, issueId: string): Promise<Issue> {
-  const data = await paperclipFetch<{ issue: Issue }>(
-    `/api/companies/${companyId}/issues/${issueId}`
+  const data = await paperclipFetch(
+    `/api/companies/${companyId}/issues/${issueId}`,
+    undefined,
+    IssueResponseSchema,
   )
   return data.issue
 }
@@ -102,10 +148,10 @@ export async function createIssue(
   // Paperclip API expects `assigneeAgentId`, not `assigneeId`
   const { assigneeId, ...rest } = data
   const payload = assigneeId ? { ...rest, assigneeAgentId: assigneeId } : rest
-  const res = await paperclipFetch<{ issue: Issue }>(`/api/companies/${companyId}/issues`, {
+  const res = await paperclipFetch(`/api/companies/${companyId}/issues`, {
     method: 'POST',
     body: JSON.stringify(payload),
-  })
+  }, IssueResponseSchema)
   return res.issue
 }
 
@@ -114,12 +160,13 @@ export async function updateIssue(
   issueId: string,
   data: { state?: string; priority?: string; assigneeId?: string; title?: string }
 ): Promise<Issue> {
-  const res = await paperclipFetch<{ issue: Issue }>(
+  const res = await paperclipFetch(
     `/api/companies/${companyId}/issues/${issueId}`,
     {
       method: 'PATCH',
       body: JSON.stringify(data),
-    }
+    },
+    IssueResponseSchema,
   )
   return res.issue
 }
@@ -133,8 +180,10 @@ export async function getRuns(
   const params = new URLSearchParams()
   if (opts?.limit) params.set('limit', String(opts.limit))
   const qs = params.toString() ? `?${params}` : ''
-  const data = await paperclipFetch<{ runs: Run[] }>(
-    `/api/companies/${companyId}/runs${qs}`
+  const data = await paperclipFetch(
+    `/api/companies/${companyId}/runs${qs}`,
+    undefined,
+    RunsResponseSchema,
   )
   return data.runs ?? []
 }
@@ -142,15 +191,19 @@ export async function getRuns(
 /* ── Agents ── */
 
 export async function getAgents(companyId: string): Promise<Agent[]> {
-  const data = await paperclipFetch<{ agents: Agent[] }>(
-    `/api/companies/${companyId}/agents`
+  const data = await paperclipFetch(
+    `/api/companies/${companyId}/agents`,
+    undefined,
+    AgentsResponseSchema,
   )
   return data.agents ?? []
 }
 
 export async function getAgent(companyId: string, agentId: string): Promise<Agent> {
-  const data = await paperclipFetch<{ agent: Agent }>(
-    `/api/companies/${companyId}/agents/${agentId}`
+  const data = await paperclipFetch(
+    `/api/companies/${companyId}/agents/${agentId}`,
+    undefined,
+    AgentResponseSchema,
   )
   return data.agent
 }
@@ -159,12 +212,13 @@ export async function createAgent(
   companyId: string,
   data: { name: string; role?: string; instructions?: string; adapterType?: string }
 ): Promise<Agent> {
-  const res = await paperclipFetch<{ agent: Agent }>(
+  const res = await paperclipFetch(
     `/api/companies/${companyId}/agents`,
     {
       method: 'POST',
       body: JSON.stringify(data),
-    }
+    },
+    AgentResponseSchema,
   )
   return res.agent
 }
@@ -174,12 +228,13 @@ export async function updateAgent(
   agentId: string,
   data: { name?: string; instructions?: string; status?: string }
 ): Promise<Agent> {
-  const res = await paperclipFetch<{ agent: Agent }>(
+  const res = await paperclipFetch(
     `/api/companies/${companyId}/agents/${agentId}`,
     {
       method: 'PATCH',
       body: JSON.stringify(data),
-    }
+    },
+    AgentResponseSchema,
   )
   return res.agent
 }
@@ -187,7 +242,7 @@ export async function updateAgent(
 export async function deleteAgent(companyId: string, agentId: string): Promise<void> {
   await paperclipFetch<unknown>(
     `/api/companies/${companyId}/agents/${agentId}`,
-    { method: 'DELETE' }
+    { method: 'DELETE' },
   )
 }
 

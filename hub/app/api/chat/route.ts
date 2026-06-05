@@ -2,13 +2,17 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { getToken } from 'next-auth/jwt'
 import { authOptions } from '@/lib/auth'
+import { createLogger } from '@/lib/logger'
 import { streamGeminiChat, buildSystemPrompt } from '@/lib/gemini'
 import { getCompanies, getIssues, getAgents } from '@/lib/paperclip'
 import { fetchUrlContent, fetchDriveDocContent } from '@/lib/content-fetch'
 import { searchSemanticBrain } from '@/lib/vertex'
 import { searchWeb, fetchUrlWithExa } from '@/lib/exa'
 import { loadSkillContent } from '@/lib/skills-loader'
+import { ChatRequestSchema } from '@/lib/zod-schemas'
 import type { ChatMessage, ChatAttachment } from '@/types'
+
+const log = createLogger('chat')
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -66,8 +70,11 @@ export async function POST(req: NextRequest) {
   }
 
   const { messages, useCase = 'deep_dive', attachments, activeSkill } = body
-  if (!messages || !Array.isArray(messages) || messages.length === 0) {
-    return NextResponse.json({ error: 'Messages array required' }, { status: 400 })
+
+  // Validate core message structure
+  const msgValidation = ChatRequestSchema.pick({ messages: true }).safeParse({ messages })
+  if (!msgValidation.success) {
+    return NextResponse.json({ error: 'Messages array required', details: msgValidation.error.issues }, { status: 400 })
   }
 
   // Build context from live Paperclip data
@@ -137,7 +144,7 @@ export async function POST(req: NextRequest) {
             searchContext += `## Internal Knowledge (Vertex AI — Google Drive/Workspace)\n\n${vertexContext}\n\n`
           }
         } catch (err) {
-          console.warn('[chat] Vertex AI search failed:', err)
+          log.warn({ err }, 'Vertex AI search failed')
         }
       })()
     )
@@ -163,7 +170,7 @@ export async function POST(req: NextRequest) {
               searchContext += `## External Web Research (Exa.AI)\n\n${exaContext}\n\n`
             }
           } catch (err) {
-            console.warn('[chat] Exa.AI search failed:', err)
+            log.warn({ err }, 'Exa.AI search failed')
           }
         })()
       )
@@ -229,7 +236,7 @@ export async function POST(req: NextRequest) {
           )
         }
       } catch (err) {
-        console.error(`[chat] Failed to resolve attachment "${att.label}":`, err)
+        log.error({ err, label: att.label }, 'Failed to resolve attachment')
         resolvedParts.push(
           `### Attached: "${att.label}"\n\n[Failed to load content]`
         )

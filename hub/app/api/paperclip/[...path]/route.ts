@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
+import { createLogger } from '@/lib/logger'
 import { getPaperclipAuthHeaders, clearPaperclipSession } from '@/lib/paperclipSession'
 import { PAPERCLIP_BASE_URL } from '@/lib/paperclipConfig'
+
+const log = createLogger('paperclip/proxy')
 
 const PAPERCLIP_BASE = PAPERCLIP_BASE_URL
 
@@ -116,6 +119,7 @@ async function proxyRequest(
 
     // Auto-retry on 401: clear session, re-authenticate, retry once
     if (upstream.status === 401) {
+      log.warn({ path: apiPath }, 'Upstream 401, re-authenticating')
       clearPaperclipSession()
       upstream = await fetch(url, await buildFetchOpts())
     }
@@ -146,6 +150,7 @@ async function proxyRequest(
       headers: { 'Content-Type': upstream.headers.get('Content-Type') || 'application/json' },
     })
   } catch (err) {
+    log.error({ err, path: apiPath, method }, 'Proxy request failed')
     const message = err instanceof Error ? err.message : 'Paperclip API unreachable'
     return NextResponse.json({ error: message }, { status: 502 })
   }

@@ -2,14 +2,16 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { getToken } from 'next-auth/jwt'
 import { authOptions } from '@/lib/auth'
-import { db } from '@/lib/db'
+import { db, withTransaction } from '@/lib/db'
 import { kpis, tenants } from '@/lib/schema'
 import { eq, and, inArray } from 'drizzle-orm'
 import { timingSafeEqual } from 'crypto'
 import { runAllSources } from '@/lib/kpi-sources'
+import { createLogger } from '@/lib/logger'
 
 export const runtime = 'nodejs'
 
+const log = createLogger('kpis/sync')
 const TENANT_ID = process.env.NEXT_PUBLIC_TENANT_ID || 'rxfit'
 
 /** Ensure the rxfit tenant row exists */
@@ -39,6 +41,11 @@ function verifyCronSecret(header: string | null, secret: string): boolean {
  * Fetches live metrics from GA4, Stripe, and Google Search Console,
  * then upserts rows in the `kpis` table using stable sourceId keys.
  *
+ * HARDENING:
+ * - All KPI upserts wrapped in a single transaction (all-or-nothing)
+ * - Structured logging with correlation IDs
+ * - Optimistic locking via version column
+ *
  * Protected by:
  * - Admin session  (browser-triggered "Sync Now")
  * - CRON_SECRET header  (Railway cron job — constant-time comparison)
@@ -60,7 +67,6 @@ export async function POST(req: NextRequest) {
 
   // Get the Google OAuth access token (needed for GA4 + GSC)
   // Note: cron calls have no user session, so GA4/GSC will be skipped gracefully.
-  // To sync GA4 + GSC via cron, a service account SA key is needed (future work).
   let accessToken: string | undefined
   try {
     const token = await getToken({ req })
@@ -96,7 +102,6 @@ export async function POST(req: NextRequest) {
 
     // ── Batch lookup: fetch ALL existing rows for this tenant + these sources ──
     // Single DB round-trip instead of N+2 per KPI
-    const sourceIds = syncedKPIs.map(k => k.id)
     const existingRows = await db
       .select()
       .from(kpis)
@@ -114,44 +119,59 @@ export async function POST(req: NextRequest) {
       if (sid) existingBySourceId.set(sid, row)
     }
 
-    // ── Upsert loop — one write per KPI ──
-    let upserted = 0
-    for (const kpi of syncedKPIs) {
-      if (!kpi.label?.trim()) continue // Skip KPIs with empty labels
+    // ── Transactional upsert — all-or-nothing batch write ──
+    const upserted = await withTransaction(async (tx) => {
+      let count = 0
+      for (const kpi of syncedKPIs) {
+        if (!kpi.label?.trim()) continue // Skip KPIs with empty labels
 
-      // Round raw value to 2dp before storage
-      const roundedValue = Math.round(kpi.rawValue * 100) / 100
+        // Round raw value to 2dp before storage
+        const roundedValue = Math.round(kpi.rawValue * 100) / 100
 
-      const exactMatch = existingBySourceId.get(kpi.id) ?? null
+        const exactMatch = existingBySourceId.get(kpi.id) ?? null
 
-      const updateData = {
-        value:         String(roundedValue),
-        trend:         kpi.trend,
-        trendDirection: kpi.trendDirection,
-        unit:          kpi.unit ?? null,
-        previousValue: exactMatch?.value ?? null,   // previous value for trend display
-        lastSyncedAt:  now,
-        updatedAt:     now,
-        sourceConfig:  { sourceId: kpi.id },        // stable dedup key
+        const updateData = {
+          value:         String(roundedValue),
+          trend:         kpi.trend,
+          trendDirection: kpi.trendDirection,
+          unit:          kpi.unit ?? null,
+          previousValue: exactMatch?.value ?? null,   // previous value for trend display
+          lastSyncedAt:  now,
+          updatedAt:     now,
+          sourceConfig:  { sourceId: kpi.id },        // stable dedup key
+        }
+
+        if (exactMatch) {
+          const result = await tx
+            .update(kpis)
+            .set({ ...updateData, version: (exactMatch.version ?? 0) + 1 })
+            .where(
+              and(
+                eq(kpis.id, exactMatch.id),
+                eq(kpis.tenantId, TENANT_ID),
+                eq(kpis.version, exactMatch.version ?? 1)
+              )
+            )
+
+          if (result.count === 0) {
+            throw new Error(`Concurrency error: KPI ${exactMatch.id} was modified by another process.`)
+          }
+        } else {
+          await tx.insert(kpis).values({
+            tenantId:  TENANT_ID,
+            label:     kpi.label,
+            source:    kpi.source,
+            visibility: 'staff',
+            scope:     'global',
+            ...updateData,
+          })
+        }
+        count++
       }
+      return count
+    })
 
-      if (exactMatch) {
-        await db
-          .update(kpis)
-          .set(updateData)
-          .where(and(eq(kpis.id, exactMatch.id), eq(kpis.tenantId, TENANT_ID)))
-      } else {
-        await db.insert(kpis).values({
-          tenantId:  TENANT_ID,
-          label:     kpi.label,
-          source:    kpi.source,
-          visibility: 'staff',
-          scope:     'global',
-          ...updateData,
-        })
-      }
-      upserted++
-    }
+    log.info({ synced: upserted, sources }, 'KPI sync completed')
 
     return NextResponse.json({
       synced: upserted,
@@ -160,7 +180,7 @@ export async function POST(req: NextRequest) {
     })
 
   } catch (err) {
-    console.error('[kpis/sync] Error:', err)
+    log.error({ err }, 'KPI sync failed')
     // Do NOT include raw error string in response — may expose env context
     const message = err instanceof Error ? err.message : 'Internal sync error'
     return NextResponse.json({ error: message }, { status: 500 })
