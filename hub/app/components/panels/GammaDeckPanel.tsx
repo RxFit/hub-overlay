@@ -24,7 +24,7 @@ function parseMessages(messages: ToolPanelContentProps['messages']): ToolArtifac
 
   for (const msg of assistantMsgs) {
     /* Slide entries: "Slide 1: Title — Layout: full-image" */
-    const slideMatches = msg.content.matchAll(/Slide\s+(\d+):\s*(.+?)(?:\s*[-—]\s*Layout:\s*(.+?))?(?:\n|$)/gi)
+    const slideMatches = Array.from(msg.content.matchAll(/Slide\s+(\d+):\s*(.+?)(?:\s*[-—]\s*Layout:\s*(.+?))?(?:\n|$)/gi))
     for (const m of slideMatches) {
       sections.push({
         id: `gamma-slide-${m[1]}`,

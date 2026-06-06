@@ -39,7 +39,7 @@ function parseMessages(messages: ToolPanelContentProps['messages']): ToolArtifac
 
   /* Slide outlines within steps */
   for (const msg of assistantMsgs) {
-    const slideMatches = msg.content.matchAll(/Slide\s+(\d+):\s*(.+?)(?:\n|$)/gi)
+    const slideMatches = Array.from(msg.content.matchAll(/Slide\s+(\d+):\s*(.+?)(?:\n|$)/gi))
     for (const m of slideMatches) {
       sections.push({ id: `pipeline-slide-${m[1]}`, type: 'slide', title: `Slide ${m[1]}`, content: m[2].trim(), score: parseInt(m[1], 10) })
     }

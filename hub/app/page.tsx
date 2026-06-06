@@ -63,13 +63,13 @@ const ONBOARDING_SUGGESTIONS = [
 // AnimatedNumber is now imported from @/app/components/AnimatedNumber
 
 /* ── Left Panel: Context Layer ── */
-function LeftPanel({ isOpen, onClose, onInjectChat, panelRef, style, activeProject }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string, useCase?: string) => void; panelRef?: React.Ref<HTMLElement>; style?: React.CSSProperties; activeProject?: string }) {
+function LeftPanel({ isOpen, onClose, onInjectChat, panelRef, style, activeProject, workspaceName }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string, useCase?: string) => void; panelRef?: React.Ref<HTMLElement>; style?: React.CSSProperties; activeProject?: string; workspaceName?: string }) {
   const tenant = useTenant()
   return (
     <aside ref={panelRef} className={`panel-left ${isOpen ? 'mobile-open' : ''}`} aria-label="Context Layer" style={style}>
       <div className="panel-header">
         <h2 className="panel-title">
-          <span className="panel-title-display">{tenant?.name || 'Business'}</span>
+          <span className="panel-title-display">{workspaceName || tenant?.name || 'Business'}</span>
         </h2>
         {onClose && (
           <button className="panel-close-btn" onClick={onClose} aria-label="Close Context Layer">
@@ -1036,8 +1036,51 @@ Respond with EXACTLY one of:
     if (skill) {
       setActiveSkill({ id: skill.id, name: skill.name, plugin: skill.plugin })
       setSkillsPopoverOpen(false)
+      setToolPanelOpen(true)
+      setToolPanelCollapsed(false)
+      setToolArtifacts(null)
+      setMobileTab('tool_panel')
     }
   }, [])
+
+  /* ── Handle skill deactivation (with optional artifact persistence) ── */
+  const handleSkillDeactivate = useCallback(async () => {
+    if (toolArtifacts && toolArtifacts.sections.length > 0) {
+      try {
+        await fetch('/api/tool-artifacts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            toolId: activeSkill?.id,
+            title: `${activeSkill?.name}: ${toolArtifacts.title || 'Untitled'}`,
+            content: toolArtifacts,
+            contextSummary: null,
+          }),
+        })
+      } catch {
+        /* Fail silently — artifacts are ephemeral */
+      }
+    }
+    setActiveSkill(null)
+    setToolPanelOpen(false)
+    setToolPanelCollapsed(false)
+    setToolArtifacts(null)
+    if (mobileTab === 'tool_panel') setMobileTab('chat')
+  }, [activeSkill, toolArtifacts, mobileTab])
+
+  /* ── Save tool artifacts callback for ToolPanel ── */
+  const handleSaveToolArtifacts = useCallback(async (artifacts: ToolArtifactData) => {
+    await fetch('/api/tool-artifacts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        toolId: activeSkill?.id,
+        title: `${activeSkill?.name}: ${artifacts.title || 'Untitled'}`,
+        content: artifacts,
+        contextSummary: null,
+      }),
+    })
+  }, [activeSkill])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -1734,7 +1777,7 @@ Respond with EXACTLY one of:
       </div>
 
       <div className="panels-container">
-        <LeftPanel isOpen={mobileLeftOpen} onClose={handleClosePanels} onInjectChat={(msg) => handleChatInject(msg, 'recall')} panelRef={leftPanelRef} activeProject={activeProject} />
+        <LeftPanel isOpen={mobileLeftOpen} onClose={handleClosePanels} onInjectChat={(msg) => handleChatInject(msg, 'recall')} panelRef={leftPanelRef} activeProject={activeProject} workspaceName={projects?.[0]?.companyName} />
 
         {/* ── Center Panel: AI Chat (inlined for shared state) ── */}
         <main className="panel-center" aria-label="AI Chat">
@@ -1776,7 +1819,7 @@ Respond with EXACTLY one of:
             {activeSkill && (
               <SkillBadge
                 skill={activeSkill}
-                onDismiss={() => setActiveSkill(null)}
+                onDismiss={handleSkillDeactivate}
               />
             )}
 
@@ -2002,8 +2045,35 @@ Respond with EXACTLY one of:
           </div>
         </main>
 
-        {!isOnboarding && (
+        {!isOnboarding && activeSkill && toolPanelOpen && !toolPanelCollapsed && (
+          <ToolPanel
+            activeSkill={activeSkill}
+            messages={messages}
+            onDismiss={handleSkillDeactivate}
+            onInjectChat={(msg) => handleChatInject(msg, 'deep_dive')}
+            onSaveArtifacts={handleSaveToolArtifacts}
+            isCollapsed={toolPanelCollapsed}
+            onToggleCollapse={() => setToolPanelCollapsed(c => !c)}
+          />
+        )}
+
+        {!isOnboarding && activeSkill && toolPanelOpen && toolPanelCollapsed && (
+          <ToolPanelCollapsedRail
+            activeSkill={activeSkill}
+            onExpand={() => setToolPanelCollapsed(false)}
+          />
+        )}
+
+        {!isOnboarding && (!activeSkill || !toolPanelOpen) && (
           <RightPanel isOpen={mobileRightOpen} onClose={handleClosePanels} onInjectChat={(msg) => handleChatInject(msg, 'execute')} panelRef={rightPanelRef} projects={projects} activeProject={activeProject} userRole={userRole} kpiLoading={kpiLoading} />
+        )}
+
+        {/* Mobile: Champagne gold edge indicator when tool is active but panel not visible */}
+        {activeSkill && mobileTab !== 'tool_panel' && (
+          <MobileToolEdge
+            activeSkill={activeSkill}
+            onTap={() => setMobileTab('tool_panel')}
+          />
         )}
 
         {/* Onboarding: hide right panel placeholder for onboarding users */}
