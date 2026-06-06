@@ -8208,5 +8208,29 @@ details[open] > .settings-collapsible__trigger .settings-collapsible__arrow {
 .flw-success__icon { font-size: 2.5rem; color: var(--bm-green); margin-bottom: var(--space-3); }
 .flw-success__desc { max-width: 380px; margin: 0 auto; }
 
+/* Mobile: Make wizard full-screen to avoid positioning issues */
+@media (max-width: 640px) {
+  .flw-modal {
+    top: 0; left: 0; right: 0; bottom: 0;
+    transform: none;
+    width: 100%;
+    max-height: none;
+    height: 100%;
+    border-radius: 0;
+    border: none;
+    padding-top: env(safe-area-inset-top, 0);
+    padding-bottom: env(safe-area-inset-bottom, 0);
+  }
+  .flw-modal__body {
+    padding: var(--space-4);
+  }
+  .flw-backdrop {
+    z-index: 999;
+  }
+  .flw-modal {
+    z-index: 1000;
+  }
+}
+
 @keyframes skeleton-pulse { 0%,100%{opacity:.5} 50%{opacity:.85} }
 @keyframes fadeIn { from{opacity:0} to{opacity:1} }

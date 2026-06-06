@@ -98,14 +98,14 @@ Returns agent object with `status` field:
 - `error` — agent has a problem (escalate to Antigravity)
 - `paused` — agent is paused
 
-**Known agent IDs:**
+**Known agent IDs (updated 2026-06-05 from Cloud Run audit):**
 | Agent | ID |
 |---|---|
-| CEO (own) | `0648c755-cd93-4d9d-96d9-dd71e658b614` |
-| COO | `d9986cc8-12e7-42cd-97c0-55e2608a3113` |
-| CMO | `80775a1b-7252-453b-a802-77a30ff2c530` |
-| CTO | `d9b1bef6-f44e-4d99-9bb8-d552df6b776f` |
-| CFO | `eb0c0a52-0dc5-4104-a971-baf37dda58b3` |
+| CEO (own) | `82984f59-633e-4cdf-b8a1-d0499f6c226a` |
+| COO | `002a8e1c-9206-46a2-bf6e-4ffb46cbb254` |
+| CMO | `360e4642-135a-493d-b500-a532d23b3714` |
+| CTO | `91873c35-2586-4623-bb78-23627d3c5ca9` |
+| CFO | `4f4548b7-9f7d-458b-b4ec-3b373a0fff57` |
 
 ---
 

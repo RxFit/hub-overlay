@@ -59,6 +59,21 @@ export const CompanySchema = z.object({
   issueCount: z.number().optional(),
 }).passthrough()
 
+export const ProjectSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().nullable().optional(),
+  status: z.string().default('backlog'),
+  urlKey: z.string().optional().default(''),
+  color: z.string().nullable().optional(),
+  companyId: z.string(),
+  leadAgentId: z.string().nullable().optional(),
+  targetDate: z.string().nullable().optional(),
+  goalIds: z.string().array().optional().default([]),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+}).passthrough()
+
 /* ── Wrapped response schemas ── */
 
 export const IssuesResponseSchema = z.object({
@@ -85,6 +100,10 @@ export const CompaniesResponseSchema = z.union([
   CompanySchema.array(),
   z.object({ companies: CompanySchema.array() }).passthrough(),
 ])
+
+export const ProjectsResponseSchema = z.object({
+  projects: ProjectSchema.array(),
+}).passthrough()
 
 /* ── HUB API input schemas ── */
 
@@ -127,6 +146,7 @@ export type ValidatedIssue = z.infer<typeof IssueSchema>
 export type ValidatedRun = z.infer<typeof RunSchema>
 export type ValidatedAgent = z.infer<typeof AgentSchema>
 export type ValidatedCompany = z.infer<typeof CompanySchema>
+export type ValidatedProject = z.infer<typeof ProjectSchema>
 export type ValidatedChatMessage = z.infer<typeof ChatMessageSchema>
 export type ValidatedChatRequest = z.infer<typeof ChatRequestSchema>
 export type ValidatedCreateIssueRequest = z.infer<typeof CreateIssueRequestSchema>

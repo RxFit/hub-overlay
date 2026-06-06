@@ -19,12 +19,12 @@
     "bind": "lan",
     "host": "0.0.0.0",
     "port": 3100,
-    "allowedHostnames": ["api.paperclip.casatrejo.com", "paperclip-production-4394.up.railway.app"],
+    "allowedHostnames": ["api.paperclip.casatrejo.com", "paperclip-production-4394.up.railway.app", "rxfit-paperclip-11747747730.us-central1.run.app"],
     "serveUi": true
   },
   "auth": {
     "baseUrlMode": "explicit",
-    "publicBaseUrl": "https://api.paperclip.casatrejo.com",
+    "publicBaseUrl": "https://rxfit-paperclip-11747747730.us-central1.run.app",
     "disableSignUp": true
   },
   "telemetry": {

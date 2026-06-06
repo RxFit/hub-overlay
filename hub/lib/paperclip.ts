@@ -1,4 +1,4 @@
-import type { Company, Issue, Run, Agent } from '@/types'
+import type { Company, Issue, Run, Agent, Project } from '@/types'
 import { getPaperclipAuthHeaders, clearPaperclipSession } from '@/lib/paperclipSession'
 import { PAPERCLIP_BASE_URL } from '@/lib/paperclipConfig'
 import { createLogger } from '@/lib/logger'
@@ -14,6 +14,7 @@ import {
   RunsResponseSchema,
   AgentsResponseSchema,
   AgentResponseSchema,
+  ProjectsResponseSchema,
 } from '@/lib/zod-schemas'
 import type { ZodType } from 'zod'
 
@@ -206,6 +207,17 @@ export async function getRuns(
     RunsResponseSchema,
   )
   return data.runs ?? []
+}
+
+/* ── Projects ── */
+
+export async function getProjects(companyId: string): Promise<Project[]> {
+  const data = await paperclipFetch(
+    `/api/companies/${companyId}/projects`,
+    undefined,
+    ProjectsResponseSchema,
+  )
+  return data.projects ?? []
 }
 
 /* ── Agents ── */

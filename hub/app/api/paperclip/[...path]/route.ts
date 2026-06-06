@@ -20,6 +20,7 @@ const ALLOWED_PREFIXES = [
   '/api/issues',            // direct issue operations (PATCH, GET by ID)
   '/api/agents',            // agent status + management
   '/api/runs',              // agent run history
+  '/api/projects',          // project lookups by ID or shortname
 ]
 
 export async function GET(
