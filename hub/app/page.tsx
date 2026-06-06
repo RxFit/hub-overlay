@@ -1,12 +1,15 @@
 'use client'
 
-import { useState, useRef, useEffect, useCallback, Fragment } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo, Fragment } from 'react'
 import { mutate } from 'swr'
 import { useSession, signIn } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { TasksSection, CalendarSection, DocumentsSection, KPISection, ProjectHealthSection } from '@/app/components/LeftPanelSections'
 import { ExecutionFeed } from '@/app/components/RightPanelSections'
 import { InterviewBadge, ContextInjectionBanner, ActionConfirmCard, SkillBadge } from '@/app/components/ChatEnhancements'
+import { ToolPanel } from '@/app/components/ToolPanel'
+import { ToolPanelCollapsedRail, MobileToolEdge } from '@/app/components/ToolPanelCollapsedRail'
+import type { ToolArtifactData } from '@/types'
 import { ContextAttachMenu, AttachmentChips } from '@/app/components/ContextAttachMenu'
 import { SkillsPopover } from '@/app/components/SkillsPopover'
 import { SKILL_CATALOG, SKILL_MAP } from '@/lib/skills'
@@ -36,10 +39,12 @@ import {
 import { RXFIT_COMPANY_ID, RXFIT_COO_AGENT_ID, PAPERCLIP_BASE_URL } from '@/lib/paperclipConfig'
 import type { InterviewState, ActionSpec, ChatAttachment, ActiveSkill } from '@/types'
 
-const CHAT_SUGGESTIONS = [
-  "What's blocking FridgeSnap revenue?",
+/* ── Dynamic suggestions are built per-user in HubPage via useMemo ── */
+
+const FALLBACK_SUGGESTIONS = [
+  "What projects need attention?",
   "Summarize today's agent activity",
-  "Show Q2 goal status",
+  "Show workspace status",
   "Create a task for the team",
 ]
 
@@ -256,7 +261,7 @@ function RightPanel({ isOpen, onClose, onInjectChat, panelRef, style, projects, 
    MAIN PAGE
    ══════════════════════════════════════════════════════════════════════════════ */
 
-type MobileTab = 'chat' | 'command' | 'execution' | 'google_chat'
+type MobileTab = 'chat' | 'command' | 'execution' | 'google_chat' | 'tool_panel'
 type ChatMsg = { id: string; role: 'user' | 'assistant'; content: string; timestamp?: string; attachments?: ChatAttachment[] }
 
 function CopyButton({ text }: { text: string }) {
@@ -315,6 +320,35 @@ export default function HubPage() {
   const canUseInterviewMode = !isOnboarding
   const canAccessAdmin = userRole === 'admin' || userRole === 'superadmin'
 
+  // Dynamic suggestions based on the user's actual projects/workspace
+  const chatSuggestions = useMemo(() => {
+    if (!projects || projects.length === 0) return FALLBACK_SUGGESTIONS
+
+    // Pick the most relevant project names (up to 2)
+    const topProjects = projects
+      .filter(p => p.companyName && p.companyName !== 'All')
+      .slice(0, 2)
+
+    const suggestions: string[] = []
+
+    if (topProjects.length > 0) {
+      // Lead with a project-specific question
+      suggestions.push(`What's blocking ${topProjects[0].companyName}?`)
+    }
+
+    suggestions.push("Summarize today's agent activity")
+
+    if (topProjects.length > 1) {
+      suggestions.push(`Compare ${topProjects[0].companyName} vs ${topProjects[1].companyName} progress`)
+    } else {
+      suggestions.push('Show workspace status')
+    }
+
+    suggestions.push('Create a task for the team')
+
+    return suggestions
+  }, [projects])
+
   // Swipe gesture state — real-time drag-follow system
   const touchStartRef = useRef<{ x: number; y: number } | null>(null)
   const swipeDirRef = useRef<'left' | 'right' | null>(null)
@@ -355,6 +389,11 @@ export default function HubPage() {
   const [activeSkill, setActiveSkill] = useState<ActiveSkill | null>(null)
   const [suggestedTools, setSuggestedTools] = useState<string[]>([])
   const [skillsPopoverOpen, setSkillsPopoverOpen] = useState(false)
+
+  // Tool Panel state
+  const [toolPanelOpen, setToolPanelOpen] = useState(false)
+  const [toolPanelCollapsed, setToolPanelCollapsed] = useState(false)
+  const [toolArtifacts, setToolArtifacts] = useState<ToolArtifactData | null>(null)
 
   const handleAddAttachment = useCallback((att: Omit<ChatAttachment, 'id'>) => {
     if (attachments.length >= 5) return  // Cap at 5
@@ -436,6 +475,12 @@ export default function HubPage() {
   /* ── Swipe gesture handlers — real-time drag-follow ── */
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     const touch = e.touches[0]
+    // Skip swipe tracking if touch originated inside a horizontally-scrollable area
+    const target = e.target as HTMLElement
+    if (target.closest('.chat-suggestions')) {
+      touchStartRef.current = null
+      return
+    }
     touchStartRef.current = { x: touch.clientX, y: touch.clientY }
     swipeDirRef.current = null
     isSwipingRef.current = false
@@ -1895,7 +1940,7 @@ Respond with EXACTLY one of:
             {/* Suggestion chips (shown when chat is fresh) */}
             {messages.length <= 1 && (
               <div className="chat-suggestions" role="group" aria-label="Suggested prompts">
-                {(isOnboarding ? ONBOARDING_SUGGESTIONS : CHAT_SUGGESTIONS).map(s => (
+                {(isOnboarding ? ONBOARDING_SUGGESTIONS : chatSuggestions).map(s => (
                   <button
                     key={s}
                     className="chat-suggestion-chip"
