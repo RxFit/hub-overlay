@@ -140,6 +140,7 @@ When any agent encounters an API key error, the agent MUST:
 | `KEY_INVALID` | Key format/value is incorrect | Verify key in provider dashboard |
 | `KEY_UNAUTHORIZED` | Key lacks required permissions | Update key scopes/permissions |
 | `KEY_BILLING_FAILED` | Provider payment method declined | Update billing on provider account |
+| `KEY_NEEDED` | Required key not configured in workspace | Create issue with Settings > API Keys connection instructions |
 
 **Issue Template:**
 ```json

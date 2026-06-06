@@ -34,9 +34,6 @@ export interface TenantConfig {
   logoFull: string                 // 'HUB' (text after accent)
   brandColors: TenantBrandColors
   googleWorkspaceId?: string
-  kpiSheetId?: string
-  kpiSheetRange?: string           // default 'KPIs!A2:D10'
-  hubRolesSheetId?: string         // Hub Roles Google Sheet ID for role management
   roles: Record<string, RoleConfig>
 }
 
@@ -111,8 +108,7 @@ export const TENANT_CONFIGS: Record<string, TenantConfig> = {
       bgVoid: '#141824',
       bgPrimary: '#1a1f2e',
     },
-    kpiSheetRange: 'KPIs!A2:D10',
-    hubRolesSheetId: process.env.HUB_ROLES_SHEET_ID,
+
     roles: { superadmin: SUPERADMIN_ROLE, admin: ADMIN_ROLE, staff: STAFF_ROLE, onboarding: ONBOARDING_ROLE },
   },
 
@@ -130,8 +126,7 @@ export const TENANT_CONFIGS: Record<string, TenantConfig> = {
       bgVoid: '#1a0a14',
       bgPrimary: '#220e1a',
     },
-    kpiSheetRange: 'KPIs!A2:D10',
-    hubRolesSheetId: process.env.HUB_ROLES_SHEET_ID,
+
     roles: { superadmin: SUPERADMIN_ROLE, admin: ADMIN_ROLE, staff: STAFF_ROLE, onboarding: ONBOARDING_ROLE },
   },
 }

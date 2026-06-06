@@ -76,11 +76,9 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
  * 3. Hub Roles Sheet lookup → assigned role or 'onboarding' fallback
  */
 async function resolveUserRole(
-  email: string,
-  accessToken: string
+  email: string
 ): Promise<{ role: string; assignedProjects: string[] }> {
   const normalized = email.toLowerCase()
-
 
   // Env var overrides always win — these are infra-level assignments
   if (SUPERADMIN_EMAILS.includes(normalized)) {
@@ -90,11 +88,10 @@ async function resolveUserRole(
     return { role: 'admin', assignedProjects: ['*'] }
   }
 
-  // Sheet lookup — falls back to { role: 'onboarding', assignedProjects: [] }
-  const sheetId = process.env.HUB_ROLES_SHEET_ID
+  // Database lookup — falls back to { role: 'onboarding', assignedProjects: [] }
   try {
-    // Check if user has an existing row in the sheet
-    const allEntries = await getAllRoleEntries(accessToken, sheetId)
+    // Check if user has an existing row in DB
+    const allEntries = await getAllRoleEntries()
     const existingEntry = allEntries.find(e => e.email === normalized)
 
     if (existingEntry) {
@@ -110,7 +107,7 @@ async function resolveUserRole(
         role: 'onboarding',
         assignedProjects: [],
         assignedBy: 'system',
-      }, accessToken, sheetId)
+      })
     } catch (err) {
       console.error('[auth] Failed to auto-create user row:', err)
     }
@@ -146,7 +143,7 @@ export const authOptions: NextAuthOptions = {
         const email = (user.email || '').toLowerCase()
         const accessToken = account.access_token as string
 
-        const { role, assignedProjects } = await resolveUserRole(email, accessToken)
+        const { role, assignedProjects } = await resolveUserRole(email)
 
         return {
           ...token,
@@ -167,12 +164,9 @@ export const authOptions: NextAuthOptions = {
       const refreshed = await refreshAccessToken(token)
       if (refreshed.error) return refreshed  // propagate error, keep stale role
 
-      // Re-check role from sheet on every token refresh (~1hr cadence)
+      // Re-check role from DB on every token refresh (~1hr cadence)
       const email = (token.email as string || '').toLowerCase()
-      const { role, assignedProjects } = await resolveUserRole(
-        email,
-        refreshed.accessToken as string
-      )
+      const { role, assignedProjects } = await resolveUserRole(email)
 
       return { ...refreshed, role, assignedProjects }
     },

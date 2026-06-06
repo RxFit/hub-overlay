@@ -175,10 +175,7 @@ export interface TenantConfig {
   tenantId: string
   tenantName: string
   roles: Record<string, RoleConfig>  // keyed by role ID (e.g. 'admin', 'staff')
-  kpiSheetId?: string         // Google Sheet ID for KPI dashboard
-  kpiSheetRange?: string      // e.g. "KPIs!A1:F20"
   feedPollingIntervalMs?: number
-  hubRolesSheetId?: string    // Google Sheet ID for Hub role assignments
 }
 
 /* ── Activity Feed Types ── */

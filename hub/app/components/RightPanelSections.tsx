@@ -187,9 +187,11 @@ function DateGroupLabel({ label }: { label: string }) {
 export function ExecutionFeed({
   onInjectChat,
   orgId,
+  onCustomizeCSuite,
 }: {
   onInjectChat: (msg: string) => void
   orgId?: string
+  onCustomizeCSuite: (orgId: string, orgName: string) => void
 }) {
   const { items, isLoading, error } = useFeed()
   const [activeFilter, setActiveFilter] = useState<FilterTab>('all')
@@ -254,6 +256,7 @@ export function ExecutionFeed({
         orgId={orgId}
         onCreateTask={handleCreateTask}
         stalledCount={stalledItems.length}
+        onCustomizeCSuite={onCustomizeCSuite}
       />
 
       {/* ── Divider ── */}

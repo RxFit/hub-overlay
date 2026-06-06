@@ -106,6 +106,20 @@ export async function GET(
   }
 
   const orgId = params.orgId
+
+  // Security Check: Ensure user has access to this project
+  const userRole = (session.user as any).role as string
+  const assignedProjects = (session.user as any).assignedProjects as string[] || []
+
+  const hasAccess =
+    userRole === 'superadmin' ||
+    assignedProjects.includes('*') ||
+    assignedProjects.includes(orgId)
+
+  if (!hasAccess) {
+    return NextResponse.json({ error: 'Insufficient permissions for this organization' }, { status: 403 })
+  }
+
   const orgFolder = resolveOrchestratorPath(orgId)
 
   if (!orgFolder) {
@@ -154,6 +168,19 @@ export async function POST(
   }
 
   const orgId = params.orgId
+
+  // Security Check: Ensure user has access to this project
+  const assignedProjects = (session.user as any).assignedProjects as string[] || []
+
+  const hasAccess =
+    userRole === 'superadmin' ||
+    assignedProjects.includes('*') ||
+    assignedProjects.includes(orgId)
+
+  if (!hasAccess) {
+    return NextResponse.json({ error: 'Insufficient permissions for this organization' }, { status: 403 })
+  }
+
   const orgFolder = resolveOrchestratorPath(orgId)
 
   if (!orgFolder) {

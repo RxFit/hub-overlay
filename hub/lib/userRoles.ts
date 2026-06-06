@@ -39,8 +39,6 @@ export async function ensureTenant(
 /* ── Read all role entries for a tenant ─────────────────────────────────── */
 
 export async function getAllRoleEntries(
-  _accessToken: string,   // kept for call-site compat during transition, unused
-  _sheetId?: string,      // kept for call-site compat during transition, unused
   tenantId = DEFAULT_TENANT
 ): Promise<HubRoleEntry[]> {
   try {
@@ -68,8 +66,6 @@ export async function getAllRoleEntries(
 
 export async function getUserRole(
   email: string,
-  _accessToken: string,   // kept for call-site compat during transition, unused
-  _sheetId?: string,      // kept for call-site compat during transition, unused
   tenantId = DEFAULT_TENANT
 ): Promise<{ role: string; assignedProjects: string[] }> {
   const normalized = email.toLowerCase().trim()
@@ -99,8 +95,6 @@ export async function upsertUserRole(
     assignedBy: string
     name?: string
   },
-  _accessToken: string,   // kept for call-site compat during transition, unused
-  _sheetId?: string,      // kept for call-site compat during transition, unused
   tenantId = DEFAULT_TENANT
 ): Promise<void> {
   const normalized = entry.email.toLowerCase().trim()
@@ -125,13 +119,4 @@ export async function upsertUserRole(
         ...(entry.name ? { name: entry.name } : {}),
       },
     })
-}
-
-/* ── Legacy no-op stubs (kept so old call sites don't break) ─────────────── */
-
-export async function ensureSheetHeaders(
-  _accessToken: string,
-  _sheetId?: string
-): Promise<void> {
-  // No-op: headers are defined in the DB schema
 }

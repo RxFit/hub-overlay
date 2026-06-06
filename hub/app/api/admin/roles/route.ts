@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
-import { getToken } from 'next-auth/jwt'
 import { authOptions } from '@/lib/auth'
-import { getAllRoleEntries, upsertUserRole, ensureSheetHeaders } from '@/lib/userRoles'
+import { getAllRoleEntries, upsertUserRole } from '@/lib/userRoles'
 import { canAssignRole } from '@/lib/roles'
 import { recordEvent } from '@/lib/event-logger'
 
@@ -24,16 +23,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
   }
 
-  const token = await getToken({ req })
-  const accessToken = token?.accessToken as string | undefined
-  if (!accessToken) {
-    return NextResponse.json({ error: 'No access token' }, { status: 401 })
-  }
-
   try {
-    // Auto-initialize sheet headers on first access (idempotent)
-    await ensureSheetHeaders(accessToken, process.env.HUB_ROLES_SHEET_ID).catch(() => {})
-    const users = await getAllRoleEntries(accessToken, process.env.HUB_ROLES_SHEET_ID)
+    const users = await getAllRoleEntries()
     return NextResponse.json({ users })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error'
@@ -49,12 +40,6 @@ export async function POST(req: NextRequest) {
 
   if (!session?.user || !['admin', 'superadmin'].includes(callerRole)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
-  }
-
-  const token = await getToken({ req })
-  const accessToken = token?.accessToken as string | undefined
-  if (!accessToken) {
-    return NextResponse.json({ error: 'No access token' }, { status: 401 })
   }
 
   let body: { email: string; role: string; assignedProjects: string[] }
@@ -95,7 +80,7 @@ export async function POST(req: NextRequest) {
   // Prevent downgrading a role to a lower privilege level
   // e.g. admin cannot set a superadmin to 'onboarding'
   try {
-    const allEntries = await import('@/lib/userRoles').then(m => m.getAllRoleEntries('', process.env.HUB_ROLES_SHEET_ID))
+    const allEntries = await import('@/lib/userRoles').then(m => m.getAllRoleEntries())
     const existingEntry = allEntries.find(e => e.email === email)
     if (existingEntry) {
       const existingRank = ROLE_RANK[existingEntry.role] ?? 0
@@ -124,11 +109,12 @@ export async function POST(req: NextRequest) {
       console.warn(`[admin/roles] Staff user ${email} assigned with no projects — they will see an empty dashboard until projects are assigned`)
     }
 
-    await upsertUserRole(
-      { email, role, assignedProjects: assignedProjects || [], assignedBy: callerEmail },
-      accessToken,
-      process.env.HUB_ROLES_SHEET_ID
-    )
+    await upsertUserRole({
+      email,
+      role,
+      assignedProjects: assignedProjects || [],
+      assignedBy: callerEmail,
+    })
 
     await recordEvent({
       eventType: 'role.updated',

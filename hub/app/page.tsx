@@ -20,6 +20,7 @@ import { OnboardingBanner } from '@/app/components/OnboardingBanner'
 import { GoogleChatPanel } from '@/app/components/GoogleChatPanel'
 import { EmailPreviewCard } from '@/app/components/EmailPreviewCard'
 import { InfoPopover } from '@/app/components/InfoPopover'
+import { FounderLensWizard } from '@/app/components/FounderLensWizard'
 import { useTenant } from '@/app/components/TenantProvider'
 import { useKPIData } from '@/app/hooks/useKPIData'
 import { useSpaces, useUnreadCounts } from '@/app/hooks/useGoogleChat'
@@ -202,7 +203,29 @@ function MessageContent({ content, onToolActivate }: { content: string; onToolAc
 }
 
 /* ── Right Panel: Execution Layer ── */
-function RightPanel({ isOpen, onClose, onInjectChat, panelRef, style, projects, activeProject, userRole, kpiLoading }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string, useCase?: string) => void; panelRef?: React.Ref<HTMLElement>; style?: React.CSSProperties; projects?: import('@/types').ProjectKPI[]; activeProject?: string; userRole?: string; kpiLoading?: boolean }) {
+function RightPanel({
+  isOpen,
+  onClose,
+  onInjectChat,
+  panelRef,
+  style,
+  projects,
+  activeProject,
+  userRole,
+  kpiLoading,
+  onCustomizeCSuite,
+}: {
+  isOpen?: boolean
+  onClose?: () => void
+  onInjectChat: (msg: string, useCase?: string) => void
+  panelRef?: React.Ref<HTMLElement>
+  style?: React.CSSProperties
+  projects?: import('@/types').ProjectKPI[]
+  activeProject?: string
+  userRole?: string
+  kpiLoading?: boolean
+  onCustomizeCSuite: (orgId: string, orgName: string) => void
+}) {
   // Build Paperclip workspace URL from the active project
   const paperclipBaseUrl = process.env.NEXT_PUBLIC_PAPERCLIP_URL || 'https://rxfit-paperclip-11747747730.us-central1.run.app'
   const activeCompany = projects?.find(p => p.identifier?.toLowerCase() === activeProject?.toLowerCase() || p.companyName?.toLowerCase().includes(activeProject?.toLowerCase() || ''))
@@ -251,7 +274,7 @@ function RightPanel({ isOpen, onClose, onInjectChat, panelRef, style, projects, 
 
       <div className="panel-content">
         <ProjectHealthSection projects={projects} onInjectChat={onInjectChat} userRole={userRole} isLoading={kpiLoading} />
-        <ExecutionFeed onInjectChat={onInjectChat} />
+        <ExecutionFeed onInjectChat={onInjectChat} onCustomizeCSuite={onCustomizeCSuite} />
       </div>
     </aside>
   )
@@ -310,6 +333,8 @@ export default function HubPage() {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark')
   const [showOnboardingCard, setShowOnboardingCard] = useState(false)
   const [chatPanelOpen, setChatPanelOpen] = useState(false)
+  const [showWizard, setShowWizard] = useState(false)
+  const [wizardOrg, setWizardOrg] = useState<{ id: string; name: string } | null>(null)
 
   // Google Chat unread badge — uses visible spaces from useSpaces hook
   const { visibleSpaces: chatVisibleSpaces } = useSpaces()
@@ -2056,7 +2081,20 @@ Respond with EXACTLY one of:
         )}
 
         {!isOnboarding && (!activeSkill || !toolPanelOpen) && (
-          <RightPanel isOpen={mobileRightOpen} onClose={handleClosePanels} onInjectChat={(msg) => handleChatInject(msg, 'execute')} panelRef={rightPanelRef} projects={projects} activeProject={activeProject} userRole={userRole} kpiLoading={kpiLoading} />
+          <RightPanel
+            isOpen={mobileRightOpen}
+            onClose={handleClosePanels}
+            onInjectChat={(msg) => handleChatInject(msg, 'execute')}
+            panelRef={rightPanelRef}
+            projects={projects}
+            activeProject={activeProject}
+            userRole={userRole}
+            kpiLoading={kpiLoading}
+            onCustomizeCSuite={(orgId, orgName) => {
+              setWizardOrg({ id: orgId, name: orgName })
+              setShowWizard(true)
+            }}
+          />
         )}
 
         {/* Mobile: Champagne gold edge indicator when tool is active but panel not visible */}
@@ -2156,6 +2194,18 @@ Respond with EXACTLY one of:
       {/* Onboarding card (full-screen, first sign-in only) */}
       {showOnboardingCard && (
         <OnboardingCard onDismiss={() => setShowOnboardingCard(false)} />
+      )}
+
+      {/* C-Suite Customization Wizard Modal */}
+      {showWizard && wizardOrg && (
+        <FounderLensWizard
+          orgId={wizardOrg.id}
+          orgName={wizardOrg.name}
+          onClose={() => {
+            setShowWizard(false)
+            setWizardOrg(null)
+          }}
+        />
       )}
     </div>
   )

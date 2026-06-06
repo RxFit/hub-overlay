@@ -3,7 +3,6 @@
 import { useState, useCallback } from 'react'
 import { useBusinessManager, healthToColor, roleLabel } from '@/app/hooks/useBusinessManager'
 import type { DepartmentPulse, StallState } from '@/types'
-import { FounderLensWizard } from '@/app/components/FounderLensWizard'
 
 /* ══════════════════════════════════════════════════════════════════════════════
    HEALTH RING — animated SVG circle showing global org health %
@@ -193,15 +192,16 @@ export function BusinessManagerPanel({
   orgId,
   onCreateTask,
   stalledCount = 0,
+  onCustomizeCSuite,
 }: {
   orgId?: string
   onCreateTask: () => void
   stalledCount?: number
+  onCustomizeCSuite: (orgId: string, orgName: string) => void
 }) {
   const { pulse, globalHealthPct, orgName, isLoading } = useBusinessManager(orgId)
   const [selectedRole, setSelectedRole] = useState<string | null>(null)
   const [showScorecard, setShowScorecard] = useState(false)
-  const [showWizard, setShowWizard] = useState(false)
 
   const handleChipClick = useCallback((role: string) => {
     if (selectedRole === role && showScorecard) {
@@ -316,23 +316,23 @@ export function BusinessManagerPanel({
           <button
             id="bm-customize-csuite-btn"
             className="bm-cta bm-cta--secondary"
-            onClick={() => setShowWizard(true)}
+            onClick={() => onCustomizeCSuite(orgId ?? pulse?.orgId ?? '', orgName || 'Your Organization')}
             aria-label="Customize your C-Suite"
           >
             <span aria-hidden="true">⚙</span>
             Customize C-Suite
           </button>
+          <button
+            id="bm-manage-keys-btn"
+            className="bm-cta bm-cta--secondary"
+            onClick={() => window.location.href = '/settings#api-keys'}
+            aria-label="Manage API Keys"
+          >
+            <span aria-hidden="true">🔑</span>
+            Manage Keys
+          </button>
         </div>
       </div>
-
-      {/* ── Founder Lens Wizard Modal ── */}
-      {showWizard && (
-        <FounderLensWizard
-          orgId={orgId ?? ''}
-          orgName={orgName}
-          onClose={() => setShowWizard(false)}
-        />
-      )}
     </>
   )
 }

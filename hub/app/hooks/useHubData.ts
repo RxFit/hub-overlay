@@ -214,60 +214,6 @@ export function useDrive(filter?: string) {
   }
 }
 
-/* ══════════════════════════════════════════
-   Google Sheets — KPI Dashboard
-   ══════════════════════════════════════════ */
-
-interface SheetsResponse {
-  values: {
-    range: string
-    majorDimension: string
-    values: string[][]
-  }
-}
-
-export interface KPIRow {
-  label: string
-  value: string
-  trend: string
-  up: boolean
-}
-
-/**
- * Fetch KPI data from a Google Sheet.
- * Expects rows in format: [label, value, trend, up/down].
- * Refreshes every 60 seconds.
- */
-export function useKPIs(sheetId?: string, range?: string) {
-  const params = new URLSearchParams()
-  if (sheetId) params.set('spreadsheetId', sheetId)
-  if (range) params.set('range', range)
-
-  // Only fetch if we have a sheetId
-  const url = sheetId
-    ? `/api/google/sheets?${params.toString()}`
-    : null
-
-  const { data, error, isLoading } = useSWR<SheetsResponse>(
-    url,
-    fetcher,
-    { refreshInterval: 60_000, revalidateOnFocus: false }
-  )
-
-  // Parse rows into KPI format
-  const kpis: KPIRow[] = (data?.values?.values ?? []).map((row) => ({
-    label: row[0] ?? '',
-    value: row[1] ?? '0',
-    trend: row[2] ?? '',
-    up: (row[3] ?? 'true').toLowerCase() !== 'false',
-  }))
-
-  return {
-    kpis,
-    isLoading,
-    error,
-  }
-}
 
 /* ══════════════════════════════════════════
    Activity Feed (Paperclip)

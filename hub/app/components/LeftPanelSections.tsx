@@ -978,7 +978,7 @@ export function KPISection({
   if (kpis.length === 0) {
     return (
       <CollapsibleSection title="KPIs" protocolNum="01" defaultOpen>
-        <SectionMessage message="No business KPIs configured — add a Google Sheet in Settings" type="empty" />
+        <SectionMessage message="No business KPIs configured — configure KPIs in Settings" type="empty" />
       </CollapsibleSection>
     )
   }
