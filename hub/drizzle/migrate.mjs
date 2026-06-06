@@ -145,6 +145,13 @@ async function run() {
   `
   console.log('[migrate] ✓ document_chunks table')
 
+  // Create HNSW index for pgvector search
+  await sql`
+    CREATE INDEX IF NOT EXISTS document_chunks_embedding_hnsw_idx 
+    ON document_chunks USING hnsw (embedding vector_cosine_ops);
+  `
+  console.log('[migrate] ✓ document_chunks HNSW index')
+
   // Seed rxfit tenant
   await sql`
     INSERT INTO tenants (id, name, domain)

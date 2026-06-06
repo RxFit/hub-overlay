@@ -199,7 +199,7 @@ export async function POST(req: NextRequest) {
             if (pgvectorResults && pgvectorResults.length < requestedLimit) {
               const discarded = requestedLimit - pgvectorResults.length
               log.info({ returned: pgvectorResults.length, discarded, threshold: SIMILARITY_THRESHOLD },
-                'Semantic chunks discarded due to low relevance threshold')
+                'Few chunks met relevance threshold')
             }
             
             if (pgvectorResults && pgvectorResults.length > 0) {

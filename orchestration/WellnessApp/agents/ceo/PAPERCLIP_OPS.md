@@ -1,4 +1,4 @@
-﻿# Paperclip Backend API â€” CEO Operational Reference
+# Paperclip Backend API â€” CEO Operational Reference
 # Project: Wellness App
 
 > All credentials via env vars. Never hardcoded. The IDs below are workspace/agent IDs (not secrets).
@@ -124,5 +124,33 @@ npx paperclipai issue create \
 - Any `500` recurring â†’ escalate to Antigravity
 
 ---
-*Last updated: 2026-05-21 by Antigravity â€” Wellness App CEO bootstrap*
 
+## Key Failure Escalation Protocol
+
+When any agent encounters an API key error, the agent MUST:
+1. Identify the error type from the table below
+2. Create an **URGENT** issue in the CEO workspace with the error code
+3. Do NOT retry more than once — escalate immediately
+
+| Error Code | Meaning | CEO Action Required |
+|---|---|---|
+| `KEY_EXPIRED` | Token/key has expired | Rotate key, update env var on Railway |
+| `KEY_RATE_LIMITED` | API quota exhausted | Check billing, upgrade plan or wait for reset |
+| `KEY_REVOKED` | Key was manually revoked | Generate new key, update env var |
+| `KEY_INVALID` | Key format/value is incorrect | Verify key in provider dashboard |
+| `KEY_UNAUTHORIZED` | Key lacks required permissions | Update key scopes/permissions |
+| `KEY_BILLING_FAILED` | Provider payment method declined | Update billing on provider account |
+
+**Issue Template:**
+```json
+{
+  "title": "[KEY-FAIL] {ERROR_CODE}: {KEY_NAME} in {WORKSPACE_NAME}",
+  "description": "Agent: {agent_name}\nKey: {key_name}\nError: {error_code}\nHTTP Status: {status}\nResponse: {error_body}\nTimestamp: {iso_timestamp}\nAction Required: {recommended_action}",
+  "priority": "urgent"
+}
+```
+
+**Key Scope Reference:** See `orchestration/secrets-manifest.json` for which keys each workspace is authorized to use.
+
+---
+*Last updated: 2026-06-06 by Antigravity – Wellness App CEO bootstrap – added key failure escalation protocol*
