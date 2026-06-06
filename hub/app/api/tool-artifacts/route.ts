@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth'
 import {
   saveToolArtifact,
   getToolArtifacts,
+  getToolArtifact,
   updateToolArtifact,
   archiveToolArtifact,
 } from '@/lib/tool-artifacts'
@@ -91,6 +92,12 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ error: 'Nothing to update — provide content or title' }, { status: 400 })
     }
 
+    // Verify artifact belongs to this tenant (IDOR prevention)
+    const existing = await getToolArtifact(id)
+    if (!existing || existing.tenantId !== TENANT_ID) {
+      return NextResponse.json({ error: 'Artifact not found' }, { status: 404 })
+    }
+
     const artifact = await updateToolArtifact(id, content, title)
 
     if (!artifact) {
@@ -120,6 +127,12 @@ export async function DELETE(req: NextRequest) {
 
     if (!id) {
       return NextResponse.json({ error: 'id is required' }, { status: 400 })
+    }
+
+    // Verify artifact belongs to this tenant (IDOR prevention)
+    const existing = await getToolArtifact(id)
+    if (!existing || existing.tenantId !== TENANT_ID) {
+      return NextResponse.json({ error: 'Artifact not found' }, { status: 404 })
     }
 
     const archived = await archiveToolArtifact(id)

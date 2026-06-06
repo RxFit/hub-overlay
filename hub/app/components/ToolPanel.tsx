@@ -69,7 +69,10 @@ export function ToolPanel({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ toolId: activeSkill.id, recentMessages }),
     })
-      .then(r => r.json())
+      .then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      return r.json()
+    })
       .then(data => {
         if (!cancelled && data.contextCard) {
           setContextCard(data.contextCard)
@@ -92,6 +95,7 @@ export function ToolPanel({
 
   /* ── Save & Close ── */
   const handleSaveAndClose = useCallback(async () => {
+    if (saving) return // Prevent double-click
     if (!artifacts) {
       onDismiss()
       return
@@ -108,10 +112,11 @@ export function ToolPanel({
   }, [artifacts, onDismiss, onSaveArtifacts])
 
   /* ── Get prompts (hybrid: contextual + static) ── */
-  const prompts = [
+  const rawPrompts = [
     ...(contextCard?.suggestedPrompts || []),
     ...(FALLBACK_PROMPTS[activeSkill.id] || []),
-  ].slice(0, 6) // Cap at 6 prompts
+  ]
+  const prompts = [...new Set(rawPrompts)].slice(0, 6)
 
   /* ── Resolve tool-specific panel component ── */
   const PanelContent = TOOL_PANEL_MAP[activeSkill.id]
@@ -174,7 +179,14 @@ export function ToolPanel({
               </div>
             )}
           </div>
-        ) : null}
+        ) : (
+          <div className="tool-panel__context-card">
+            <span className="tool-panel__context-label">Context</span>
+            <p className="tool-panel__context-summary" style={{ fontStyle: 'italic' }}>
+              Start chatting to build context for this tool.
+            </p>
+          </div>
+        )}
       </div>
 
       {/* ── Prompt Chips ── */}

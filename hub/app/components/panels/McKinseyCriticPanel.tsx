@@ -57,7 +57,8 @@ export default function McKinseyCriticPanel({ messages, onInjectChat, onArtifact
     if (sections.length > 0) {
       onArtifactUpdate({ toolId: 'mckinsey-critic', title: 'McKinsey Critique', sections })
     }
-  }, [messages, onArtifactUpdate])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length, onArtifactUpdate])
 
   const sections = artifacts?.sections ?? []
   const grade = sections.find(s => s.id === 'grade')

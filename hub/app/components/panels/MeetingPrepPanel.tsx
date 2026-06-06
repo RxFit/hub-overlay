@@ -49,7 +49,8 @@ export default function MeetingPrepPanel({ messages, onInjectChat, onArtifactUpd
     if (sections.length > 0) {
       onArtifactUpdate({ toolId: 'meeting-prep', title: 'Meeting Prep', sections })
     }
-  }, [messages, onArtifactUpdate])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length, onArtifactUpdate])
 
   const sections = artifacts?.sections ?? []
   const agendaItems = sections.filter(s => s.type === 'step')

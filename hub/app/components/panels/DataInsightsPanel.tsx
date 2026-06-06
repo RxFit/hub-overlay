@@ -57,7 +57,8 @@ export default function DataInsightsPanel({ messages, onInjectChat, onArtifactUp
     if (sections.length > 0) {
       onArtifactUpdate({ toolId: 'data-insights', title: 'Data Insights', sections })
     }
-  }, [messages, onArtifactUpdate])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length, onArtifactUpdate])
 
   const sections = artifacts?.sections ?? []
   const metrics = sections.filter(s => s.type === 'score')

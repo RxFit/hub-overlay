@@ -1044,29 +1044,14 @@ Respond with EXACTLY one of:
   }, [])
 
   /* ── Handle skill deactivation (with optional artifact persistence) ── */
-  const handleSkillDeactivate = useCallback(async () => {
-    if (toolArtifacts && toolArtifacts.sections.length > 0) {
-      try {
-        await fetch('/api/tool-artifacts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            toolId: activeSkill?.id,
-            title: `${activeSkill?.name}: ${toolArtifacts.title || 'Untitled'}`,
-            content: toolArtifacts,
-            contextSummary: null,
-          }),
-        })
-      } catch {
-        /* Fail silently — artifacts are ephemeral */
-      }
-    }
+  /* ── Handle skill deactivation (cleanup only — saving is handled by ToolPanel.handleSaveAndClose) ── */
+  const handleSkillDeactivate = useCallback(() => {
     setActiveSkill(null)
     setToolPanelOpen(false)
     setToolPanelCollapsed(false)
     setToolArtifacts(null)
     if (mobileTab === 'tool_panel') setMobileTab('chat')
-  }, [activeSkill, toolArtifacts, mobileTab])
+  }, [mobileTab])
 
   /* ── Save tool artifacts callback for ToolPanel ── */
   const handleSaveToolArtifacts = useCallback(async (artifacts: ToolArtifactData) => {

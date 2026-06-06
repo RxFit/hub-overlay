@@ -69,7 +69,8 @@ export default function IssueTreePanel({ messages, onInjectChat, onArtifactUpdat
     if (sections.length > 0) {
       onArtifactUpdate({ toolId: 'issue-tree', title: 'Issue Tree', sections })
     }
-  }, [messages, onArtifactUpdate])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length, onArtifactUpdate])
 
   const sections = artifacts?.sections ?? []
   const branches = sections.filter(s => s.type === 'branch')

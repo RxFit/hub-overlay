@@ -56,7 +56,8 @@ export default function PrioritizationPanel({ messages, onInjectChat, onArtifact
     if (sections.length > 0) {
       onArtifactUpdate({ toolId: 'prioritization', title: 'Prioritization Matrix', sections })
     }
-  }, [messages, onArtifactUpdate])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length, onArtifactUpdate])
 
   const items = artifacts?.sections ?? []
 

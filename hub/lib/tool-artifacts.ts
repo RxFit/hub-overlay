@@ -66,8 +66,12 @@ export async function getToolArtifacts(
 ) {
   try {
     const conditions = toolId
-      ? and(eq(toolArtifacts.tenantId, tenantId), eq(toolArtifacts.toolId, toolId))
-      : eq(toolArtifacts.tenantId, tenantId)
+      ? and(
+          eq(toolArtifacts.tenantId, tenantId),
+          eq(toolArtifacts.toolId, toolId),
+          eq(toolArtifacts.status, 'active')
+        )
+      : and(eq(toolArtifacts.tenantId, tenantId), eq(toolArtifacts.status, 'active'))
 
     const rows = await db
       .select()

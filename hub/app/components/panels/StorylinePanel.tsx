@@ -39,7 +39,8 @@ export default function StorylinePanel({ messages, onInjectChat, onArtifactUpdat
     if (sections.length > 0) {
       onArtifactUpdate({ toolId: 'storyline', title: 'Storyline', sections })
     }
-  }, [messages, onArtifactUpdate])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length, onArtifactUpdate])
 
   const sections = artifacts?.sections ?? []
   const govThought = sections.find(s => s.id === 'gov-thought')

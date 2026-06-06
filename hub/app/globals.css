@@ -2893,7 +2893,7 @@ a:hover .rx-arrow {
 
 .tool-rail:hover {
   background: var(--bg-elevated);
-  width: 44px;
+  box-shadow: inset 0 0 0 2px rgba(197, 160, 89, 0.1);
 }
 
 .tool-rail__pulse {
@@ -2952,12 +2952,21 @@ a:hover .rx-arrow {
   right: 0;
   top: 0;
   bottom: 0;
-  width: 3px;
+  width: 44px; /* Meet 44px min touch target */
   z-index: 100;
   background: transparent;
   border: none;
   cursor: pointer;
   padding: 0;
+}
+
+.tool-edge-indicator::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px; /* Visual indicator stays thin */
 }
 
 .tool-edge-indicator__glow {

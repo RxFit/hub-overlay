@@ -53,7 +53,8 @@ export default function DeckPipelinePanel({ messages, onInjectChat, onArtifactUp
     if (sections.length > 0) {
       onArtifactUpdate({ toolId: 'deck-pipeline', title: 'Deck Pipeline', sections })
     }
-  }, [messages, onArtifactUpdate])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length, onArtifactUpdate])
 
   const sections = artifacts?.sections ?? []
   const stepSections = sections.filter(s => s.type === 'step')

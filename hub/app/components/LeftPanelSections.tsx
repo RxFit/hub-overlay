@@ -814,7 +814,7 @@ export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string)
   const { files, isLoading, error } = useDrive(activeFilter === 'artifacts' ? 'recent' : activeFilter)
   
   /* Fetch tool artifacts when artifacts tab is active */
-  const { data: artifactsData, isLoading: artifactsLoading } = useSWR<{ artifacts: ToolArtifactRecord[] }>(
+  const { data: artifactsData, isLoading: artifactsLoading, error: artifactsError } = useSWR<{ artifacts: ToolArtifactRecord[] }>(
     activeFilter === 'artifacts' ? '/api/tool-artifacts' : null,
     (url: string) => fetch(url).then(r => r.json()),
     { revalidateOnFocus: false }
@@ -861,6 +861,8 @@ export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string)
       {activeFilter === 'artifacts' ? (
         artifactsLoading ? (
           <SkeletonBlock lines={3} />
+        ) : artifactsError ? (
+          <SectionMessage message="Unable to load artifacts" type="error" />
         ) : !artifactsData?.artifacts?.length ? (
           <SectionMessage message={emptyMessages.artifacts} type="empty" />
         ) : (

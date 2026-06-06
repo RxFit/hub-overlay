@@ -56,7 +56,8 @@ export default function GammaDeckPanel({ messages, onInjectChat, onArtifactUpdat
     if (sections.length > 0) {
       onArtifactUpdate({ toolId: 'gamma-deck', title: 'Gamma Deck', sections })
     }
-  }, [messages, onArtifactUpdate])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length, onArtifactUpdate])
 
   const sections = artifacts?.sections ?? []
   const slides = sections.filter(s => s.type === 'slide')

@@ -44,7 +44,8 @@ export default function DecisionMemoPanel({ messages, onInjectChat, onArtifactUp
     if (sections.length > 0) {
       onArtifactUpdate({ toolId: 'decision-memo', title: 'Decision Memo', sections })
     }
-  }, [messages, onArtifactUpdate])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length, onArtifactUpdate])
 
   const sections = artifacts?.sections ?? []
   const pros = sections.filter(s => s.type === 'pro')

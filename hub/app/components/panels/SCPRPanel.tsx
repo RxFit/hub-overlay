@@ -43,7 +43,8 @@ export default function SCPRPanel({ messages, onInjectChat, onArtifactUpdate, ar
     if (sections.length > 0) {
       onArtifactUpdate({ toolId: 'scpr', title: 'SCPR Framework', sections })
     }
-  }, [messages, onArtifactUpdate])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length, onArtifactUpdate])
 
   const sections = artifacts?.sections ?? []
   const quadrants = sections.filter(s => s.type === 'narrative')

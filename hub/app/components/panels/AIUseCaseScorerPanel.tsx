@@ -54,7 +54,8 @@ export default function AIUseCaseScorerPanel({ messages, onInjectChat, onArtifac
     if (sections.length > 0) {
       onArtifactUpdate({ toolId: 'ai-use-case-scorer', title: 'AI Use Case Scorer', sections })
     }
-  }, [messages, onArtifactUpdate])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length, onArtifactUpdate])
 
   const items = artifacts?.sections ?? []
   const grouped: Record<string, typeof items> = { 'do-now': [], 'park': [], 'avoid': [] }
