@@ -54,6 +54,12 @@ async function run() {
     ON hub_users(tenant_id, email)
   `
 
+  // Migration patch — add updated_at to hub_users if it was created without it
+  await sql`
+    ALTER TABLE hub_users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now()
+  `
+  console.log('[migrate] ✓ hub_users updated_at column check')
+
   await sql`
     CREATE TABLE IF NOT EXISTS kpis (
       id              TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
