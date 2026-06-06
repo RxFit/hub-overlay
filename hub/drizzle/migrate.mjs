@@ -152,6 +152,24 @@ async function run() {
   `
   console.log('[migrate] ✓ document_chunks HNSW index')
 
+  // Create tool_artifacts table
+  await sql`
+    CREATE TABLE IF NOT EXISTS tool_artifacts (
+      id              TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id       TEXT NOT NULL REFERENCES tenants(id),
+      tool_id         TEXT NOT NULL,
+      chat_id         TEXT,
+      title           TEXT NOT NULL,
+      content         JSONB NOT NULL,
+      context_summary TEXT,
+      status          TEXT DEFAULT 'active',
+      created_by      TEXT,
+      created_at      TIMESTAMPTZ DEFAULT now() NOT NULL,
+      updated_at      TIMESTAMPTZ DEFAULT now() NOT NULL
+    )
+  `
+  console.log('[migrate] ✓ tool_artifacts table')
+
   // Seed rxfit tenant
   await sql`
     INSERT INTO tenants (id, name, domain)

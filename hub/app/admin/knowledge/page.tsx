@@ -27,7 +27,7 @@ export default async function KnowledgePage() {
   .from(documentChunks)
   .where(eq(documentChunks.tenantId, tenant.id))
   .orderBy(desc(documentChunks.createdAt))
-  .limit(100)
+  .limit(500)
 
   const ROLE_LABELS: Record<string, string> = {
     superadmin: 'Super Admin',

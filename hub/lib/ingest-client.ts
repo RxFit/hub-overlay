@@ -36,6 +36,24 @@ export async function ingestDocument(
 
     console.log(`[Ingest Client] Split document into ${chunks.length} chunks. Sending to upsert...`)
 
+    // Clear existing chunks for this sourceUrl before inserting new ones
+    const clearUrl = `${baseUrl.replace(/\/$/, '')}/api/embeddings/upsert?sourceUrl=${encodeURIComponent(sourceUrl)}&tenantId=${encodeURIComponent(tenantId)}`
+    console.log(`[Ingest Client] Clearing existing chunks at ${clearUrl}`)
+    const clearRes = await fetch(clearUrl, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`
+      },
+      cache: 'no-store'
+    })
+
+    if (!clearRes.ok) {
+      const errBody = await clearRes.text().catch(() => 'Unknown error')
+      console.warn(`[Ingest Client] Warning: Failed to clear old chunks: ${clearRes.status} - ${errBody}`)
+    } else {
+      console.log(`[Ingest Client] Old chunks cleared successfully.`)
+    }
+
     const chunkIds: string[] = []
 
     for (let i = 0; i < chunks.length; i++) {

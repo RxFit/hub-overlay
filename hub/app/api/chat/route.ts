@@ -35,9 +35,6 @@ function needsInternalSearch(message: string): boolean {
 function needsExternalSearch(message: string): boolean {
   const lower = message.toLowerCase()
 
-  // Skip if clearly about internal data
-  if (needsInternalSearch(message)) return false
-
   const externalSignals = [
     // Explicit web/research intent
     'search for', 'search the web', 'look up', 'find out about',

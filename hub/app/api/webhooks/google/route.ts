@@ -19,21 +19,40 @@ export async function POST(req: Request) {
     const channelToken = req.headers.get('x-goog-channel-token');
     const resourceState = req.headers.get('x-goog-resource-state');
     
-    if (!channelToken) {
+    // Check channel token validity
+    const expectedToken = process.env.GOOGLE_WEBHOOK_CHANNEL_TOKEN;
+    if (!channelToken || (expectedToken && channelToken !== expectedToken)) {
+      console.warn('[Google Webhook] Unauthorized request or channel token mismatch');
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    // 2. We only care about sync/update/add events
+    // 2. Acknowledge sync event immediately
     if (resourceState === 'sync') {
       return NextResponse.json({ status: 'Acknowledged Sync' }, { status: 200 });
     }
 
-    // 3. Extract basic payload info (URL, resourceId)
-    // Note: The actual body of Google Webhooks is often empty; we have to fetch the resource.
     const resourceId = req.headers.get('x-goog-resource-id') || 'unknown';
     const resourceUri = req.headers.get('x-goog-resource-uri') || '';
 
-    // 4. Process the delta asynchronously so we can return 200 quickly
+    // 3. Handle document deletion or trashing
+    if (resourceState === 'trash' || resourceState === 'delete') {
+      let fileId = resourceId;
+      if (resourceUri) {
+        const match = resourceUri.match(/\/files\/([a-zA-Z0-9-_]+)/);
+        if (match) {
+          fileId = match[1];
+        }
+      }
+
+      console.log(`[Google Webhook] File deleted or trashed. Cleaning up chunks for: ${fileId}`);
+      deleteChunksForFile(fileId).catch(err => {
+        console.error('[Google Webhook Deletion Error]', err);
+      });
+
+      return NextResponse.json({ status: 'Processing deletion' }, { status: 200 });
+    }
+
+    // 4. Process the delta asynchronously for add/update events
     processGoogleDelta(resourceId, resourceUri).catch(err => {
       console.error('[Google Webhook Error in Background]', err);
     });
@@ -79,30 +98,39 @@ async function processGoogleDelta(resourceId: string, resourceUri: string) {
     return;
   }
 
-  // POST to pgvector ingestion endpoint
-  const hubUrl = process.env.NEXTAUTH_URL || 'https://hub.casatrejo.com';
-  const upsertUrl = `${hubUrl}/api/embeddings/upsert`;
-  const apiKey = process.env.PAPERCLIP_API_KEY;
   const tenantId = process.env.NEXT_PUBLIC_TENANT_ID || 'rxfit';
   const sourceUrl = metadata.webViewLink || `https://docs.google.com/document/d/${fileId}/edit`;
 
-  const postRes = await fetch(upsertUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`
-    },
-    body: JSON.stringify({
-      tenantId,
-      sourceUrl,
-      content
-    })
+  // Use the ingest client to handle chunking, clearing, and uploading
+  const { ingestDocument } = await import('@/lib/ingest-client');
+  const hubUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
+
+  console.log(`[Google Webhook] Ingesting file ${fileId} content via ingestDocument...`);
+  const result = await ingestDocument(tenantId, sourceUrl, content, {
+    baseUrl: hubUrl,
+    chunkSize: 3000,
+    chunkOverlap: 600
   });
 
-  if (!postRes.ok) {
-    const bodyText = await postRes.text().catch(() => '');
-    throw new Error(`Failed to POST embedding: ${postRes.status} ${bodyText}`);
+  if (!result.success) {
+    throw new Error(`Ingest client failed to index ${fileId}: ${result.error}`);
   }
 
-  console.log(`[Google Webhook] Successfully indexed document ${fileId}`);
+  console.log(`[Google Webhook] Successfully indexed document ${fileId} with ${result.chunkIds.length} chunks`);
+}
+
+async function deleteChunksForFile(fileId: string) {
+  const { db } = await import('@/lib/db');
+  const { documentChunks } = await import('@/lib/schema');
+  const { like, and, eq } = await import('drizzle-orm');
+  const tenantId = process.env.NEXT_PUBLIC_TENANT_ID || 'rxfit';
+
+  const deleted = await db.delete(documentChunks).where(
+    and(
+      eq(documentChunks.tenantId, tenantId),
+      like(documentChunks.sourceUrl, `%${fileId}%`)
+    )
+  ).returning();
+
+  console.log(`[Google Webhook] Successfully deleted ${deleted.length} stale chunks associated with file ID: ${fileId}`);
 }

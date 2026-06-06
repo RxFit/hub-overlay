@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, uniqueIndex, jsonb, integer, vector } from 'drizzle-orm/pg-core'
+import { pgTable, text, timestamp, uniqueIndex, jsonb, integer, vector, index } from 'drizzle-orm/pg-core'
 
 /**
  * Hub database schema — Railway Postgres
@@ -115,7 +115,9 @@ export const documentChunks = pgTable('document_chunks', {
   content:    text('content').notNull(),                           // The raw text chunk
   embedding:  vector('embedding', { dimensions: 768 }),            // Google Gemini text-embedding-004
   createdAt:  timestamp('created_at').defaultNow().notNull(),
-})
+}, (table) => ({
+  embeddingIndex: index('document_chunks_embedding_hnsw_idx').using('hnsw', table.embedding.op('vector_cosine_ops'))
+}))
 
 /* ── Tool Artifacts (Structured output from skill sessions) ────────────── */
 

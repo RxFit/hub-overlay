@@ -1,7 +1,7 @@
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import { db } from './db'
 import { documentChunks } from './schema'
-import { desc, sql } from 'drizzle-orm'
+import { desc, sql, eq, and } from 'drizzle-orm'
 import { createLogger } from './logger'
 
 const log = createLogger('vector-store')
@@ -106,6 +106,25 @@ export async function upsertDocumentChunk(tenantId: string, sourceUrl: string, c
     return inserted
   } catch (err) {
     log.error({ err }, 'Failed to upsert document chunk')
+    throw err
+  }
+}
+
+/**
+ * Delete all document chunks matching a specific source URL and tenant ID
+ */
+export async function deleteDocumentChunks(tenantId: string, sourceUrl: string) {
+  try {
+    await db
+      .delete(documentChunks)
+      .where(
+        and(
+          eq(documentChunks.tenantId, tenantId),
+          eq(documentChunks.sourceUrl, sourceUrl)
+        )
+      )
+  } catch (err) {
+    log.error({ err }, 'Failed to delete document chunks')
     throw err
   }
 }
