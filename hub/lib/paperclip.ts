@@ -217,7 +217,7 @@ export async function getProjects(companyId: string): Promise<Project[]> {
     undefined,
     ProjectsResponseSchema,
   )
-  return data.projects ?? []
+  return (data.projects ?? []) as unknown as Project[]
 }
 
 /* ── Agents ── */

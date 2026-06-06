@@ -60,14 +60,14 @@ export interface Agent {
 export interface Project {
   id: string
   name: string
-  description: string | null
-  status: 'backlog' | 'planned' | 'started' | 'paused' | 'completed' | 'cancelled'
+  description: string | null | undefined
+  status: string                // 'backlog' | 'planned' | 'started' | 'paused' | 'completed' | 'cancelled'
   urlKey: string
-  color: string | null
+  color?: string | null
   companyId: string
   companyName?: string          // enriched client-side for dropdown display
-  leadAgentId: string | null
-  targetDate: string | null
+  leadAgentId?: string | null
+  targetDate?: string | null
   goalIds: string[]
   createdAt: string
   updatedAt: string

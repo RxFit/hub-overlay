@@ -1,10 +1,11 @@
 'use client'
 
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { signOut, useSession } from 'next-auth/react'
 import Link from 'next/link'
 import { useTenant } from './TenantProvider'
 import { useCompanies } from '@/app/hooks/useCompanies'
+import { useProjects } from '@/app/hooks/useProjects'
 
 /* ── BrandedHeader ── */
 
@@ -30,8 +31,9 @@ export function BrandedHeader({
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
-  // Live company list — scoped server-side by role
+  // Live data — both scoped server-side by role
   const { companies, isLoading: companiesLoading } = useCompanies()
+  const { projects, isLoading: projectsLoading } = useProjects()
 
   // Close menu on outside click
   useEffect(() => {
@@ -68,12 +70,24 @@ export function BrandedHeader({
     .join('')
     .toUpperCase()
 
-  // Selector visibility:
-  //  - onboarding: always hidden
-  //  - loading: show skeleton
-  //  - others: show live dropdown
+  // Role-based selector mode
+  const isSuperAdmin = userRole === 'superadmin'
   const isAdminOrAbove = userRole === 'superadmin' || userRole === 'admin'
   const showSelector = userRole && userRole !== 'onboarding'
+
+  // Group projects by company for the dropdown optgroups
+  const projectsByCompany = useMemo(() => {
+    const groups: Record<string, typeof projects> = {}
+    for (const p of projects) {
+      const key = p.companyName || 'Uncategorized'
+      if (!groups[key]) groups[key] = []
+      groups[key].push(p)
+    }
+    return groups
+  }, [projects])
+
+  // Determine loading state based on which selector mode
+  const selectorLoading = isSuperAdmin ? companiesLoading : projectsLoading
 
   return (
     <header className="hub-header" role="banner">
@@ -85,12 +99,14 @@ export function BrandedHeader({
       </div>
 
       <nav className="header-actions" aria-label="Hub controls">
-        {/* Project selector — hidden for onboarding, skeleton while loading */}
+        {/* Selector — superadmin sees companies, admin/staff see projects */}
         {showSelector && (
           <>
-            <label htmlFor="project-selector" className="sr-only">Select project</label>
-            {companiesLoading ? (
-              /* Skeleton placeholder — same width as the real select */
+            <label htmlFor="project-selector" className="sr-only">
+              {isSuperAdmin ? 'Select workspace' : 'Select project'}
+            </label>
+            {selectorLoading ? (
+              /* Skeleton placeholder */
               <div
                 aria-hidden="true"
                 style={{
@@ -101,26 +117,47 @@ export function BrandedHeader({
                   animation: 'pulse 1.5s ease-in-out infinite',
                 }}
               />
+            ) : isSuperAdmin ? (
+              /* ── SUPERADMIN: Company/workspace selector ── */
+              <select
+                id="project-selector"
+                value={activeProject}
+                onChange={e => onProjectChange(e.target.value)}
+                aria-label="Select workspace"
+                className="project-selector"
+                disabled={companies.length === 0}
+              >
+                <option value="all">All Workspaces</option>
+                {companies.map(c => (
+                  <option key={c.id} value={c.id}>
+                    [{c.identifier?.slice(0, 2).toUpperCase() ?? c.id.slice(0, 2).toUpperCase()}] {c.name}
+                  </option>
+                ))}
+              </select>
             ) : (
+              /* ── ADMIN / STAFF: Projects selector (grouped by company) ── */
               <select
                 id="project-selector"
                 value={activeProject}
                 onChange={e => onProjectChange(e.target.value)}
                 aria-label="Select project"
                 className="project-selector"
-                disabled={companies.length === 0}
+                disabled={projects.length === 0}
               >
-                {/* Admins and above get the "All" aggregated view */}
                 {isAdminOrAbove && (
                   <option value="all">All Projects</option>
                 )}
-                {companies.length === 0 && !isAdminOrAbove ? (
-                  <option value="" disabled>No projects assigned</option>
+                {projects.length === 0 ? (
+                  <option value="" disabled>No projects yet</option>
                 ) : (
-                  companies.map(c => (
-                    <option key={c.id} value={c.id}>
-                      [{c.identifier?.slice(0, 2).toUpperCase() ?? c.id.slice(0, 2).toUpperCase()}] {c.name}
-                    </option>
+                  Object.entries(projectsByCompany).map(([companyName, companyProjects]) => (
+                    <optgroup key={companyName} label={companyName}>
+                      {companyProjects.map(p => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}{p.status !== 'started' ? ` (${p.status})` : ''}
+                        </option>
+                      ))}
+                    </optgroup>
                   ))
                 )}
               </select>
