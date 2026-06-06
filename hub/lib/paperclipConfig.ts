@@ -12,8 +12,18 @@ export const PAPERCLIP_BASE_URL =
   process.env.PAPERCLIP_BASE_URL || 'https://rxfit-paperclip-11747747730.us-central1.run.app'
 
 /* ── RxFit AI Org — canonical IDs (Cloud Run) ── */
-/** The single RxFit company workspace in Paperclip. All issues route here. */
+/**
+ * The unified RxFit Enterprise org in Paperclip.
+ * All C-Suite agents (CEO, CMO, CTO, CFO, COO) live here.
+ * Previously mis-documented as "CMO workspace" — it is the parent org.
+ */
 export const RXFIT_COMPANY_ID = '829b2493-97ed-4cb9-8775-ff8298dcf650'
+
+/**
+ * CEO's personal workspace — inbound tasks from the Hub route here first.
+ * The CEO agent triages and delegates to officer workspaces.
+ */
+export const RXFIT_CEO_COMPANY_ID = '8f2acc3d-f2dc-4f8c-897e-7c400e91fd85'
 
 /** CEO — receives all inbound issues as orchestrator. */
 export const RXFIT_CEO_AGENT_ID = '82984f59-633e-4cdf-b8a1-d0499f6c226a'

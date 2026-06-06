@@ -15,8 +15,11 @@ const PAPERCLIP_BASE = PAPERCLIP_BASE_URL
 
 // Allowed API path prefixes for the proxy — covers full Paperclip surface
 const ALLOWED_PREFIXES = [
-  '/api/companies',         // list + detail + create
+  '/api/companies',         // list + detail + create + nested resources
   '/api/health',            // health check
+  '/api/issues',            // direct issue operations (PATCH, GET by ID)
+  '/api/agents',            // agent status + management
+  '/api/runs',              // agent run history
 ]
 
 export async function GET(

@@ -4,7 +4,7 @@ import { authOptions } from '@/lib/auth'
 import { createLogger } from '@/lib/logger'
 import { createIssue, getAgents } from '@/lib/paperclip'
 import { recordEvent } from '@/lib/event-logger'
-import { RXFIT_COMPANY_ID, RXFIT_CEO_AGENT_ID } from '@/lib/paperclipConfig'
+import { RXFIT_CEO_COMPANY_ID, RXFIT_CEO_AGENT_ID } from '@/lib/paperclipConfig'
 import { CreateIssueRequestSchema } from '@/lib/zod-schemas'
 import type { HubUser } from '@/types'
 
@@ -13,7 +13,7 @@ const log = createLogger('paperclip/issues')
 export const runtime = 'nodejs'
 
 // Default company for issues when no companyId is specified — always the RxFit org.
-const DEFAULT_COMPANY_ID = process.env.DEFAULT_PAPERCLIP_COMPANY_ID || RXFIT_COMPANY_ID
+const DEFAULT_COMPANY_ID = process.env.DEFAULT_PAPERCLIP_COMPANY_ID || RXFIT_CEO_COMPANY_ID
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions)

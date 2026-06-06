@@ -115,13 +115,14 @@ export async function POST(req: NextRequest) {
       const errored = allAgents.filter(a => a.status === 'error').length
       const inactive = allAgents.filter(a => a.status === 'inactive').length
       agentStatusContext = `Agent Fleet Status: ${allAgents.length} total — ${healthy} healthy, ${errored} errored, ${inactive} inactive`
-    } catch {
-      // Agents unavailable
+    } catch (agentErr) {
+      log.warn({ err: agentErr }, 'Agent status fetch failed — skipping agent context')
     }
     if (agentStatusContext) {
       agentActivity += '\n' + agentStatusContext
     }
-  } catch {
+  } catch (ctxErr) {
+    log.warn({ err: ctxErr }, 'Paperclip context fetch failed — proceeding without project context')
     // Paperclip unavailable — proceed without context
     projectContext = 'Paperclip API unavailable — using cached context'
   }

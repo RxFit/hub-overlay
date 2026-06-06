@@ -475,9 +475,15 @@ export default function HubPage() {
   /* ── Swipe gesture handlers — real-time drag-follow ── */
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     const touch = e.touches[0]
-    // Skip swipe tracking if touch originated inside a horizontally-scrollable area
     const target = e.target as HTMLElement
-    if (target.closest('.chat-suggestions')) {
+    // Skip swipe tracking inside the chat interaction zone
+    // (suggestions, input area, quoted replies) to allow native text
+    // selection, magnifying glass, and horizontal chip scrolling
+    if (
+      target.closest('.chat-suggestions') ||
+      target.closest('.chat-input-area') ||
+      target.closest('.quoted-reply-chip')
+    ) {
       touchStartRef.current = null
       return
     }

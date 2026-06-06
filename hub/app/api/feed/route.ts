@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { getCompanies, getIssues, getRuns } from '@/lib/paperclip'
+import { getCompanies, getIssues, getAgents } from '@/lib/paperclip'
 import type { FeedItem } from '@/types'
 
 export const runtime = 'nodejs'
@@ -17,18 +17,18 @@ export async function GET() {
   try {
     const companies = await getCompanies()
 
-    // Fetch recent issues and runs from all companies (cap at 3 for perf)
-    const companySlice = companies.slice(0, 3)
+    // Fetch recent issues and agents from all companies
+    const companySlice = companies.slice(0, 6) // cover all orgs
 
-    const [issueResults, runResults] = await Promise.all([
+    const [issueResults, agentResults] = await Promise.all([
       Promise.all(
         companySlice.map((c) =>
-          getIssues(c.id, { limit: 5 }).catch(() => [])
+          getIssues(c.id, { limit: 10 }).catch(() => [])
         )
       ),
       Promise.all(
         companySlice.map((c) =>
-          getRuns(c.id, { limit: 5 }).catch(() => [])
+          getAgents(c.id).catch(() => [])
         )
       ),
     ])
@@ -56,33 +56,34 @@ export async function GET() {
       })
     }
 
-    // Convert runs to feed items
-    for (const run of runResults.flat()) {
-      const runType = run.status === 'completed' ? 'completed' as const
-        : run.status === 'running' ? 'in_progress' as const
-        : run.status === 'failed' ? 'needs_you' as const
+    // Convert agents to feed items (show active/errored agents)
+    for (const agent of agentResults.flat()) {
+      const agentType = agent.status === 'active' ? 'in_progress' as const
+        : agent.status === 'error' ? 'needs_you' as const
         : 'info' as const
 
       feed.push({
-        id: `run-${run.id}`,
+        id: `agent-${agent.id}`,
         source: 'paperclip',
-        type: runType,
-        title: `Agent run: ${run.agentName}`,
-        description: `Issue ${run.issueIdentifier} · Status: ${run.status}${run.durationMs ? ` · ${(run.durationMs / 1000).toFixed(1)}s` : ''}`,
-        timestamp: run.startedAt ?? run.completedAt ?? new Date().toISOString(),
+        type: agentType,
+        title: `Agent: ${agent.name || 'Unnamed'}`,
+        description: `Adapter: ${agent.adapter ?? 'n/a'} · Status: ${agent.status ?? 'unknown'}`,
+        timestamp: agent.lastHeartbeat ?? agent.createdAt ?? new Date().toISOString(),
         icon: 'cpu',
         metadata: {
-          runId: run.id,
-          status: run.status,
-          agentName: run.agentName,
+          agentId: agent.id,
+          status: agent.status,
+          agentName: agent.name,
         },
       })
     }
 
     // Sort by timestamp descending (newest first)
     feed.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-  } catch {
+  } catch (err) {
     // Paperclip unavailable — return empty feed with system message
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    console.warn('[feed] Paperclip unavailable:', message)
     feed.push({
       id: 'system-offline',
       source: 'system',

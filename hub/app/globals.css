@@ -851,6 +851,8 @@ a:hover {
   border-top: 1px solid var(--border);
   background: var(--bg-primary);
   flex-shrink: 0;
+  /* Allow all native touch gestures (text selection, magnifying glass) */
+  touch-action: auto;
 }
 
 .chat-input-wrapper {
