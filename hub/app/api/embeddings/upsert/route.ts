@@ -20,7 +20,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Missing required fields: tenantId, sourceUrl, content' }, { status: 400 })
     }
 
-    const inserted = await upsertDocumentChunk(tenantId, sourceUrl, content)
+    // Guard against excessively large payloads that could exceed embedding model token limits
+    const MAX_CONTENT_LENGTH = 10_000
+    if (content.length > MAX_CONTENT_LENGTH) {
+      log.warn({ contentLength: content.length, max: MAX_CONTENT_LENGTH, sourceUrl },
+        'Content exceeds max length — truncating before embedding')
+    }
+    const safeContent = content.slice(0, MAX_CONTENT_LENGTH)
+
+    const inserted = await upsertDocumentChunk(tenantId, sourceUrl, safeContent)
 
     log.info({ chunkId: inserted.id }, 'Successfully upserted document chunk embedding')
 

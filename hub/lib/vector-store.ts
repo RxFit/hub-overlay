@@ -6,6 +6,20 @@ import { createLogger } from './logger'
 
 const log = createLogger('vector-store')
 
+/**
+ * Minimum cosine similarity score (0–1) a chunk must reach to be included
+ * in chat context. Configurable via SIMILARITY_THRESHOLD env var.
+ * Default 0.65 balances precision vs. recall for typical corpora.
+ */
+export const SIMILARITY_THRESHOLD = Number(process.env.SIMILARITY_THRESHOLD) || 0.65
+
+/**
+ * Maximum character length accepted by the embedding model.
+ * Inputs longer than this are truncated to prevent token-limit errors.
+ * gemini-embedding-001 supports ~2048 tokens ≈ 8000 chars conservatively.
+ */
+const MAX_EMBEDDING_INPUT_CHARS = 8_000
+
 let genAI: GoogleGenerativeAI | null = null
 
 function getGenAI() {
@@ -20,9 +34,19 @@ function getGenAI() {
  */
 export async function generateEmbedding(text: string): Promise<number[]> {
   try {
+    // Guard: truncate excessively long inputs to avoid token-limit errors
+    const safeText = text.length > MAX_EMBEDDING_INPUT_CHARS
+      ? text.slice(0, MAX_EMBEDDING_INPUT_CHARS)
+      : text
+
+    if (safeText.length < text.length) {
+      log.warn({ originalLength: text.length, truncatedTo: MAX_EMBEDDING_INPUT_CHARS },
+        'Input text truncated before embedding generation')
+    }
+
     const model = getGenAI().getGenerativeModel({ model: 'gemini-embedding-001' })
     const result = await model.embedContent({
-      content: { parts: [{ text: text }] },
+      content: { parts: [{ text: safeText }] },
       outputDimensionality: 768,
     } as any)
     return result.embedding.values
@@ -33,7 +57,8 @@ export async function generateEmbedding(text: string): Promise<number[]> {
 }
 
 /**
- * Perform a semantic search across document chunks using cosine distance
+ * Perform a semantic search across document chunks using cosine distance.
+ * Only returns results with similarity > SIMILARITY_THRESHOLD.
  */
 export async function searchSimilarDocuments(tenantId: string, query: string, limit: number = 5) {
   try {
@@ -50,7 +75,7 @@ export async function searchSimilarDocuments(tenantId: string, query: string, li
         similarity,
       })
       .from(documentChunks)
-      .where(sql`${documentChunks.tenantId} = ${tenantId} AND 1 - (${documentChunks.embedding} <=> ${JSON.stringify(queryEmbedding)}::vector) > 0.65`)
+      .where(sql`${documentChunks.tenantId} = ${tenantId} AND 1 - (${documentChunks.embedding} <=> ${JSON.stringify(queryEmbedding)}::vector) > ${SIMILARITY_THRESHOLD}`)
       .orderBy(desc(similarity))
       .limit(limit)
 

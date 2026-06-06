@@ -116,3 +116,19 @@ export const documentChunks = pgTable('document_chunks', {
   embedding:  vector('embedding', { dimensions: 768 }),            // Google Gemini text-embedding-004
   createdAt:  timestamp('created_at').defaultNow().notNull(),
 })
+
+/* ── Tool Artifacts (Structured output from skill sessions) ────────────── */
+
+export const toolArtifacts = pgTable('tool_artifacts', {
+  id:             text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+  tenantId:       text('tenant_id').notNull().references(() => tenants.id),
+  toolId:         text('tool_id').notNull(),              // e.g. 'issue-tree', 'decision-memo'
+  chatId:         text('chat_id'),                        // Links to the chat session that produced this
+  title:          text('title').notNull(),                 // User-facing title
+  content:        jsonb('content').notNull(),              // Structured JSONB (tool-specific schema)
+  contextSummary: text('context_summary'),                 // AI-generated context card text
+  status:         text('status').default('active'),        // active | completed | archived
+  createdBy:      text('created_by'),                      // User email
+  createdAt:      timestamp('created_at').defaultNow().notNull(),
+  updatedAt:      timestamp('updated_at').defaultNow().notNull(),
+})

@@ -1,11 +1,12 @@
 'use client'
 
-import { useState, useEffect, ReactNode } from 'react'
+import { useState, useEffect, ReactNode, useCallback } from 'react'
 import { useTasks, useCalendar, useDrive } from '@/app/hooks/useHubData'
 import type { TaskItem, CalendarEvent, DriveFile } from '@/app/hooks/useHubData'
 import { useKPIData } from '@/app/hooks/useKPIData'
-import type { LiveKPI, ProjectKPI } from '@/types'
+import type { LiveKPI, ProjectKPI, ToolArtifactRecord } from '@/types'
 import { AnimatedNumber } from './AnimatedNumber'
+import useSWR from 'swr'
 
 /* ══════════════════════════════════════════════════════════════════════════════
    SKELETON — shared loading placeholder
@@ -800,23 +801,43 @@ function CalendarRow({
    DOCUMENTS SECTION
    ══════════════════════════════════════════════════════════════════════════════ */
 
-type DocFilter = 'recent' | 'shared' | 'transcripts'
+type DocFilter = 'recent' | 'shared' | 'artifacts' | 'transcripts'
 const DOC_FILTERS: { key: DocFilter; label: string }[] = [
   { key: 'recent', label: 'Recent' },
   { key: 'shared', label: 'Shared' },
+  { key: 'artifacts', label: 'Artifacts' },
   { key: 'transcripts', label: 'Transcripts' },
 ]
 
 export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string) => void }) {
   const [activeFilter, setActiveFilter] = useState<DocFilter>('recent')
-  const { files, isLoading, error } = useDrive(activeFilter)
+  const { files, isLoading, error } = useDrive(activeFilter === 'artifacts' ? 'recent' : activeFilter)
+  
+  /* Fetch tool artifacts when artifacts tab is active */
+  const { data: artifactsData, isLoading: artifactsLoading } = useSWR<{ artifacts: ToolArtifactRecord[] }>(
+    activeFilter === 'artifacts' ? '/api/tool-artifacts' : null,
+    (url: string) => fetch(url).then(r => r.json()),
+    { revalidateOnFocus: false }
+  )
 
   const isAuthError = error && (error as any)?.status === 401
 
   const emptyMessages: Record<DocFilter, string> = {
     recent: 'No recent files',
     shared: 'No shared files',
+    artifacts: 'No saved artifacts — complete a tool session to create one',
     transcripts: 'No transcripts found',
+  }
+
+  /* Tool icon mapping for artifact cards */
+  const getToolIcon = (toolId: string): string => {
+    const icons: Record<string, string> = {
+      'issue-tree': '🌳', 'decision-memo': '📋', 'prioritization': '📊',
+      'data-insights': '📈', 'meeting-prep': '🤝', 'storyline': '📖',
+      'scpr': '🔄', 'mckinsey-critic': '🔍', 'ai-use-case-scorer': '🤖',
+      'deck-pipeline': '📑', 'gamma-deck': '🎨',
+    }
+    return icons[toolId] || '⚡'
   }
 
   return (
@@ -836,30 +857,63 @@ export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string)
         ))}
       </div>
 
-      {/* Content */}
-      {isLoading ? (
-        <SkeletonBlock lines={3} />
-      ) : isAuthError ? (
-        <SectionMessage message="Session expired — please sign in again" type="error" />
-      ) : error ? (
-        <SectionMessage message="Unable to load files — try refreshing or check your connection" type="error" />
-      ) : files.length === 0 ? (
-        <SectionMessage message={emptyMessages[activeFilter]} type="empty" />
+      {/* Artifacts tab content */}
+      {activeFilter === 'artifacts' ? (
+        artifactsLoading ? (
+          <SkeletonBlock lines={3} />
+        ) : !artifactsData?.artifacts?.length ? (
+          <SectionMessage message={emptyMessages.artifacts} type="empty" />
+        ) : (
+          <div role="list" aria-label="Saved tool artifacts">
+            {artifactsData.artifacts.map((artifact) => (
+              <button
+                key={artifact.id}
+                role="listitem"
+                onClick={() => onInjectChat(`Show me the ${artifact.toolId} artifact: ${artifact.title}`)}
+                aria-label={`Artifact: ${artifact.title}`}
+                className="section-row"
+              >
+                <span aria-hidden="true" className="document-icon">
+                  {getToolIcon(artifact.toolId)}
+                </span>
+                <div className="document-info">
+                  <div className="document-name">{artifact.title}</div>
+                  <div className="document-modified">
+                    {artifact.toolId} · {new Date(artifact.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+        )
       ) : (
-        <div role="list" aria-label={`${activeFilter} documents`}>
-          {files.map((file) => (
-            <DocumentRow
-              key={file.id}
-              file={file}
-              onClick={() => {
-                const msg = activeFilter === 'transcripts'
-                  ? `Summarize the meeting transcript: ${file.name}`
-                  : `Find document: ${file.name}`
-                onInjectChat(msg)
-              }}
-            />
-          ))}
-        </div>
+        /* Existing Drive file content */
+        <>
+          {isLoading ? (
+            <SkeletonBlock lines={3} />
+          ) : isAuthError ? (
+            <SectionMessage message="Session expired — please sign in again" type="error" />
+          ) : error ? (
+            <SectionMessage message="Unable to load files — try refreshing or check your connection" type="error" />
+          ) : files.length === 0 ? (
+            <SectionMessage message={emptyMessages[activeFilter]} type="empty" />
+          ) : (
+            <div role="list" aria-label={`${activeFilter} documents`}>
+              {files.map((file) => (
+                <DocumentRow
+                  key={file.id}
+                  file={file}
+                  onClick={() => {
+                    const msg = activeFilter === 'transcripts'
+                      ? `Summarize the meeting transcript: ${file.name}`
+                      : `Find document: ${file.name}`
+                    onInjectChat(msg)
+                  }}
+                />
+              ))}
+            </div>
+          )}
+        </>
       )}
     </CollapsibleSection>
   )

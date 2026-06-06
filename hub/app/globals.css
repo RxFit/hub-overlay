@@ -2592,7 +2592,576 @@ a:hover .rx-arrow {
   border-color: rgba(197, 160, 89, 0.25);
 }
 
-/* ── Context Injection Banner ── */
+/* ══════════════════════════════════════════════════════════════════════════════
+   TOOL GUIDANCE PANEL — Right-side contextual workflow panel
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+.tool-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-primary);
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+  animation: toolPanelSlideIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes toolPanelSlideIn {
+  from { transform: translateX(40px); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+
+/* ── Panel Header ── */
+.tool-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-card);
+  flex-shrink: 0;
+}
+
+.tool-panel__header-info {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.tool-panel__icon {
+  font-size: var(--text-base);
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 4px rgba(197, 160, 89, 0.3));
+}
+
+.tool-panel__title {
+  font-weight: 600;
+  font-size: var(--text-sm);
+  color: var(--accent);
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tool-panel__plugin {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+  margin-top: 1px;
+}
+
+.tool-panel__header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+
+.tool-panel__collapse-btn,
+.tool-panel__close-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  transition: all var(--duration-fast) ease;
+}
+
+.tool-panel__collapse-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.tool-panel__close-btn:hover {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: var(--danger);
+}
+
+/* ── Context Card ── */
+.tool-panel__context {
+  padding: var(--space-3) var(--space-4) 0;
+  flex-shrink: 0;
+}
+
+.tool-panel__context-loading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+
+.tool-panel__context-skeleton {
+  height: 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  animation: pulse 1.8s ease-in-out infinite;
+  width: 100%;
+}
+
+.tool-panel__context-skeleton--short {
+  width: 65%;
+}
+
+.tool-panel__context-card {
+  background: var(--glass-bg);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  animation: rxSlideInUp 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.tool-panel__context-label {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  color: var(--accent-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  display: block;
+  margin-bottom: var(--space-1);
+}
+
+.tool-panel__context-summary {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.tool-panel__context-entities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: var(--space-2);
+}
+
+.tool-panel__entity-chip {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  font-weight: 500;
+  color: var(--accent-dim);
+  background: rgba(197, 160, 89, 0.06);
+  border: 1px solid rgba(197, 160, 89, 0.12);
+  border-radius: var(--radius-full);
+  padding: 1px 8px;
+}
+
+/* ── Prompt Chips ── */
+.tool-panel__prompts {
+  padding: var(--space-3) var(--space-4);
+  flex-shrink: 0;
+}
+
+.tool-panel__prompts-label {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  display: block;
+  margin-bottom: var(--space-2);
+}
+
+.tool-panel__prompt-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tool-panel__prompt-chip {
+  font-size: var(--text-2xs);
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  padding: 4px 12px;
+  cursor: pointer;
+  transition: all var(--duration-fast) ease;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tool-panel__prompt-chip:hover {
+  background: rgba(197, 160, 89, 0.08);
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
+.tool-panel__prompt-chip:active {
+  transform: scale(0.96);
+}
+
+/* ── Artifact Workspace ── */
+.tool-panel__workspace {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-3) var(--space-4);
+  -webkit-overflow-scrolling: touch;
+}
+
+.tool-panel__loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-8);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.tool-panel__generic {
+  padding: var(--space-4);
+  text-align: center;
+}
+
+/* ── Panel Footer ── */
+.tool-panel__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border);
+  background: var(--bg-card);
+  flex-shrink: 0;
+}
+
+.tool-panel__artifact-count {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+}
+
+.tool-panel__save-btn {
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--accent-border);
+  background: rgba(197, 160, 89, 0.08);
+  color: var(--accent);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--duration-fast) ease;
+}
+
+.tool-panel__save-btn:hover {
+  background: rgba(197, 160, 89, 0.15);
+  border-color: var(--accent);
+}
+
+.tool-panel__save-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   COLLAPSED RAIL — Thin vertical strip with pulsing LIVE indicator
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+.tool-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 100%;
+  background: var(--bg-card);
+  border-left: 2px solid var(--accent);
+  cursor: pointer;
+  transition: all var(--duration-fast) ease;
+  position: relative;
+  overflow: hidden;
+  border-top: none;
+  border-bottom: none;
+  border-right: none;
+}
+
+.tool-rail:hover {
+  background: var(--bg-elevated);
+  width: 44px;
+}
+
+.tool-rail__pulse {
+  position: absolute;
+  inset: 0;
+  border-left: 2px solid var(--accent);
+  animation: toolPulse 2.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes toolPulse {
+  0%, 100% { box-shadow: inset 2px 0 8px rgba(197, 160, 89, 0.15); opacity: 0.7; }
+  50%      { box-shadow: inset 2px 0 20px rgba(197, 160, 89, 0.35); opacity: 1; }
+}
+
+.tool-rail__content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  transform: rotate(180deg);
+}
+
+.tool-rail__icon {
+  font-size: 14px;
+  filter: drop-shadow(0 0 3px rgba(197, 160, 89, 0.3));
+}
+
+.tool-rail__name {
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.tool-rail__live {
+  font-family: var(--font-mono);
+  font-size: 0.5rem;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.08em;
+  animation: toolPulse 2.4s ease-in-out infinite;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   MOBILE EDGE INDICATOR — Champagne gold pulsing bar on right edge
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+.tool-edge-indicator {
+  display: none;
+  position: fixed;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  z-index: 100;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+.tool-edge-indicator__glow {
+  position: absolute;
+  inset: 0;
+  background: rgba(197, 160, 89, 0.4);
+  animation: edgePulse 2s ease-in-out infinite;
+}
+
+@keyframes edgePulse {
+  0%, 100% { background: rgba(197, 160, 89, 0.2); box-shadow: -2px 0 8px rgba(197, 160, 89, 0.1); }
+  50%      { background: rgba(197, 160, 89, 0.7); box-shadow: -4px 0 16px rgba(197, 160, 89, 0.3); }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   ARTIFACT CARDS — Structured output blocks within the tool panel
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+.artifact-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-2);
+  overflow: hidden;
+  transition: all var(--duration-fast) ease;
+  animation: rxSlideInUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.artifact-card:hover {
+  border-color: var(--border-hover);
+}
+
+.artifact-card--recommended {
+  border-color: rgba(197, 160, 89, 0.4);
+  box-shadow: 0 0 12px rgba(197, 160, 89, 0.08);
+}
+
+.artifact-card--warning {
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.artifact-card__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  user-select: none;
+}
+
+.artifact-card__type-badge {
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+
+.artifact-card__type-badge--branch {
+  color: var(--accent);
+  background: rgba(197, 160, 89, 0.08);
+  border: 1px solid rgba(197, 160, 89, 0.15);
+}
+
+.artifact-card__type-badge--hypothesis {
+  color: var(--info);
+  background: rgba(74, 111, 165, 0.08);
+  border: 1px solid rgba(74, 111, 165, 0.15);
+}
+
+.artifact-card__type-badge--pro {
+  color: var(--success, #22c55e);
+  background: rgba(34, 197, 94, 0.08);
+  border: 1px solid rgba(34, 197, 94, 0.15);
+}
+
+.artifact-card__type-badge--con {
+  color: var(--danger);
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.15);
+}
+
+.artifact-card__type-badge--recommendation {
+  color: var(--accent);
+  background: rgba(197, 160, 89, 0.1);
+  border: 1px solid rgba(197, 160, 89, 0.2);
+}
+
+.artifact-card__type-badge--step {
+  color: var(--text-muted);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+}
+
+.artifact-card__type-badge--score {
+  color: var(--accent-bright);
+  background: rgba(197, 160, 89, 0.06);
+  border: 1px solid rgba(197, 160, 89, 0.12);
+}
+
+.artifact-card__type-badge--critique {
+  color: var(--warn);
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.15);
+}
+
+.artifact-card__title {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-card__toggle {
+  font-size: 10px;
+  color: var(--text-muted);
+  transition: transform var(--duration-fast) ease;
+  flex-shrink: 0;
+}
+
+.artifact-card__toggle--open {
+  transform: rotate(90deg);
+}
+
+.artifact-card__body {
+  padding: 0 var(--space-3) var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.artifact-card__children {
+  padding: 0 var(--space-3) var(--space-2);
+}
+
+.artifact-card__score-value {
+  font-family: var(--font-mono);
+  font-size: var(--text-lg);
+  font-weight: 700;
+  color: var(--accent);
+}
+
+/* ── Light mode overrides for tool panel ── */
+[data-theme="light"] .tool-panel {
+  background: var(--bg-primary);
+  border-left-color: var(--border);
+}
+
+[data-theme="light"] .tool-panel__header {
+  background: var(--bg-card);
+}
+
+[data-theme="light"] .tool-panel__context-card {
+  background: var(--glass-bg);
+  border-color: var(--glass-border);
+}
+
+[data-theme="light"] .tool-panel__prompt-chip {
+  background: var(--bg-card);
+  border-color: var(--border);
+}
+
+[data-theme="light"] .tool-panel__prompt-chip:hover {
+  background: rgba(197, 160, 89, 0.12);
+}
+
+[data-theme="light"] .tool-rail {
+  background: var(--bg-card);
+}
+
+[data-theme="light"] .artifact-card {
+  background: var(--bg-card);
+}
+
+/* ── Mobile: Tool panel as full-screen overlay ── */
+@media (max-width: 640px) {
+  .tool-panel {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    border-left: none;
+    animation: toolPanelMobileSlideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  @keyframes toolPanelMobileSlideUp {
+    from { transform: translateY(100%); opacity: 0; }
+    to   { transform: translateY(0);    opacity: 1; }
+  }
+
+  .tool-rail {
+    display: none;
+  }
+
+  .tool-edge-indicator {
+    display: block;
+  }
+}
+
+
 .context-banner {
   display: flex;
   align-items: center;

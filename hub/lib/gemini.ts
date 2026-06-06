@@ -166,7 +166,12 @@ Question sequences by intent:
 
   /* ── Active Skill Protocol ── */
   if (context.activeSkill && context.activeSkillContent) {
-    prompt += `## ACTIVE SKILL PROTOCOL: ${context.activeSkill}\n\nYou are currently operating under the "${context.activeSkill}" protocol. Follow its instructions precisely.\n\nIMPORTANT: You are in the Hub web assistant — file system, terminal commands, git operations, and bash scripts are NOT available. Adapt all skill protocols to a conversational workflow. Focus on the strategic/analytical instructions, skip any file-writing or terminal-based steps.\n\n${context.activeSkillContent}\n\n`
+    prompt += `## ACTIVE SKILL PROTOCOL: ${context.activeSkill}\n\n`
+    prompt += `You are currently operating under the "${context.activeSkill}" protocol. Follow its instructions precisely.\n\n`
+    prompt += `IMPORTANT: You are in the Hub web assistant — file system, terminal commands, git operations, and bash scripts are NOT available. Adapt all skill protocols to a conversational workflow. Focus on the strategic/analytical instructions, skip any file-writing or terminal-based steps.\n\n`
+    prompt += `CRITICAL CONTEXT PRESERVATION: The user activated this tool mid-conversation. You MUST reference and build upon the conversation context that was being discussed before activation. Do NOT ask the user to re-state topics, entities, or analysis that was already discussed. Treat the entire conversation history as your working context.\n\n`
+    prompt += `ARTIFACT FORMATTING: Structure your output so that distinct artifacts (branches, hypotheses, recommendations, pros/cons, steps, scores, critiques) are clearly delineated with markdown headers (e.g., "### Branch A:", "**Hypothesis A1:**", "**Recommendation:**"). The Tool Panel UI will parse these into interactive cards. Use consistent formatting patterns.\n\n`
+    prompt += `${context.activeSkillContent}\n\n`
   }
 
   /* ── Skill Catalog (for dynamic tool suggestions) ── */

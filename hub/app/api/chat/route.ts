@@ -181,11 +181,24 @@ export async function POST(req: NextRequest) {
         (async () => {
           try {
             const tenantId = process.env.NEXT_PUBLIC_TENANT_ID || 'rxfit'
-            const { searchSimilarDocuments } = await import('@/lib/vector-store')
-            const pgvectorResults = await searchSimilarDocuments(tenantId, query, 3)
+            const { searchSimilarDocuments, SIMILARITY_THRESHOLD } = await import('@/lib/vector-store')
+            const requestedLimit = 3
+            const pgvectorResults = await searchSimilarDocuments(tenantId, query, requestedLimit)
             
-            if (pgvectorResults && pgvectorResults.length < 3) {
-              log.info({ count: pgvectorResults.length }, 'Few chunks met relevance threshold (0.65)')
+            // Log per-chunk scores for observability
+            if (pgvectorResults && pgvectorResults.length > 0) {
+              const scores = pgvectorResults.map(r => ({
+                id: r.id,
+                sourceUrl: r.sourceUrl,
+                similarity: Number(r.similarity).toFixed(4),
+              }))
+              log.info({ scores, threshold: SIMILARITY_THRESHOLD }, 'pgvector semantic results returned')
+            }
+
+            if (pgvectorResults && pgvectorResults.length < requestedLimit) {
+              const discarded = requestedLimit - pgvectorResults.length
+              log.info({ returned: pgvectorResults.length, discarded, threshold: SIMILARITY_THRESHOLD },
+                'Semantic chunks discarded due to low relevance threshold')
             }
             
             if (pgvectorResults && pgvectorResults.length > 0) {
