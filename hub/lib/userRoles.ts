@@ -116,6 +116,7 @@ export async function upsertUserRole(
         assignedProjects: entry.assignedProjects,
         assignedBy:       entry.assignedBy,
         assignedAt:       new Date(),
+        updatedAt:        new Date(),
         ...(entry.name ? { name: entry.name } : {}),
       },
     })
