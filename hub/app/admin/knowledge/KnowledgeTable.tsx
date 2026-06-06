@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useEffect } from 'react'
+import { useRouter, usePathname } from 'next/navigation'
 import { deleteChunk } from './actions'
 
 type Chunk = {
@@ -10,13 +11,56 @@ type Chunk = {
   createdAt: Date
 }
 
-export default function KnowledgeTable({ initialChunks }: { initialChunks: Chunk[] }) {
+interface KnowledgeTableProps {
+  initialChunks: Chunk[]
+  totalCount: number
+  currentPage: number
+  pageSize: number
+  searchTerm: string
+}
+
+export default function KnowledgeTable({
+  initialChunks,
+  totalCount,
+  currentPage,
+  pageSize,
+  searchTerm,
+}: KnowledgeTableProps) {
+  const router = useRouter()
+  const pathname = usePathname()
+
   const [chunks, setChunks] = useState(initialChunks)
   const [deleting, setDeleting] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [searchTerm, setSearchTerm] = useState('')
-  const [currentPage, setCurrentPage] = useState(1)
-  const pageSize = 10
+  const [searchInputValue, setSearchInputValue] = useState(searchTerm)
+
+  // Keep local chunks list synced with server updates
+  useEffect(() => {
+    setChunks(initialChunks)
+  }, [initialChunks])
+
+  // Keep search input synced with URL updates
+  useEffect(() => {
+    setSearchInputValue(searchTerm)
+  }, [searchTerm])
+
+  // Debounce search input and update URL query parameters
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (searchInputValue.trim() === searchTerm) return
+
+      const params = new URLSearchParams(window.location.search)
+      if (searchInputValue.trim()) {
+        params.set('q', searchInputValue.trim())
+      } else {
+        params.delete('q')
+      }
+      params.set('page', '1') // reset page to 1 on new search
+      router.push(`${pathname}?${params.toString()}`)
+    }, 400)
+
+    return () => clearTimeout(timer)
+  }, [searchInputValue, searchTerm, router, pathname])
 
   const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to permanently delete this chunk?')) return
@@ -32,27 +76,17 @@ export default function KnowledgeTable({ initialChunks }: { initialChunks: Chunk
     }
   }
 
-  // Filter chunks based on search term
-  const filteredChunks = useMemo(() => {
-    const term = searchTerm.trim().toLowerCase()
-    if (!term) return chunks
-    return chunks.filter(c =>
-      c.content.toLowerCase().includes(term) ||
-      c.sourceUrl.toLowerCase().includes(term)
-    )
-  }, [chunks, searchTerm])
-
-  // Paginate filtered chunks
-  const totalPages = Math.ceil(filteredChunks.length / pageSize)
-  const startIndex = (currentPage - 1) * pageSize
-  const paginatedChunks = useMemo(() => {
-    return filteredChunks.slice(startIndex, startIndex + pageSize)
-  }, [filteredChunks, startIndex, pageSize])
-
-  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setSearchTerm(e.target.value)
-    setCurrentPage(1)
+  const handlePageChange = (newPage: number) => {
+    const params = new URLSearchParams(window.location.search)
+    params.set('page', newPage.toString())
+    if (searchTerm) {
+      params.set('q', searchTerm)
+    }
+    router.push(`${pathname}?${params.toString()}`)
   }
+
+  const totalPages = Math.ceil(totalCount / pageSize)
+  const startIndex = (currentPage - 1) * pageSize
 
   return (
     <div className="admin-table">
@@ -74,7 +108,7 @@ export default function KnowledgeTable({ initialChunks }: { initialChunks: Chunk
         border: '1px solid var(--border)'
       }}>
         <span className="rx-icon rx-icon--sm" style={{ color: 'var(--accent)' }}>
-          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
             <circle cx="11" cy="11" r="8"></circle>
             <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
           </svg>
@@ -82,8 +116,8 @@ export default function KnowledgeTable({ initialChunks }: { initialChunks: Chunk
         <input
           type="text"
           placeholder="Search semantic database by URL or chunk content..."
-          value={searchTerm}
-          onChange={handleSearchChange}
+          value={searchInputValue}
+          onChange={(e) => setSearchInputValue(e.target.value)}
           style={{
             flex: 1,
             background: 'transparent',
@@ -95,9 +129,15 @@ export default function KnowledgeTable({ initialChunks }: { initialChunks: Chunk
           }}
           aria-label="Search chunks"
         />
-        {searchTerm && (
+        {searchInputValue && (
           <button
-            onClick={() => { setSearchTerm(''); setCurrentPage(1); }}
+            onClick={() => {
+              setSearchInputValue('')
+              const params = new URLSearchParams(window.location.search)
+              params.delete('q')
+              params.set('page', '1')
+              router.push(`${pathname}?${params.toString()}`)
+            }}
             style={{
               background: 'var(--bg-elevated)',
               border: '1px solid var(--border)',
@@ -116,12 +156,12 @@ export default function KnowledgeTable({ initialChunks }: { initialChunks: Chunk
         )}
       </div>
 
-      {filteredChunks.length === 0 ? (
+      {chunks.length === 0 ? (
         <div className="admin-empty">No matching chunks found.</div>
       ) : (
         <>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            {paginatedChunks.map(chunk => (
+            {chunks.map(chunk => (
               <div key={chunk.id} className="admin-row" style={{ alignItems: 'flex-start', padding: '16px', borderRadius: 'var(--radius-md)', display: 'flex', border: '1px solid var(--border)', background: 'var(--bg-card)' }}>
                 <div className="admin-row__info" style={{ flex: 1, overflow: 'hidden' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', flexWrap: 'wrap', gap: '8px' }}>
@@ -186,12 +226,12 @@ export default function KnowledgeTable({ initialChunks }: { initialChunks: Chunk
             gap: '12px'
           }}>
             <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              Showing {filteredChunks.length > 0 ? startIndex + 1 : 0}–{Math.min(startIndex + pageSize, filteredChunks.length)} of {filteredChunks.length} chunks
+              Showing {totalCount > 0 ? startIndex + 1 : 0}–{Math.min(startIndex + pageSize, totalCount)} of {totalCount} chunks
             </span>
             {totalPages > 1 && (
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                 <button
-                  onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
+                  onClick={() => handlePageChange(Math.max(currentPage - 1, 1))}
                   disabled={currentPage === 1}
                   style={{
                     background: currentPage === 1 ? 'transparent' : 'var(--bg-elevated)',
@@ -211,7 +251,7 @@ export default function KnowledgeTable({ initialChunks }: { initialChunks: Chunk
                   Page {currentPage} of {totalPages}
                 </span>
                 <button
-                  onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
+                  onClick={() => handlePageChange(Math.min(currentPage + 1, totalPages))}
                   disabled={currentPage === totalPages}
                   style={{
                     background: currentPage === totalPages ? 'transparent' : 'var(--bg-elevated)',
