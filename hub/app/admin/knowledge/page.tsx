@@ -3,7 +3,7 @@ import { documentChunks } from '@/lib/schema'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { redirect } from 'next/navigation'
-import { desc } from 'drizzle-orm'
+import { desc, eq } from 'drizzle-orm'
 import { getTenantConfig } from '@/lib/tenant'
 import KnowledgeTable from './KnowledgeTable'
 import Link from 'next/link'
@@ -23,7 +23,11 @@ export default async function KnowledgePage() {
     sourceUrl: documentChunks.sourceUrl,
     content: documentChunks.content,
     createdAt: documentChunks.createdAt,
-  }).from(documentChunks).orderBy(desc(documentChunks.createdAt))
+  })
+  .from(documentChunks)
+  .where(eq(documentChunks.tenantId, tenant.id))
+  .orderBy(desc(documentChunks.createdAt))
+  .limit(100)
 
   const ROLE_LABELS: Record<string, string> = {
     superadmin: 'Super Admin',
