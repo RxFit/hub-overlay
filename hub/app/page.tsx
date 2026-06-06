@@ -214,6 +214,7 @@ function RightPanel({
   userRole,
   kpiLoading,
   onCustomizeCSuite,
+  activeOrgId,
 }: {
   isOpen?: boolean
   onClose?: () => void
@@ -225,6 +226,7 @@ function RightPanel({
   userRole?: string
   kpiLoading?: boolean
   onCustomizeCSuite: (orgId: string, orgName: string) => void
+  activeOrgId?: string
 }) {
   // Build Paperclip workspace URL from the active project
   const paperclipBaseUrl = process.env.NEXT_PUBLIC_PAPERCLIP_URL || 'https://rxfit-paperclip-11747747730.us-central1.run.app'
@@ -274,7 +276,7 @@ function RightPanel({
 
       <div className="panel-content">
         <ProjectHealthSection projects={projects} onInjectChat={onInjectChat} userRole={userRole} isLoading={kpiLoading} />
-        <ExecutionFeed onInjectChat={onInjectChat} onCustomizeCSuite={onCustomizeCSuite} />
+        <ExecutionFeed onInjectChat={onInjectChat} onCustomizeCSuite={onCustomizeCSuite} orgId={activeOrgId || activeCompany?.companyId} />
       </div>
     </aside>
   )
@@ -2088,6 +2090,7 @@ Respond with EXACTLY one of:
             panelRef={rightPanelRef}
             projects={projects}
             activeProject={activeProject}
+            activeOrgId={activeProject !== 'all' ? projects?.find(p => p.identifier?.toLowerCase() === activeProject?.toLowerCase() || p.companyName?.toLowerCase().includes(activeProject?.toLowerCase() || ''))?.companyId : undefined}
             userRole={userRole}
             kpiLoading={kpiLoading}
             onCustomizeCSuite={(orgId, orgName) => {

@@ -302,7 +302,7 @@ export interface ActiveSkill {
    BUSINESS MANAGER / CEO PULSE TYPES
    ══════════════════════════════════════════════════════════════════════════════ */
 
-export type AgentRoleKey = 'ceo' | 'cmo' | 'cto' | 'cfo' | 'coo' | 'marketing' | 'technical' | 'revenue'
+export type AgentRoleKey = 'ceo' | 'cmo' | 'cto' | 'cfo' | 'coo'
 export type DepartmentHealth = 'ON_TRACK' | 'DRIFTING' | 'CRITICAL'
 export type StallStatus = 'normal' | 'amber' | 'red'
 

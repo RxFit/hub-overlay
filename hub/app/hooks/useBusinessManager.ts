@@ -35,9 +35,6 @@ const ROLE_DISPLAY: Record<string, string> = {
   cto: 'CTO',
   cfo: 'CFO',
   coo: 'COO',
-  marketing: 'Marketing',
-  technical: 'Technical',
-  revenue: 'Revenue',
 }
 
 export function useBusinessManager(orgId?: string): BusinessManagerState {

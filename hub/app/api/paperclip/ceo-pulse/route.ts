@@ -27,9 +27,6 @@ const ROLE_KEYWORDS: Record<AgentRoleKey, string[]> = {
   cto:       ['cto', 'technical', 'engineer', 'dev', 'tech'],
   cfo:       ['cfo', 'finance', 'revenue', 'billing', 'stripe'],
   coo:       ['coo', 'operations', 'ops', 'comms'],
-  marketing: ['marketing', 'content', 'seo', 'brand', 'cmo'],
-  technical: ['technical', 'engineer', 'dev', 'tech', 'cto'],
-  revenue:   ['revenue', 'finance', 'billing', 'stripe', 'cfo'],
 }
 
 function classifyAgentRole(agentName: string): AgentRoleKey {
@@ -68,7 +65,7 @@ export async function GET(req: Request) {
     const allCompanies = await getCompanies()
     const companies = orgId
       ? allCompanies.filter(c => c.id === orgId || c.identifier === orgId)
-      : allCompanies.slice(0, 1) // Default to first org if no orgId specified
+      : allCompanies.sort((a, b) => (a.identifier ?? a.name).localeCompare(b.identifier ?? b.name)).slice(0, 1) // Deterministic: alphabetical fallback
 
     if (companies.length === 0) {
       // Return a graceful empty pulse rather than erroring
