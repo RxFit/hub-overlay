@@ -9,7 +9,7 @@
  * - CSS custom properties (brand colors) injected at runtime
  * - Project selector options
  * - Role permissions
- * - KPI sheet binding
+ * - KPI data binding
  */
 
 import type { RoleConfig } from '@/types'
@@ -43,7 +43,7 @@ const SUPERADMIN_ROLE: RoleConfig = {
   id: 'superadmin',
   name: 'Super Admin',
   description: 'Master orchestrator — can assign admin roles across companies',
-  leftPanelModules: ['tasks', 'calendar', 'drive', 'sheets-kpi'],
+  leftPanelModules: ['tasks', 'calendar', 'drive', 'kpi'],
   rightPanelModules: ['feed', 'agent-runs', 'issues', 'notifications'],
   canChat: true,
   canManageRoles: true,
@@ -56,7 +56,7 @@ const ADMIN_ROLE: RoleConfig = {
   id: 'admin',
   name: 'Admin',
   description: 'Business admin — can assign roles up to staff within their company',
-  leftPanelModules: ['tasks', 'calendar', 'drive', 'sheets-kpi'],
+  leftPanelModules: ['tasks', 'calendar', 'drive', 'kpi'],
   rightPanelModules: ['feed', 'agent-runs', 'issues', 'notifications'],
   canChat: true,
   canManageRoles: true,
@@ -69,7 +69,7 @@ const STAFF_ROLE: RoleConfig = {
   id: 'staff',
   name: 'Staff',
   description: 'Full operational access to assigned projects',
-  leftPanelModules: ['tasks', 'calendar', 'drive', 'sheets-kpi'],
+  leftPanelModules: ['tasks', 'calendar', 'drive', 'kpi'],
   rightPanelModules: ['feed', 'notifications'],
   canChat: true,
   canManageRoles: false,
@@ -82,7 +82,7 @@ const ONBOARDING_ROLE: RoleConfig = {
   id: 'onboarding',
   name: 'Onboarding',
   description: 'Default role for new users — full left panel + chat, awaiting role assignment',
-  leftPanelModules: ['tasks', 'calendar', 'drive', 'sheets-kpi'],
+  leftPanelModules: ['tasks', 'calendar', 'drive', 'kpi'],
   rightPanelModules: [],
   canChat: true,
   canManageRoles: false,

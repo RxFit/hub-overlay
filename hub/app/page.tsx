@@ -670,10 +670,15 @@ export default function HubPage() {
   const sendToApi = useCallback(async (userMessage: string, allMessages: ChatMsg[], useCase: string = 'deep_dive', msgAttachments?: ChatAttachment[]) => {
     setIsTyping(true)
 
+    // HARDENED: AbortController with 45-second client-side timeout
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 45_000)
+
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           messages: allMessages.map(m => ({
             id: m.id,
@@ -720,6 +725,12 @@ export default function HubPage() {
                   prev.map(m => m.id === assistantId ? { ...m, content: fullText } : m)
                 )
               }
+              if (parsed.error) {
+                // Server sent an error event — show it to the user
+                setMessages(prev =>
+                  prev.map(m => m.id === assistantId ? { ...m, content: `⚠️ ${parsed.error}` } : m)
+                )
+              }
               // Parse suggestedTools metadata from SSE
               if (parsed.suggestedTools && Array.isArray(parsed.suggestedTools)) {
                 setSuggestedTools(parsed.suggestedTools)
@@ -733,13 +744,18 @@ export default function HubPage() {
 
       return // Success — no fallback needed
     } catch (err) {
+      const isTimeout = err instanceof DOMException && err.name === 'AbortError'
       console.error('Chat API Error:', err);
       setIsTyping(false);
       setMessages(prev => [...prev, {
         id: String(Date.now()),
         role: 'assistant' as const,
-        content: "I'm having trouble connecting to the intelligence nodes right now. Please try again in a moment.",
+        content: isTimeout
+          ? "⏱️ The response took too long. The server may be warming up — please try again in a moment."
+          : "I'm having trouble connecting to the intelligence nodes right now. Please try again in a moment.",
       }]);
+    } finally {
+      clearTimeout(timeoutId)
     }
   }, [activeSkill])
 

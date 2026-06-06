@@ -90,7 +90,7 @@ export async function GET(req: NextRequest) {
           value: row.value,
           trend: row.trend ?? '',
           trendDirection: (row.trendDirection as 'up' | 'down' | 'neutral') ?? 'neutral',
-          source: 'sheet' as const,   // keeps 'sheet' source so Left Panel filter includes them
+          source: 'business' as const,   // DB-sourced business KPIs (migrated from Google Sheets)
           scope: (row.scope as 'global' | 'project') ?? 'global',
           visibility: (row.visibility as 'public' | 'staff' | 'admin') ?? 'staff',
           updatedAt: row.updatedAt?.toISOString() ?? now,

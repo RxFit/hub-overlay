@@ -15,7 +15,21 @@ import type { ChatMessage, ChatAttachment } from '@/types'
 const log = createLogger('chat')
 
 export const runtime = 'nodejs'
-export const maxDuration = 60
+export const maxDuration = 120
+
+/**
+ * Race a promise against a timeout. Returns fallback value on timeout.
+ * Critical for preventing pre-stream work from blocking the SSE response.
+ */
+async function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T, label: string): Promise<T> {
+  const timer = new Promise<T>((resolve) => {
+    setTimeout(() => {
+      log.warn({ ms, label }, `Timeout exceeded for ${label} — using fallback`)
+      resolve(fallback)
+    }, ms)
+  })
+  return Promise.race([promise, timer])
+}
 
 const internalSignals = [
   'our ', 'my ', 'kpi', 'paperclip', 'workspace',
@@ -81,48 +95,56 @@ export async function POST(req: NextRequest) {
   }
 
   // Build context from live Paperclip data
+  // HARDENED: 8-second aggregate timeout prevents pre-stream hang
   let projectContext = ''
   let agentActivity = ''
-  try {
-    const companies = await getCompanies()
-    projectContext = companies
-      .map(c => `- ${c.name} (${c.identifier}): ${c.issueCount ?? '?'} issues, ${c.memberCount ?? '?'} members`)
-      .join('\n')
+  const paperclipContextResult = await withTimeout(
+    (async () => {
+      try {
+        const companies = await getCompanies()
+        const pc = companies
+          .map(c => `- ${c.name} (${c.identifier}): ${c.issueCount ?? '?'} issues, ${c.memberCount ?? '?'} members`)
+          .join('\n')
 
-    // Get recent issues across all companies (first 3 for context)
-    const issuePromises = companies.slice(0, 3).map(c =>
-      getIssues(c.id, { limit: 5 }).catch(() => [])
-    )
-    const issueResults = await Promise.all(issuePromises)
-    const allIssues = issueResults.flat()
-    agentActivity = allIssues
-      .slice(0, 10)
-      .map(i => `- [${i.identifier}] ${i.title} (${i.state?.name ?? 'unknown'})`)
-      .join('\n')
+        // Get recent issues across all companies (first 3 for context)
+        const issuePromises = companies.slice(0, 3).map(c =>
+          getIssues(c.id, { limit: 5 }).catch(() => [])
+        )
+        const issueResults = await Promise.all(issuePromises)
+        const allIssues = issueResults.flat()
+        let aa = allIssues
+          .slice(0, 10)
+          .map(i => `- [${i.identifier}] ${i.title} (${i.state?.name ?? 'unknown'})`)
+          .join('\n')
 
-    // Also get agent status for system prompt context
-    let agentStatusContext = ''
-    try {
-      const agentPromises = companies.slice(0, 3).map(c =>
-        getAgents(c.id).catch(() => [])
-      )
-      const agentResults = await Promise.all(agentPromises)
-      const allAgents = agentResults.flat()
-      const healthy = allAgents.filter(a => a.status === 'active').length
-      const errored = allAgents.filter(a => a.status === 'error').length
-      const inactive = allAgents.filter(a => a.status === 'inactive').length
-      agentStatusContext = `Agent Fleet Status: ${allAgents.length} total — ${healthy} healthy, ${errored} errored, ${inactive} inactive`
-    } catch (agentErr) {
-      log.warn({ err: agentErr }, 'Agent status fetch failed — skipping agent context')
-    }
-    if (agentStatusContext) {
-      agentActivity += '\n' + agentStatusContext
-    }
-  } catch (ctxErr) {
-    log.warn({ err: ctxErr }, 'Paperclip context fetch failed — proceeding without project context')
-    // Paperclip unavailable — proceed without context
-    projectContext = 'Paperclip API unavailable — using cached context'
-  }
+        // Also get agent status for system prompt context
+        try {
+          const agentPromises = companies.slice(0, 3).map(c =>
+            getAgents(c.id).catch(() => [])
+          )
+          const agentResults = await Promise.all(agentPromises)
+          const allAgents = agentResults.flat()
+          const healthy = allAgents.filter(a => a.status === 'active').length
+          const errored = allAgents.filter(a => a.status === 'error').length
+          const inactive = allAgents.filter(a => a.status === 'inactive').length
+          const agentStatusContext = `Agent Fleet Status: ${allAgents.length} total — ${healthy} healthy, ${errored} errored, ${inactive} inactive`
+          aa += '\n' + agentStatusContext
+        } catch (agentErr) {
+          log.warn({ err: agentErr }, 'Agent status fetch failed — skipping agent context')
+        }
+
+        return { projectContext: pc, agentActivity: aa }
+      } catch (ctxErr) {
+        log.warn({ err: ctxErr }, 'Paperclip context fetch failed — proceeding without project context')
+        return { projectContext: 'Paperclip API unavailable — using cached context', agentActivity: '' }
+      }
+    })(),
+    8_000,
+    { projectContext: 'Context fetch timed out — Paperclip may be cold-starting', agentActivity: '' },
+    'paperclip-context'
+  )
+  projectContext = paperclipContextResult.projectContext
+  agentActivity = paperclipContextResult.agentActivity
 
   const effectiveUseCase = activeSkill ? 'deep_dive' : useCase
 
@@ -142,109 +164,117 @@ export async function POST(req: NextRequest) {
   if (lastUserMsg) {
     const query = lastUserMsg.content
 
-    // Run searches in parallel based on query intent
-    const searchPromises: Promise<string | null>[] = []
+    // HARDENED: 10-second aggregate timeout on all search operations
+    const searchResults = await withTimeout(
+      (async () => {
+        const searchPromises: Promise<string | null>[] = []
 
-    const explicitInternalReq = needsInternalSearch(query)
-    const shouldRunVertex = effectiveUseCase === 'deep_dive' || effectiveUseCase === 'interview' || (effectiveUseCase === 'execute' && explicitInternalReq)
-    const shouldRunPgVector = effectiveUseCase === 'recall' || effectiveUseCase === 'deep_dive' || effectiveUseCase === 'interview' || (effectiveUseCase === 'execute' && explicitInternalReq)
+        const explicitInternalReq = needsInternalSearch(query)
+        const shouldRunVertex = effectiveUseCase === 'deep_dive' || effectiveUseCase === 'interview' || (effectiveUseCase === 'execute' && explicitInternalReq)
+        const shouldRunPgVector = effectiveUseCase === 'recall' || effectiveUseCase === 'deep_dive' || effectiveUseCase === 'interview' || (effectiveUseCase === 'execute' && explicitInternalReq)
 
-    log.info({ effectiveUseCase, shouldRunVertex, shouldRunPgVector, explicitInternalReq }, 'Search routing decision')
+        log.info({ effectiveUseCase, shouldRunVertex, shouldRunPgVector, explicitInternalReq }, 'Search routing decision')
 
-    // Try Vertex AI for internal context
-    if (shouldRunVertex) {
-      searchPromises.push(
-        (async () => {
-          try {
-            const vertexResults = await searchSemanticBrain(query)
-            if (vertexResults && vertexResults.length > 0) {
-              const vertexContext = vertexResults
-                .map(r => `**${r.title}** ${r.uri ? `(${r.uri})` : ''}\n${r.snippet}`)
-                .join('\n\n---\n\n')
-              return `## Internal Knowledge (Vertex AI — Google Drive/Workspace)\n\n${vertexContext}\n\n`
-            }
-          } catch (err) {
-            log.warn({ err }, 'Vertex AI search failed')
-          }
-          return null
-        })()
-      )
-    } else {
-      log.info({ effectiveUseCase }, 'Vertex AI search skipped by routing policy')
-    }
+        // Try Vertex AI for internal context
+        if (shouldRunVertex) {
+          searchPromises.push(
+            (async () => {
+              try {
+                const vertexResults = await searchSemanticBrain(query)
+                if (vertexResults && vertexResults.length > 0) {
+                  const vertexContext = vertexResults
+                    .map(r => `**${r.title}** ${r.uri ? `(${r.uri})` : ''}\n${r.snippet}`)
+                    .join('\n\n---\n\n')
+                  return `## Internal Knowledge (Vertex AI — Google Drive/Workspace)\n\n${vertexContext}\n\n`
+                }
+              } catch (err) {
+                log.warn({ err }, 'Vertex AI search failed')
+              }
+              return null
+            })()
+          )
+        } else {
+          log.info({ effectiveUseCase }, 'Vertex AI search skipped by routing policy')
+        }
 
-    // Query pgvector Obsidian semantic database for project insights
-    if (shouldRunPgVector) {
-      searchPromises.push(
-        (async () => {
-          try {
-            const tenantId = process.env.NEXT_PUBLIC_TENANT_ID || 'rxfit'
-            const { searchSimilarDocuments, SIMILARITY_THRESHOLD } = await import('@/lib/vector-store')
-            const requestedLimit = 3
-            const pgvectorResults = await searchSimilarDocuments(tenantId, query, requestedLimit)
-            
-            // Log per-chunk scores for observability
-            if (pgvectorResults && pgvectorResults.length > 0) {
-              const scores = pgvectorResults.map(r => ({
-                id: r.id,
-                sourceUrl: r.sourceUrl,
-                similarity: Number(r.similarity).toFixed(4),
-              }))
-              log.info({ scores, threshold: SIMILARITY_THRESHOLD }, 'pgvector semantic results returned')
-            }
+        // Query pgvector Obsidian semantic database for project insights
+        if (shouldRunPgVector) {
+          searchPromises.push(
+            (async () => {
+              try {
+                const tenantId = process.env.NEXT_PUBLIC_TENANT_ID || 'rxfit'
+                const { searchSimilarDocuments, SIMILARITY_THRESHOLD } = await import('@/lib/vector-store')
+                const requestedLimit = 3
+                const pgvectorResults = await searchSimilarDocuments(tenantId, query, requestedLimit)
+                
+                // Log per-chunk scores for observability
+                if (pgvectorResults && pgvectorResults.length > 0) {
+                  const scores = pgvectorResults.map(r => ({
+                    id: r.id,
+                    sourceUrl: r.sourceUrl,
+                    similarity: Number(r.similarity).toFixed(4),
+                  }))
+                  log.info({ scores, threshold: SIMILARITY_THRESHOLD }, 'pgvector semantic results returned')
+                }
 
-            if (pgvectorResults && pgvectorResults.length < requestedLimit) {
-              const discarded = requestedLimit - pgvectorResults.length
-              log.info({ returned: pgvectorResults.length, discarded, threshold: SIMILARITY_THRESHOLD },
-                'Few chunks met relevance threshold')
-            }
-            
-            if (pgvectorResults && pgvectorResults.length > 0) {
-              const pgvectorContext = pgvectorResults
-                .map(r => `**Source: ${r.sourceUrl}** (Similarity: ${(Number(r.similarity) * 100).toFixed(1)}%)\n${r.content}`)
-                .join('\n\n---\n\n')
-              return `## Internal Knowledge (Obsidian Semantic Database)\n\n${pgvectorContext}\n\n`
-            }
-          } catch (err) {
-            log.warn({ err }, 'pgvector semantic search failed')
-          }
-          return null
-        })()
-      )
-    } else {
-      log.info({ effectiveUseCase }, 'pgvector search skipped by routing policy')
-    }
+                if (pgvectorResults && pgvectorResults.length < requestedLimit) {
+                  const discarded = requestedLimit - pgvectorResults.length
+                  log.info({ returned: pgvectorResults.length, discarded, threshold: SIMILARITY_THRESHOLD },
+                    'Few chunks met relevance threshold')
+                }
+                
+                if (pgvectorResults && pgvectorResults.length > 0) {
+                  const pgvectorContext = pgvectorResults
+                    .map(r => `**Source: ${r.sourceUrl}** (Similarity: ${(Number(r.similarity) * 100).toFixed(1)}%)\n${r.content}`)
+                    .join('\n\n---\n\n')
+                  return `## Internal Knowledge (Obsidian Semantic Database)\n\n${pgvectorContext}\n\n`
+                }
+              } catch (err) {
+                log.warn({ err }, 'pgvector semantic search failed')
+              }
+              return null
+            })()
+          )
+        } else {
+          log.info({ effectiveUseCase }, 'pgvector search skipped by routing policy')
+        }
 
-    // Use Exa.AI for external queries
-    if (needsExternalSearch(query)) {
-      searchPromises.push(
-        (async () => {
-          try {
-            const exaResults = await searchWeb(query, {
-              numResults: 5,
-              useAutoprompt: true,
-            })
-            if (exaResults.length > 0) {
-              const exaContext = exaResults
-                .map(r => {
-                  let entry = `**${r.title ?? 'Untitled'}** — [${r.url}]`
-                  if (r.publishedDate) entry += ` (${r.publishedDate.split('T')[0]})`
-                  if (r.snippet) entry += `\n${r.snippet}`
-                  return entry
+        // Use Exa.AI for external queries
+        if (needsExternalSearch(query)) {
+          searchPromises.push(
+            (async () => {
+              try {
+                const exaResults = await searchWeb(query, {
+                  numResults: 5,
+                  useAutoprompt: true,
                 })
-                .join('\n\n---\n\n')
-              return `## External Web Research (Exa.AI)\n\n${exaContext}\n\n`
-            }
-          } catch (err) {
-            log.warn({ err }, 'Exa.AI search failed')
-          }
-          return null
-        })()
-      )
-    }
+                if (exaResults.length > 0) {
+                  const exaContext = exaResults
+                    .map(r => {
+                      let entry = `**${r.title ?? 'Untitled'}** — [${r.url}]`
+                      if (r.publishedDate) entry += ` (${r.publishedDate.split('T')[0]})`
+                      if (r.snippet) entry += `\n${r.snippet}`
+                      return entry
+                    })
+                    .join('\n\n---\n\n')
+                  return `## External Web Research (Exa.AI)\n\n${exaContext}\n\n`
+                }
+              } catch (err) {
+                log.warn({ err }, 'Exa.AI search failed')
+              }
+              return null
+            })()
+          )
+        }
 
-    const searchResults = await Promise.all(searchPromises)
-    searchContextParts.push(...searchResults.filter((r): r is string => r !== null))
+        const results = await Promise.all(searchPromises)
+        return results.filter((r): r is string => r !== null)
+      })(),
+      10_000,
+      [] as string[],
+      'search-pipeline'
+    )
+    searchContextParts.push(...searchResults)
   }
 
   const searchContext = searchContextParts.join('')

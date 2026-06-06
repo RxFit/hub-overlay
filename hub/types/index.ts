@@ -245,7 +245,7 @@ export type ActionPermission = 'staff' | 'admin' | 'superadmin'
 
 /* ── Multi-Tenant KPI Types ── */
 
-export type KPISource = 'paperclip' | 'sheet' | 'derived'
+export type KPISource = 'paperclip' | 'business' | 'derived'
 export type KPIScope = 'global' | 'project'
 export type KPIVisibility = 'public' | 'admin' | 'staff'
 

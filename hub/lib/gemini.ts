@@ -199,31 +199,56 @@ export async function* streamGeminiChat(
   systemPrompt: string,
   useCase: string = 'deep_dive'
 ): AsyncGenerator<string> {
-  let modelName = 'gemini-2.5-pro' // Default for deep_dive and interview
+  // Model selection: primary and fallback
+  let primaryModel = 'gemini-2.5-pro' // Default for deep_dive and interview
+  let fallbackModel = 'gemini-2.0-flash'
   if (useCase === 'recall' || useCase === 'execute') {
-    modelName = 'gemini-2.5-flash'
+    primaryModel = 'gemini-2.5-flash'
+    fallbackModel = 'gemini-2.0-flash'
   }
 
-  const model = genAI.getGenerativeModel({
-    model: modelName,
-    systemInstruction: systemPrompt,
-  })
-
-  const chat = model.startChat({
-    history: chatMessagesToContents(messages.slice(0, -1)),
-  })
-
+  const contents = chatMessagesToContents(messages.slice(0, -1))
   const lastMessage = messages[messages.length - 1]
   if (!lastMessage || lastMessage.role !== 'user') {
     throw new Error('Last message must be from the user')
   }
 
-  const result = await chat.sendMessageStream(lastMessage.content)
+  // Try primary model first, fall back on failure
+  const modelsToTry = [primaryModel, fallbackModel]
 
-  for await (const chunk of result.stream) {
-    const text = chunk.text()
-    if (text) {
-      yield text
+  for (let i = 0; i < modelsToTry.length; i++) {
+    const modelName = modelsToTry[i]
+    const isLastAttempt = i === modelsToTry.length - 1
+
+    try {
+      const model = genAI.getGenerativeModel({
+        model: modelName,
+        systemInstruction: systemPrompt,
+      })
+
+      const chat = model.startChat({ history: contents })
+
+      // HARDENED: 30-second timeout on initial stream connection
+      const resultPromise = chat.sendMessageStream(lastMessage.content)
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error(`Gemini stream timeout (${modelName})`)), 30_000)
+      })
+      const result = await Promise.race([resultPromise, timeoutPromise])
+
+      for await (const chunk of result.stream) {
+        const text = chunk.text()
+        if (text) {
+          yield text
+        }
+      }
+
+      return // Success — exit generator
+    } catch (err) {
+      if (isLastAttempt) {
+        throw err // No more fallbacks — propagate error
+      }
+      // Log and try fallback model
+      console.warn(`[gemini] ${modelName} failed, falling back to ${modelsToTry[i + 1]}:`, err)
     }
   }
 }

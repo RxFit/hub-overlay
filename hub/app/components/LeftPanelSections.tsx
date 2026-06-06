@@ -951,7 +951,7 @@ function DocumentRow({ file, onClick }: { file: DriveFile; onClick: () => void }
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
-   KPI SECTION — Live Paperclip + Sheet KPIs
+   KPI SECTION — Live Paperclip + Business KPIs
    ══════════════════════════════════════════════════════════════════════════════ */
 
 export function KPISection({

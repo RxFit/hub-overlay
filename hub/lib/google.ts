@@ -288,31 +288,6 @@ export async function listRecentFiles(
 }
 
 /* ══════════════════════════════════════════
-   Google Sheets  —  https://sheets.googleapis.com/v4
-   ══════════════════════════════════════════ */
-
-const SHEETS_BASE = 'https://sheets.googleapis.com/v4'
-
-export interface GoogleSheetValues {
-  range: string
-  majorDimension: string
-  values: string[][]
-}
-
-/** Read values from a Google Sheet range (e.g. "Sheet1!A1:D10") */
-export async function readSheetValues(
-  accessToken: string,
-  spreadsheetId: string,
-  range: string
-): Promise<GoogleSheetValues> {
-  const encodedRange = encodeURIComponent(range)
-  return googleFetch<GoogleSheetValues>(
-    `${SHEETS_BASE}/spreadsheets/${spreadsheetId}/values/${encodedRange}`,
-    accessToken
-  )
-}
-
-/* ══════════════════════════════════════════
    Google Chat  —  https://chat.googleapis.com/v1
    ══════════════════════════════════════════ */
 

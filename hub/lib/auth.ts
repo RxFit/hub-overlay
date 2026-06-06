@@ -71,9 +71,9 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
  * Resolve the effective role for an email address.
  *
  * Priority:
- * 1. SUPERADMIN_EMAILS env var → 'superadmin' (bypass sheet lookup)
- * 2. ADMIN_EMAILS env var → 'admin' (bypass sheet lookup)
- * 3. Hub Roles Sheet lookup → assigned role or 'onboarding' fallback
+ * 1. SUPERADMIN_EMAILS env var → 'superadmin' (bypass DB lookup)
+ * 2. ADMIN_EMAILS env var → 'admin' (bypass DB lookup)
+ * 3. Database lookup → assigned role or 'onboarding' fallback
  */
 async function resolveUserRole(
   email: string
