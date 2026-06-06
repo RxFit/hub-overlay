@@ -126,21 +126,32 @@ export async function POST(req: NextRequest) {
     projectContext = 'Paperclip API unavailable — using cached context'
   }
 
+  const effectiveUseCase = activeSkill ? 'deep_dive' : useCase
+
   // ── Intelligent Search Routing ──
   // Vertex AI → internal data (Google Drive, Gmail, Chat)
+  // pgvector → Obsidian semantic database
   // Exa.AI   → external data (web, competitors, news, public URLs)
+  //
+  // Routing matrix (effectiveUseCase × intent):
+  //   recall    → pgvector only (fast recall from Obsidian)
+  //   deep_dive → Vertex AI + pgvector (full internal context)
+  //   interview → Vertex AI + pgvector (needs context for smart questions)
+  //   execute   → skip unless query explicitly references internal data
   const lastUserMsg = messages.filter(m => m.role === 'user').pop()
-  let searchContext = ''
+  const searchContextParts: string[] = []
 
   if (lastUserMsg) {
     const query = lastUserMsg.content
 
     // Run searches in parallel based on query intent
-    const searchPromises: Promise<void>[] = []
+    const searchPromises: Promise<string | null>[] = []
 
     const explicitInternalReq = needsInternalSearch(query)
-    const shouldRunVertex = useCase === 'deep_dive' || (useCase === 'execute' && explicitInternalReq)
-    const shouldRunPgVector = useCase === 'recall' || useCase === 'deep_dive' || (useCase === 'execute' && explicitInternalReq)
+    const shouldRunVertex = effectiveUseCase === 'deep_dive' || effectiveUseCase === 'interview' || (effectiveUseCase === 'execute' && explicitInternalReq)
+    const shouldRunPgVector = effectiveUseCase === 'recall' || effectiveUseCase === 'deep_dive' || effectiveUseCase === 'interview' || (effectiveUseCase === 'execute' && explicitInternalReq)
+
+    log.info({ effectiveUseCase, shouldRunVertex, shouldRunPgVector, explicitInternalReq }, 'Search routing decision')
 
     // Try Vertex AI for internal context
     if (shouldRunVertex) {
@@ -152,13 +163,16 @@ export async function POST(req: NextRequest) {
               const vertexContext = vertexResults
                 .map(r => `**${r.title}** ${r.uri ? `(${r.uri})` : ''}\n${r.snippet}`)
                 .join('\n\n---\n\n')
-              searchContext += `## Internal Knowledge (Vertex AI — Google Drive/Workspace)\n\n${vertexContext}\n\n`
+              return `## Internal Knowledge (Vertex AI — Google Drive/Workspace)\n\n${vertexContext}\n\n`
             }
           } catch (err) {
             log.warn({ err }, 'Vertex AI search failed')
           }
+          return null
         })()
       )
+    } else {
+      log.info({ effectiveUseCase }, 'Vertex AI search skipped by routing policy')
     }
 
     // Query pgvector Obsidian semantic database for project insights
@@ -171,20 +185,23 @@ export async function POST(req: NextRequest) {
             const pgvectorResults = await searchSimilarDocuments(tenantId, query, 3)
             
             if (pgvectorResults && pgvectorResults.length < 3) {
-              log.info({ count: pgvectorResults.length }, 'Semantic chunks discarded due to low relevance threshold')
+              log.info({ count: pgvectorResults.length }, 'Few chunks met relevance threshold (0.65)')
             }
             
             if (pgvectorResults && pgvectorResults.length > 0) {
               const pgvectorContext = pgvectorResults
                 .map(r => `**Source: ${r.sourceUrl}** (Similarity: ${(Number(r.similarity) * 100).toFixed(1)}%)\n${r.content}`)
                 .join('\n\n---\n\n')
-              searchContext += `## Internal Knowledge (Obsidian Semantic Database)\n\n${pgvectorContext}\n\n`
+              return `## Internal Knowledge (Obsidian Semantic Database)\n\n${pgvectorContext}\n\n`
             }
           } catch (err) {
             log.warn({ err }, 'pgvector semantic search failed')
           }
+          return null
         })()
       )
+    } else {
+      log.info({ effectiveUseCase }, 'pgvector search skipped by routing policy')
     }
 
     // Use Exa.AI for external queries
@@ -205,17 +222,21 @@ export async function POST(req: NextRequest) {
                   return entry
                 })
                 .join('\n\n---\n\n')
-              searchContext += `## External Web Research (Exa.AI)\n\n${exaContext}\n\n`
+              return `## External Web Research (Exa.AI)\n\n${exaContext}\n\n`
             }
           } catch (err) {
             log.warn({ err }, 'Exa.AI search failed')
           }
+          return null
         })()
       )
     }
 
-    await Promise.all(searchPromises)
+    const searchResults = await Promise.all(searchPromises)
+    searchContextParts.push(...searchResults.filter((r): r is string => r !== null))
   }
+
+  const searchContext = searchContextParts.join('')
 
   // Resolve attachments into text context
   let attachmentContext = ''
@@ -304,8 +325,7 @@ export async function POST(req: NextRequest) {
     activeSkillContent,
   })
 
-  // Force deep_dive model when a skill is active
-  const effectiveUseCase = activeSkill ? 'deep_dive' : useCase
+  // effectiveUseCase already computed above (before search routing) for consistency
 
   // Stream response
   const encoder = new TextEncoder()

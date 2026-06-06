@@ -99,7 +99,7 @@ export const ChatMessageSchema = z.object({
 
 export const ChatRequestSchema = z.object({
   messages: ChatMessageSchema.array().min(1),
-  useCase: z.string().optional(),
+  useCase: z.enum(['recall', 'deep_dive', 'execute', 'interview']).optional(),
   skillContext: z.string().optional(),
   attachments: z.array(z.object({
     id: z.string(),
