@@ -12,13 +12,27 @@ export async function GET() {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  const user = session.user as Record<string, unknown>
+  const role = user.role as string
+  const assignedProjects = (user.assignedProjects as string[]) ?? []
+
+  // Onboarding users get no feed
+  if (!role || role === 'onboarding') {
+    return NextResponse.json({ feed: [] })
+  }
+
   const feed: FeedItem[] = []
 
   try {
-    const companies = await getCompanies()
+    let companies = await getCompanies()
 
-    // Fetch recent issues and agents from all companies
-    const companySlice = companies.slice(0, 6) // cover all orgs
+    // Scope to user's assigned workspaces (admin/superadmin with ['*'] see all)
+    if (role !== 'superadmin' && !assignedProjects.includes('*')) {
+      companies = companies.filter(c => assignedProjects.includes(c.id))
+    }
+
+    // Fetch recent issues and agents from scoped companies
+    const companySlice = companies.slice(0, 6) // cover visible orgs
 
     const [issueResults, agentResults] = await Promise.all([
       Promise.all(

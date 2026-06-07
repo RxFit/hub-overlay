@@ -61,11 +61,30 @@ export async function GET(req: Request) {
   const orgId = searchParams.get('orgId')
 
   try {
-    // Fetch all companies or filter to specific org
-    const allCompanies = await getCompanies()
+    // Fetch all companies and scope to user's access
+    const user = session.user as Record<string, unknown>
+    const role = user.role as string
+    const assignedProjects = (user.assignedProjects as string[]) ?? []
+
+    const rawCompanies = await getCompanies()
+    const hasWildcard = assignedProjects.includes('*') || role === 'superadmin'
+
+    let allCompanies = [...rawCompanies]
+    if (!hasWildcard) {
+      allCompanies = allCompanies.filter(c => assignedProjects.includes(c.id))
+    }
+
+    if (orgId) {
+      const existsGlobally = rawCompanies.some(c => c.id === orgId || c.identifier === orgId)
+      const hasAccess = allCompanies.some(c => c.id === orgId || c.identifier === orgId)
+      if (existsGlobally && !hasAccess) {
+        return NextResponse.json({ error: 'Access denied: you are not assigned to this workspace' }, { status: 403 })
+      }
+    }
+
     const companies = orgId
       ? allCompanies.filter(c => c.id === orgId || c.identifier === orgId)
-      : allCompanies.sort((a, b) => (a.identifier ?? a.name).localeCompare(b.identifier ?? b.name)).slice(0, 1) // Deterministic: alphabetical fallback
+      : allCompanies.sort((a, b) => (a.identifier ?? a.name).localeCompare(b.identifier ?? b.name)).slice(0, 1) // Deterministic: alphabetical fallback from scoped set
 
     if (companies.length === 0) {
       // Return a graceful empty pulse rather than erroring

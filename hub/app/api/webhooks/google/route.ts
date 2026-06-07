@@ -21,7 +21,11 @@ export async function POST(req: Request) {
     
     // Check channel token validity
     const expectedToken = process.env.GOOGLE_WEBHOOK_CHANNEL_TOKEN;
-    if (!channelToken || (expectedToken && channelToken !== expectedToken)) {
+    if (!expectedToken) {
+      console.error('[Google Webhook] GOOGLE_WEBHOOK_CHANNEL_TOKEN is not configured.');
+      return NextResponse.json({ error: 'Internal configuration error' }, { status: 500 });
+    }
+    if (!channelToken || channelToken !== expectedToken) {
       console.warn('[Google Webhook] Unauthorized request or channel token mismatch');
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }

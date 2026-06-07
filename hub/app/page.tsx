@@ -37,7 +37,8 @@ import {
   isReadOnlyIntent,
   isHighStakesIntent,
 } from '@/lib/interview'
-import { RXFIT_COMPANY_ID, RXFIT_COO_AGENT_ID, PAPERCLIP_BASE_URL } from '@/lib/paperclipConfig'
+import { PAPERCLIP_BASE_URL } from '@/lib/paperclipConfig'
+import { useCompanies } from '@/app/hooks/useCompanies'
 import type { InterviewState, ActionSpec, ChatAttachment, ActiveSkill } from '@/types'
 
 /* ── Dynamic suggestions are built per-user in HubPage via useMemo ── */
@@ -391,6 +392,21 @@ export default function HubPage() {
   const router = useRouter()
   const [activeProject, setActiveProject] = useState('all')
   const { projects, isLoading: kpiLoading } = useKPIData(activeProject)
+  const { companies: allCompanies } = useCompanies()
+
+  // Resolve the active workspace company for issue creation and deep links
+  const resolveActiveCompany = useCallback(() => {
+    if (!allCompanies.length) return null
+    if (activeProject && activeProject !== 'all') {
+      const match = allCompanies.find(
+        c => c.identifier?.toLowerCase() === activeProject.toLowerCase()
+          || c.name?.toLowerCase().includes(activeProject.toLowerCase())
+      )
+      if (match) return match
+    }
+    // Fallback to first available company
+    return allCompanies[0] ?? null
+  }, [activeProject, allCompanies])
   const [mobileLeftOpen, setMobileLeftOpen] = useState(false)
   const [mobileRightOpen, setMobileRightOpen] = useState(false)
   const [mobileTab, setMobileTab] = useState<MobileTab>('chat')
@@ -1301,9 +1317,10 @@ Respond with EXACTLY one of:
         }
 
         case 'send_communication': {
-          // Route communication requests directly to the COO via Paperclip.
-          // The COO (General/Operations agent) handles all Austin client comms.
-          // We use the hardcoded RXFIT org IDs — no dynamic lookup needed.
+          // Route communication requests to the COO in the user's active workspace.
+          const activeCompany = resolveActiveCompany()
+          if (!activeCompany) throw new Error('No workspace available — please select a project first.')
+
           const commDetails = spec.details.details || spec.details.description || spec.summary
           const commTo = spec.details.to || spec.details.recipient || ''
           const commChannel = spec.details.channel || spec.details.medium || 'email'
@@ -1319,6 +1336,18 @@ Respond with EXACTLY one of:
             `The human operator has requested a communication be sent. COO: compose the message based on the details above and execute delivery via ${commChannel}. Report back with confirmation of what was sent, to whom, and when.`,
           ].filter(Boolean).join('\n')
 
+          // Find the COO agent dynamically in the target workspace
+          let commAssigneeId: string | undefined
+          try {
+            const agentsRes = await fetch(`/api/paperclip/api/companies/${activeCompany.id}/agents`)
+            if (agentsRes.ok) {
+              const agentsData = await agentsRes.json()
+              const agents = Array.isArray(agentsData) ? agentsData : agentsData.agents ?? []
+              const coo = agents.find((a: { name: string }) => a.name.toLowerCase().includes('coo') || a.name.toLowerCase().includes('operations'))
+              if (coo) commAssigneeId = coo.id
+            }
+          } catch { /* will fall through to server-side CEO resolution */ }
+
           const scIssueRes = await fetch('/api/paperclip/issues', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1326,17 +1355,17 @@ Respond with EXACTLY one of:
               title: commTitle,
               description: commDesc,
               priority: 'high',
-              companyId: RXFIT_COMPANY_ID,
-              assigneeId: RXFIT_COO_AGENT_ID,
+              companyId: activeCompany.id,
+              ...(commAssigneeId ? { assigneeId: commAssigneeId } : {}),
             }),
           })
           if (!scIssueRes.ok) throw new Error(`Communication issue creation failed: ${scIssueRes.status}`)
           const scIssueData = await scIssueRes.json()
           
           const issueId = scIssueData.issue?.identifier || scIssueData.issue?.id || ''
-          const inboxUrl = `${PAPERCLIP_BASE_URL}/RXF/inbox/mine`
+          const inboxUrl = `${PAPERCLIP_BASE_URL}/${activeCompany.identifier}/inbox/mine`
 
-          resultMsg = `✉️ **Communication Routed to COO Agent**\n\nIssue **${issueId}** ("${scIssueData.issue?.title || commTitle}") has been created and assigned to the COO. The agent will compose and send the message.\n\n▶ Track progress in the **Execution Feed** (right panel) or view it directly in your [Paperclip Inbox](${inboxUrl}).`
+          resultMsg = `✉️ **Communication Routed to ${commAssigneeId ? 'COO' : 'CEO'} Agent**\n\nIssue **${issueId}** ("${scIssueData.issue?.title || commTitle}") has been created and assigned in the **${activeCompany.name}** workspace.\n\n▶ Track progress in the **Execution Feed** (right panel) or view it directly in your [Paperclip Inbox](${inboxUrl}).`
           mutate('/api/feed')
           break
         }
@@ -1346,6 +1375,7 @@ Respond with EXACTLY one of:
           const issueTitle = spec.details.title || spec.summary
           const issueDesc = spec.details.description || ''
           const issuePriority = spec.details.priority || 'medium'
+          const issueCompany = resolveActiveCompany()
 
           const res = await fetch('/api/paperclip/issues', {
             method: 'POST',
@@ -1354,15 +1384,17 @@ Respond with EXACTLY one of:
               title: issueTitle,
               description: issueDesc,
               priority: issuePriority,
+              ...(issueCompany ? { companyId: issueCompany.id } : {}),
             }),
           })
           if (!res.ok) throw new Error(`Paperclip Issue creation failed: ${res.status}`)
           const data = await res.json()
           
           const issueId = data.issue?.identifier || data.issue?.id || ''
-          const inboxUrl = `${PAPERCLIP_BASE_URL}/RXF/inbox/mine`
+          const issuePrefix = issueCompany?.identifier || 'RXF'
+          const inboxUrl = `${PAPERCLIP_BASE_URL}/${issuePrefix}/inbox/mine`
           
-          resultMsg = `✅ **Agent Triggered!**\n\nIssue **${issueId}** ("${data.issue?.title || issueTitle}") has been assigned to the CEO Agent.\n\n▶ Track progress in the **Execution Feed** (right panel) or view it directly in your [Paperclip Inbox](${inboxUrl}).`
+          resultMsg = `✅ **Agent Triggered!**\n\nIssue **${issueId}** ("${data.issue?.title || issueTitle}") has been assigned to the CEO Agent in **${issueCompany?.name || 'your workspace'}**.\n\n▶ Track progress in the **Execution Feed** (right panel) or view it directly in your [Paperclip Inbox](${inboxUrl}).`
           
           // Force refresh the Right Panel feed immediately
           mutate('/api/feed')

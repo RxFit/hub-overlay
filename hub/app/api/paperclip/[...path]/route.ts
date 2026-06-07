@@ -77,9 +77,13 @@ async function proxyRequest(
 
   // If the request targets a specific company, check access
   const companyMatch = apiPath.match(/\/api\/companies\/([a-f0-9-]+)/)
-  if (companyMatch && role !== 'admin' && role !== 'superadmin') {
+  if (companyMatch) {
     const requestedCompanyId = companyMatch[1]
-    if (!assignedProjects.includes(requestedCompanyId)) {
+    if (
+      role !== 'superadmin' &&
+      !assignedProjects.includes('*') &&
+      !assignedProjects.includes(requestedCompanyId)
+    ) {
       return NextResponse.json(
         { error: 'Access denied: not assigned to this project' },
         { status: 403 }
@@ -170,7 +174,7 @@ async function proxyRequest(
 
     // If the user is staff (not admin) and this is a companies list,
     // filter to only their assigned projects
-    if (apiPath === '/api/companies' && role !== 'admin' && role !== 'superadmin') {
+    if (apiPath === '/api/companies' && role !== 'superadmin' && !assignedProjects.includes('*')) {
       try {
         const parsed = JSON.parse(data)
         // Handle both array and wrapped responses

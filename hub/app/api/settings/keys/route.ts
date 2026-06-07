@@ -219,7 +219,42 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: 'id is required' }, { status: 400 })
     }
 
+    const requestedCompanyId = searchParams.get('companyId') ?? undefined
+    const companyId = resolveCompanyId(session as unknown as Record<string, unknown>, requestedCompanyId)
+    if (!companyId) {
+      return NextResponse.json({ error: 'No workspace assigned' }, { status: 400 })
+    }
+
     const authHeaders = await getPaperclipAuthHeaders()
+
+    // Retrieve company secrets first to verify ownership of secretId
+    const verifyRes = await fetch(`${PAPERCLIP_BASE}/api/companies/${companyId}/secrets`, {
+      headers: {
+        ...authHeaders,
+        Origin: PAPERCLIP_BASE,
+      },
+      signal: AbortSignal.timeout(10_000),
+    })
+
+    if (verifyRes.status === 401 || verifyRes.status === 403) {
+      clearPaperclipSession()
+      return NextResponse.json({ error: 'Paperclip auth failed' }, { status: 502 })
+    }
+
+    if (!verifyRes.ok) {
+      const verifyErrBody = await verifyRes.text().catch(() => '')
+      return NextResponse.json({ error: `Failed to verify key ownership: ${verifyErrBody}` }, { status: verifyRes.status })
+    }
+
+    const companySecrets = await verifyRes.json()
+    const secretExists = (Array.isArray(companySecrets) ? companySecrets : []).some(
+      (s: Record<string, unknown>) => s.id === secretId
+    )
+
+    if (!secretExists) {
+      return NextResponse.json({ error: 'Access denied: secret does not belong to your workspace' }, { status: 403 })
+    }
+
     const res = await fetch(`${PAPERCLIP_BASE}/api/secrets/${secretId}`, {
       method: 'DELETE',
       headers: {

@@ -98,15 +98,27 @@ export async function POST(req: NextRequest) {
   // HARDENED: 8-second aggregate timeout prevents pre-stream hang
   let projectContext = ''
   let agentActivity = ''
+
+  // Extract user scoping for Paperclip context
+  const chatUser = session.user as Record<string, unknown>
+  const chatRole = chatUser.role as string
+  const chatAssignedProjects = (chatUser.assignedProjects as string[]) ?? []
+
   const paperclipContextResult = await withTimeout(
     (async () => {
       try {
-        const companies = await getCompanies()
+        let companies = await getCompanies()
+
+        // Scope to user's assigned workspaces (admin/superadmin with ['*'] see all)
+        if (chatRole !== 'superadmin' && !chatAssignedProjects.includes('*')) {
+          companies = companies.filter(c => chatAssignedProjects.includes(c.id))
+        }
+
         const pc = companies
           .map(c => `- ${c.name} (${c.identifier}): ${c.issueCount ?? '?'} issues, ${c.memberCount ?? '?'} members`)
           .join('\n')
 
-        // Get recent issues across all companies (first 3 for context)
+        // Get recent issues across scoped companies (first 3 for context)
         const issuePromises = companies.slice(0, 3).map(c =>
           getIssues(c.id, { limit: 5 }).catch(() => [])
         )

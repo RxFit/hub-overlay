@@ -44,6 +44,17 @@ export async function POST(req: Request) {
   // 3. Default CEO workspace (for superadmin or wildcard)
   let companyId: string
   if (bodyCompanyId) {
+    // Validate that the user has access to the requested company
+    if (
+      userRole !== 'superadmin' &&
+      !user.assignedProjects?.includes('*') &&
+      !user.assignedProjects?.includes(bodyCompanyId)
+    ) {
+      return NextResponse.json(
+        { error: 'Access denied: you are not assigned to this workspace' },
+        { status: 403 }
+      )
+    }
     companyId = bodyCompanyId
   } else if (
     user.assignedProjects &&
