@@ -870,6 +870,8 @@ interface SecretMeta {
 }
 
 function ConnectedServicesCard() {
+  const { companies, isLoading: companiesLoading } = useCompanies()
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string>('')
   const [secrets, setSecrets] = useState<SecretMeta[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -885,11 +887,19 @@ function ConnectedServicesCard() {
   // Delete
   const [deleting, setDeleting] = useState<string | null>(null)
 
+  // Auto-select first company when companies load
+  useEffect(() => {
+    if (companies.length > 0 && !selectedCompanyId) {
+      setSelectedCompanyId(companies[0].id)
+    }
+  }, [companies, selectedCompanyId])
+
   const loadSecrets = useCallback(async () => {
+    if (!selectedCompanyId) return
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch('/api/settings/keys')
+      const res = await fetch(`/api/settings/keys?companyId=${encodeURIComponent(selectedCompanyId)}`)
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
       setSecrets(data.secrets ?? [])
@@ -898,7 +908,7 @@ function ConnectedServicesCard() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [selectedCompanyId])
 
   useEffect(() => { loadSecrets() }, [loadSecrets])
 
@@ -929,7 +939,7 @@ function ConnectedServicesCard() {
         const res = await fetch('/api/settings/keys', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: key.name, value: drafts[key.name] }),
+          body: JSON.stringify({ name: key.name, value: drafts[key.name], companyId: selectedCompanyId }),
         })
         const data = await res.json()
         if (!res.ok) throw new Error(data.error || `Failed to save ${key.name}`)
@@ -955,7 +965,7 @@ function ConnectedServicesCard() {
       const res = await fetch('/api/settings/keys', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: customName.toUpperCase().replace(/\s+/g, '_'), value: customValue }),
+        body: JSON.stringify({ name: customName.toUpperCase().replace(/\s+/g, '_'), value: customValue, companyId: selectedCompanyId }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed to save')
@@ -974,7 +984,7 @@ function ConnectedServicesCard() {
   const handleDelete = async (secretId: string) => {
     setDeleting(secretId)
     try {
-      const res = await fetch(`/api/settings/keys?id=${encodeURIComponent(secretId)}`, { method: 'DELETE' })
+      const res = await fetch(`/api/settings/keys?id=${encodeURIComponent(secretId)}&companyId=${encodeURIComponent(selectedCompanyId)}`, { method: 'DELETE' })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Delete failed')
       await loadSecrets()
@@ -1025,14 +1035,64 @@ function ConnectedServicesCard() {
 
   return (
     <section className="settings-section" id="api-keys" aria-label="Connected Services">
-      <h2 className="settings-section-title">
-        <span className="rx-comment-label">02 //</span>{' '}
-        Connected Services
-      </h2>
-      <p className="settings-section-desc">
-        Connect your business accounts to unlock autonomous marketing, SEO, and revenue operations.
-        Keys are encrypted and stored per-workspace.
-      </p>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+        <div>
+          <h2 className="settings-section-title">
+            <span className="rx-comment-label">02 //</span>{' '}
+            Connected Services
+          </h2>
+          <p className="settings-section-desc" style={{ margin: 0 }}>
+            Connect your business accounts to unlock autonomous marketing, SEO, and revenue operations.
+            Keys are encrypted and stored per-workspace.
+          </p>
+        </div>
+        {/* Workspace Selector */}
+        {companies.length > 1 && (
+          <select
+            id="api-keys-workspace-select"
+            value={selectedCompanyId}
+            onChange={e => {
+              setSelectedCompanyId(e.target.value)
+              setExpandedBundle(null)
+              setSaveResult(null)
+            }}
+            style={{
+              background: 'var(--surface-2, rgba(255,255,255,0.04))',
+              border: '1px solid var(--border)',
+              borderRadius: '6px',
+              padding: '6px 10px',
+              color: 'var(--text-primary)',
+              fontSize: '0.75rem',
+              fontFamily: 'var(--font-mono)',
+              cursor: 'pointer',
+              outline: 'none',
+              flexShrink: 0,
+              maxWidth: '220px',
+            }}
+            aria-label="Select workspace for API keys"
+          >
+            {companies.map(c => (
+              <option key={c.id} value={c.id}>
+                {c.name} ({c.identifier})
+              </option>
+            ))}
+          </select>
+        )}
+        {companies.length === 1 && (
+          <span style={{
+            fontSize: '0.68rem',
+            fontFamily: 'var(--font-mono)',
+            color: 'var(--text-muted)',
+            padding: '4px 10px',
+            background: 'rgba(255,255,255,0.04)',
+            borderRadius: '6px',
+            border: '1px solid var(--border)',
+            flexShrink: 0,
+          }}>
+            {companies[0].name}
+          </span>
+        )}
+      </div>
 
       {error && (
         <div className="settings-test-result settings-test-result--error" style={{ marginBottom: '12px' }}>
