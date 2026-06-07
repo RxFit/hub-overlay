@@ -4,7 +4,7 @@ import { getToken } from 'next-auth/jwt'
 import { authOptions } from '@/lib/auth'
 import { createLogger } from '@/lib/logger'
 import { streamGeminiChat, buildSystemPrompt } from '@/lib/gemini'
-import { getCompanies, getIssues, getAgents } from '@/lib/paperclip'
+import { getCompanies, getIssues, getAgents, getRuns } from '@/lib/paperclip'
 import { fetchUrlContent, fetchDriveDocContent } from '@/lib/content-fetch'
 import { searchSemanticBrain } from '@/lib/vertex'
 import { searchWeb, fetchUrlWithExa } from '@/lib/exa'
@@ -117,7 +117,7 @@ export async function POST(req: NextRequest) {
           .map(i => `- [${i.identifier}] ${i.title} (${i.state?.name ?? 'unknown'})`)
           .join('\n')
 
-        // Also get agent status for system prompt context
+        // Also get agent status for system prompt context — INDIVIDUAL details, not just counts
         try {
           const agentPromises = companies.slice(0, 3).map(c =>
             getAgents(c.id).catch(() => [])
@@ -127,20 +127,62 @@ export async function POST(req: NextRequest) {
           const healthy = allAgents.filter(a => a.status === 'active').length
           const errored = allAgents.filter(a => a.status === 'error').length
           const inactive = allAgents.filter(a => a.status === 'inactive').length
-          const agentStatusContext = `Agent Fleet Status: ${allAgents.length} total — ${healthy} healthy, ${errored} errored, ${inactive} inactive`
-          aa += '\n' + agentStatusContext
+          aa += '\nAgent Fleet Status: ' + allAgents.length + ' total — ' + healthy + ' active, ' + errored + ' errored, ' + inactive + ' inactive'
+
+          // List individual agents so the LLM has real data for audits
+          if (allAgents.length > 0) {
+            aa += '\n\nAgent Details:'
+            for (const agent of allAgents) {
+              const heartbeat = agent.lastHeartbeat
+                ? ` (last heartbeat: ${new Date(agent.lastHeartbeat).toLocaleString('en-US', { timeZone: 'America/Chicago' })})`
+                : ' (no heartbeat recorded)'
+              aa += `\n  - ${agent.name}: ${agent.status.toUpperCase()}${heartbeat}`
+            }
+          }
+
+          // Surface errored agents prominently
+          const erroredAgents = allAgents.filter(a => a.status === 'error')
+          if (erroredAgents.length > 0) {
+            aa += '\n\n⚠️ ERRORED AGENTS:'
+            for (const agent of erroredAgents) {
+              aa += `\n  - ${agent.name} (${agent.id}) — status: error, adapter: ${agent.adapter}`
+            }
+          }
         } catch (agentErr) {
           log.warn({ err: agentErr }, 'Agent status fetch failed — skipping agent context')
+        }
+
+        // Fetch recent runs to provide actual execution history for audit queries
+        try {
+          const runPromises = companies.slice(0, 3).map(c =>
+            getRuns(c.id, { limit: 5 }).catch(() => [])
+          )
+          const runResults = await Promise.all(runPromises)
+          const allRuns = runResults.flat()
+          if (allRuns.length > 0) {
+            aa += '\n\nRecent Agent Runs:'
+            for (const run of allRuns.slice(0, 10)) {
+              const duration = run.durationMs ? `${(run.durationMs / 1000).toFixed(1)}s` : 'n/a'
+              const started = run.startedAt ? new Date(run.startedAt).toLocaleString('en-US', { timeZone: 'America/Chicago' }) : 'unknown'
+              aa += `\n  - [${run.issueIdentifier}] ${run.agentName}: ${run.status.toUpperCase()} (${duration}, started: ${started})`
+            }
+            const failedRuns = allRuns.filter(r => r.status === 'failed')
+            if (failedRuns.length > 0) {
+              aa += `\n\n⚠️ ${failedRuns.length} FAILED RUNS in recent history`
+            }
+          }
+        } catch (runErr) {
+          log.warn({ err: runErr }, 'Run history fetch failed — skipping run context')
         }
 
         return { projectContext: pc, agentActivity: aa }
       } catch (ctxErr) {
         log.warn({ err: ctxErr }, 'Paperclip context fetch failed — proceeding without project context')
-        return { projectContext: 'Paperclip API unavailable — using cached context', agentActivity: '' }
+        return { projectContext: '[Paperclip orchestration data unavailable — this does NOT affect Google Drive, Calendar, Tasks, Gmail, or Chat. Those services are powered by the user\'s OAuth session and work independently via the left panel.]', agentActivity: '' }
       }
     })(),
     8_000,
-    { projectContext: 'Context fetch timed out — Paperclip may be cold-starting', agentActivity: '' },
+    { projectContext: '[Paperclip project context timed out — Google Workspace features (Drive, Calendar, Tasks, Chat, Gmail) are unaffected and remain available via the left panel.]', agentActivity: '' },
     'paperclip-context'
   )
   projectContext = paperclipContextResult.projectContext
@@ -187,10 +229,12 @@ export async function POST(req: NextRequest) {
                     .join('\n\n---\n\n')
                   return `## Internal Knowledge (Vertex AI — Google Drive/Workspace)\n\n${vertexContext}\n\n`
                 }
+                // Vertex returned no results — tell the LLM explicitly so it doesn't fabricate diagnostics
+                return `## Internal Knowledge (Vertex AI)\n\n[No matching documents found in the internal knowledge base for this query. The user can search Google Drive directly from the Documents panel on the left sidebar, or try refining their search terms. Do NOT blame Paperclip or claim Google services are down — they are independent.]\n\n`
               } catch (err) {
                 log.warn({ err }, 'Vertex AI search failed')
+                return `## Internal Knowledge (Vertex AI)\n\n[Vertex AI search encountered an error. Google Drive, Calendar, Tasks, and Chat are unaffected — they use the user\'s OAuth session, not Vertex AI. Suggest the user check the Documents panel on the left.]\n\n`
               }
-              return null
             })()
           )
         } else {

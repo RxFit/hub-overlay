@@ -13,11 +13,14 @@ interface ServiceAccountKey {
  * @returns Access token or null if auth fails
  */
 export async function getServiceAccountAccessToken(scope: string): Promise<string | null> {
-  const keyJson = process.env.GOOGLE_SERVICE_ACCOUNT_KEY
+  let keyJson = process.env.GOOGLE_SERVICE_ACCOUNT_KEY
   if (!keyJson) {
     console.warn('[google-auth] GOOGLE_SERVICE_ACCOUNT_KEY is not set')
     return null
   }
+
+  // Defensive: strip wrapping single/double quotes (common .env copy-paste error)
+  keyJson = keyJson.replace(/^['"]|['"]$/g, '')
 
   try {
     const key: ServiceAccountKey = JSON.parse(keyJson)

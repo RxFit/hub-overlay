@@ -31,7 +31,9 @@ export const maxDuration = 30
    }
    ══════════════════════════════════════════════════════════════════════════════ */
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '')
+const genAI = new GoogleGenerativeAI(
+  process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY || ''
+)
 
 /* ── Dimension definitions per intent ── */
 

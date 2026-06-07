@@ -24,7 +24,11 @@ let genAI: GoogleGenerativeAI | null = null
 
 function getGenAI() {
   if (!genAI) {
-    genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '')
+    const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY || ''
+    if (!key) {
+      throw new Error('No Gemini API key found for embeddings.')
+    }
+    genAI = new GoogleGenerativeAI(key)
   }
   return genAI
 }

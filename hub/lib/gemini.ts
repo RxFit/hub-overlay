@@ -2,7 +2,19 @@ import { GoogleGenerativeAI, type Content } from '@google/generative-ai'
 import type { ChatMessage } from '@/types'
 import { SKILL_CATALOG_PROMPT } from './skills'
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '')
+/* Lazy-initialized so the API key is read at runtime, not build time.
+   Prevents empty-key 403s when Railway injects env vars after the build step. */
+let _genAI: GoogleGenerativeAI | null = null
+function getGenAI(): GoogleGenerativeAI {
+  if (!_genAI) {
+    const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY || ''
+    if (!key) {
+      throw new Error('No Gemini API key found. Set GEMINI_API_KEY, GOOGLE_API_KEY, or GOOGLE_GENERATIVE_AI_API_KEY.')
+    }
+    _genAI = new GoogleGenerativeAI(key)
+  }
+  return _genAI
+}
 
 const HUB_SYSTEM_PROMPT = `You are the AI assistant for the RxFit operations hub.
 You help team members understand project status, take action on tasks, and coordinate work across departments.
@@ -14,6 +26,14 @@ You have two search backends that are automatically activated based on the query
 2. **Exa.AI (External Brain)** — Searches the live web for public information: competitors, market trends, industry news, documentation, best practices, and any external research. Cite source URLs when using external data.
 
 When search results are injected into your context, clearly indicate which source they come from and cite URLs where available.
+
+CRITICAL — DATA SOURCE INDEPENDENCE:
+Google Workspace features (Google Drive, Calendar, Tasks, Gmail, Google Chat) are powered by the user's personal OAuth session and are COMPLETELY INDEPENDENT of the Paperclip API and Vertex AI Search.
+- If Paperclip is unavailable or timed out, Google Workspace features still work normally via the left panel. NEVER tell the user that Google Drive, Gmail, or Chat are broken because Paperclip is down.
+- If Vertex AI Search returns no results for a document query, the document may still exist in Google Drive — suggest the user check the Documents panel on the left sidebar or search Drive directly.
+- NEVER say "the connection to our internal drive may be warming up" — the Google Drive API does not warm up. If a document wasn't found, it's because the Vertex AI search index doesn't contain it, NOT because Drive is unavailable.
+- NEVER fabricate infrastructure diagnostics (e.g., "Auth Error", "Missing Token", "Broken Handshake") when you simply don't have search results.
+- Paperclip = AI task orchestration platform. Google Workspace = user's personal productivity suite. They are separate systems.
 
 CRITICAL — NEVER FABRICATE ACTIONS:
 You do NOT have the ability to directly send emails, create Paperclip issues, schedule events, or execute any write operation on your own.
@@ -40,11 +60,21 @@ You detect task creation intent from phrases like: "I need to...", "Can we...", 
 
 For non-task queries (status checks, questions, summaries), respond directly and concisely.
 
+CRITICAL — NEVER FABRICATE DIAGNOSTICS OR STATUS DATA:
+You do NOT have the ability to run live infrastructure diagnostics, check auth tokens, inspect webhook handshakes, or query backend system health directly.
+The ONLY real-time data you have is what appears in your system prompt context (Active projects, Recent agent activity, etc.).
+If those sections are empty, say "timed out", or show partial data — you MUST:
+1. Tell the user honestly: "I couldn't retrieve live data from Paperclip right now — the API may be warming up."
+2. NEVER invent diagnostic findings like "Auth Error", "Missing Token", "Broken Handshake", "Orphaned Workers", or any infrastructure failure you did not directly observe in your context.
+3. NEVER present fabricated system status as fact. If you don't have the data, say so.
+4. Suggest the user retry in 30 seconds, or offer to check a specific item they care about.
+Violation of this rule destroys user trust and causes false incident escalations.
+
 Guidelines:
 - Be concise and business-focused
 - Use bullet points for clarity
 - Reference specific project and company names
-- When showing metrics, use exact numbers
+- When showing metrics, use exact numbers FROM YOUR CONTEXT ONLY — never invent numbers
 - Suggest next actions when appropriate
 - When citing external sources, include the URL
 - Distinguish clearly between internal data and external research
@@ -194,18 +224,33 @@ export function chatMessagesToContents(messages: ChatMessage[]): Content[] {
     }))
 }
 
+/**
+ * APPROVED MODELS POLICY: Only models verified to work with our API key
+ * and deliver reasoning-grade intelligence are allowed. This allowlist is
+ * the single source of truth — any model not listed will be rejected at runtime.
+ */
+const APPROVED_MODELS: readonly string[] = [
+  'gemini-3.5-flash',    // Primary — near-Pro intelligence, Flash-tier speed (1M context)
+  'gemini-2.5-pro',      // Fallback — proven reasoning model
+] as const
+
+function assertApprovedModel(model: string): void {
+  if (!APPROVED_MODELS.includes(model)) {
+    throw new Error(
+      `MODEL POLICY VIOLATION: "${model}" is not an approved model. ` +
+      `Allowed: [${APPROVED_MODELS.join(', ')}].`
+    )
+  }
+}
+
 export async function* streamGeminiChat(
   messages: ChatMessage[],
   systemPrompt: string,
-  useCase: string = 'deep_dive'
+  _useCase: string = 'deep_dive'
 ): AsyncGenerator<string> {
-  // Model selection: primary and fallback
-  let primaryModel = 'gemini-2.5-pro' // Default for deep_dive and interview
-  let fallbackModel = 'gemini-2.0-flash'
-  if (useCase === 'recall' || useCase === 'execute') {
-    primaryModel = 'gemini-2.5-flash'
-    fallbackModel = 'gemini-2.0-flash'
-  }
+  // Fallback chain: all models must be on the APPROVED_MODELS list
+  const modelsToTry = ['gemini-3.5-flash', 'gemini-2.5-pro'] as const
+  modelsToTry.forEach(assertApprovedModel)
 
   const contents = chatMessagesToContents(messages.slice(0, -1))
   const lastMessage = messages[messages.length - 1]
@@ -213,27 +258,34 @@ export async function* streamGeminiChat(
     throw new Error('Last message must be from the user')
   }
 
-  // Try primary model first, fall back on failure
-  const modelsToTry = [primaryModel, fallbackModel]
-
   for (let i = 0; i < modelsToTry.length; i++) {
     const modelName = modelsToTry[i]
     const isLastAttempt = i === modelsToTry.length - 1
 
     try {
-      const model = genAI.getGenerativeModel({
+      // Brief delay before fallback to let transient issues clear
+      if (i > 0) {
+        await new Promise(r => setTimeout(r, 2_000))
+      }
+
+      const model = getGenAI().getGenerativeModel({
         model: modelName,
         systemInstruction: systemPrompt,
       })
 
       const chat = model.startChat({ history: contents })
 
-      // HARDENED: 30-second timeout on initial stream connection
+      // HARDENED: 60-second timeout on initial stream connection
       const resultPromise = chat.sendMessageStream(lastMessage.content)
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error(`Gemini stream timeout (${modelName})`)), 30_000)
+        setTimeout(() => reject(new Error(`Gemini stream timeout (${modelName})`)), 60_000)
       })
       const result = await Promise.race([resultPromise, timeoutPromise])
+
+      // If this is a fallback, notify the user visibly
+      if (i > 0) {
+        yield `⚠️ *Primary model unavailable — using ${modelName}*\n\n`
+      }
 
       for await (const chunk of result.stream) {
         const text = chunk.text()
@@ -242,13 +294,13 @@ export async function* streamGeminiChat(
         }
       }
 
-      return // Success — exit generator
+      return // Success
     } catch (err) {
       if (isLastAttempt) {
-        throw err // No more fallbacks — propagate error
+        throw err // All approved models exhausted
       }
-      // Log and try fallback model
       console.warn(`[gemini] ${modelName} failed, falling back to ${modelsToTry[i + 1]}:`, err)
     }
   }
 }
+

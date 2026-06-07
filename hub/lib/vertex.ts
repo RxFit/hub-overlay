@@ -34,8 +34,11 @@ interface ServiceAccountKey {
 let cachedToken: { token: string; expiresAt: number } | null = null
 
 async function getAccessToken(): Promise<string | null> {
-  const keyJson = process.env.GOOGLE_SERVICE_ACCOUNT_KEY
+  let keyJson = process.env.GOOGLE_SERVICE_ACCOUNT_KEY
   if (!keyJson) return null
+
+  // Defensive: strip wrapping single/double quotes (common .env copy-paste error)
+  keyJson = keyJson.replace(/^['"]|['"]$/g, '')
 
   // Return cached token if still valid (with 60s buffer)
   if (cachedToken && Date.now() < cachedToken.expiresAt - 60_000) {

@@ -138,17 +138,22 @@ function MessageContent({ content, onToolActivate }: { content: string; onToolAc
   // Strip suggestedTools metadata from visible content
   const cleanContent = content.replace(/<!--suggestedTools:\[.*?\]-->/g, '').trimEnd()
   
-  // Custom parser to split by HTML code blocks
-  const parts: { type: 'text' | 'html', content: string }[] = []
-  const htmlBlockRegex = /```html\n([\s\S]*?)```/g
+  // Custom parser to split by HTML code blocks and generic code blocks
+  const parts: { type: 'text' | 'html' | 'code', content: string, lang?: string }[] = []
+  const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g
   let lastIndex = 0
   let match
 
-  while ((match = htmlBlockRegex.exec(cleanContent)) !== null) {
+  while ((match = codeBlockRegex.exec(cleanContent)) !== null) {
     if (match.index > lastIndex) {
       parts.push({ type: 'text', content: cleanContent.slice(lastIndex, match.index) })
     }
-    parts.push({ type: 'html', content: match[1] })
+    const lang = match[1] || ''
+    if (lang === 'html') {
+      parts.push({ type: 'html', content: match[2] })
+    } else {
+      parts.push({ type: 'code', content: match[2], lang })
+    }
     lastIndex = match.index + match[0].length
   }
   if (lastIndex < cleanContent.length) {
@@ -161,14 +166,71 @@ function MessageContent({ content, onToolActivate }: { content: string; onToolAc
         if (part.type === 'html') {
           return <EmailPreviewCard key={pIndex} htmlContent={part.content} />
         }
+        if (part.type === 'code') {
+          return (
+            <div key={pIndex} style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: 'clamp(0.78rem, 0.74rem + 0.2vw, 0.85rem)',
+              background: 'rgba(0,0,0,0.25)',
+              border: '1px solid rgba(255,255,255,0.06)',
+              borderRadius: 'var(--radius-md)',
+              padding: 'var(--space-3)',
+              margin: 'var(--space-2) 0',
+              overflowX: 'auto',
+              lineHeight: 1.55,
+            }}>
+              {part.content}
+            </div>
+          )
+        }
         
         const lines = part.content.split('\n')
         return (
           <Fragment key={pIndex}>
             {lines.map((line, i) => {
-              // Bullet points
+              // Heading lines (## Header or ### Header)
+              if (/^#{1,3} /.test(line)) {
+                const level = line.match(/^(#+)/)?.[1].length || 2
+                const text = line.replace(/^#+\s*/, '')
+                return (
+                  <div key={`${pIndex}-${i}`} style={{
+                    fontFamily: 'var(--font-heading)',
+                    fontWeight: 600,
+                    fontSize: level === 1 ? '1.05em' : level === 2 ? '0.95em' : '0.9em',
+                    marginTop: '0.75em',
+                    marginBottom: '0.25em',
+                    color: 'var(--text-primary)',
+                    letterSpacing: '-0.01em',
+                  }}>
+                    {parseInlineMarkdown(text, onToolActivate)}
+                  </div>
+                )
+              }
+              // Numbered list items (1. or 1) style)
+              if (/^\d+[.)\s]/.test(line.trim())) {
+                return (
+                  <div key={`${pIndex}-${i}`} style={{ paddingLeft: '16px', position: 'relative' }}>
+                    {parseInlineMarkdown(line, onToolActivate)}
+                  </div>
+                )
+              }
+              // Bullet points — proper indentation
               if (line.startsWith('• ') || line.startsWith('- ')) {
-                return <div key={`${pIndex}-${i}`} style={{ paddingLeft: '8px' }}>{parseInlineMarkdown(line, onToolActivate)}</div>
+                return <div key={`${pIndex}-${i}`} style={{ paddingLeft: '16px', position: 'relative' }}>{parseInlineMarkdown(line, onToolActivate)}</div>
+              }
+              // Blockquote lines (> text)
+              if (line.startsWith('> ')) {
+                return (
+                  <div key={`${pIndex}-${i}`} style={{
+                    paddingLeft: '12px',
+                    borderLeft: '3px solid var(--accent-dim)',
+                    color: 'var(--text-secondary)',
+                    fontStyle: 'italic',
+                    margin: '4px 0',
+                  }}>
+                    {parseInlineMarkdown(line.slice(2), onToolActivate)}
+                  </div>
+                )
               }
               // Table header detection
               if (line.includes('|') && line.trim().startsWith('|')) {
@@ -179,7 +241,7 @@ function MessageContent({ content, onToolActivate }: { content: string; onToolAc
                     display: 'flex',
                     gap: '8px',
                     fontFamily: 'var(--font-mono)',
-                    fontSize: '0.7rem',
+                    fontSize: 'clamp(0.75rem, 0.7rem + 0.25vw, 0.85rem)',
                     padding: '2px 0',
                     color: line.includes('---') ? 'transparent' : undefined,
                   }}>
@@ -189,9 +251,9 @@ function MessageContent({ content, onToolActivate }: { content: string; onToolAc
                   </div>
                 )
               }
-              // Empty line
+              // Empty line → visible paragraph break
               if (!line.trim()) {
-                return <div key={`${pIndex}-${i}`}>{' '}</div>
+                return <div key={`${pIndex}-${i}`} style={{ height: '0.5em' }} aria-hidden="true" />
               }
               return <div key={`${pIndex}-${i}`}>{parseInlineMarkdown(line, onToolActivate)}</div>
             })}
@@ -751,8 +813,8 @@ export default function HubPage() {
         id: String(Date.now()),
         role: 'assistant' as const,
         content: isTimeout
-          ? "⏱️ The response took too long. The server may be warming up — please try again in a moment."
-          : "I'm having trouble connecting to the intelligence nodes right now. Please try again in a moment.",
+          ? "⏱️ That took longer than expected. Try asking again — things usually speed up quickly."
+          : "Something went wrong on my end. Give it another try in a moment.",
       }]);
     } finally {
       clearTimeout(timeoutId)
@@ -1895,13 +1957,14 @@ Respond with EXACTLY one of:
                     fontWeight: 800, color: 'var(--text-primary)', margin: 0,
                     letterSpacing: '-0.02em',
                   }}>
-                    How can I help today?
+                    {session?.user?.name ? `Hey ${session.user.name.split(' ')[0]} 👋` : 'Hey there 👋'}
                   </h3>
                   <p style={{
-                    fontSize: 'var(--text-sm)', color: 'var(--text-muted)',
-                    maxWidth: '280px', lineHeight: 1.5, margin: 0,
+                    fontFamily: 'var(--font-chat)', fontSize: 'var(--text-sm)',
+                    color: 'var(--text-muted)',
+                    maxWidth: '300px', lineHeight: 1.6, margin: 0,
                   }}>
-                    Ask about your projects, create tasks, schedule events, or check your business metrics.
+                    I'm your business co-pilot. Ask me anything about your workspace.
                   </p>
                 </div>
               )}
