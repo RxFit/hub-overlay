@@ -217,7 +217,7 @@ export async function POST(req: NextRequest) {
 
         log.info({ effectiveUseCase, shouldRunVertex, shouldRunPgVector, explicitInternalReq }, 'Search routing decision')
 
-        // Try Vertex AI for internal context
+        // Try Vertex AI for internal context, with Google Drive API fallback
         if (shouldRunVertex) {
           searchPromises.push(
             (async () => {
@@ -229,10 +229,60 @@ export async function POST(req: NextRequest) {
                     .join('\n\n---\n\n')
                   return `## Internal Knowledge (Vertex AI — Google Drive/Workspace)\n\n${vertexContext}\n\n`
                 }
-                // Vertex returned no results — tell the LLM explicitly so it doesn't fabricate diagnostics
-                return `## Internal Knowledge (Vertex AI)\n\n[No matching documents found in the internal knowledge base for this query. The user can search Google Drive directly from the Documents panel on the left sidebar, or try refining their search terms. Do NOT blame Paperclip or claim Google services are down — they are independent.]\n\n`
+
+                // Vertex returned no results — fall back to live Google Drive API search
+                log.info({ query }, 'Vertex AI returned no results — trying Google Drive API fallback')
+                try {
+                  const token = await getToken({ req })
+                  const driveAccessToken = token?.accessToken as string | undefined
+                  if (driveAccessToken) {
+                    const { listRecentFiles } = await import('@/lib/google')
+                    // Build Drive API fullText search query
+                    const driveQuery = `fullText contains '${query.replace(/'/g, "\\'").substring(0, 100)}'`
+                    const driveFiles = await listRecentFiles(driveAccessToken, {
+                      maxResults: 10,
+                      query: driveQuery,
+                    })
+                    if (driveFiles.length > 0) {
+                      const driveContext = driveFiles
+                        .map(f => {
+                          const link = f.webViewLink ? `[Open in Drive](${f.webViewLink})` : ''
+                          const owner = f.owners?.[0]?.displayName || 'Unknown'
+                          return `**${f.name}** — ${f.mimeType.split('.').pop() || 'file'} · Modified: ${new Date(f.modifiedTime).toLocaleDateString()} · Owner: ${owner} ${link}`
+                        })
+                        .join('\n')
+                      return `## Google Drive Search Results (Live)\n\nFound ${driveFiles.length} matching file(s) in the user's Google Drive:\n\n${driveContext}\n\nThese results come from the user's live Google Drive connection (not the search index). You can reference these files directly.\n\n`
+                    }
+                  }
+                } catch (driveErr) {
+                  log.warn({ err: driveErr }, 'Google Drive API fallback search failed')
+                }
+
+                // Neither Vertex AI nor Drive found anything
+                return `## Internal Knowledge\n\n[No matching documents found in Vertex AI search index or Google Drive for this query. The user may want to try different search terms, or the document may not exist yet. Do NOT fabricate infrastructure errors.]\n\n`
               } catch (err) {
                 log.warn({ err }, 'Vertex AI search failed')
+                // Still try Drive API even if Vertex throws
+                try {
+                  const token = await getToken({ req })
+                  const driveAccessToken = token?.accessToken as string | undefined
+                  if (driveAccessToken) {
+                    const { listRecentFiles } = await import('@/lib/google')
+                    const driveQuery = `fullText contains '${query.replace(/'/g, "\\'").substring(0, 100)}'`
+                    const driveFiles = await listRecentFiles(driveAccessToken, {
+                      maxResults: 5,
+                      query: driveQuery,
+                    })
+                    if (driveFiles.length > 0) {
+                      const driveContext = driveFiles
+                        .map(f => `**${f.name}** — ${f.mimeType.split('.').pop() || 'file'} · ${f.webViewLink ? `[Open](${f.webViewLink})` : ''}`)
+                        .join('\n')
+                      return `## Google Drive Search Results (Live)\n\n${driveContext}\n\n`
+                    }
+                  }
+                } catch (fallbackErr) {
+                  log.warn({ err: fallbackErr }, 'Drive fallback also failed')
+                }
                 return `## Internal Knowledge (Vertex AI)\n\n[Vertex AI search encountered an error. Google Drive, Calendar, Tasks, and Chat are unaffected — they use the user\'s OAuth session, not Vertex AI. Suggest the user check the Documents panel on the left.]\n\n`
               }
             })()
