@@ -94,6 +94,7 @@ export async function upsertUserRole(
     assignedProjects: string[]
     assignedBy: string
     name?: string
+    googleRefreshToken?: string
   },
   tenantId = DEFAULT_TENANT
 ): Promise<void> {
@@ -108,6 +109,7 @@ export async function upsertUserRole(
       role:             entry.role,
       assignedProjects: entry.assignedProjects,
       assignedBy:       entry.assignedBy,
+      googleRefreshToken: entry.googleRefreshToken,
     })
     .onConflictDoUpdate({
       target:  [hubUsers.tenantId, hubUsers.email],
@@ -118,6 +120,7 @@ export async function upsertUserRole(
         assignedAt:       new Date(),
         updatedAt:        new Date(),
         ...(entry.name ? { name: entry.name } : {}),
+        ...(entry.googleRefreshToken ? { googleRefreshToken: entry.googleRefreshToken } : {}),
       },
     })
 }

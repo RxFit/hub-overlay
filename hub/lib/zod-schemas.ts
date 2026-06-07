@@ -175,3 +175,33 @@ export type ValidatedMemoryType = z.infer<typeof MemoryTypeSchema>
 export type ValidatedStoreMemoryRequest = z.infer<typeof StoreMemoryRequestSchema>
 export type ValidatedQueryMemoryRequest = z.infer<typeof QueryMemoryRequestSchema>
 
+/* ── KPI Settings Schemas ── */
+
+export const TrendDirectionSchema = z.enum(['up', 'down', 'neutral'])
+export const KpiScopeSchema = z.enum(['global', 'project'])
+export const KpiVisibilitySchema = z.enum(['public', 'staff', 'admin'])
+
+export const CreateKpiRequestSchema = z.object({
+  label: z.string().min(1, 'Label is required'),
+  value: z.string().or(z.number()).optional().default('0'),
+  trend: z.string().nullable().optional(),
+  trendDirection: TrendDirectionSchema.optional().default('neutral'),
+  unit: z.string().nullable().optional(),
+  scope: KpiScopeSchema.optional().default('global'),
+  visibility: KpiVisibilitySchema.optional().default('staff'),
+})
+
+export const UpdateKpiRequestSchema = z.object({
+  id: z.string().min(1, 'ID is required'),
+  label: z.string().min(1).optional(),
+  value: z.string().or(z.number()).optional(),
+  trend: z.string().nullable().optional(),
+  trendDirection: TrendDirectionSchema.optional(),
+  unit: z.string().nullable().optional(),
+  scope: KpiScopeSchema.optional(),
+  visibility: KpiVisibilitySchema.optional(),
+})
+
+export type ValidatedCreateKpiRequest = z.infer<typeof CreateKpiRequestSchema>
+export type ValidatedUpdateKpiRequest = z.infer<typeof UpdateKpiRequestSchema>
+

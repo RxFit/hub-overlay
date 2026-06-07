@@ -51,3 +51,31 @@
 - **Pre-Compile Check:** Local `npm run build` executed successfully, guaranteeing bundle compilation.
 - **Service Validation:** Execute `railway status` to confirm target configuration.
 - **Cloud Build Monitoring:** Track the build process on the Railway console or CLI.
+
+---
+
+# RxHarden Session 2: Vertex AI + pgvector Dual-Search Hardening
+
+> Started: 2026-06-07T16:36:00-05:00
+> Conversation: 26bfbe50
+
+## Foundation Phase
+
+### Design Decisions Locked (from /grill-me interview)
+1. Vertex AI = native Google Workspace connector (kill GCS bucket)
+2. pgvector = admin-curated Knowledge Base uploads only
+3. Separate Discovery Engine instances per tenant (full isolation)
+4. Engine config stored in `tenants` table columns
+5. Silent fallback to pgvector on Vertex AI failure
+6. Consolidate dual SA auth into single `google-auth.ts`
+7. Single GCP project `semantic-brain-desktop`, multiple engines
+8. Admin UI Vertex AI status panel on Knowledge Base page
+
+### Current State Snapshot
+- Vertex AI: LIVE in code (reinstated ~13:51 today), engine `semanticbrain_1779229063037`
+- pgvector: LIVE, 1 debug chunk, HNSW index active, threshold 0.65
+- Auth: TWO duplicate SA auth implementations (vertex.ts + google-auth.ts)
+- Tenant config: hardcoded engine ID in vertex.ts
+- GCS bucket: frozen since May 19 (366 stale docs)
+
+---

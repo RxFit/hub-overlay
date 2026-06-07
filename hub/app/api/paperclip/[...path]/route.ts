@@ -89,6 +89,18 @@ async function proxyRequest(
         { status: 403 }
       )
     }
+  } else if (
+    role !== 'superadmin' &&
+    !assignedProjects.includes('*') &&
+    !apiPath.startsWith('/api/health') &&
+    !apiPath.startsWith('/api/companies')
+  ) {
+    // Direct access to issues, agents, runs, etc. without a company prefix
+    // is forbidden for non-superadmins because we cannot reliably check tenancy.
+    return NextResponse.json(
+      { error: 'Direct access to global resources requires superadmin role. Use company-scoped paths instead.' },
+      { status: 403 }
+    )
   }
 
   // Forward request to Paperclip with session auth
@@ -169,12 +181,13 @@ async function proxyRequest(
     }
 
     // 3. Circuit breaker & Retry wrapper
-    const upstream = await breaker.execute('paperclip-api', () => withRetry(execute))
+    const upstream = await breaker.execute('paperclip-api', () => withRetry(execute, { maxAttempts: 2, deadlineMs: 12_000 }))
     const data = await upstream.text()
 
     // If the user is staff (not admin) and this is a companies list,
     // filter to only their assigned projects
-    if (apiPath === '/api/companies' && role !== 'superadmin' && !assignedProjects.includes('*')) {
+    const isCompaniesList = apiPath.replace(/\/$/, '') === '/api/companies';
+    if (isCompaniesList && role !== 'superadmin' && !assignedProjects.includes('*')) {
       try {
         const parsed = JSON.parse(data)
         // Handle both array and wrapped responses

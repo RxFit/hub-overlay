@@ -2,6 +2,7 @@ interface RetryOpts {
   maxAttempts?: number
   baseMs?: number
   jitter?: boolean
+  deadlineMs?: number  // Total wall-clock budget for all attempts
 }
 
 const RETRYABLE_STATUS = ['500', '502', '503', '504']
@@ -39,10 +40,15 @@ export async function withRetry<T>(
   const maxAttempts = opts?.maxAttempts ?? 3
   const baseMs = opts?.baseMs ?? 500
   const jitter = opts?.jitter ?? true
+  const deadline = opts?.deadlineMs ? Date.now() + opts.deadlineMs : undefined
 
   let lastError: unknown
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    // Pre-flight: abort if deadline would be exceeded
+    if (deadline && Date.now() >= deadline) {
+      throw lastError ?? new Error(`Retry deadline exceeded after ${attempt} attempts`)
+    }
     try {
       return await fn()
     } catch (err) {

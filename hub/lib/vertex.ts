@@ -105,6 +105,7 @@ async function getAccessToken(): Promise<string | null> {
  */
 export async function searchSemanticBrain(
   query: string,
+  tenantId?: string,
   dataStore?: string
 ): Promise<VertexSearchResult[] | null> {
   const token = await getAccessToken()
@@ -131,9 +132,18 @@ export async function searchSemanticBrain(
       },
     }
 
-    // Filter to specific data store if provided
+    // Build multi-tenant filters
+    const filters: string[] = []
+    if (tenantId) {
+      // Assuming custom metadata 'tenantId' is configured as indexable in Vertex schema
+      filters.push(`tenantId=\"${tenantId}\"`)
+    }
     if (dataStore) {
-      body.filter = `dataStore:\"${dataStore}\"`
+      filters.push(`dataStore:\"${dataStore}\"`)
+    }
+    
+    if (filters.length > 0) {
+      body.filter = filters.join(' AND ')
     }
 
     const res = await fetch(url, {

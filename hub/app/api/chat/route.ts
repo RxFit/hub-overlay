@@ -234,7 +234,8 @@ export async function POST(req: NextRequest) {
           searchPromises.push(
             (async () => {
               try {
-                const vertexResults = await searchSemanticBrain(query)
+                const tenantId = process.env.NEXT_PUBLIC_TENANT_ID || 'rxfit'
+                const vertexResults = await searchSemanticBrain(query, tenantId)
                 if (vertexResults && vertexResults.length > 0) {
                   const vertexContext = vertexResults
                     .map(r => `**${r.title}** ${r.uri ? `(${r.uri})` : ''}\n${r.snippet}`)

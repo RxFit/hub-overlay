@@ -176,6 +176,19 @@ async function run() {
   `
   console.log('[migrate] ✓ tool_artifacts table')
 
+  // Create circuit_breakers table
+  await sql`
+    CREATE TABLE IF NOT EXISTS circuit_breakers (
+      key           TEXT PRIMARY KEY,
+      state         TEXT NOT NULL DEFAULT 'closed',
+      failures      INTEGER NOT NULL DEFAULT 0,
+      last_failure  TIMESTAMPTZ,
+      probing       BOOLEAN NOT NULL DEFAULT false,
+      updated_at    TIMESTAMPTZ DEFAULT now() NOT NULL
+    )
+  `
+  console.log('[migrate] ✓ circuit_breakers table')
+
   // Seed rxfit tenant
   await sql`
     INSERT INTO tenants (id, name, domain)

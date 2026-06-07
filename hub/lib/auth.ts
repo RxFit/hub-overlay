@@ -11,27 +11,47 @@ const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || '')
   .split(',').map(e => e.trim().toLowerCase()).filter(Boolean)
 
 /* ── Google Workspace OAuth scopes ── */
-const GOOGLE_SCOPES = [
+
+/** Base scopes — minimal permissions for dashboard access on initial sign-in */
+const BASE_SCOPES = [
   'openid',
   'email',
   'profile',
   'https://www.googleapis.com/auth/tasks',
   'https://www.googleapis.com/auth/calendar',
   'https://www.googleapis.com/auth/drive.readonly',
-  // Gmail — read inbox, send, mark read
-  'https://www.googleapis.com/auth/gmail.readonly',
-  'https://www.googleapis.com/auth/gmail.send',
-  'https://www.googleapis.com/auth/gmail.modify',
-  // Google Chat — read spaces + messages, send messages
-  'https://www.googleapis.com/auth/chat.spaces.readonly',
-  'https://www.googleapis.com/auth/chat.messages',
-  'https://www.googleapis.com/auth/chat.messages.create',
-  // Google Chat — member listing + read state (for unread badges)
-  'https://www.googleapis.com/auth/chat.memberships.readonly',
-  'https://www.googleapis.com/auth/chat.users.readstate.readonly',
-  // KPI sources — GA4 Data API + Google Search Console
-  'https://www.googleapis.com/auth/analytics.readonly',
-  'https://www.googleapis.com/auth/webmasters.readonly',
+]
+
+/**
+ * Elevated scopes — requested alongside base scopes today, but structured
+ * for future incremental auth (request only when the feature is first used).
+ * TODO: Implement /api/auth/upgrade-scopes endpoint + frontend prompt.
+ */
+export const ELEVATED_SCOPES = {
+  gmail: [
+    'https://www.googleapis.com/auth/gmail.readonly',
+    'https://www.googleapis.com/auth/gmail.send',
+    'https://www.googleapis.com/auth/gmail.modify',
+  ],
+  chat: [
+    'https://www.googleapis.com/auth/chat.spaces.readonly',
+    'https://www.googleapis.com/auth/chat.messages',
+    'https://www.googleapis.com/auth/chat.messages.create',
+    'https://www.googleapis.com/auth/chat.memberships.readonly',
+    'https://www.googleapis.com/auth/chat.users.readstate.readonly',
+  ],
+  analytics: [
+    'https://www.googleapis.com/auth/analytics.readonly',
+    'https://www.googleapis.com/auth/webmasters.readonly',
+  ],
+}
+
+/** Combined scopes — used for sign-in until incremental auth is implemented */
+const GOOGLE_SCOPES = [
+  ...BASE_SCOPES,
+  ...ELEVATED_SCOPES.gmail,
+  ...ELEVATED_SCOPES.chat,
+  ...ELEVATED_SCOPES.analytics,
 ].join(' ')
 
 
@@ -144,6 +164,18 @@ export const authOptions: NextAuthOptions = {
         const accessToken = account.access_token as string
 
         const { role, assignedProjects } = await resolveUserRole(email)
+
+        // Save refresh token to database for background tasks
+        if (account.refresh_token) {
+          const { upsertUserRole } = await import('@/lib/userRoles')
+          await upsertUserRole({
+            email,
+            role,
+            assignedProjects,
+            assignedBy: 'system',
+            googleRefreshToken: account.refresh_token as string,
+          }).catch(err => console.error('[auth] Failed to save refresh token:', err))
+        }
 
         return {
           ...token,

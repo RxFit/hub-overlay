@@ -1,0 +1,1 @@
+ALTER TABLE "hub_users" ADD COLUMN "google_refresh_token" text;

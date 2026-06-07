@@ -243,6 +243,38 @@ function assertApprovedModel(model: string): void {
   }
 }
 
+/**
+ * Dynamic Fallback Cache
+ * When the primary model fails, subsequent requests skip it entirely
+ * for a cooldown period, routing directly to the fallback model.
+ */
+interface FallbackState {
+  failedModel: string
+  failedAt: number
+  cooldownMs: number
+}
+
+let _fallbackState: FallbackState | null = null
+const DEFAULT_COOLDOWN_MS = 5 * 60 * 1000 // 5 minutes
+
+function shouldSkipModel(modelName: string): boolean {
+  if (!_fallbackState) return false
+  if (_fallbackState.failedModel !== modelName) return false
+  if (Date.now() - _fallbackState.failedAt > _fallbackState.cooldownMs) {
+    _fallbackState = null // Cooldown expired, retry primary
+    return false
+  }
+  return true
+}
+
+function recordModelFailure(modelName: string): void {
+  _fallbackState = {
+    failedModel: modelName,
+    failedAt: Date.now(),
+    cooldownMs: DEFAULT_COOLDOWN_MS,
+  }
+}
+
 export async function* streamGeminiChat(
   messages: ChatMessage[],
   systemPrompt: string,
@@ -260,13 +292,14 @@ export async function* streamGeminiChat(
 
   for (let i = 0; i < modelsToTry.length; i++) {
     const modelName = modelsToTry[i]
+    // Skip models in cooldown from recent failures
+    if (shouldSkipModel(modelName)) {
+      console.warn(`[gemini] Skipping ${modelName} (in cooldown until ${new Date(_fallbackState!.failedAt + _fallbackState!.cooldownMs).toISOString()})`)
+      continue
+    }
     const isLastAttempt = i === modelsToTry.length - 1
 
     try {
-      // Brief delay before fallback to let transient issues clear
-      if (i > 0) {
-        await new Promise(r => setTimeout(r, 2_000))
-      }
 
       const model = getGenAI().getGenerativeModel({
         model: modelName,
@@ -296,6 +329,7 @@ export async function* streamGeminiChat(
 
       return // Success
     } catch (err) {
+      recordModelFailure(modelName)
       if (isLastAttempt) {
         throw err // All approved models exhausted
       }

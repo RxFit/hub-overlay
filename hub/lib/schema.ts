@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, uniqueIndex, jsonb, integer, vector, index } from 'drizzle-orm/pg-core'
+import { pgTable, text, timestamp, uniqueIndex, jsonb, integer, vector, index, boolean } from 'drizzle-orm/pg-core'
 
 /**
  * Hub database schema — Railway Postgres
@@ -32,6 +32,7 @@ export const hubUsers = pgTable(
     assignedBy:        text('assigned_by'),
     assignedAt:        timestamp('assigned_at').defaultNow(),
     lastLogin:         timestamp('last_login'),
+    googleRefreshToken: text('google_refresh_token'),
     createdAt:         timestamp('created_at').defaultNow(),
     updatedAt:         timestamp('updated_at').defaultNow(),
   },
@@ -133,4 +134,15 @@ export const toolArtifacts = pgTable('tool_artifacts', {
   createdBy:      text('created_by'),                      // User email
   createdAt:      timestamp('created_at').defaultNow().notNull(),
   updatedAt:      timestamp('updated_at').defaultNow().notNull(),
+})
+
+/* ── Circuit Breakers (distributed state) ────────────────────────────────── */
+
+export const circuitBreakers = pgTable('circuit_breakers', {
+  key:         text('key').primaryKey(),
+  state:       text('state').notNull().default('closed'), // 'closed' | 'open' | 'half-open'
+  failures:    integer('failures').notNull().default(0),
+  lastFailure: timestamp('last_failure'),
+  probing:     boolean('probing').notNull().default(false),
+  updatedAt:   timestamp('updated_at').defaultNow().notNull(),
 })
