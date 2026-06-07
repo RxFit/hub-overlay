@@ -229,7 +229,7 @@ export async function POST(req: NextRequest) {
 
         log.info({ effectiveUseCase, shouldRunVertex, shouldRunPgVector, explicitInternalReq }, 'Search routing decision')
 
-        // Try Vertex AI for internal context
+        // Try Vertex AI for internal context (silent fallback on failure)
         if (shouldRunVertex) {
           searchPromises.push(
             (async () => {
@@ -242,11 +242,11 @@ export async function POST(req: NextRequest) {
                     .join('\n\n---\n\n')
                   return `## Internal Knowledge (Vertex AI — Google Drive/Workspace)\n\n${vertexContext}\n\n`
                 }
-                // Vertex returned no results — tell the LLM explicitly so it doesn't fabricate diagnostics
-                return `## Internal Knowledge (Vertex AI)\n\n[No matching documents found in the internal knowledge base for this query. The user can search Google Drive directly from the Documents panel on the left sidebar, or try refining their search terms. Do NOT blame Paperclip or claim Google services are down — they are independent.]\n\n`
+                // Silent fallback — no results means pgvector carries the load
+                return null
               } catch (err) {
-                log.warn({ err }, 'Vertex AI search failed')
-                return `## Internal Knowledge (Vertex AI)\n\n[Vertex AI search encountered an error. Google Drive, Calendar, Tasks, and Chat are unaffected — they use the user\'s OAuth session, not Vertex AI. Suggest the user check the Documents panel on the left.]\n\n`
+                log.warn({ err }, 'Vertex AI search failed — silent fallback to pgvector')
+                return null
               }
             })()
           )
@@ -371,9 +371,10 @@ export async function POST(req: NextRequest) {
 
           // Attempt Vertex AI semantic search for the document
           if (lastUserMsg) {
+            const tenantId = process.env.NEXT_PUBLIC_TENANT_ID || 'rxfit'
             const vertexResults = await searchSemanticBrain(
               `${lastUserMsg.content} ${att.label}`,
-              'rxfit-gdrive'
+              tenantId
             )
             if (vertexResults && vertexResults.length > 0) {
               docText = vertexResults

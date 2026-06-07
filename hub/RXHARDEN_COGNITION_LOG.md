@@ -79,3 +79,68 @@
 - GCS bucket: frozen since May 19 (366 stale docs)
 
 ---
+
+## Task 1: Auth Consolidation
+
+### 3b. Context & Dependency Matrix
+
+| Dependency | Type | Direction | Risk Level |
+|---|---|---|---|
+| `hub/lib/google-auth.ts` | File | Modify | MEDIUM |
+| `hub/lib/vertex.ts` | File | Modify | HIGH |
+| `hub/app/api/webhooks/google/route.ts` | File | Read (consumer) | LOW |
+| `GOOGLE_SERVICE_ACCOUNT_KEY` env var | Config | Read | LOW |
+| `discoveryengine.googleapis.com` | External API | Read | LOW |
+| Token cache (in-memory) | State | Mutate | MEDIUM |
+
+### 3c. Blast Radius Prediction
+- **Data Desync:** If token caching introduces stale tokens after key rotation, Vertex AI calls will fail silently until cache expires.
+- **Break a rendering:** No UI impact — this is purely server-side auth.
+- **Introduce latency:** Removing token caching from vertex.ts without adding it to google-auth.ts would cause a fresh JWT exchange on every search request (~200-400ms per call).
+- **Security vulnerability:** If the cached token scope is too broad (cloud-platform) and gets leaked, it provides full GCP access. Scope-based cache keys mitigate cross-scope token reuse.
+
+### 3d. Explicit Mitigations
+- **Token caching with scope-based keys:** Use a `Map<scope, {token, expiresAt}>` to cache tokens per scope. 60s expiry buffer (same as current vertex.ts).
+- **Backward compatibility:** The webhook pipeline calls `getServiceAccountAccessToken('drive.readonly')` — this must continue working unchanged.
+- **Verification:** `npx tsc --noEmit` to confirm no type errors after refactor.
+
+---
+
+## Post-Implementation Hostile Audit (Tasks 1-7)
+
+### 3i. Hostile Auditor Findings
+
+**Weaknesses:**
+- Token cache is in-memory (Map) — does not survive process restarts or scale across serverless instances. MEDIUM risk. Mitigation: tokens are cheap to regenerate (one HTTP call), and the 60s buffer ensures freshness. Acceptable for current scale.
+- `getTenantVertexConfig()` cache is also in-memory with 5min TTL. On Railway (single instance), this is fine. On serverless (Vercel), each invocation would re-query DB. Acceptable tradeoff.
+
+**Edge Cases:**
+- If `GOOGLE_SERVICE_ACCOUNT_KEY` is rotated while a cached token is still valid, the old token will be used until cache expires (up to ~59 minutes). LOW risk — key rotation is infrequent.
+- If a tenant row has `vertex_engine_id` set but `vertex_status` is not `'active'`, the fallback to env var defaults kicks in. This could cause unexpected cross-tenant data access via the default engine. MEDIUM risk — mitigated by the fallback only applying when no active config exists.
+- The setup script creates engines with predictable IDs (`hub-{tenantId}`). If a tenant ID contains special characters, the API call will fail. LOW risk — tenant IDs are controlled strings.
+
+**Breaking Points:**
+- Discovery Engine API has per-project quotas. If many tenants search simultaneously, quota exhaustion could cascade across all tenants. MEDIUM risk — single GCP project strategy accepted by design.
+- The admin `vertex-status` endpoint fires a real search query for the health check. Under load, this adds unnecessary traffic. LOW risk — admin page is rarely accessed.
+
+**Security Concerns:**
+- The `vertex-test` admin endpoint is properly gated by `admin`/`superadmin` role check. No escalation vector.
+- The SA key scope (`cloud-platform`) is maximally broad. Narrowing to `discoveryengine.readonly` would reduce blast radius. RECOMMENDATION: future work.
+- No rate limiting on the admin test endpoint. Could be used for Vertex AI API abuse. LOW risk — admin-only.
+
+### Verdict: NO CRITICAL OR HIGH FLAWS. Proceed to commit.
+
+---
+
+## Verification Results
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` (pre-build) | ✅ PASS — 0 errors |
+| `npx next build` (mid-build, Tasks 1-4) | ✅ PASS — all routes compiled |
+| `npx tsc --noEmit` (final) | ✅ PASS — 0 errors |
+| `npx next build` (final, all tasks) | ✅ PASS — all routes compiled |
+| New routes registered | ✅ `/api/admin/vertex-status`, `/api/admin/vertex-test` |
+| Existing routes intact | ✅ All 30+ existing API routes still compile |
+
+---

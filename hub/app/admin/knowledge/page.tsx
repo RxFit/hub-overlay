@@ -6,6 +6,7 @@ import { redirect } from 'next/navigation'
 import { desc, eq, and, or, ilike, count } from 'drizzle-orm'
 import { getTenantConfig } from '@/lib/tenant'
 import KnowledgeTable from './KnowledgeTable'
+import VertexStatusCard from './VertexStatusCard'
 import Link from 'next/link'
 
 export default async function KnowledgePage({
@@ -94,6 +95,21 @@ export default async function KnowledgePage({
       </header>
 
       <main className="admin-main">
+        {/* ── Vertex AI Status Panel ── */}
+        <section className="admin-section" style={{ marginBottom: '2rem' }}>
+          <div className="admin-section__header">
+            <h2 className="admin-section__title">
+              <span className="admin-section__dot admin-section__dot--active" />
+              Vertex AI Search Engine
+            </h2>
+            <p className="admin-section__sub" style={{ marginTop: '4px' }}>
+              Auto-indexed Google Workspace content (Drive, Gmail, Chat). Each tenant gets an isolated Discovery Engine.
+            </p>
+          </div>
+          <VertexStatusCard />
+        </section>
+
+        {/* ── pgvector Chunks ── */}
         <section className="admin-section">
           <div className="admin-section__header">
             <h2 className="admin-section__title">

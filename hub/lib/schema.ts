@@ -11,11 +11,15 @@ import { pgTable, text, timestamp, uniqueIndex, jsonb, integer, vector, index, b
 /* ── Tenants ─────────────────────────────────────────────────────────────── */
 
 export const tenants = pgTable('tenants', {
-  id:        text('id').primaryKey(),               // e.g. 'rxfit'
-  name:      text('name').notNull(),                // e.g. 'RxFit Athletics'
-  domain:    text('domain'),                        // e.g. 'rxfitatx.com'
-  createdAt: timestamp('created_at').defaultNow(),
-  updatedAt: timestamp('updated_at').defaultNow(),
+  id:               text('id').primaryKey(),               // e.g. 'rxfit'
+  name:             text('name').notNull(),                // e.g. 'RxFit Athletics'
+  domain:           text('domain'),                        // e.g. 'rxfitatx.com'
+  vertexEngineId:   text('vertex_engine_id'),              // Discovery Engine ID for this tenant
+  vertexGcpProject: text('vertex_gcp_project'),            // GCP project (default: semantic-brain-desktop)
+  workspaceDomain:  text('workspace_domain'),              // Google Workspace domain to index
+  vertexStatus:     text('vertex_status').default('pending'), // pending | active | error | disabled
+  createdAt:        timestamp('created_at').defaultNow(),
+  updatedAt:        timestamp('updated_at').defaultNow(),
 })
 
 /* ── Hub Users (replaces HUB_ROLES_SHEET_ID) ─────────────────────────────── */
