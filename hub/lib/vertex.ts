@@ -120,8 +120,8 @@ export async function searchSemanticBrain(
     const body: Record<string, unknown> = {
       query,
       pageSize: 5,
-      queryExpansionSpec: { condition: 'AUTO' },
-      spellCorrectionSpec: { mode: 'AUTO' },
+      // NOTE: queryExpansionSpec and spellCorrectionSpec are NOT supported
+      // on multi-datastore engines (returns 400 INVALID_ARGUMENT)
       contentSearchSpec: {
         snippetSpec: { returnSnippet: true, maxSnippetCount: 3 },
         extractiveContentSpec: {
