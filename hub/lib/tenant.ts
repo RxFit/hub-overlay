@@ -29,7 +29,7 @@ export interface TenantConfig {
   id: string
   name: string                     // 'RxFit', 'Rose Pop Parties'
   domain: string                   // 'hub.casatrejo.com'
-  tagline: string                  // 'Biological Performance Command Center'
+  tagline: string                  // 'Command Center'
   logoText: string                 // 'CT' (the accent text in header)
   logoFull: string                 // 'HUB' (text after accent)
   brandColors: TenantBrandColors
@@ -98,7 +98,7 @@ export const TENANT_CONFIGS: Record<string, TenantConfig> = {
     id: 'rxfit',
     name: 'RxFit',
     domain: 'hub.casatrejo.com',
-    tagline: 'Biological Performance Command Center',
+    tagline: 'Command Center',
     logoText: 'CT',
     logoFull: 'HUB',
     brandColors: {

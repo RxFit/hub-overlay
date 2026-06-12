@@ -1,10 +1,10 @@
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Space+Grotesk:wght@300;400;500;600;700&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
 /* ============================================================================
    CASA TREJO HUB — Global Design System v3 (Mobile-Optimized)
    Trejo Branding: Deep navy, Trejo Gold, technical-premium, data-first
    UI UX Pro Max: Fluid type, 44px touch targets, bottom nav, glassmorphism
    ============================================================================ */
-
-@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Space+Grotesk:wght@300;400;500;600;700&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&family=JetBrains+Mono:wght@400;500;700&display=swap');
 
 /* ──────────────────────── CSS Custom Properties ──────────────────────── */
 :root {
