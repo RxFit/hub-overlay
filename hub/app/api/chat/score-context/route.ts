@@ -12,7 +12,8 @@ export const maxDuration = 30
    POST /api/chat/score-context
 
    Evaluates whether an in-progress Interview Mode has collected enough context
-   to safely generate an ActionConfirmCard. Uses Gemini 2.5 Pro to score:
+   to safely generate an ActionConfirmCard. Uses Claude Fable 5 (primary) or
+   Gemini 2.5 Pro (fallback) to score:
 
    Input:
    {
@@ -172,21 +173,32 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-2.5-pro',
-      generationConfig: {
-        // Low temperature for consistent structured output
-        temperature: 0.1,
-        maxOutputTokens: 256,
-      },
-    })
-
+    // Claude Fable 5 primary → Gemini 2.5 Pro fallback for scoring
     const prompt = buildScoringPrompt(intent, context, dimensions)
-    const result = await model.generateContent(prompt)
-    const rawText = result.response.text()
 
-    const scoreResult = parseScoreResponse(rawText)
-    return NextResponse.json(scoreResult)
+    // Try Claude first (better at structured JSON output)
+    try {
+      const { claudeChat } = await import('@/lib/claude')
+      const rawText = await claudeChat(
+        [{ id: '1', role: 'user', content: prompt, timestamp: new Date().toISOString() }],
+        'You are a context sufficiency scorer. Return ONLY valid JSON.',
+        { maxTokens: 256, temperature: 0.1 }
+      )
+      const scoreResult = parseScoreResponse(rawText)
+      return NextResponse.json(scoreResult)
+    } catch (claudeErr) {
+      console.warn('[score-context] Claude failed, falling back to Gemini 2.5 Pro:', claudeErr)
+
+      // Fallback: Gemini 2.5 Pro
+      const model = genAI.getGenerativeModel({
+        model: 'gemini-2.5-pro',
+        generationConfig: { temperature: 0.1, maxOutputTokens: 256 },
+      })
+      const result = await model.generateContent(prompt)
+      const rawText = result.response.text()
+      const scoreResult = parseScoreResponse(rawText)
+      return NextResponse.json(scoreResult)
+    }
 
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Scoring failed'

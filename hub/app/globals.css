@@ -5916,6 +5916,18 @@ a:hover .rx-arrow {
   border: 1px solid var(--border);
 }
 
+.chat-header-model-badge--claude {
+  color: #c4b5fd;
+  border-color: rgba(167, 139, 250, 0.3);
+  background: rgba(139, 92, 246, 0.1);
+}
+
+.chat-header-model-badge--gemini {
+  color: var(--accent);
+  border-color: var(--accent-border);
+  background: rgba(197, 160, 89, 0.08);
+}
+
 /* ══════════════════════════════════════════════════════════════════════════════
    m2 — HEADER DROPDOWN MENU (extracted from inline styles)
    ══════════════════════════════════════════════════════════════════════════════ */

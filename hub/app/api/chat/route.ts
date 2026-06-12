@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth'
 import { getToken } from 'next-auth/jwt'
 import { authOptions } from '@/lib/auth'
 import { createLogger } from '@/lib/logger'
-import { streamGeminiChat, buildSystemPrompt } from '@/lib/gemini'
+import { streamChat, buildSystemPrompt } from '@/lib/gemini'
 import { getCompanies, getIssues, getAgents, getRuns } from '@/lib/paperclip'
 import { fetchUrlContent, fetchDriveDocContent } from '@/lib/content-fetch'
 import { searchSemanticBrain } from '@/lib/vertex'
@@ -394,7 +394,13 @@ export async function POST(req: NextRequest) {
     async start(controller) {
       try {
         let fullText = ''
-        for await (const chunk of streamGeminiChat(messages, systemPrompt, effectiveUseCase)) {
+        const hasActiveSkill = Boolean(activeSkill)
+        for await (const chunk of streamChat(messages, systemPrompt, effectiveUseCase, hasActiveSkill)) {
+          if (typeof chunk === 'object' && 'modelUsed' in chunk) {
+            // Emit model identification event to the UI
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ modelUsed: chunk.modelUsed })}\n\n`))
+            continue
+          }
           fullText += chunk
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: chunk })}\n\n`))
         }

@@ -225,32 +225,121 @@ export function chatMessagesToContents(messages: ChatMessage[]): Content[] {
 }
 
 /**
- * APPROVED MODELS POLICY: Only models verified to work with our API key
+ * APPROVED GEMINI MODELS POLICY: Only models verified to work with our API key
  * and deliver reasoning-grade intelligence are allowed. This allowlist is
  * the single source of truth — any model not listed will be rejected at runtime.
+ *
+ * NOTE: Claude Fable 5 (claude-sonnet-4-6) is managed separately in hub/lib/claude.ts,
+ * not the Google SDK — see hub/lib/claude.ts.
  */
-const APPROVED_MODELS: readonly string[] = [
-  'gemini-2.5-flash',    // Primary — fast, 1M context (gemini-3.5-flash does not exist)
+const APPROVED_GEMINI_MODELS: readonly string[] = [
+  'gemini-2.5-flash',    // Primary — fast, 1M context
   'gemini-2.5-pro',      // Fallback — proven reasoning model
 ] as const
 
-function assertApprovedModel(model: string): void {
-  if (!APPROVED_MODELS.includes(model)) {
+function assertApprovedGeminiModel(model: string): void {
+  if (!APPROVED_GEMINI_MODELS.includes(model)) {
     throw new Error(
-      `MODEL POLICY VIOLATION: "${model}" is not an approved model. ` +
-      `Allowed: [${APPROVED_MODELS.join(', ')}].`
+      `MODEL POLICY VIOLATION: "${model}" is not an approved Gemini model. ` +
+      `Allowed: [${APPROVED_GEMINI_MODELS.join(', ')}].`
     )
   }
 }
 
-export async function* streamGeminiChat(
+/** Human-friendly model display names for the UI badge */
+function getModelDisplayName(model: string): string {
+  switch (model) {
+    case 'claude-sonnet-4-6': return 'Claude Fable 5'
+    case 'gemini-2.5-flash': return 'Gemini 2.5 Flash'
+    case 'gemini-2.5-pro': return 'Gemini 2.5 Pro'
+    default: return model
+  }
+}
+
+/**
+ * UseCase-based routing: decides whether to try Claude first.
+ *
+ * Model priority by use case:
+ *   interview  → Claude → Gemini 2.5 Pro → Gemini 2.5 Flash
+ *   deep_dive (with skill active) → Claude → Gemini 2.5 Pro → Gemini 2.5 Flash
+ *   execute (Pre-Cog quality gate) → Claude → Gemini 2.5 Pro → Gemini 2.5 Flash
+ *
+ *   recall     → Gemini 2.5 Flash → Gemini 2.5 Pro
+ *   deep_dive (no skill) → Gemini 2.5 Flash → Gemini 2.5 Pro
+ */
+function shouldUseClaude(useCase: string, hasActiveSkill: boolean): boolean {
+  if (useCase === 'interview') return true
+  if (useCase === 'execute') return true
+  if (useCase === 'deep_dive' && hasActiveSkill) return true
+  return false
+}
+
+/* ── W-3 FIX: Map-based cooldown cache ──
+ * Tracks failure state PER MODEL independently, preventing flip-flop
+ * when multiple models fail in sequence. */
+const _modelCooldowns = new Map<string, { failedAt: number; cooldownMs: number }>()
+
+function recordModelFailure(model: string, isRateLimit: boolean): void {
+  // W-2 FIX: Rate limits get shorter cooldown (30s), real failures get 5 min
+  const cooldownMs = isRateLimit ? 30_000 : 300_000
+  _modelCooldowns.set(model, { failedAt: Date.now(), cooldownMs })
+}
+
+function isModelInCooldown(model: string): boolean {
+  const state = _modelCooldowns.get(model)
+  if (!state) return false
+  if (Date.now() - state.failedAt > state.cooldownMs) {
+    _modelCooldowns.delete(model) // Cooldown expired
+    return false
+  }
+  return true
+}
+
+/**
+ * Primary streaming entry point — routes to Claude or Gemini based on useCase.
+ * Yields: { text: string } chunks and a final { modelUsed: string } event.
+ * The modelUsed event tells the UI which model answered this request.
+ */
+export async function* streamChat(
   messages: ChatMessage[],
   systemPrompt: string,
-  _useCase: string = 'deep_dive'
-): AsyncGenerator<string> {
-  // Fallback chain: all models must be on the APPROVED_MODELS list
+  useCase: string = 'deep_dive',
+  hasActiveSkill: boolean = false
+): AsyncGenerator<string | { modelUsed: string }> {
+  if (shouldUseClaude(useCase, hasActiveSkill) && !isModelInCooldown('claude-sonnet-4-6')) {
+    try {
+      const { streamClaudeChat } = await import('@/lib/claude')
+
+      // Emit modelUsed event BEFORE streaming
+      yield { modelUsed: getModelDisplayName('claude-sonnet-4-6') }
+
+      for await (const chunk of streamClaudeChat(messages, systemPrompt)) {
+        yield chunk
+      }
+      return // Claude success — done
+    } catch (err: unknown) {
+      // W-2 FIX: Classify error to determine cooldown behavior
+      const claudeErr = (err as { claudeError?: { type: string } })?.claudeError
+      const isRateLimit = claudeErr?.type === 'rate_limit'
+      recordModelFailure('claude-sonnet-4-6', isRateLimit)
+      console.warn(`[streamChat] Claude failed (${isRateLimit ? 'rate_limit' : 'error'}), falling back to Gemini:`, err)
+    }
+  }
+
+  // Fallback: Gemini 2.5 Flash → Gemini 2.5 Pro
+  yield* streamGeminiWithFallback(messages, systemPrompt)
+}
+
+/**
+ * Gemini streaming with fallback chain.
+ * Gemini 2.5 Flash → Gemini 2.5 Pro
+ */
+async function* streamGeminiWithFallback(
+  messages: ChatMessage[],
+  systemPrompt: string
+): AsyncGenerator<string | { modelUsed: string }> {
   const modelsToTry = ['gemini-2.5-flash', 'gemini-2.5-pro'] as const
-  modelsToTry.forEach(assertApprovedModel)
+  modelsToTry.forEach(assertApprovedGeminiModel)
 
   const contents = chatMessagesToContents(messages.slice(0, -1))
   const lastMessage = messages[messages.length - 1]
@@ -262,11 +351,13 @@ export async function* streamGeminiChat(
     const modelName = modelsToTry[i]
     const isLastAttempt = i === modelsToTry.length - 1
 
+    if (isModelInCooldown(modelName)) {
+      if (isLastAttempt) throw new Error('All models are in cooldown')
+      continue
+    }
+
     try {
-      // Brief delay before fallback to let transient issues clear
-      if (i > 0) {
-        await new Promise(r => setTimeout(r, 2_000))
-      }
+      if (i > 0) await new Promise(r => setTimeout(r, 2_000))
 
       const model = getGenAI().getGenerativeModel({
         model: modelName,
@@ -282,7 +373,9 @@ export async function* streamGeminiChat(
       })
       const result = await Promise.race([resultPromise, timeoutPromise])
 
-      // If this is a fallback, notify the user visibly
+      // Emit modelUsed event
+      yield { modelUsed: getModelDisplayName(modelName) }
+
       if (i > 0) {
         yield `⚠️ *Primary model unavailable — using ${modelName}*\n\n`
       }
@@ -296,11 +389,26 @@ export async function* streamGeminiChat(
 
       return // Success
     } catch (err) {
+      recordModelFailure(modelName, false)
       if (isLastAttempt) {
         throw err // All approved models exhausted
       }
       console.warn(`[gemini] ${modelName} failed, falling back to ${modelsToTry[i + 1]}:`, err)
     }
+  }
+}
+
+/**
+ * Legacy export — preserved for backward compatibility.
+ * Filters out modelUsed events and yields only text.
+ */
+export async function* streamGeminiChat(
+  messages: ChatMessage[],
+  systemPrompt: string,
+  useCase: string = 'deep_dive'
+): AsyncGenerator<string> {
+  for await (const chunk of streamChat(messages, systemPrompt, useCase, false)) {
+    if (typeof chunk === 'string') yield chunk
   }
 }
 
