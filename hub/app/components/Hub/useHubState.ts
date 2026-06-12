@@ -99,6 +99,7 @@ export interface HubState {
   input: string
   setInput: React.Dispatch<React.SetStateAction<string>>
   isTyping: boolean
+  activeModel: string | null
   actionExecuting: boolean
   showScrollBtn: boolean
 
@@ -267,6 +268,7 @@ export function useHubState(): HubState {
   const [messages, setMessages] = useState<ChatMsg[]>([])
   const [input, setInput] = useState('')
   const [isTyping, setIsTyping] = useState(false)
+  const [activeModel, setActiveModel] = useState<string | null>(null)
   const [actionExecuting, setActionExecuting] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const chatMessagesRef = useRef<HTMLDivElement>(null)
@@ -612,6 +614,10 @@ export function useHubState(): HubState {
               if (parsed.suggestedTools && Array.isArray(parsed.suggestedTools)) {
                 setSuggestedTools(parsed.suggestedTools)
               }
+              // Parse modelUsed event for dynamic badge
+              if (parsed.modelUsed) {
+                setActiveModel(parsed.modelUsed)
+              }
             } catch {
               // Skip malformed lines
             }
@@ -815,7 +821,7 @@ Respond with EXACTLY one of:
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   messages: [{ role: 'user', content: evalPrompt }],
-                  useCase: 'deep_dive',
+                  useCase: 'interview',
                 }),
               }).then(async (res) => {
                 const reader = res.body?.getReader()
@@ -1705,6 +1711,7 @@ Respond with EXACTLY one of:
     input,
     setInput,
     isTyping,
+    activeModel,
     actionExecuting,
     showScrollBtn,
 

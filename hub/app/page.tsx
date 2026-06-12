@@ -468,6 +468,7 @@ export default function HubPage() {
   const [messages, setMessages] = useState<ChatMsg[]>([])
   const [input, setInput] = useState('')
   const [isTyping, setIsTyping] = useState(false)
+  const [activeModel, setActiveModel] = useState<string | null>(null)
   const [actionExecuting, setActionExecuting] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const chatMessagesRef = useRef<HTMLDivElement>(null)
@@ -812,6 +813,10 @@ export default function HubPage() {
               // Parse suggestedTools metadata from SSE
               if (parsed.suggestedTools && Array.isArray(parsed.suggestedTools)) {
                 setSuggestedTools(parsed.suggestedTools)
+              }
+              // Parse modelUsed event for dynamic badge
+              if (parsed.modelUsed) {
+                setActiveModel(parsed.modelUsed)
               }
             } catch {
               // Skip malformed lines
@@ -1920,8 +1925,8 @@ Respond with EXACTLY one of:
                   </span>
                   {' '}AI Assistant
                 </h2>
-                <span className="chat-header-model-badge">
-                  Gemini 2.5
+                <span className={`chat-header-model-badge${activeModel?.includes('Claude') ? ' chat-header-model-badge--claude' : activeModel ? ' chat-header-model-badge--gemini' : ''}`}>
+                  {activeModel || 'AI'}
                 </span>
               </div>
             </div>

@@ -283,6 +283,9 @@ export interface ChatPanelProps {
   userInitials: string
   session: { user?: { name?: string | null } } | null
 
+  /* ── Active model ── */
+  activeModel: string | null
+
   /* ── Refs ── */
   chatMessagesRef: React.Ref<HTMLDivElement>
   messagesEndRef: React.Ref<HTMLDivElement>
@@ -335,6 +338,7 @@ export function ChatPanel({
   isOnboarding,
   userInitials,
   session,
+  activeModel,
   chatMessagesRef,
   messagesEndRef,
   textareaRef,
@@ -372,8 +376,8 @@ export function ChatPanel({
               </span>
               {' '}AI Assistant
             </h2>
-            <span className="chat-header-model-badge">
-              Gemini 2.5
+            <span className={`chat-header-model-badge${activeModel?.includes('Claude') ? ' chat-header-model-badge--claude' : activeModel ? ' chat-header-model-badge--gemini' : ''}`}>
+              {activeModel || 'AI'}
             </span>
           </div>
         </div>

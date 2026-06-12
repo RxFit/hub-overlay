@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth'
 import { getToken } from 'next-auth/jwt'
 import { authOptions } from '@/lib/auth'
 import { createLogger } from '@/lib/logger'
-import { streamGeminiChat, buildSystemPrompt } from '@/lib/gemini'
+import { streamChat, buildSystemPrompt } from '@/lib/gemini'
 import { getCompanies, getIssues, getAgents, getRuns } from '@/lib/paperclip'
 import { fetchUrlContent, fetchDriveDocContent } from '@/lib/content-fetch'
 import { searchSemanticBrain } from '@/lib/vertex'
@@ -200,7 +200,10 @@ export async function POST(req: NextRequest) {
   projectContext = paperclipContextResult.projectContext
   agentActivity = paperclipContextResult.agentActivity
 
+  // Preserve 'interview' useCase when interview mode is active;
+  // activeSkill upgrades any deep_dive to Claude-primary via the hasActiveSkill flag
   const effectiveUseCase = activeSkill ? 'deep_dive' : useCase
+  const hasActiveSkill = !!activeSkill
 
   // ── Intelligent Search Routing ──
   // Vertex AI → internal data (Google Drive, Gmail, Chat)
@@ -432,7 +435,12 @@ export async function POST(req: NextRequest) {
     async start(controller) {
       try {
         let fullText = ''
-        for await (const chunk of streamGeminiChat(messages, systemPrompt, effectiveUseCase)) {
+        for await (const chunk of streamChat(messages, systemPrompt, effectiveUseCase, hasActiveSkill)) {
+          if (typeof chunk === 'object' && 'modelUsed' in chunk) {
+            // Emit model identification event to the UI
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ modelUsed: chunk.modelUsed })}\n\n`))
+            continue
+          }
           fullText += chunk
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: chunk })}\n\n`))
         }

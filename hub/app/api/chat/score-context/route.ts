@@ -12,7 +12,8 @@ export const maxDuration = 30
    POST /api/chat/score-context
 
    Evaluates whether an in-progress Interview Mode has collected enough context
-   to safely generate an ActionConfirmCard. Uses Gemini 2.5 Pro to score:
+   to safely generate an ActionConfirmCard. Uses Claude Fable 5 (primary) or
+   Gemini 2.5 Pro (fallback) to score:
 
    Input:
    {
@@ -172,18 +173,30 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-2.5-pro',
-      generationConfig: {
-        // Low temperature for consistent structured output
-        temperature: 0.1,
-        maxOutputTokens: 256,
-      },
-    })
-
     const prompt = buildScoringPrompt(intent, context, dimensions)
-    const result = await model.generateContent(prompt)
-    const rawText = result.response.text()
+    let rawText: string
+
+    // Primary: Claude Fable 5 (superior reasoning for context evaluation)
+    try {
+      const { claudeChat } = await import('@/lib/claude')
+      rawText = await claudeChat(prompt, undefined, {
+        maxTokens: 256,
+        temperature: 0.1,
+      })
+    } catch (claudeErr) {
+      console.warn('[score-context] Claude failed, falling back to Gemini 2.5 Pro:', claudeErr)
+
+      // Fallback: Gemini 2.5 Pro
+      const model = genAI.getGenerativeModel({
+        model: 'gemini-2.5-pro',
+        generationConfig: {
+          temperature: 0.1,
+          maxOutputTokens: 256,
+        },
+      })
+      const result = await model.generateContent(prompt)
+      rawText = result.response.text()
+    }
 
     const scoreResult = parseScoreResponse(rawText)
     return NextResponse.json(scoreResult)
