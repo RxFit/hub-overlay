@@ -63,15 +63,17 @@ export async function getToolArtifacts(
   tenantId: string,
   toolId?: string,
   limit: number = 20,
+  createdBy?: string,
 ) {
   try {
-    const conditions = toolId
-      ? and(
-          eq(toolArtifacts.tenantId, tenantId),
-          eq(toolArtifacts.toolId, toolId),
-          eq(toolArtifacts.status, 'active')
-        )
-      : and(eq(toolArtifacts.tenantId, tenantId), eq(toolArtifacts.status, 'active'))
+    const filters = [
+      eq(toolArtifacts.tenantId, tenantId),
+      eq(toolArtifacts.status, 'active'),
+    ]
+    if (toolId) filters.push(eq(toolArtifacts.toolId, toolId))
+    // When createdBy is provided, scope results to that author (non-admin callers).
+    if (createdBy) filters.push(eq(toolArtifacts.createdBy, createdBy))
+    const conditions = and(...filters)
 
     const rows = await db
       .select()

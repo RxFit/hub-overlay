@@ -76,7 +76,8 @@ export async function GET(req: NextRequest) {
         const { db } = await import('@/lib/db')
         const { kpis: kpisTable } = await import('@/lib/schema')
         const { eq } = await import('drizzle-orm')
-        const tenantId = process.env.NEXT_PUBLIC_TENANT_ID || 'rxfit'
+        const { getTenantId } = await import('@/lib/tenant-context')
+        const tenantId = getTenantId()
 
         const dbKpis = await db
           .select()

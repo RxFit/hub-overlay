@@ -58,14 +58,17 @@ export async function POST(req: NextRequest) {
 
     const userPrompt = `Tool being activated: ${toolId}\n\nRecent conversation:\n${transcript}`
 
-    const apiKey = process.env.GEMINI_API_KEY
+    const apiKey =
+      process.env.GEMINI_API_KEY ||
+      process.env.GOOGLE_API_KEY ||
+      process.env.GOOGLE_GENERATIVE_AI_API_KEY
     if (!apiKey) {
-      console.warn('[tool-context] GEMINI_API_KEY not set — returning fallback context')
+      console.warn('[tool-context] No Gemini API key set (GEMINI_API_KEY / GOOGLE_API_KEY / GOOGLE_GENERATIVE_AI_API_KEY) — returning fallback context')
       return NextResponse.json({ contextCard: FALLBACK_CONTEXT })
     }
 
     const genAI = new GoogleGenerativeAI(apiKey)
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' })
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' })
 
     const result = await model.generateContent({
       contents: [{ role: 'user', parts: [{ text: userPrompt }] }],

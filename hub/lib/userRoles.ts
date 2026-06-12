@@ -4,16 +4,14 @@
  * Replaces the old hubRoles.ts (Google Sheets-based).
  * All reads/writes go directly to the `hub_users` table.
  *
- * Tenant ID is resolved from:
- *   1. process.env.NEXT_PUBLIC_TENANT_ID  (Railway env var, currently 'rxfit')
- *   2. Falls back to 'rxfit' if not set
+ * Tenant ID is resolved per-call via lib/tenant-context (request header →
+ * env var → 'rxfit' fallback). Callers may pass an explicit tenantId.
  */
 
 import { eq, and } from 'drizzle-orm'
 import { db } from './db'
 import { hubUsers, tenants } from './schema'
-
-const DEFAULT_TENANT = process.env.NEXT_PUBLIC_TENANT_ID || 'rxfit'
+import { getTenantId } from './tenant-context'
 
 export interface HubRoleEntry {
   email: string
@@ -27,7 +25,7 @@ export interface HubRoleEntry {
 /* ── Ensure tenant row exists (idempotent) ──────────────────────────────── */
 
 export async function ensureTenant(
-  tenantId = DEFAULT_TENANT,
+  tenantId = getTenantId(),
   name = 'RxFit Athletics'
 ): Promise<void> {
   await db
@@ -39,7 +37,7 @@ export async function ensureTenant(
 /* ── Read all role entries for a tenant ─────────────────────────────────── */
 
 export async function getAllRoleEntries(
-  tenantId = DEFAULT_TENANT
+  tenantId = getTenantId()
 ): Promise<HubRoleEntry[]> {
   try {
     await ensureTenant(tenantId)
@@ -66,7 +64,7 @@ export async function getAllRoleEntries(
 
 export async function getUserRole(
   email: string,
-  tenantId = DEFAULT_TENANT
+  tenantId = getTenantId()
 ): Promise<{ role: string; assignedProjects: string[] }> {
   const normalized = email.toLowerCase().trim()
   try {
@@ -94,9 +92,8 @@ export async function upsertUserRole(
     assignedProjects: string[]
     assignedBy: string
     name?: string
-    googleRefreshToken?: string
   },
-  tenantId = DEFAULT_TENANT
+  tenantId = getTenantId()
 ): Promise<void> {
   const normalized = entry.email.toLowerCase().trim()
   await ensureTenant(tenantId)
@@ -109,7 +106,6 @@ export async function upsertUserRole(
       role:             entry.role,
       assignedProjects: entry.assignedProjects,
       assignedBy:       entry.assignedBy,
-      googleRefreshToken: entry.googleRefreshToken,
     })
     .onConflictDoUpdate({
       target:  [hubUsers.tenantId, hubUsers.email],
@@ -120,7 +116,6 @@ export async function upsertUserRole(
         assignedAt:       new Date(),
         updatedAt:        new Date(),
         ...(entry.name ? { name: entry.name } : {}),
-        ...(entry.googleRefreshToken ? { googleRefreshToken: entry.googleRefreshToken } : {}),
       },
     })
 }

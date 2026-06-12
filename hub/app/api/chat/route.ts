@@ -3,12 +3,13 @@ import { getServerSession } from 'next-auth'
 import { getToken } from 'next-auth/jwt'
 import { authOptions } from '@/lib/auth'
 import { createLogger } from '@/lib/logger'
-import { streamChat, buildSystemPrompt } from '@/lib/gemini'
+import { streamGeminiChat, buildSystemPrompt } from '@/lib/gemini'
 import { getCompanies, getIssues, getAgents, getRuns } from '@/lib/paperclip'
 import { fetchUrlContent, fetchDriveDocContent } from '@/lib/content-fetch'
 import { searchSemanticBrain } from '@/lib/vertex'
 import { searchWeb, fetchUrlWithExa } from '@/lib/exa'
 import { loadSkillContent } from '@/lib/skills-loader'
+import { needsInternalSearch, needsExternalSearch } from '@/lib/search-routing'
 import { ChatRequestSchema } from '@/lib/zod-schemas'
 import type { ChatMessage, ChatAttachment } from '@/types'
 
@@ -31,46 +32,8 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T, labe
   return Promise.race([promise, timer])
 }
 
-const internalSignals = [
-  'our ', 'my ', 'kpi', 'paperclip', 'workspace',
-  'project status', 'team ', 'sprint', 'issue ',
-  'casa trejo', 'rxfit',
-]
-
-function needsInternalSearch(message: string): boolean {
-  const lower = message.toLowerCase()
-  return internalSignals.some(s => lower.includes(s))
-}
-
-/**
- * Detect if a user message likely needs external web data.
- * Returns true for queries about public info, competitors, news, markets, etc.
- */
-function needsExternalSearch(message: string): boolean {
-  const lower = message.toLowerCase()
-
-  const externalSignals = [
-    // Explicit web/research intent
-    'search for', 'search the web', 'look up', 'find out about',
-    'google ', 'research ',
-    // Knowledge questions
-    'what is a ', 'who is ', 'what are ', 'how to ', 'how does ',
-    // Competitor/market signals
-    'competitor', 'market ', 'industry ', 'trend',
-    'benchmark', 'comparison', 'compare with',
-    // News/current events (multi-word to avoid false positives)
-    'in the news', 'latest news', 'recent announcement',
-    // Technical/external docs
-    'documentation for', 'docs for', 'tutorial', 'guide for',
-    'best practice', 'specification',
-    // Named external entities (URLs)
-    'http://', 'https://',
-    // Analysis that needs outside data
-    'seo', 'rankings', 'traffic', 'social media',
-    'reviews', 'public opinion',
-  ]
-  return externalSignals.some(signal => lower.includes(signal))
-}
+// Search-routing heuristics live in lib/search-routing.ts (word-boundary
+// matched + unit-tested) — imported above as needsInternalSearch / needsExternalSearch.
 
 export async function POST(req: NextRequest) {
   // Auth check
@@ -200,10 +163,7 @@ export async function POST(req: NextRequest) {
   projectContext = paperclipContextResult.projectContext
   agentActivity = paperclipContextResult.agentActivity
 
-  // Preserve 'interview' useCase when interview mode is active;
-  // activeSkill upgrades any deep_dive to Claude-primary via the hasActiveSkill flag
   const effectiveUseCase = activeSkill ? 'deep_dive' : useCase
-  const hasActiveSkill = !!activeSkill
 
   // ── Intelligent Search Routing ──
   // Vertex AI → internal data (Google Drive, Gmail, Chat)
@@ -232,24 +192,23 @@ export async function POST(req: NextRequest) {
 
         log.info({ effectiveUseCase, shouldRunVertex, shouldRunPgVector, explicitInternalReq }, 'Search routing decision')
 
-        // Try Vertex AI for internal context (silent fallback on failure)
+        // Try Vertex AI for internal context
         if (shouldRunVertex) {
           searchPromises.push(
             (async () => {
               try {
-                const tenantId = process.env.NEXT_PUBLIC_TENANT_ID || 'rxfit'
-                const vertexResults = await searchSemanticBrain(query, tenantId)
+                const vertexResults = await searchSemanticBrain(query)
                 if (vertexResults && vertexResults.length > 0) {
                   const vertexContext = vertexResults
                     .map(r => `**${r.title}** ${r.uri ? `(${r.uri})` : ''}\n${r.snippet}`)
                     .join('\n\n---\n\n')
                   return `## Internal Knowledge (Vertex AI — Google Drive/Workspace)\n\n${vertexContext}\n\n`
                 }
-                // Silent fallback — no results means pgvector carries the load
-                return null
+                // Vertex returned no results — tell the LLM explicitly so it doesn't fabricate diagnostics
+                return `## Internal Knowledge (Vertex AI)\n\n[No matching documents found in the internal knowledge base for this query. The user can search Google Drive directly from the Documents panel on the left sidebar, or try refining their search terms. Do NOT blame Paperclip or claim Google services are down — they are independent.]\n\n`
               } catch (err) {
-                log.warn({ err }, 'Vertex AI search failed — silent fallback to pgvector')
-                return null
+                log.warn({ err }, 'Vertex AI search failed')
+                return `## Internal Knowledge (Vertex AI)\n\n[Vertex AI search encountered an error. Google Drive, Calendar, Tasks, and Chat are unaffected — they use the user\'s OAuth session, not Vertex AI. Suggest the user check the Documents panel on the left.]\n\n`
               }
             })()
           )
@@ -262,7 +221,8 @@ export async function POST(req: NextRequest) {
           searchPromises.push(
             (async () => {
               try {
-                const tenantId = process.env.NEXT_PUBLIC_TENANT_ID || 'rxfit'
+                const { getTenantId } = await import('@/lib/tenant-context')
+                const tenantId = getTenantId()
                 const { searchSimilarDocuments, SIMILARITY_THRESHOLD } = await import('@/lib/vector-store')
                 const requestedLimit = 3
                 const pgvectorResults = await searchSimilarDocuments(tenantId, query, requestedLimit)
@@ -374,10 +334,9 @@ export async function POST(req: NextRequest) {
 
           // Attempt Vertex AI semantic search for the document
           if (lastUserMsg) {
-            const tenantId = process.env.NEXT_PUBLIC_TENANT_ID || 'rxfit'
             const vertexResults = await searchSemanticBrain(
               `${lastUserMsg.content} ${att.label}`,
-              tenantId
+              'rxfit-gdrive'
             )
             if (vertexResults && vertexResults.length > 0) {
               docText = vertexResults
@@ -435,12 +394,7 @@ export async function POST(req: NextRequest) {
     async start(controller) {
       try {
         let fullText = ''
-        for await (const chunk of streamChat(messages, systemPrompt, effectiveUseCase, hasActiveSkill)) {
-          if (typeof chunk === 'object' && 'modelUsed' in chunk) {
-            // Emit model identification event to the UI
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ modelUsed: chunk.modelUsed })}\n\n`))
-            continue
-          }
+        for await (const chunk of streamGeminiChat(messages, systemPrompt, effectiveUseCase)) {
           fullText += chunk
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: chunk })}\n\n`))
         }

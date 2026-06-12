@@ -1,61 +1,40 @@
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { readFile, writeFile } from 'fs/promises'
-import { join } from 'path'
+import { and, eq } from 'drizzle-orm'
+import { db } from '@/lib/db'
+import { founderLensSections, tenants } from '@/lib/schema'
 import type { FounderLensConfig, FounderLensCustomSection } from '@/types'
+import { getDefaultTenantId } from '@/lib/tenant-context'
 
 export const runtime = 'nodejs'
 
 /* ══════════════════════════════════════════════════════════════════════════════
-   FOUNDER LENS API
-   GET  /api/orgs/[orgId]/founder-lens  → read current CUSTOM sections
-   POST /api/orgs/[orgId]/founder-lens  → write CUSTOM sections to FOUNDER_LENS.md
+   FOUNDER LENS API  (DB-backed — replaces the old filesystem FOUNDER_LENS.md
+   files under ../orchestration, which do not exist in the deployed container)
+
+   GET  /api/orgs/[orgId]/founder-lens  → read current CUSTOM sections per role
+   POST /api/orgs/[orgId]/founder-lens  → upsert CUSTOM sections per role
    ══════════════════════════════════════════════════════════════════════════════ */
 
-// Map from role key to comment tag used in FOUNDER_LENS.md
-const ROLE_TAG_MAP: Record<string, string> = {
-  ceo:       'CEO',
-  cmo:       'CMO',
-  cto:       'CTO',
-  cfo:       'CFO',
-  coo:       'COO',
-  marketing: 'MARKETING',
-  technical: 'TECHNICAL',
-  revenue:   'REVENUE',
+// Phase 1 (multi-tenancy): resolve per-request from hostname instead of env.
+const TENANT_ID = getDefaultTenantId()
+
+// Valid role keys accepted by the wizard.
+const VALID_ROLES = new Set([
+  'ceo', 'cmo', 'cto', 'cfo', 'coo', 'marketing', 'technical', 'revenue',
+])
+
+/** Idempotently ensure the tenant row exists (FK target). */
+async function ensureTenant() {
+  await db
+    .insert(tenants)
+    .values({ id: TENANT_ID, name: 'RxFit Athletics', domain: 'rxfitatx.com' })
+    .onConflictDoNothing()
 }
 
-// Map from orgId to orchestration folder name
-// Extend this as new orgs are added
-const ORG_FOLDER_MAP: Record<string, string> = {
-  rxfit:          'RxFit',
-  fridgesnap:     'FridgeSnap',
-  jadeCOS:        'JadeCoS',
-  notebookrx:     'NotebookRx',
-  wellnessapp:    'WellnessApp',
-  rxfit_seo:      'RxFit-SEO-Agent',
-}
-
-function resolveOrchestratorPath(orgId: string): string | null {
-  // Try exact match first
-  const direct = ORG_FOLDER_MAP[orgId.toLowerCase().replace(/[-\s]/g, '')]
-  if (direct) return direct
-
-  // Try partial match
-  const key = Object.keys(ORG_FOLDER_MAP).find(k =>
-    orgId.toLowerCase().includes(k) || k.includes(orgId.toLowerCase())
-  )
-  return key ? ORG_FOLDER_MAP[key] : null
-}
-
-// Absolute base path for orchestration files
-const ORCHESTRATION_BASE = join(process.cwd(), '..', 'orchestration')
-
-function buildAgentPath(orgFolder: string, role: string): string {
-  return join(ORCHESTRATION_BASE, orgFolder, 'agents', role, 'FOUNDER_LENS.md')
-}
-
-function buildCustomSection(section: FounderLensCustomSection, tagName: string): string {
+/** Render a structured section into the markdown block the client expects. */
+function buildCustomSection(section: FounderLensCustomSection): string {
   const lines: string[] = []
   if (section.okrs) lines.push(`**OKRs:**\n${section.okrs}`)
   if (section.competitiveAdvantages) lines.push(`**Competitive Advantages:**\n${section.competitiveAdvantages}`)
@@ -64,36 +43,7 @@ function buildCustomSection(section: FounderLensCustomSection, tagName: string):
   if (section.annualGoals) lines.push(`**Annual Goals:**\n${section.annualGoals}`)
   if (section.tonePreferences) lines.push(`**Tone & Voice:**\n${section.tonePreferences}`)
   if (section.uniqueInstructions) lines.push(`**Operating Instructions:**\n${section.uniqueInstructions}`)
-
-  if (lines.length === 0) return ''
   return lines.join('\n\n')
-}
-
-async function updateFounderLensCustom(
-  filePath: string,
-  section: FounderLensCustomSection,
-  tagName: string
-): Promise<void> {
-  let content = await readFile(filePath, 'utf-8')
-  const startTag = `<!-- CUSTOM_${tagName}_START -->`
-  const endTag   = `<!-- CUSTOM_${tagName}_END -->`
-
-  const customContent = buildCustomSection(section, tagName)
-  const replacement = customContent
-    ? `${startTag}\n${customContent}\n${endTag}`
-    : `${startTag}\n${endTag}`
-
-  const startIdx = content.indexOf(startTag)
-  const endIdx   = content.indexOf(endTag)
-
-  if (startIdx === -1 || endIdx === -1) {
-    // Tags not found — append at end
-    content += `\n\n${replacement}`
-  } else {
-    content = content.slice(0, startIdx) + replacement + content.slice(endIdx + endTag.length)
-  }
-
-  await writeFile(filePath, content, 'utf-8')
 }
 
 export async function GET(
@@ -107,9 +57,9 @@ export async function GET(
 
   const orgId = params.orgId
 
-  // Security Check: Ensure user has access to this project
-  const userRole = (session.user as any).role as string
-  const assignedProjects = (session.user as any).assignedProjects as string[] || []
+  // Security Check: Ensure user has access to this org
+  const userRole = (session.user as Record<string, unknown>).role as string
+  const assignedProjects = ((session.user as Record<string, unknown>).assignedProjects as string[]) || []
 
   const hasAccess =
     userRole === 'superadmin' ||
@@ -120,36 +70,24 @@ export async function GET(
     return NextResponse.json({ error: 'Insufficient permissions for this organization' }, { status: 403 })
   }
 
-  const orgFolder = resolveOrchestratorPath(orgId)
+  try {
+    await ensureTenant()
+    const rows = await db
+      .select()
+      .from(founderLensSections)
+      .where(and(eq(founderLensSections.tenantId, TENANT_ID), eq(founderLensSections.orgId, orgId)))
 
-  if (!orgFolder) {
-    return NextResponse.json({ error: `Unknown org: ${orgId}` }, { status: 404 })
+    const result: Record<string, string> = {}
+    for (const row of rows) {
+      const rendered = buildCustomSection(row.sections as FounderLensCustomSection)
+      if (rendered) result[row.role] = rendered
+    }
+
+    return NextResponse.json({ orgId, roles: result })
+  } catch (err) {
+    console.error('[founder-lens GET]', err)
+    return NextResponse.json({ error: 'Failed to load Founder Lens config' }, { status: 500 })
   }
-
-  // Read all available FOUNDER_LENS.md files and extract CUSTOM sections
-  const roles = Object.keys(ROLE_TAG_MAP)
-  const result: Partial<Record<string, string>> = {}
-
-  await Promise.all(
-    roles.map(async (role) => {
-      try {
-        const filePath = buildAgentPath(orgFolder, role)
-        const content = await readFile(filePath, 'utf-8')
-        const tagName = ROLE_TAG_MAP[role]
-        const startTag = `<!-- CUSTOM_${tagName}_START -->`
-        const endTag   = `<!-- CUSTOM_${tagName}_END -->`
-        const start = content.indexOf(startTag)
-        const end   = content.indexOf(endTag)
-        if (start !== -1 && end !== -1) {
-          result[role] = content.slice(start + startTag.length, end).trim()
-        }
-      } catch {
-        // File doesn't exist for this role — skip
-      }
-    })
-  )
-
-  return NextResponse.json({ orgId, roles: result })
 }
 
 export async function POST(
@@ -161,17 +99,16 @@ export async function POST(
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  // Only admins and superadmins can customize C-Suite
-  const userRole = (session.user as any).role as string
+  // Only admins and superadmins can customize the C-Suite.
+  const userRole = (session.user as Record<string, unknown>).role as string
   if (!['admin', 'superadmin'].includes(userRole)) {
     return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 })
   }
 
   const orgId = params.orgId
 
-  // Security Check: Ensure user has access to this project
-  const assignedProjects = (session.user as any).assignedProjects as string[] || []
-
+  // Security Check: Ensure user has access to this org
+  const assignedProjects = ((session.user as Record<string, unknown>).assignedProjects as string[]) || []
   const hasAccess =
     userRole === 'superadmin' ||
     assignedProjects.includes('*') ||
@@ -181,12 +118,6 @@ export async function POST(
     return NextResponse.json({ error: 'Insufficient permissions for this organization' }, { status: 403 })
   }
 
-  const orgFolder = resolveOrchestratorPath(orgId)
-
-  if (!orgFolder) {
-    return NextResponse.json({ error: `Unknown org: ${orgId}` }, { status: 404 })
-  }
-
   let body: FounderLensConfig
   try {
     body = await req.json()
@@ -194,35 +125,65 @@ export async function POST(
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   }
 
-  const errors: string[] = []
+  if (!Array.isArray(body.roles)) {
+    return NextResponse.json({ error: 'roles array is required' }, { status: 400 })
+  }
 
-  await Promise.all(
-    body.roles.map(async (section) => {
+  const updatedBy = (session.user.email as string) ?? 'unknown'
+  const errors: string[] = []
+  const rolesUpdated: string[] = []
+
+  try {
+    await ensureTenant()
+
+    for (const section of body.roles) {
       const role = section.role
-      const tagName = ROLE_TAG_MAP[role]
-      if (!tagName) return
+      if (!role || !VALID_ROLES.has(role)) {
+        errors.push(`${role}: unknown role`)
+        continue
+      }
 
       try {
-        const filePath = buildAgentPath(orgFolder, role)
-        await updateFounderLensCustom(filePath, section, tagName)
+        await db
+          .insert(founderLensSections)
+          .values({
+            tenantId: TENANT_ID,
+            orgId,
+            role,
+            sections: section as unknown as Record<string, unknown>,
+            updatedBy,
+          })
+          .onConflictDoUpdate({
+            target: [founderLensSections.tenantId, founderLensSections.orgId, founderLensSections.role],
+            set: {
+              sections: section as unknown as Record<string, unknown>,
+              updatedBy,
+              updatedAt: new Date(),
+            },
+          })
+        rolesUpdated.push(role)
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        errors.push(`${role}: ${msg}`)
+        errors.push(`${role}: ${err instanceof Error ? err.message : String(err)}`)
       }
-    })
-  )
-
-  if (errors.length > 0) {
+    }
+  } catch (err) {
     return NextResponse.json(
-      { error: 'Some roles failed to update', details: errors },
-      { status: 207 }
+      { error: `Failed to save Founder Lens config: ${err instanceof Error ? err.message : String(err)}` },
+      { status: 500 }
     )
+  }
+
+  if (errors.length > 0 && rolesUpdated.length === 0) {
+    return NextResponse.json({ error: 'All roles failed to update', details: errors }, { status: 500 })
+  }
+  if (errors.length > 0) {
+    return NextResponse.json({ error: 'Some roles failed to update', details: errors }, { status: 207 })
   }
 
   return NextResponse.json({
     success: true,
     orgId,
-    rolesUpdated: body.roles.map(r => r.role),
+    rolesUpdated,
     updatedAt: new Date().toISOString(),
   })
 }

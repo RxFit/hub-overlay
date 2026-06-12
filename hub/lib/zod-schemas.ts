@@ -2,6 +2,17 @@ import { z } from 'zod'
 
 /* ── Paperclip API response schemas ── */
 
+/*
+ * NOTE — Paperclip API contract (verified against @paperclipai/server):
+ *   - List endpoints return BARE arrays; single resources return bare objects.
+ *     All wrapped-response schemas below are unions tolerating both shapes.
+ *   - Issues carry a flat `status` string (backlog|todo|in_progress|in_review|
+ *     done|blocked|cancelled). The Linear-style `state` object does not exist
+ *     on the wire — lib/paperclip.ts derives it during normalization.
+ *   - Issue priorities on the wire are critical|high|medium|low.
+ *   - Assignee is `assigneeAgentId`; agents use the full 7-value status enum.
+ */
+
 export const IssueStateSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -12,40 +23,50 @@ export const IssueStateSchema = z.object({
 export const IssueSchema = z.object({
   id: z.string(),
   title: z.string(),
-  description: z.string().nullable(),
-  identifier: z.string(),
-  priority: z.enum(['urgent', 'high', 'medium', 'low', 'none']),
-  state: IssueStateSchema,
-  assigneeId: z.string().nullable(),
-  assigneeName: z.string().nullable(),
+  description: z.string().nullable().optional(),
+  identifier: z.string().optional(),
+  // Accept both Paperclip's wire vocabulary and the Hub's internal one
+  priority: z.enum(['critical', 'urgent', 'high', 'medium', 'low', 'none']).optional(),
+  status: z.enum(['backlog', 'todo', 'in_progress', 'in_review', 'done', 'blocked', 'cancelled']).optional(),
+  state: IssueStateSchema.optional(),
+  assigneeAgentId: z.string().nullable().optional(),
+  assigneeId: z.string().nullable().optional(),
+  assigneeName: z.string().nullable().optional(),
   companyId: z.string(),
   createdAt: z.string(),
   updatedAt: z.string(),
 }).passthrough()
 
 export const RunSchema = z.object({
-  id: z.string(),
-  status: z.enum(['queued', 'running', 'completed', 'failed', 'cancelled']),
+  // Heartbeat runs expose `runId`/`finishedAt`; older shapes used `id`/`completedAt`
+  id: z.string().optional(),
+  runId: z.string().optional(),
+  status: z.enum([
+    'queued', 'scheduled_retry', 'running',
+    'succeeded', 'completed', 'failed', 'timed_out', 'cancelled',
+  ]),
   agentId: z.string(),
-  agentName: z.string(),
-  issueId: z.string(),
-  issueIdentifier: z.string(),
-  model: z.string().nullable(),
-  startedAt: z.string().nullable(),
-  completedAt: z.string().nullable(),
-  durationMs: z.number().nullable(),
-  companyId: z.string(),
+  agentName: z.string().optional(),
+  startedAt: z.string().nullable().optional(),
+  completedAt: z.string().nullable().optional(),
+  finishedAt: z.string().nullable().optional(),
+  durationMs: z.number().nullable().optional(),
 }).passthrough()
 
 export const AgentSchema = z.object({
   id: z.string(),
   name: z.string(),
-  description: z.string().nullable(),
-  adapter: z.string(),
-  status: z.enum(['active', 'inactive', 'error']),
+  description: z.string().nullable().optional(),
+  adapter: z.string().optional(),
+  adapterType: z.string().optional(),
+  status: z.enum([
+    'active', 'paused', 'idle', 'running', 'error',
+    'pending_approval', 'terminated', 'inactive',
+  ]),
   companyId: z.string(),
   createdAt: z.string(),
-  lastHeartbeat: z.string().nullable(),
+  lastHeartbeat: z.string().nullable().optional(),
+  lastHeartbeatAt: z.string().nullable().optional(),
 }).passthrough()
 
 export const CompanySchema = z.object({
@@ -76,34 +97,43 @@ export const ProjectSchema = z.object({
 
 /* ── Wrapped response schemas ── */
 
-export const IssuesResponseSchema = z.object({
-  issues: IssueSchema.array(),
-}).passthrough()
+/* Every list/single response tolerates both the bare shape (current
+   Paperclip API) and the wrapped shape (legacy expectation). */
 
-export const IssueResponseSchema = z.object({
-  issue: IssueSchema,
-}).passthrough()
+export const IssuesResponseSchema = z.union([
+  IssueSchema.array(),
+  z.object({ issues: IssueSchema.array() }).passthrough(),
+])
 
-export const RunsResponseSchema = z.object({
-  runs: RunSchema.array(),
-}).passthrough()
+export const IssueResponseSchema = z.union([
+  IssueSchema,
+  z.object({ issue: IssueSchema }).passthrough(),
+])
 
-export const AgentsResponseSchema = z.object({
-  agents: AgentSchema.array(),
-}).passthrough()
+export const RunsResponseSchema = z.union([
+  RunSchema.array(),
+  z.object({ runs: RunSchema.array() }).passthrough(),
+])
 
-export const AgentResponseSchema = z.object({
-  agent: AgentSchema,
-}).passthrough()
+export const AgentsResponseSchema = z.union([
+  AgentSchema.array(),
+  z.object({ agents: AgentSchema.array() }).passthrough(),
+])
+
+export const AgentResponseSchema = z.union([
+  AgentSchema,
+  z.object({ agent: AgentSchema }).passthrough(),
+])
 
 export const CompaniesResponseSchema = z.union([
   CompanySchema.array(),
   z.object({ companies: CompanySchema.array() }).passthrough(),
 ])
 
-export const ProjectsResponseSchema = z.object({
-  projects: ProjectSchema.array(),
-}).passthrough()
+export const ProjectsResponseSchema = z.union([
+  ProjectSchema.array(),
+  z.object({ projects: ProjectSchema.array() }).passthrough(),
+])
 
 /* ── HUB API input schemas ── */
 
@@ -134,7 +164,9 @@ export const ChatRequestSchema = z.object({
 export const CreateIssueRequestSchema = z.object({
   title: z.string().min(1, 'Title is required'),
   description: z.string().optional(),
-  priority: z.enum(['urgent', 'high', 'medium', 'low', 'none']).optional(),
+  // Hub + Paperclip vocabularies both accepted; lib/paperclip.ts maps
+  // urgent→critical and none→low before hitting the Paperclip API.
+  priority: z.enum(['critical', 'urgent', 'high', 'medium', 'low', 'none']).optional(),
   assigneeId: z.string().optional(),
   companyId: z.string().optional(),
 })
@@ -174,34 +206,4 @@ export const QueryMemoryRequestSchema = z.object({
 export type ValidatedMemoryType = z.infer<typeof MemoryTypeSchema>
 export type ValidatedStoreMemoryRequest = z.infer<typeof StoreMemoryRequestSchema>
 export type ValidatedQueryMemoryRequest = z.infer<typeof QueryMemoryRequestSchema>
-
-/* ── KPI Settings Schemas ── */
-
-export const TrendDirectionSchema = z.enum(['up', 'down', 'neutral'])
-export const KpiScopeSchema = z.enum(['global', 'project'])
-export const KpiVisibilitySchema = z.enum(['public', 'staff', 'admin'])
-
-export const CreateKpiRequestSchema = z.object({
-  label: z.string().min(1, 'Label is required'),
-  value: z.string().or(z.number()).optional().default('0'),
-  trend: z.string().nullable().optional(),
-  trendDirection: TrendDirectionSchema.optional().default('neutral'),
-  unit: z.string().nullable().optional(),
-  scope: KpiScopeSchema.optional().default('global'),
-  visibility: KpiVisibilitySchema.optional().default('staff'),
-})
-
-export const UpdateKpiRequestSchema = z.object({
-  id: z.string().min(1, 'ID is required'),
-  label: z.string().min(1).optional(),
-  value: z.string().or(z.number()).optional(),
-  trend: z.string().nullable().optional(),
-  trendDirection: TrendDirectionSchema.optional(),
-  unit: z.string().nullable().optional(),
-  scope: KpiScopeSchema.optional(),
-  visibility: KpiVisibilitySchema.optional(),
-})
-
-export type ValidatedCreateKpiRequest = z.infer<typeof CreateKpiRequestSchema>
-export type ValidatedUpdateKpiRequest = z.infer<typeof UpdateKpiRequestSchema>
 

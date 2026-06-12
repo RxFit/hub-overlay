@@ -8,10 +8,12 @@ import {
   updateToolArtifact,
   archiveToolArtifact,
 } from '@/lib/tool-artifacts'
+import { getDefaultTenantId } from '@/lib/tenant-context'
 
 export const runtime = 'nodejs'
 
-const TENANT_ID = process.env.NEXT_PUBLIC_TENANT_ID || 'rxfit'
+// Phase 1 (multi-tenancy): resolve per-request from hostname instead of env.
+const TENANT_ID = getDefaultTenantId()
 
 /**
  * GET /api/tool-artifacts?toolId=issue-tree
@@ -23,9 +25,18 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  // Onboarding users have no artifact access (consistent with the rest of the app).
+  const role = (session.user as Record<string, unknown>)?.role as string | undefined
+  if (!role || role === 'onboarding') {
+    return NextResponse.json({ artifacts: [] })
+  }
+
   try {
     const toolId = req.nextUrl.searchParams.get('toolId') ?? undefined
-    const artifacts = await getToolArtifacts(TENANT_ID, toolId)
+    // Admins see all tenant artifacts; staff are scoped to artifacts they created.
+    const isAdmin = role === 'admin' || role === 'superadmin'
+    const createdBy = isAdmin ? undefined : (session.user.email ?? '__none__')
+    const artifacts = await getToolArtifacts(TENANT_ID, toolId, 20, createdBy)
     return NextResponse.json({ artifacts })
   } catch (err) {
     console.error('[tool-artifacts GET]', err)

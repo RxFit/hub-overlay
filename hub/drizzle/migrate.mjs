@@ -4,7 +4,11 @@
  */
 import postgres from 'postgres'
 
-const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://postgres:REDACTED_PASSWORD@localhost:5432/railway'
+const DATABASE_URL = process.env.DATABASE_URL
+if (!DATABASE_URL) {
+  console.error('[migrate] DATABASE_URL is not set. Refusing to run without an explicit connection string.')
+  process.exit(1)
+}
 
 const sql = postgres(DATABASE_URL, { max: 1 })
 
@@ -176,18 +180,23 @@ async function run() {
   `
   console.log('[migrate] ✓ tool_artifacts table')
 
-  // Create circuit_breakers table
+  // Founder Lens Sections table (replaces filesystem FOUNDER_LENS.md)
   await sql`
-    CREATE TABLE IF NOT EXISTS circuit_breakers (
-      key           TEXT PRIMARY KEY,
-      state         TEXT NOT NULL DEFAULT 'closed',
-      failures      INTEGER NOT NULL DEFAULT 0,
-      last_failure  TIMESTAMPTZ,
-      probing       BOOLEAN NOT NULL DEFAULT false,
-      updated_at    TIMESTAMPTZ DEFAULT now() NOT NULL
+    CREATE TABLE IF NOT EXISTS founder_lens_sections (
+      id         TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id  TEXT NOT NULL REFERENCES tenants(id),
+      org_id     TEXT NOT NULL,
+      role       TEXT NOT NULL,
+      sections   JSONB NOT NULL,
+      updated_by TEXT,
+      updated_at TIMESTAMPTZ DEFAULT now() NOT NULL
     )
   `
-  console.log('[migrate] ✓ circuit_breakers table')
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS founder_lens_org_role_uniq
+    ON founder_lens_sections(tenant_id, org_id, role)
+  `
+  console.log('[migrate] ✓ founder_lens_sections table')
 
   // Seed rxfit tenant
   await sql`

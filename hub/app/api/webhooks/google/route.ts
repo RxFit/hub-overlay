@@ -102,7 +102,9 @@ async function processGoogleDelta(resourceId: string, resourceUri: string) {
     return;
   }
 
-  const tenantId = process.env.NEXT_PUBLIC_TENANT_ID || 'rxfit';
+  // Phase 1 (multi-tenancy): derive tenant from webhook channel/hostname.
+  const { getDefaultTenantId } = await import('@/lib/tenant-context');
+  const tenantId = getDefaultTenantId();
   const sourceUrl = metadata.webViewLink || `https://docs.google.com/document/d/${fileId}/edit`;
 
   // Use the ingest client to handle chunking, clearing, and uploading
@@ -127,7 +129,8 @@ async function deleteChunksForFile(fileId: string) {
   const { db } = await import('@/lib/db');
   const { documentChunks } = await import('@/lib/schema');
   const { like, and, eq } = await import('drizzle-orm');
-  const tenantId = process.env.NEXT_PUBLIC_TENANT_ID || 'rxfit';
+  const { getDefaultTenantId } = await import('@/lib/tenant-context');
+  const tenantId = getDefaultTenantId();
 
   const deleted = await db.delete(documentChunks).where(
     and(

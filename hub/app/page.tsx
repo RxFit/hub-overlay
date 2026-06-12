@@ -41,6 +41,29 @@ import { PAPERCLIP_BASE_URL } from '@/lib/paperclipConfig'
 import { useCompanies } from '@/app/hooks/useCompanies'
 import type { InterviewState, ActionSpec, ChatAttachment, ActiveSkill } from '@/types'
 
+/**
+ * The Paperclip API returns bare arrays from list endpoints; older Hub code
+ * expected `{ issues: [...] }`-style wrappers. Tolerate both.
+ */
+function pickList<T>(data: unknown, key: string): T[] {
+  if (Array.isArray(data)) return data as T[]
+  if (data && typeof data === 'object') {
+    const inner = (data as Record<string, unknown>)[key]
+    if (Array.isArray(inner)) return inner as T[]
+  }
+  return []
+}
+
+/** Open/active issue check that works with both `status` strings (Paperclip
+ *  wire format) and legacy `state.group` objects. */
+function isOpenIssue(issue: { status?: string; state?: { group?: string } }): boolean {
+  if (typeof issue.status === 'string') {
+    return issue.status !== 'done' && issue.status !== 'cancelled'
+  }
+  const group = issue.state?.group
+  return group !== 'completed' && group !== 'cancelled'
+}
+
 /* ── Dynamic suggestions are built per-user in HubPage via useMemo ── */
 
 const FALLBACK_SUGGESTIONS = [
@@ -468,7 +491,6 @@ export default function HubPage() {
   const [messages, setMessages] = useState<ChatMsg[]>([])
   const [input, setInput] = useState('')
   const [isTyping, setIsTyping] = useState(false)
-  const [activeModel, setActiveModel] = useState<string | null>(null)
   const [actionExecuting, setActionExecuting] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const chatMessagesRef = useRef<HTMLDivElement>(null)
@@ -814,10 +836,6 @@ export default function HubPage() {
               if (parsed.suggestedTools && Array.isArray(parsed.suggestedTools)) {
                 setSuggestedTools(parsed.suggestedTools)
               }
-              // Parse modelUsed event for dynamic badge
-              if (parsed.modelUsed) {
-                setActiveModel(parsed.modelUsed)
-              }
             } catch {
               // Skip malformed lines
             }
@@ -959,13 +977,37 @@ export default function HubPage() {
           const runQualityGate = async (spec: typeof nextState.spec) => {
             if (!spec) return
 
-            // Trust the real-time contextScore and contextWeakDim
-            let finalScore = contextScore ?? 80
-            let finalWeak: string | null = contextWeakDim
+            // Fetch a FRESH context-sufficiency score. Reading the async badge
+            // state (contextScore) here is unreliable — this closure captured a
+            // stale value, and the real follow-up question was never populated.
+            let finalScore = 80
+            let finalWeak: string | null = null
             let followUpQuestion: string | null = null
+            try {
+              const scoreRes = await fetch('/api/chat/score-context', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  intent: spec.intent,
+                  context: nextState.context,
+                  currentStep: nextState.step,
+                  totalSteps: getTotalQuestions(spec.intent),
+                }),
+              })
+              const scoreData = await scoreRes.json()
+              if (typeof scoreData.score === 'number') finalScore = scoreData.score
+              finalWeak = scoreData.weakDimension ?? null
+              followUpQuestion = scoreData.followUpQuestion ?? null
+              setContextScore(finalScore)
+              setContextWeakDim(finalWeak)
+            } catch {
+              // Network error reaching the gate — fail closed for high-stakes intents.
+              if (isHighStakesIntent(spec.intent) || spec.intent === 'delete_workspace' || spec.intent === 'delete_agent') {
+                finalScore = 0
+                followUpQuestion = 'I could not verify this action is safe to execute. Please re-state the key details and try again.'
+              }
+            }
 
-            // If we already know the score is < 80, handle it directly.
-            // If the score is still processing, the Confirm Card UI itself will show a "Validating..." state and block approval until ready.
             if (finalScore < 80) {
               // ── BLOCKED — context insufficient ──
               // Re-activate interview for a follow-up question, don't show confirm card
@@ -981,7 +1023,7 @@ export default function HubPage() {
 
 I need more detail before this can execute safely. The weakest area is **${(finalWeak ?? 'context').replace(/_/g, ' ')}**.
 
-**${followUpQuestion}**`,
+**${followUpQuestion ?? 'Can you add more specifics so I can validate this safely?'}**`,
                 timestamp: new Date().toISOString(),
               }])
               return
@@ -1344,11 +1386,10 @@ Respond with EXACTLY one of:
           // Find the COO agent dynamically in the target workspace
           let commAssigneeId: string | undefined
           try {
-            const agentsRes = await fetch(`/api/paperclip/api/companies/${activeCompany.id}/agents`)
+            const agentsRes = await fetch(`/api/paperclip/companies/${activeCompany.id}/agents`)
             if (agentsRes.ok) {
-              const agentsData = await agentsRes.json()
-              const agents = Array.isArray(agentsData) ? agentsData : agentsData.agents ?? []
-              const coo = agents.find((a: { name: string }) => a.name.toLowerCase().includes('coo') || a.name.toLowerCase().includes('operations'))
+              const agents = pickList<{ id: string; name: string }>(await agentsRes.json(), 'agents')
+              const coo = agents.find((a) => a.name.toLowerCase().includes('coo') || a.name.toLowerCase().includes('operations'))
               if (coo) commAssigneeId = coo.id
             }
           } catch { /* will fall through to server-side CEO resolution */ }
@@ -1408,10 +1449,9 @@ Respond with EXACTLY one of:
 
         case 'check_agent_status': {
           // Fetch agent status from all companies
-          const companiesRes = await fetch('/api/paperclip/api/companies')
+          const companiesRes = await fetch('/api/paperclip/companies')
           if (!companiesRes.ok) throw new Error(`Failed to fetch companies: ${companiesRes.status}`)
-          const companiesData = await companiesRes.json()
-          const companies = Array.isArray(companiesData) ? companiesData : companiesData.companies ?? []
+          const companies = pickList<{ id: string; name: string }>(await companiesRes.json(), 'companies')
 
           const targetProject = spec.details.project?.toLowerCase()
           const targetCompanies = targetProject === 'all'
@@ -1421,12 +1461,11 @@ Respond with EXACTLY one of:
           const agentStatusParts: string[] = []
           for (const company of targetCompanies.slice(0, 5)) {
             try {
-              const agentsRes = await fetch(`/api/paperclip/api/companies/${company.id}/agents`)
+              const agentsRes = await fetch(`/api/paperclip/companies/${company.id}/agents`)
               if (!agentsRes.ok) continue
-              const agentsData = await agentsRes.json()
-              const agents = agentsData.agents ?? []
-              const lines = agents.map((a: { name: string; status: string }) =>
-                `  • **${a.name}** — ${a.status === 'active' ? '🟢' : a.status === 'error' ? '🔴' : '⚪'} ${a.status}`
+              const agents = pickList<{ name: string; status: string }>(await agentsRes.json(), 'agents')
+              const lines = agents.map((a) =>
+                `  • **${a.name}** — ${a.status === 'active' || a.status === 'running' ? '🟢' : a.status === 'error' ? '🔴' : '⚪'} ${a.status}`
               )
               agentStatusParts.push(`**${company.name}** (${agents.length} agents):\n${lines.join('\n')}`)
             } catch { /* skip */ }
@@ -1439,10 +1478,9 @@ Respond with EXACTLY one of:
         }
 
         case 'view_runs': {
-          const companiesRes = await fetch('/api/paperclip/api/companies')
+          const companiesRes = await fetch('/api/paperclip/companies')
           if (!companiesRes.ok) throw new Error('Failed to fetch companies')
-          const companiesData = await companiesRes.json()
-          const companies = Array.isArray(companiesData) ? companiesData : companiesData.companies ?? []
+          const companies = pickList<{ id: string; name: string }>(await companiesRes.json(), 'companies')
 
           const targetProject = spec.details.project?.toLowerCase()
           const targetCompanies = targetProject === 'all'
@@ -1452,10 +1490,11 @@ Respond with EXACTLY one of:
           const runParts: string[] = []
           for (const company of targetCompanies.slice(0, 5)) {
             try {
-              const runsRes = await fetch(`/api/paperclip/api/companies/${company.id}/runs?limit=10`)
+              // Paperclip has no company-level runs endpoint — this Hub route
+              // aggregates per-issue runs server-side.
+              const runsRes = await fetch(`/api/paperclip/runs?companyId=${company.id}&limit=10`)
               if (!runsRes.ok) continue
-              const runsData = await runsRes.json()
-              const runs = runsData.runs ?? []
+              const runs = pickList<{ agentName: string; status: string; issueIdentifier: string; durationMs: number | null }>(await runsRes.json(), 'runs')
               if (runs.length === 0) continue
               const lines = runs.map((r: { agentName: string; status: string; issueIdentifier: string; durationMs: number | null }) =>
                 `  • **${r.agentName}** → ${r.issueIdentifier} — ${r.status === 'completed' ? '✅' : r.status === 'failed' ? '❌' : '⏳'} ${r.status}${r.durationMs ? ` (${(r.durationMs / 1000).toFixed(1)}s)` : ''}`
@@ -1472,10 +1511,9 @@ Respond with EXACTLY one of:
 
         case 'assign_issue': {
           // Resolve issue and agent, then PATCH the assignment
-          const aiCompaniesRes = await fetch('/api/paperclip/api/companies')
+          const aiCompaniesRes = await fetch('/api/paperclip/companies')
           if (!aiCompaniesRes.ok) throw new Error('Failed to fetch companies')
-          const aiCompaniesData = await aiCompaniesRes.json()
-          const aiCompanies = Array.isArray(aiCompaniesData) ? aiCompaniesData : aiCompaniesData.companies ?? []
+          const aiCompanies = pickList<{ id: string; name: string }>(await aiCompaniesRes.json(), 'companies')
 
           const issueRef = (spec.details.issueRef || '').toLowerCase()
           const agentRef = (spec.details.agent || '').toLowerCase()
@@ -1485,22 +1523,20 @@ Respond with EXACTLY one of:
           for (const company of aiCompanies) {
             try {
               const [issuesRes, agentsRes] = await Promise.all([
-                fetch(`/api/paperclip/api/companies/${company.id}/issues?limit=50`),
-                fetch(`/api/paperclip/api/companies/${company.id}/agents`),
+                fetch(`/api/paperclip/companies/${company.id}/issues?limit=50`),
+                fetch(`/api/paperclip/companies/${company.id}/agents`),
               ])
               if (issuesRes.ok && !foundIssue) {
-                const issData = await issuesRes.json()
-                const issues = issData.issues ?? []
-                const match = issues.find((i: { identifier: string; title: string }) =>
+                const issues = pickList<{ id: string; identifier: string; title: string }>(await issuesRes.json(), 'issues')
+                const match = issues.find((i) =>
                   i.identifier?.toLowerCase().includes(issueRef) ||
                   i.title?.toLowerCase().includes(issueRef)
                 )
                 if (match) foundIssue = { id: match.id, title: match.title, companyId: company.id }
               }
               if (agentsRes.ok && !foundAgent) {
-                const agData = await agentsRes.json()
-                const agents = agData.agents ?? []
-                const match = agents.find((a: { name: string }) =>
+                const agents = pickList<{ id: string; name: string }>(await agentsRes.json(), 'agents')
+                const match = agents.find((a) =>
                   a.name?.toLowerCase().includes(agentRef)
                 )
                 if (match) foundAgent = { id: match.id, name: match.name }
@@ -1511,7 +1547,8 @@ Respond with EXACTLY one of:
           if (!foundIssue) throw new Error(`Could not find issue matching "${spec.details.issueRef}"`)
           if (!foundAgent) throw new Error(`Could not find agent matching "${spec.details.agent}"`)
 
-          const assignRes = await fetch(`/api/paperclip/api/companies/${foundIssue.companyId}/issues/${foundIssue.id}`, {
+          // Single-issue routes are NOT company-scoped in Paperclip
+          const assignRes = await fetch(`/api/paperclip/issues/${foundIssue.id}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ assigneeAgentId: foundAgent.id }),
@@ -1525,21 +1562,19 @@ Respond with EXACTLY one of:
 
         case 'update_issue_state': {
           // Resolve issue, then PATCH the status
-          const usCompaniesRes = await fetch('/api/paperclip/api/companies')
+          const usCompaniesRes = await fetch('/api/paperclip/companies')
           if (!usCompaniesRes.ok) throw new Error('Failed to fetch companies')
-          const usCompaniesData = await usCompaniesRes.json()
-          const usCompanies = Array.isArray(usCompaniesData) ? usCompaniesData : usCompaniesData.companies ?? []
+          const usCompanies = pickList<{ id: string; name: string }>(await usCompaniesRes.json(), 'companies')
 
           const usIssueRef = (spec.details.issueRef || '').toLowerCase()
           let usFoundIssue: { id: string; title: string; companyId: string } | null = null
 
           for (const company of usCompanies) {
             try {
-              const issuesRes = await fetch(`/api/paperclip/api/companies/${company.id}/issues?limit=50`)
+              const issuesRes = await fetch(`/api/paperclip/companies/${company.id}/issues?limit=50`)
               if (!issuesRes.ok) continue
-              const issData = await issuesRes.json()
-              const issues = issData.issues ?? []
-              const match = issues.find((i: { identifier: string; title: string }) =>
+              const issues = pickList<{ id: string; identifier: string; title: string }>(await issuesRes.json(), 'issues')
+              const match = issues.find((i) =>
                 i.identifier?.toLowerCase().includes(usIssueRef) ||
                 i.title?.toLowerCase().includes(usIssueRef)
               )
@@ -1553,16 +1588,21 @@ Respond with EXACTLY one of:
           if (!usFoundIssue) throw new Error(`Could not find issue matching "${spec.details.issueRef}"`)
 
           // Map user-friendly state names to Paperclip status values
+          // (backlog | todo | in_progress | in_review | done | blocked | cancelled)
           const stateMap: Record<string, string> = {
+            'backlog': 'backlog',
             'open': 'todo', 'todo': 'todo',
             'in-progress': 'in_progress', 'in progress': 'in_progress', 'started': 'in_progress',
+            'in-review': 'in_review', 'in review': 'in_review', 'review': 'in_review',
+            'blocked': 'blocked',
             'done': 'done', 'complete': 'done', 'completed': 'done',
             'cancelled': 'cancelled', 'canceled': 'cancelled',
           }
           const rawState = (spec.details.newState || '').toLowerCase()
           const mappedStatus = stateMap[rawState] || rawState
 
-          const stateRes = await fetch(`/api/paperclip/api/companies/${usFoundIssue.companyId}/issues/${usFoundIssue.id}`, {
+          // Single-issue routes are NOT company-scoped in Paperclip
+          const stateRes = await fetch(`/api/paperclip/issues/${usFoundIssue.id}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ status: mappedStatus }),
@@ -1576,19 +1616,17 @@ Respond with EXACTLY one of:
 
         case 'create_agent': {
           // CEO-ROUTED: Create an Issue for the CEO to provision the agent
-          const companiesRes = await fetch('/api/paperclip/api/companies')
+          const companiesRes = await fetch('/api/paperclip/companies')
           if (!companiesRes.ok) throw new Error('Failed to fetch companies')
-          const companiesData = await companiesRes.json()
-          const companies = Array.isArray(companiesData) ? companiesData : companiesData.companies ?? []
+          const companies = pickList<{ id: string; name: string }>(await companiesRes.json(), 'companies')
           const targetName = spec.details.project?.toLowerCase() || ''
-          const company = companies.find((c: { name: string }) => c.name.toLowerCase().includes(targetName))
+          const company = companies.find((c) => c.name.toLowerCase().includes(targetName))
           if (!company) throw new Error(`Workspace "${spec.details.project}" not found`)
 
           // Get the CEO agent ID
-          const agentsRes = await fetch(`/api/paperclip/api/companies/${company.id}/agents`)
-          const agentsData = agentsRes.ok ? await agentsRes.json() : { agents: [] }
-          const agents = agentsData.agents ?? []
-          const ceoAgent = agents.find((a: { name: string }) => a.name.toLowerCase().includes('ceo'))
+          const agentsRes = await fetch(`/api/paperclip/companies/${company.id}/agents`)
+          const agents = agentsRes.ok ? pickList<{ id: string; name: string }>(await agentsRes.json(), 'agents') : []
+          const ceoAgent = agents.find((a) => a.name.toLowerCase().includes('ceo'))
 
           const issueTitle = `Provision Agent: ${spec.details.agentName}`
           const issueDesc = [
@@ -1622,19 +1660,17 @@ Respond with EXACTLY one of:
 
         case 'launch_campaign': {
           // CEO-ROUTED: Create a campaign-level Issue for the CEO
-          const companiesRes = await fetch('/api/paperclip/api/companies')
+          const companiesRes = await fetch('/api/paperclip/companies')
           if (!companiesRes.ok) throw new Error('Failed to fetch companies')
-          const companiesData = await companiesRes.json()
-          const companies = Array.isArray(companiesData) ? companiesData : companiesData.companies ?? []
+          const companies = pickList<{ id: string; name: string }>(await companiesRes.json(), 'companies')
           const targetName = spec.details.project?.toLowerCase() || ''
-          const company = companies.find((c: { name: string }) => c.name.toLowerCase().includes(targetName))
+          const company = companies.find((c) => c.name.toLowerCase().includes(targetName))
           if (!company) throw new Error(`Workspace "${spec.details.project}" not found`)
 
           // Get the CEO agent ID
-          const agentsRes = await fetch(`/api/paperclip/api/companies/${company.id}/agents`)
-          const agentsData = agentsRes.ok ? await agentsRes.json() : { agents: [] }
-          const agents = agentsData.agents ?? []
-          const ceoAgent = agents.find((a: { name: string }) => a.name.toLowerCase().includes('ceo'))
+          const agentsRes = await fetch(`/api/paperclip/companies/${company.id}/agents`)
+          const agents = agentsRes.ok ? pickList<{ id: string; name: string }>(await agentsRes.json(), 'agents') : []
+          const ceoAgent = agents.find((a) => a.name.toLowerCase().includes('ceo'))
 
           const suggestedRoles = spec.details.suggestedRoles || 'CEO to determine'
           const constraints = spec.details.constraints || 'None specified'
@@ -1672,25 +1708,23 @@ Respond with EXACTLY one of:
 
         case 'restart_agent': {
           // Resolve the agent by name, then PATCH status to idle
-          const raCompaniesRes = await fetch('/api/paperclip/api/companies')
+          const raCompaniesRes = await fetch('/api/paperclip/companies')
           if (!raCompaniesRes.ok) throw new Error('Failed to fetch companies')
-          const raCompaniesData = await raCompaniesRes.json()
-          const raCompanies = Array.isArray(raCompaniesData) ? raCompaniesData : raCompaniesData.companies ?? []
+          const raCompanies = pickList<{ id: string; name: string }>(await raCompaniesRes.json(), 'companies')
 
           const raProjectRef = (spec.details.project || '').toLowerCase()
           const raAgentRef = (spec.details.agent || '').toLowerCase()
           const raTargetCompanies = raProjectRef === 'all'
             ? raCompanies
-            : raCompanies.filter((c: { name: string }) => c.name.toLowerCase().includes(raProjectRef))
+            : raCompanies.filter((c) => c.name.toLowerCase().includes(raProjectRef))
 
           let raFoundAgent: { id: string; name: string; companyId: string } | null = null
           for (const company of raTargetCompanies) {
             try {
-              const agentsRes = await fetch(`/api/paperclip/api/companies/${company.id}/agents`)
+              const agentsRes = await fetch(`/api/paperclip/companies/${company.id}/agents`)
               if (!agentsRes.ok) continue
-              const agData = await agentsRes.json()
-              const agents = agData.agents ?? []
-              const match = agents.find((a: { name: string }) =>
+              const agents = pickList<{ id: string; name: string }>(await agentsRes.json(), 'agents')
+              const match = agents.find((a) =>
                 a.name?.toLowerCase().includes(raAgentRef)
               )
               if (match) {
@@ -1702,7 +1736,8 @@ Respond with EXACTLY one of:
 
           if (!raFoundAgent) throw new Error(`Could not find agent matching "${spec.details.agent}" in "${spec.details.project}"`)
 
-          const raRes = await fetch(`/api/paperclip/api/companies/${raFoundAgent.companyId}/agents/${raFoundAgent.id}`, {
+          // Agent mutation routes are NOT company-scoped in Paperclip
+          const raRes = await fetch(`/api/paperclip/agents/${raFoundAgent.id}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ status: 'idle' }),
@@ -1715,24 +1750,23 @@ Respond with EXACTLY one of:
 
         case 'run_audit': {
           // Fetch data and display as inline audit
-          const companiesRes = await fetch('/api/paperclip/api/companies')
+          const companiesRes = await fetch('/api/paperclip/companies')
           if (!companiesRes.ok) throw new Error('Failed to fetch companies')
-          const companiesData = await companiesRes.json()
-          const companies = Array.isArray(companiesData) ? companiesData : companiesData.companies ?? []
+          const companies = pickList<{ id: string; name: string }>(await companiesRes.json(), 'companies')
 
           const auditParts: string[] = []
           for (const company of companies.slice(0, 5)) {
             try {
               const [agentsRes, issuesRes] = await Promise.all([
-                fetch(`/api/paperclip/api/companies/${company.id}/agents`),
-                fetch(`/api/paperclip/api/companies/${company.id}/issues?limit=100`),
+                fetch(`/api/paperclip/companies/${company.id}/agents`),
+                fetch(`/api/paperclip/companies/${company.id}/issues?limit=100`),
               ])
-              const agents = agentsRes.ok ? (await agentsRes.json()).agents ?? [] : []
-              const issues = issuesRes.ok ? (await issuesRes.json()).issues ?? [] : []
-              
-              const healthy = agents.filter((a: { status: string }) => a.status === 'active').length
-              const errored = agents.filter((a: { status: string }) => a.status === 'error').length
-              const openIssues = issues.filter((i: { state: { group: string } }) => i.state?.group !== 'completed' && i.state?.group !== 'cancelled').length
+              const agents = agentsRes.ok ? pickList<{ status: string }>(await agentsRes.json(), 'agents') : []
+              const issues = issuesRes.ok ? pickList<{ status?: string; state?: { group?: string } }>(await issuesRes.json(), 'issues') : []
+
+              const healthy = agents.filter((a) => a.status === 'active' || a.status === 'running').length
+              const errored = agents.filter((a) => a.status === 'error').length
+              const openIssues = issues.filter(isOpenIssue).length
               
               auditParts.push(
                 `**${company.name}**\n` +
@@ -1774,16 +1808,15 @@ Respond with EXACTLY one of:
           }
 
           // Resolve workspace by name then DELETE
-          const dwCompaniesRes = await fetch('/api/paperclip/api/companies')
+          const dwCompaniesRes = await fetch('/api/paperclip/companies')
           if (!dwCompaniesRes.ok) throw new Error('Failed to fetch companies')
-          const dwCompaniesData = await dwCompaniesRes.json()
-          const dwCompanies = Array.isArray(dwCompaniesData) ? dwCompaniesData : dwCompaniesData.companies ?? []
-          const dwMatch = dwCompanies.find((c: { name: string }) =>
+          const dwCompanies = pickList<{ id: string; name: string }>(await dwCompaniesRes.json(), 'companies')
+          const dwMatch = dwCompanies.find((c) =>
             c.name.toLowerCase() === spec.details.name?.toLowerCase()
           )
           if (!dwMatch) throw new Error(`Workspace "${spec.details.name}" not found`)
 
-          const dwRes = await fetch(`/api/paperclip/api/companies/${dwMatch.id}`, {
+          const dwRes = await fetch(`/api/paperclip/companies/${dwMatch.id}`, {
             method: 'DELETE',
           })
           if (!dwRes.ok) throw new Error(`Workspace deletion failed: ${dwRes.status}`)
@@ -1802,10 +1835,9 @@ Respond with EXACTLY one of:
           }
 
           // Resolve agent by name then DELETE
-          const daCompaniesRes = await fetch('/api/paperclip/api/companies')
+          const daCompaniesRes = await fetch('/api/paperclip/companies')
           if (!daCompaniesRes.ok) throw new Error('Failed to fetch companies')
-          const daCompaniesData = await daCompaniesRes.json()
-          const daCompanies = Array.isArray(daCompaniesData) ? daCompaniesData : daCompaniesData.companies ?? []
+          const daCompanies = pickList<{ id: string; name: string }>(await daCompaniesRes.json(), 'companies')
 
           const daProjectRef = (spec.details.project || '').toLowerCase()
           const daAgentRef = (spec.details.agent || '').toLowerCase()
@@ -1814,11 +1846,10 @@ Respond with EXACTLY one of:
           for (const company of daCompanies) {
             if (daProjectRef && !company.name.toLowerCase().includes(daProjectRef)) continue
             try {
-              const agentsRes = await fetch(`/api/paperclip/api/companies/${company.id}/agents`)
+              const agentsRes = await fetch(`/api/paperclip/companies/${company.id}/agents`)
               if (!agentsRes.ok) continue
-              const agData = await agentsRes.json()
-              const agents = agData.agents ?? []
-              const match = agents.find((a: { name: string }) =>
+              const agents = pickList<{ id: string; name: string }>(await agentsRes.json(), 'agents')
+              const match = agents.find((a) =>
                 a.name?.toLowerCase().includes(daAgentRef)
               )
               if (match) {
@@ -1830,7 +1861,8 @@ Respond with EXACTLY one of:
 
           if (!daFoundAgent) throw new Error(`Could not find agent matching "${spec.details.agent}"`)
 
-          const daRes = await fetch(`/api/paperclip/api/companies/${daFoundAgent.companyId}/agents/${daFoundAgent.id}`, {
+          // Agent mutation routes are NOT company-scoped in Paperclip
+          const daRes = await fetch(`/api/paperclip/agents/${daFoundAgent.id}`, {
             method: 'DELETE',
           })
           if (!daRes.ok) throw new Error(`Agent deletion failed: ${daRes.status}`)
@@ -1925,8 +1957,8 @@ Respond with EXACTLY one of:
                   </span>
                   {' '}AI Assistant
                 </h2>
-                <span className={`chat-header-model-badge${activeModel?.includes('Claude') ? ' chat-header-model-badge--claude' : activeModel ? ' chat-header-model-badge--gemini' : ''}`}>
-                  {activeModel || 'AI'}
+                <span className="chat-header-model-badge">
+                  Gemini 2.5
                 </span>
               </div>
             </div>

@@ -225,161 +225,32 @@ export function chatMessagesToContents(messages: ChatMessage[]): Content[] {
 }
 
 /**
- * APPROVED MODELS POLICY: Only models verified to work with our API keys
+ * APPROVED MODELS POLICY: Only models verified to work with our API key
  * and deliver reasoning-grade intelligence are allowed. This allowlist is
  * the single source of truth — any model not listed will be rejected at runtime.
- *
- * Claude Fable 5 (claude-sonnet-4-6) is called via Anthropic REST API,
- * not the Google SDK — see hub/lib/claude.ts.
  */
-const APPROVED_GEMINI_MODELS: readonly string[] = [
-  'gemini-3.5-flash',    // Primary — near-Pro intelligence, Flash-tier speed (1M context)
+const APPROVED_MODELS: readonly string[] = [
+  'gemini-2.5-flash',    // Primary — fast, 1M context (gemini-3.5-flash does not exist)
   'gemini-2.5-pro',      // Fallback — proven reasoning model
 ] as const
 
-function assertApprovedGeminiModel(model: string): void {
-  if (!APPROVED_GEMINI_MODELS.includes(model)) {
+function assertApprovedModel(model: string): void {
+  if (!APPROVED_MODELS.includes(model)) {
     throw new Error(
-      `MODEL POLICY VIOLATION: "${model}" is not an approved Gemini model. ` +
-      `Allowed: [${APPROVED_GEMINI_MODELS.join(', ')}].`
+      `MODEL POLICY VIOLATION: "${model}" is not an approved model. ` +
+      `Allowed: [${APPROVED_MODELS.join(', ')}].`
     )
   }
 }
 
-/**
- * Dynamic Fallback Cache
- * When a model fails, subsequent requests skip it entirely
- * for a cooldown period, routing directly to the fallback model.
- */
-interface FallbackState {
-  failedModel: string
-  failedAt: number
-  cooldownMs: number
-}
-
-let _fallbackState: FallbackState | null = null
-const DEFAULT_COOLDOWN_MS = 5 * 60 * 1000 // 5 minutes
-
-function shouldSkipModel(modelName: string): boolean {
-  if (!_fallbackState) return false
-  if (_fallbackState.failedModel !== modelName) return false
-  if (Date.now() - _fallbackState.failedAt > _fallbackState.cooldownMs) {
-    _fallbackState = null // Cooldown expired, retry
-    return false
-  }
-  return true
-}
-
-function recordModelFailure(modelName: string): void {
-  _fallbackState = {
-    failedModel: modelName,
-    failedAt: Date.now(),
-    cooldownMs: DEFAULT_COOLDOWN_MS,
-  }
-}
-
-/**
- * Use-case-based model routing:
- *
- * HIGH-REASONING (Claude Fable 5 primary):
- *   interview  → Claude → Gemini 2.5 Pro → Gemini 3.5 Flash
- *   deep_dive (with skill active) → Claude → Gemini 2.5 Pro → Gemini 3.5 Flash
- *   execute (Pre-Cog quality gate) → Claude → Gemini 2.5 Pro → Gemini 3.5 Flash
- *
- * FAST (Gemini primary):
- *   recall     → Gemini 3.5 Flash → Gemini 2.5 Pro
- *   deep_dive (no skill) → Gemini 3.5 Flash → Gemini 2.5 Pro
- */
-function shouldUseClaudePrimary(useCase: string, hasActiveSkill: boolean): boolean {
-  if (useCase === 'interview') return true
-  if (useCase === 'execute') return true
-  if (useCase === 'deep_dive' && hasActiveSkill) return true
-  return false
-}
-
-/** Human-friendly model display names for the UI badge */
-function getModelDisplayName(model: string): string {
-  switch (model) {
-    case 'claude-sonnet-4-6': return 'Claude Fable 5'
-    case 'gemini-3.5-flash': return 'Gemini 3.5'
-    case 'gemini-2.5-pro': return 'Gemini 2.5 Pro'
-    default: return model
-  }
-}
-
-/**
- * Yields: { text: string } chunks and a final { modelUsed: string } event.
- * The modelUsed event tells the UI which model answered this request.
- */
-export async function* streamChat(
+export async function* streamGeminiChat(
   messages: ChatMessage[],
   systemPrompt: string,
-  useCase: string = 'deep_dive',
-  hasActiveSkill: boolean = false
-): AsyncGenerator<string | { modelUsed: string }> {
-  const useClaude = shouldUseClaudePrimary(useCase, hasActiveSkill)
-
-  if (useClaude) {
-    yield* streamWithClaudePrimary(messages, systemPrompt)
-  } else {
-    yield* streamWithGeminiPrimary(messages, systemPrompt)
-  }
-}
-
-/**
- * Claude-primary fallback chain:
- * Claude Fable 5 → Gemini 2.5 Pro → Gemini 3.5 Flash
- */
-async function* streamWithClaudePrimary(
-  messages: ChatMessage[],
-  systemPrompt: string
-): AsyncGenerator<string | { modelUsed: string }> {
-  // Try Claude first (unless in cooldown)
-  if (!shouldSkipModel('claude-sonnet-4-6')) {
-    try {
-      const { streamClaudeChat } = await import('@/lib/claude')
-      yield { modelUsed: getModelDisplayName('claude-sonnet-4-6') }
-
-      for await (const chunk of streamClaudeChat(messages, systemPrompt)) {
-        yield chunk
-      }
-      return // Success
-    } catch (err) {
-      recordModelFailure('claude-sonnet-4-6')
-      console.warn('[chat] Claude Fable 5 failed, falling back to Gemini:', err)
-    }
-  } else {
-    console.warn('[chat] Skipping Claude (in cooldown)')
-  }
-
-  // Fallback: Gemini 2.5 Pro → Gemini 3.5 Flash
-  const geminiModels = ['gemini-2.5-pro', 'gemini-3.5-flash'] as const
-  yield* streamGeminiChain(messages, systemPrompt, geminiModels, true)
-}
-
-/**
- * Gemini-primary fallback chain:
- * Gemini 3.5 Flash → Gemini 2.5 Pro
- */
-async function* streamWithGeminiPrimary(
-  messages: ChatMessage[],
-  systemPrompt: string
-): AsyncGenerator<string | { modelUsed: string }> {
-  const geminiModels = ['gemini-3.5-flash', 'gemini-2.5-pro'] as const
-  yield* streamGeminiChain(messages, systemPrompt, geminiModels, false)
-}
-
-/**
- * Core Gemini streaming with model fallback chain.
- * Shared by both Claude-primary (fallback path) and Gemini-primary paths.
- */
-async function* streamGeminiChain(
-  messages: ChatMessage[],
-  systemPrompt: string,
-  modelsToTry: readonly string[],
-  isFallbackFromClaude: boolean
-): AsyncGenerator<string | { modelUsed: string }> {
-  modelsToTry.forEach(assertApprovedGeminiModel)
+  _useCase: string = 'deep_dive'
+): AsyncGenerator<string> {
+  // Fallback chain: all models must be on the APPROVED_MODELS list
+  const modelsToTry = ['gemini-2.5-flash', 'gemini-2.5-pro'] as const
+  modelsToTry.forEach(assertApprovedModel)
 
   const contents = chatMessagesToContents(messages.slice(0, -1))
   const lastMessage = messages[messages.length - 1]
@@ -389,14 +260,13 @@ async function* streamGeminiChain(
 
   for (let i = 0; i < modelsToTry.length; i++) {
     const modelName = modelsToTry[i]
-    // Skip models in cooldown from recent failures
-    if (shouldSkipModel(modelName)) {
-      console.warn(`[gemini] Skipping ${modelName} (in cooldown until ${new Date(_fallbackState!.failedAt + _fallbackState!.cooldownMs).toISOString()})`)
-      continue
-    }
     const isLastAttempt = i === modelsToTry.length - 1
 
     try {
+      // Brief delay before fallback to let transient issues clear
+      if (i > 0) {
+        await new Promise(r => setTimeout(r, 2_000))
+      }
 
       const model = getGenAI().getGenerativeModel({
         model: modelName,
@@ -412,12 +282,9 @@ async function* streamGeminiChain(
       })
       const result = await Promise.race([resultPromise, timeoutPromise])
 
-      // Emit modelUsed event
-      yield { modelUsed: getModelDisplayName(modelName) }
-
-      // If this is a fallback from Claude or from the primary Gemini model, notify
-      if (isFallbackFromClaude || i > 0) {
-        yield `⚠️ *Primary model unavailable — using ${getModelDisplayName(modelName)}*\n\n`
+      // If this is a fallback, notify the user visibly
+      if (i > 0) {
+        yield `⚠️ *Primary model unavailable — using ${modelName}*\n\n`
       }
 
       for await (const chunk of result.stream) {
@@ -429,27 +296,10 @@ async function* streamGeminiChain(
 
       return // Success
     } catch (err) {
-      recordModelFailure(modelName)
       if (isLastAttempt) {
-        throw err // All models exhausted
+        throw err // All approved models exhausted
       }
       console.warn(`[gemini] ${modelName} failed, falling back to ${modelsToTry[i + 1]}:`, err)
-    }
-  }
-}
-
-/**
- * Legacy export — wraps streamChat for backward compatibility.
- * Filters out modelUsed events and yields only text.
- */
-export async function* streamGeminiChat(
-  messages: ChatMessage[],
-  systemPrompt: string,
-  useCase: string = 'deep_dive'
-): AsyncGenerator<string> {
-  for await (const chunk of streamChat(messages, systemPrompt, useCase)) {
-    if (typeof chunk === 'string') {
-      yield chunk
     }
   }
 }

@@ -4,56 +4,7 @@
    UI UX Pro Max: Fluid type, 44px touch targets, bottom nav, glassmorphism
    ============================================================================ */
 
-/* Tailwind CSS v4 — incremental migration in progress */
-@import "tailwindcss";
-
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Space+Grotesk:wght@300;400;500;600;700&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&family=JetBrains+Mono:wght@400;500;700&display=swap');
-
-/* ── Tailwind v4 Theme Tokens (mapped from CSS custom properties) ── */
-@theme {
-  /* Background colors — mapped from --bg-* variables */
-  --color-bg-void: hsl(224, 28%, 11%);
-  --color-bg-primary: hsl(224, 28%, 14%);
-  --color-bg-card: hsl(224, 22%, 18%);
-  --color-bg-elevated: hsl(224, 20%, 22%);
-  --color-bg-hover: hsl(224, 18%, 25%);
-  --color-bg-active: hsl(224, 16%, 28%);
-  --color-bg-input: hsl(224, 28%, 10%);
-
-  /* Accent — Trejo Gold */
-  --color-accent: #C5A059;
-  --color-accent-dim: #8a6e3e;
-  --color-accent-bright: #d4b572;
-
-  /* Semantic colors */
-  --color-warn: hsl(38, 92%, 50%);
-  --color-danger: hsl(0, 84%, 60%);
-  --color-info: hsl(213, 89%, 62%);
-  --color-success: hsl(152, 69%, 46%);
-
-  /* Text colors */
-  --color-text-primary: hsl(38, 30%, 92%);
-  --color-text-secondary: hsl(218, 28%, 72%);
-  --color-text-muted: hsl(220, 16%, 62%);
-  --color-text-accent: #C5A059;
-
-  /* Button text */
-  --color-btn-text: hsl(224, 42%, 10%);
-
-  /* Font families */
-  --font-display: 'Syne', 'Space Grotesk', system-ui, -apple-system, sans-serif;
-  --font-heading: 'Space Grotesk', system-ui, -apple-system, sans-serif;
-  --font-body: 'Space Grotesk', system-ui, -apple-system, sans-serif;
-  --font-chat: 'DM Sans', 'Space Grotesk', system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
-
-  /* Border radius */
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
-  --radius-2xl: 24px;
-}
 
 /* ──────────────────────── CSS Custom Properties ──────────────────────── */
 :root {
@@ -5963,19 +5914,6 @@ a:hover .rx-arrow {
   padding: 2px 6px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
-  transition: all var(--duration-normal) var(--ease-out);
-}
-
-.chat-header-model-badge--claude {
-  color: #c4b5fd;
-  border-color: rgba(167, 139, 250, 0.3);
-  background: rgba(139, 92, 246, 0.1);
-}
-
-.chat-header-model-badge--gemini {
-  color: var(--accent);
-  border-color: var(--accent-border);
-  background: rgba(197, 160, 89, 0.08);
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════

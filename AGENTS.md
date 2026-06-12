@@ -88,3 +88,31 @@ npx -y paperclipai dashboard
 `C:\Users\danie\Documents\antigravity\vibrant-chandrasekhar`
 
 <!-- END:paperclip-org -->
+
+<!-- BEGIN:obsidian-vault -->
+## Obsidian Vault — AntigravityHQ
+
+> Centralized institutional memory for all Antigravity projects.
+> Git-versioned, queryable, and indexed by Obsidian.
+
+### Vault
+- **Path:** `C:\AntigravityHQ`
+- **Type:** Single unified vault (all projects share one vault)
+
+### Chat Memory
+- **Location:** `chats/hub-paperclip/`
+- **Format:** Obsidian-compatible markdown with YAML frontmatter
+- **Updated by:** Memory Extractor (`extract-memory.mjs`) + direct agent writes
+
+### CEO Directive
+> Before closing ANY issue, the CEO agent MUST:
+> 1. Query `C:\AntigravityHQ\chats\hub-paperclip\` for prior context
+> 2. Verify the deliverable matches the original request (Pre-Flight Verification)
+> 3. Flag any reinterpretations: `REINTERPRETED: User said X, agent delivered Y`
+> 4. Declare any gaps: `UNDELIVERED: {component} — {reason}`
+
+### Scoping Rules
+- **Default scope:** Read only from `chats/hub-paperclip/`
+- **Cross-project reads:** Only when explicitly requested by user or Antigravity
+- **Write scope:** Only to `chats/hub-paperclip/`
+<!-- END:obsidian-vault -->

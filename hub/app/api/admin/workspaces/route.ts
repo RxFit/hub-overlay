@@ -48,7 +48,9 @@ const AGENT_TEMPLATES = [
 
 
 export async function POST(req: NextRequest) {
-  // Auth guard — superadmin only
+  // Auth guard — admin or superadmin. Workspace provisioning is an
+  // admin-level action (matches INTENT_PERMISSIONS.create_workspace = 'admin'
+  // in lib/interview.ts). Staff and onboarding are rejected.
   const session = await getServerSession(authOptions)
   const userRole = (session?.user as Record<string, unknown>)?.role as string
   if (userRole !== 'superadmin' && userRole !== 'admin') {

@@ -1,5 +1,6 @@
 const { Client } = require('pg');
-const client = new Client({ connectionString: 'postgresql://postgres:REDACTED_PASSWORD@localhost:5432/railway' });
+if (!process.env.DATABASE_URL) { console.error('DATABASE_URL not set'); process.exit(1); }
+const client = new Client({ connectionString: process.env.DATABASE_URL });
 
 client.connect().then(() => {
   return client.query('SELECT * FROM "account"');

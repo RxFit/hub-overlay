@@ -145,8 +145,11 @@ export async function GET(req: Request) {
         status,
         lastTask: lastRun ? `Run ${lastRun.issueIdentifier}` : 'No recent tasks',
         lastTaskTime: lastRun?.completedAt ?? undefined,
+        // Count issues that are actually blocked (Paperclip status === 'blocked',
+        // surfaced by normalization as state.name 'Blocked'); previously this
+        // counted ALL in-flight issues, inflating the metric.
         blockedTasks: issues.filter(i =>
-          i.state?.group === 'started' &&
+          ((i as { status?: string }).status === 'blocked' || i.state?.name === 'Blocked') &&
           agentIds.has(i.assigneeId ?? '')
         ).length,
         correctiveAction: null,

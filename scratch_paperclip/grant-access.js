@@ -1,7 +1,8 @@
 const { Client } = require('pg');
 const crypto = require('crypto');
 
-const DB_URL = 'postgresql://postgres:REDACTED_PASSWORD@localhost:5432/railway';
+const DB_URL = process.env.DATABASE_URL;
+if (!DB_URL) { console.error('DATABASE_URL not set'); process.exit(1); }
 const USER_ID = 'danny-rxfit-admin';
 
 async function main() {

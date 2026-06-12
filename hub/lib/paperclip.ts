@@ -11,7 +11,6 @@ import {
   CompanySchema,
   IssuesResponseSchema,
   IssueResponseSchema,
-  RunsResponseSchema,
   AgentsResponseSchema,
   AgentResponseSchema,
   ProjectsResponseSchema,
@@ -20,6 +19,136 @@ import type { ZodType } from 'zod'
 
 const log = createLogger('paperclip')
 const PAPERCLIP_BASE = PAPERCLIP_BASE_URL
+
+/* ══════════════════════════════════════════════════════════════════════════
+   PAPERCLIP API CONTRACT NORMALIZATION
+
+   The live Paperclip server (paperclipai / @paperclipai/server):
+   - Returns BARE arrays/objects (not `{ issues: [...] }` wrappers)
+   - Issues carry a flat `status` string
+     (backlog | todo | in_progress | in_review | done | blocked | cancelled),
+     NOT a Linear-style `state: { group, name }` object
+   - Issue priorities are critical | high | medium | low (no urgent/none)
+   - Assignee field is `assigneeAgentId` (not `assigneeId`)
+   - Single-issue routes live at /api/issues/:id (NOT company-scoped)
+   - Agent routes for update/delete live at /api/agents/:id
+   - There is NO /api/companies/:id/runs endpoint — runs are per-issue
+     at /api/issues/:id/runs
+
+   The Hub's internal types (types/index.ts) predate this contract, so this
+   module normalizes at the boundary: every helper tolerates BOTH the bare
+   and wrapped response shapes, and maps Paperclip-native fields onto the
+   Hub's internal Issue/Agent/Run shapes.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/** Tolerate both bare-array and `{ [key]: [...] }` wrapped responses. */
+function pickArray<T>(data: unknown, key: string): T[] {
+  if (Array.isArray(data)) return data as T[]
+  if (data && typeof data === 'object') {
+    const inner = (data as Record<string, unknown>)[key]
+    if (Array.isArray(inner)) return inner as T[]
+  }
+  return []
+}
+
+/** Tolerate both bare-object and `{ [key]: {...} }` wrapped responses. */
+function pickItem<T>(data: unknown, key: string): T {
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    const inner = (data as Record<string, unknown>)[key]
+    if (inner && typeof inner === 'object') return inner as T
+  }
+  return data as T
+}
+
+/** Paperclip `status` → Hub IssueState (Linear-style group used across the UI). */
+const STATUS_TO_STATE: Record<string, { group: Issue['state']['group']; name: string }> = {
+  backlog:     { group: 'backlog',   name: 'Backlog' },
+  todo:        { group: 'unstarted', name: 'Todo' },
+  in_progress: { group: 'started',   name: 'In Progress' },
+  in_review:   { group: 'started',   name: 'In Review' },
+  blocked:     { group: 'started',   name: 'Blocked' },
+  done:        { group: 'completed', name: 'Done' },
+  cancelled:   { group: 'cancelled', name: 'Cancelled' },
+}
+
+/** Hub state-group / friendly names → Paperclip `status` values. */
+const STATE_TO_STATUS: Record<string, string> = {
+  backlog: 'backlog',
+  unstarted: 'todo', todo: 'todo', open: 'todo',
+  started: 'in_progress', in_progress: 'in_progress',
+  in_review: 'in_review', review: 'in_review',
+  blocked: 'blocked',
+  completed: 'done', done: 'done',
+  cancelled: 'cancelled', canceled: 'cancelled',
+}
+
+/** Hub priority vocabulary → Paperclip (`urgent`→`critical`, `none`→`low`). */
+const PRIORITY_TO_PAPERCLIP: Record<string, string> = {
+  urgent: 'critical', critical: 'critical',
+  high: 'high', medium: 'medium', low: 'low', none: 'low',
+}
+
+/** Paperclip priority → Hub vocabulary (`critical`→`urgent`). */
+const PRIORITY_FROM_PAPERCLIP: Record<string, Issue['priority']> = {
+  critical: 'urgent', urgent: 'urgent',
+  high: 'high', medium: 'medium', low: 'low', none: 'none',
+}
+
+/** Map a raw Paperclip issue onto the Hub's internal Issue shape. */
+function normalizeIssue(raw: Record<string, unknown>): Issue {
+  const status = typeof raw.status === 'string' ? raw.status : undefined
+  const existingState = raw.state as Issue['state'] | undefined
+  const mapped = status ? STATUS_TO_STATE[status] : undefined
+  const state: Issue['state'] = existingState?.group
+    ? existingState
+    : {
+        id: status ?? 'unknown',
+        name: mapped?.name ?? (status ?? 'Unknown'),
+        group: mapped?.group ?? 'backlog',
+        color: '#999999',
+      }
+  const rawPriority = typeof raw.priority === 'string' ? raw.priority : 'medium'
+  return {
+    ...(raw as unknown as Issue),
+    identifier: (raw.identifier as string) ?? String(raw.id ?? '').slice(0, 8),
+    priority: PRIORITY_FROM_PAPERCLIP[rawPriority] ?? 'medium',
+    state,
+    assigneeId: (raw.assigneeId as string | null)
+      ?? (raw.assigneeAgentId as string | null)
+      ?? null,
+    assigneeName: (raw.assigneeName as string | null) ?? null,
+  }
+}
+
+/** Paperclip agent statuses → the Hub's 3-state model. */
+const AGENT_STATUS_MAP: Record<string, Agent['status']> = {
+  active: 'active', running: 'active',
+  idle: 'inactive', paused: 'inactive', pending_approval: 'inactive',
+  terminated: 'inactive', inactive: 'inactive',
+  error: 'error',
+}
+
+/** Map a raw Paperclip agent onto the Hub's internal Agent shape. */
+function normalizeAgent(raw: Record<string, unknown>): Agent {
+  const rawStatus = typeof raw.status === 'string' ? raw.status : 'inactive'
+  return {
+    ...(raw as unknown as Agent),
+    adapter: (raw.adapter as string) ?? (raw.adapterType as string) ?? 'unknown',
+    status: AGENT_STATUS_MAP[rawStatus] ?? 'inactive',
+    lastHeartbeat: (raw.lastHeartbeat as string | null)
+      ?? (raw.lastHeartbeatAt as string | null)
+      ?? null,
+  }
+}
+
+/** Paperclip heartbeat-run statuses → the Hub's Run status model. */
+const RUN_STATUS_MAP: Record<string, Run['status']> = {
+  queued: 'queued', scheduled_retry: 'queued',
+  running: 'running',
+  succeeded: 'completed', completed: 'completed',
+  failed: 'failed', timed_out: 'failed',
+  cancelled: 'cancelled',
+}
 
 /**
  * Shared Paperclip fetch wrapper.
@@ -113,12 +242,12 @@ async function doPaperclipFetch(url: string, opts?: RequestInit): Promise<Respon
 
 export async function getCompanies(): Promise<Company[]> {
   const data = await paperclipFetch('/api/companies', undefined, CompaniesResponseSchema)
-  if (Array.isArray(data)) return data
-  return data.companies ?? []
+  return pickArray<Company>(data, 'companies')
 }
 
 export async function getCompany(companyId: string): Promise<Company> {
-  return paperclipFetch(`/api/companies/${companyId}`, undefined, CompanySchema)
+  const data = await paperclipFetch(`/api/companies/${companyId}`, undefined, CompanySchema)
+  return pickItem<Company>(data, 'company')
 }
 
 export async function createCompany(data: {
@@ -143,70 +272,145 @@ export async function getIssues(
 ): Promise<Issue[]> {
   const params = new URLSearchParams()
   if (opts?.limit) params.set('limit', String(opts.limit))
-  if (opts?.stateGroup) params.set('state_group', opts.stateGroup)
+  // Paperclip filters by `status` (comma-separated), not Linear's `state_group`
+  if (opts?.stateGroup) {
+    const status = STATE_TO_STATUS[opts.stateGroup.toLowerCase()]
+    if (status) {
+      params.set(
+        'status',
+        opts.stateGroup === 'started' ? 'in_progress,in_review,blocked' : status,
+      )
+    }
+  }
   const qs = params.toString() ? `?${params}` : ''
   const data = await paperclipFetch(
     `/api/companies/${companyId}/issues${qs}`,
     undefined,
     IssuesResponseSchema,
   )
-  return data.issues ?? []
+  return pickArray<Record<string, unknown>>(data, 'issues').map(normalizeIssue)
 }
 
-export async function getIssue(companyId: string, issueId: string): Promise<Issue> {
+// Single-issue routes are NOT company-scoped in Paperclip (/api/issues/:id).
+// companyId is kept in the signature for call-site compatibility.
+export async function getIssue(_companyId: string, issueId: string): Promise<Issue> {
   const data = await paperclipFetch(
-    `/api/companies/${companyId}/issues/${issueId}`,
+    `/api/issues/${issueId}`,
     undefined,
     IssueResponseSchema,
   )
-  return data.issue
+  return normalizeIssue(pickItem<Record<string, unknown>>(data, 'issue'))
 }
 
 export async function createIssue(
   companyId: string,
   data: { title: string; description?: string; priority?: string; assigneeId?: string }
 ): Promise<Issue> {
-  // Paperclip API expects `assigneeAgentId`, not `assigneeId`
-  const { assigneeId, ...rest } = data
-  const payload = assigneeId ? { ...rest, assigneeAgentId: assigneeId } : rest
+  // Paperclip API expects `assigneeAgentId` (not `assigneeId`) and the
+  // critical|high|medium|low priority vocabulary (no urgent/none).
+  const { assigneeId, priority, ...rest } = data
+  const payload: Record<string, unknown> = { ...rest }
+  if (assigneeId) payload.assigneeAgentId = assigneeId
+  if (priority) payload.priority = PRIORITY_TO_PAPERCLIP[priority.toLowerCase()] ?? 'medium'
   const res = await paperclipFetch(`/api/companies/${companyId}/issues`, {
     method: 'POST',
     body: JSON.stringify(payload),
   }, IssueResponseSchema)
-  return res.issue
+  // The API returns the created issue as a bare object (201)
+  return normalizeIssue(pickItem<Record<string, unknown>>(res, 'issue'))
 }
 
 export async function updateIssue(
-  companyId: string,
+  _companyId: string,
   issueId: string,
   data: { state?: string; priority?: string; assigneeId?: string; title?: string }
 ): Promise<Issue> {
+  // Translate the Hub's update vocabulary onto Paperclip's PATCH /api/issues/:id
+  // contract: `status` (not `state`), `assigneeAgentId` (not `assigneeId`).
+  const payload: Record<string, unknown> = {}
+  if (data.title) payload.title = data.title
+  if (data.state) payload.status = STATE_TO_STATUS[data.state.toLowerCase()] ?? data.state
+  if (data.priority) payload.priority = PRIORITY_TO_PAPERCLIP[data.priority.toLowerCase()] ?? data.priority
+  if (data.assigneeId) payload.assigneeAgentId = data.assigneeId
   const res = await paperclipFetch(
-    `/api/companies/${companyId}/issues/${issueId}`,
+    `/api/issues/${issueId}`,
     {
       method: 'PATCH',
-      body: JSON.stringify(data),
+      body: JSON.stringify(payload),
     },
     IssueResponseSchema,
   )
-  return res.issue
+  return normalizeIssue(pickItem<Record<string, unknown>>(res, 'issue'))
 }
 
 /* ── Runs ── */
 
+/**
+ * Paperclip has NO /api/companies/:id/runs endpoint — runs are per-issue at
+ * /api/issues/:id/runs. This aggregates runs across the company's most
+ * recently updated issues and maps them onto the Hub's Run shape.
+ */
 export async function getRuns(
   companyId: string,
   opts?: { limit?: number }
 ): Promise<Run[]> {
-  const params = new URLSearchParams()
-  if (opts?.limit) params.set('limit', String(opts.limit))
-  const qs = params.toString() ? `?${params}` : ''
-  const data = await paperclipFetch(
-    `/api/companies/${companyId}/runs${qs}`,
-    undefined,
-    RunsResponseSchema,
+  const limit = opts?.limit ?? 20
+
+  // Recent issues first (the API sorts by updated desc by default)
+  const [issues, agents] = await Promise.all([
+    getIssues(companyId, { limit: 10 }),
+    getAgents(companyId).catch(() => [] as Agent[]),
+  ])
+  if (issues.length === 0) return []
+
+  const agentNames = new Map(agents.map(a => [a.id, a.name]))
+
+  const runArrays = await Promise.all(
+    issues.slice(0, 8).map(async (issue) => {
+      try {
+        const data = await paperclipFetch(`/api/issues/${issue.id}/runs`)
+        return pickArray<Record<string, unknown>>(data, 'runs').map((raw): Run => {
+          const rawStatus = typeof raw.status === 'string' ? raw.status : 'queued'
+          const startedAt = (raw.startedAt as string | null) ?? null
+          const completedAt = (raw.completedAt as string | null)
+            ?? (raw.finishedAt as string | null)
+            ?? null
+          const durationMs = (raw.durationMs as number | null)
+            ?? (startedAt && completedAt
+              ? new Date(completedAt).getTime() - new Date(startedAt).getTime()
+              : null)
+          const agentId = (raw.agentId as string) ?? ''
+          return {
+            id: (raw.id as string) ?? (raw.runId as string) ?? '',
+            status: RUN_STATUS_MAP[rawStatus] ?? 'queued',
+            agentId,
+            agentName: (raw.agentName as string)
+              ?? agentNames.get(agentId)
+              ?? (raw.adapterType as string)
+              ?? 'Unknown agent',
+            issueId: issue.id,
+            issueIdentifier: issue.identifier,
+            model: (raw.model as string | null) ?? null,
+            startedAt,
+            completedAt,
+            durationMs,
+            companyId,
+          }
+        })
+      } catch {
+        return [] as Run[]
+      }
+    })
   )
-  return data.runs ?? []
+
+  return runArrays
+    .flat()
+    .sort((a, b) => {
+      const ta = a.startedAt ? new Date(a.startedAt).getTime() : 0
+      const tb = b.startedAt ? new Date(b.startedAt).getTime() : 0
+      return tb - ta
+    })
+    .slice(0, limit)
 }
 
 /* ── Projects ── */
@@ -217,7 +421,7 @@ export async function getProjects(companyId: string): Promise<Project[]> {
     undefined,
     ProjectsResponseSchema,
   )
-  return (data.projects ?? []) as unknown as Project[]
+  return pickArray<Project>(data, 'projects')
 }
 
 /* ── Agents ── */
@@ -228,16 +432,18 @@ export async function getAgents(companyId: string): Promise<Agent[]> {
     undefined,
     AgentsResponseSchema,
   )
-  return data.agents ?? []
+  return pickArray<Record<string, unknown>>(data, 'agents').map(normalizeAgent)
 }
 
-export async function getAgent(companyId: string, agentId: string): Promise<Agent> {
+// Single-agent routes are NOT company-scoped in Paperclip (/api/agents/:id).
+// companyId is kept in the signature for call-site compatibility.
+export async function getAgent(_companyId: string, agentId: string): Promise<Agent> {
   const data = await paperclipFetch(
-    `/api/companies/${companyId}/agents/${agentId}`,
+    `/api/agents/${agentId}`,
     undefined,
     AgentResponseSchema,
   )
-  return data.agent
+  return normalizeAgent(pickItem<Record<string, unknown>>(data, 'agent'))
 }
 
 export async function createAgent(
@@ -252,28 +458,28 @@ export async function createAgent(
     },
     AgentResponseSchema,
   )
-  return res.agent
+  return normalizeAgent(pickItem<Record<string, unknown>>(res, 'agent'))
 }
 
 export async function updateAgent(
-  companyId: string,
+  _companyId: string,
   agentId: string,
   data: { name?: string; instructions?: string; status?: string }
 ): Promise<Agent> {
   const res = await paperclipFetch(
-    `/api/companies/${companyId}/agents/${agentId}`,
+    `/api/agents/${agentId}`,
     {
       method: 'PATCH',
       body: JSON.stringify(data),
     },
     AgentResponseSchema,
   )
-  return res.agent
+  return normalizeAgent(pickItem<Record<string, unknown>>(res, 'agent'))
 }
 
-export async function deleteAgent(companyId: string, agentId: string): Promise<void> {
+export async function deleteAgent(_companyId: string, agentId: string): Promise<void> {
   await paperclipFetch<unknown>(
-    `/api/companies/${companyId}/agents/${agentId}`,
+    `/api/agents/${agentId}`,
     { method: 'DELETE' },
   )
 }

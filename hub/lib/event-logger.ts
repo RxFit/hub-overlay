@@ -1,6 +1,7 @@
 import { db } from './db'
 import { eventLog } from './schema'
 import { createLogger } from './logger'
+import { getTenantId } from './tenant-context'
 
 const log = createLogger('event-logger')
 
@@ -20,7 +21,7 @@ export interface EventOptions {
  * Accepts an optional transaction client (`tx`) to run within an active transaction.
  */
 export async function recordEvent(opts: EventOptions, tx?: any): Promise<void> {
-  const tenantId = opts.tenantId || process.env.NEXT_PUBLIC_TENANT_ID || 'rxfit'
+  const tenantId = opts.tenantId || getTenantId()
   const client = tx || db
 
   try {

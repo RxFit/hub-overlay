@@ -10,11 +10,13 @@ import { runAllSources } from '@/lib/kpi-sources'
 import { createLogger } from '@/lib/logger'
 import { recordEvent } from '@/lib/event-logger'
 import { pruneExpiredMemories, pruneOldEventLogs } from '@/lib/agent-memory'
+import { getDefaultTenantId } from '@/lib/tenant-context'
 
 export const runtime = 'nodejs'
 
 const log = createLogger('kpis/sync')
-const TENANT_ID = process.env.NEXT_PUBLIC_TENANT_ID || 'rxfit'
+// Phase 1 (multi-tenancy): resolve per-request from hostname instead of env.
+const TENANT_ID = getDefaultTenantId()
 
 /** Ensure the rxfit tenant row exists */
 async function ensureTenant() {

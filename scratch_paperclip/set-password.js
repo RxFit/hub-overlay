@@ -2,7 +2,8 @@ const { Client } = require('pg');
 const crypto = require('crypto');
 const { scryptSync } = require('crypto');
 
-const DB_URL = 'postgresql://postgres:REDACTED_PASSWORD@localhost:5432/railway';
+const DB_URL = process.env.DATABASE_URL;
+if (!DB_URL) { console.error('DATABASE_URL not set'); process.exit(1); }
 
 // Better Auth uses scrypt with these exact parameters:
 // N: 16384, r: 16, p: 1, dkLen: 64

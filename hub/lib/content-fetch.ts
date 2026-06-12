@@ -33,19 +33,80 @@ function htmlToText(html: string): string {
 
 /* ── SSRF guard — block internal/private IP ranges ── */
 
-const BLOCKED_URL_PATTERNS = [
-  /^https?:\/\/(127\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+)/i,
-  /^https?:\/\/(172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)/i,
-  /^https?:\/\/(0\.0\.0\.0|localhost|\[::1\]|\[::0\])/i,
-  /^https?:\/\/169\.254\.\d+\.\d+/i,  // Cloud metadata endpoint
-  /^https?:\/\/metadata\.google\.internal/i,
-]
+/**
+ * Returns true if an IPv4/IPv6 literal falls in a private, loopback,
+ * link-local, or otherwise non-routable range.
+ * Exported for unit testing of the SSRF guard.
+ */
+export function isPrivateAddress(addr: string): boolean {
+  const ip = addr.toLowerCase().replace(/^\[|\]$/g, '')
+
+  // IPv6 loopback / unspecified / unique-local / link-local
+  if (ip === '::1' || ip === '::' || ip === '::0') return true
+  if (ip.startsWith('fc') || ip.startsWith('fd')) return true   // unique local fc00::/7
+  if (ip.startsWith('fe80')) return true                         // link local
+  // IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1) — extract the v4 tail
+  const mapped = ip.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/)
+  const v4 = mapped ? mapped[1] : ip
+
+  const octets = v4.split('.')
+  if (octets.length === 4 && octets.every(o => /^\d{1,3}$/.test(o))) {
+    const [a, b] = octets.map(Number)
+    if (a === 10) return true
+    if (a === 127) return true                                   // loopback
+    if (a === 0) return true
+    if (a === 169 && b === 254) return true                      // link-local / cloud metadata
+    if (a === 172 && b >= 16 && b <= 31) return true             // 172.16/12
+    if (a === 192 && b === 168) return true
+    if (a === 100 && b >= 64 && b <= 127) return true            // CGNAT 100.64/10
+  }
+  return false
+}
+
+const BLOCKED_HOSTNAMES = new Set(['localhost', 'metadata.google.internal'])
+
+/**
+ * Resolve the URL's hostname and confirm none of its IPs are private.
+ * Defends against DNS-rebinding and IP-encoding bypasses that a regex
+ * on the raw URL string cannot catch. Returns null if safe, or a reason.
+ */
+async function ssrfReason(url: string): Promise<string | null> {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return 'malformed URL'
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return 'only http(s) URLs are allowed'
+  }
+  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  if (BLOCKED_HOSTNAMES.has(host)) return 'blocked hostname'
+
+  // Literal IP in the host — check directly.
+  if (/^[\d.]+$/.test(host) || host.includes(':')) {
+    return isPrivateAddress(host) ? 'private IP address' : null
+  }
+
+  // Hostname — resolve to IPs and reject if ANY is private.
+  try {
+    const { lookup } = await import('dns/promises')
+    const records = await lookup(host, { all: true })
+    if (records.some(r => isPrivateAddress(r.address))) {
+      return 'hostname resolves to a private IP'
+    }
+  } catch {
+    return 'DNS resolution failed'
+  }
+  return null
+}
 
 /* ── Fetch URL content (server-side only) ── */
 
 export async function fetchUrlContent(url: string): Promise<string> {
-  // Block internal/private URLs to prevent SSRF
-  if (BLOCKED_URL_PATTERNS.some(p => p.test(url))) {
+  // Block internal/private URLs to prevent SSRF (resolves DNS, blocks redirects)
+  const blocked = await ssrfReason(url)
+  if (blocked) {
     return '[Blocked: requests to internal or private network addresses are not allowed]'
   }
 
@@ -55,6 +116,7 @@ export async function fetchUrlContent(url: string): Promise<string> {
 
     const res = await fetch(url, {
       signal: controller.signal,
+      redirect: 'error', // do not auto-follow — a redirect could point at an internal host
       headers: {
         'User-Agent': 'HubBot/1.0 (context-fetch)',
         'Accept': 'text/html, text/plain, application/json',

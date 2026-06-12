@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { CreateKpiRequestSchema, UpdateKpiRequestSchema } from '@/lib/zod-schemas'
 import { eq, and } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { kpis, tenants } from '@/lib/schema'
+import { getDefaultTenantId } from '@/lib/tenant-context'
 
 export const runtime = 'nodejs'
 
-const TENANT_ID = process.env.NEXT_PUBLIC_TENANT_ID || 'rxfit'
+// Phase 1 (multi-tenancy): resolve per-request from hostname instead of env.
+const TENANT_ID = getDefaultTenantId()
 
 /** Ensure the rxfit tenant row exists (idempotent) */
 async function ensureTenant() {
@@ -31,18 +32,20 @@ export async function GET(_req: NextRequest) {
     const role = (session.user as Record<string, unknown>)?.role as string | undefined
     const isAdmin = role === 'admin' || role === 'superadmin'
 
-    let query = db
+    // Build the WHERE clause as a single combined condition.
+    // NOTE: chaining `.where()` twice on a $dynamic() query REPLACES the
+    // first condition — it does not AND them. That previously dropped the
+    // tenant filter for non-admins, leaking other tenants' KPIs. Combine
+    // both predicates with and() so tenant scoping always holds.
+    const whereClause = isAdmin
+      ? eq(kpis.tenantId, TENANT_ID)
+      : and(eq(kpis.tenantId, TENANT_ID), eq(kpis.visibility, 'staff'))
+
+    const rows = await db
       .select()
       .from(kpis)
-      .where(eq(kpis.tenantId, TENANT_ID))
-      .$dynamic()
-
-    // Non-admin users only see public + staff KPIs
-    if (!isAdmin) {
-      query = query.where(eq(kpis.visibility, 'staff')) as typeof query
-    }
-
-    const rows = await query.orderBy(kpis.updatedAt)
+      .where(whereClause)
+      .orderBy(kpis.updatedAt)
     return NextResponse.json({ rows, source: 'db' })
   } catch (err) {
     console.error('[settings/kpis GET]', err)
@@ -65,24 +68,22 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json()
-    const parsed = CreateKpiRequestSchema.safeParse(body)
-    if (!parsed.success) {
-      return NextResponse.json({ error: 'Validation failed', details: parsed.error.flatten() }, { status: 400 })
-    }
-    const { label, value, trend, trendDirection, unit, scope, visibility } = parsed.data
+    const { label, value, trend, trendDirection, unit, scope, visibility } = body
+
+    if (!label) return NextResponse.json({ error: 'label is required' }, { status: 400 })
 
     await ensureTenant()
     const [row] = await db
       .insert(kpis)
       .values({
         tenantId: TENANT_ID,
-        label,
+        label: String(label),
         value: value != null ? String(value) : '0',
-        trend: trend ?? null,
-        trendDirection,
-        unit: unit ?? null,
-        scope,
-        visibility,
+        trend: trend ? String(trend) : null,
+        trendDirection: trendDirection || 'neutral',
+        unit: unit ? String(unit) : null,
+        scope: scope || 'global',
+        visibility: visibility || 'staff',
         updatedBy: (session.user as Record<string, unknown>)?.email as string,
       })
       .returning()
@@ -109,20 +110,17 @@ export async function PATCH(req: NextRequest) {
 
   try {
     const body = await req.json()
-    const parsed = UpdateKpiRequestSchema.safeParse(body)
-    if (!parsed.success) {
-      return NextResponse.json({ error: 'Validation failed', details: parsed.error.flatten() }, { status: 400 })
-    }
-    const { id, ...fields } = parsed.data
+    const { id, ...fields } = body
+    if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 })
 
     const updateData: Record<string, unknown> = { updatedAt: new Date(), updatedBy: (session.user as Record<string, unknown>)?.email as string }
-    if (fields.label != null)          updateData.label          = fields.label
+    if (fields.label != null)          updateData.label          = String(fields.label)
     if (fields.value != null)          updateData.value          = String(fields.value)
-    if (fields.trend != null)          updateData.trend          = fields.trend
-    if (fields.trendDirection != null) updateData.trendDirection = fields.trendDirection
-    if (fields.unit != null)           updateData.unit           = fields.unit
-    if (fields.scope != null)          updateData.scope          = fields.scope
-    if (fields.visibility != null)     updateData.visibility     = fields.visibility
+    if (fields.trend != null)          updateData.trend          = String(fields.trend)
+    if (fields.trendDirection != null) updateData.trendDirection = String(fields.trendDirection)
+    if (fields.unit != null)           updateData.unit           = String(fields.unit)
+    if (fields.scope != null)          updateData.scope          = String(fields.scope)
+    if (fields.visibility != null)     updateData.visibility     = String(fields.visibility)
 
     const [row] = await db
       .update(kpis)

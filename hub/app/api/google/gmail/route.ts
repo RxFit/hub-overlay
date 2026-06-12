@@ -112,15 +112,29 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'to and message are required' }, { status: 400 })
   }
 
+  // ── Header-injection guard ──
+  // Any value interpolated into an RFC-2822 header line must not contain
+  // CR/LF, or an attacker could inject extra headers (e.g. a silent Bcc).
+  const stripHeader = (v: unknown): string => String(v ?? '').replace(/[\r\n]+/g, ' ').trim()
+  const cleanInReplyTo = inReplyTo ? stripHeader(inReplyTo) : ''
+
+  // Validate every recipient address (comma-separated list supported).
+  const EMAIL_RE = /^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/
+  const recipients = stripHeader(to).split(',').map(r => r.trim()).filter(Boolean)
+  if (recipients.length === 0 || !recipients.every(r => EMAIL_RE.test(r))) {
+    return NextResponse.json({ error: 'Invalid recipient address' }, { status: 400 })
+  }
+  const cleanTo = recipients.join(', ')
+
   const from = session.user.email ?? ''
-  const subjectLine = subject || (inReplyTo ? `Re: ${inReplyTo}` : '(no subject)')
+  const subjectLine = stripHeader(subject || (cleanInReplyTo ? `Re: ${cleanInReplyTo}` : '(no subject)'))
 
   // Build RFC 2822 email
   const emailLines = [
     `From: ${from}`,
-    `To: ${to}`,
+    `To: ${cleanTo}`,
     `Subject: ${subjectLine}`,
-    ...(inReplyTo ? [`In-Reply-To: ${inReplyTo}`, `References: ${inReplyTo}`] : []),
+    ...(cleanInReplyTo ? [`In-Reply-To: ${cleanInReplyTo}`, `References: ${cleanInReplyTo}`] : []),
     'Content-Type: text/plain; charset=UTF-8',
     '',
     message,

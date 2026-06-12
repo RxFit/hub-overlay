@@ -32,7 +32,7 @@ Draft a memo with:
 5. Recommendation
 6. Risks and mitigations
 7. The Ask: one yes/no line with owner and date
-8. Memo DNA check
+8. Memo Framework check
 
 ## Process
 
@@ -44,4 +44,4 @@ Draft a memo with:
 
 ## References
 
-Read `references/memo-dna.md` for full examples, anti-patterns, or when revising a high-stakes memo.
+Read `references/memo-framework.md` for full examples, anti-patterns, or when revising a high-stakes memo.

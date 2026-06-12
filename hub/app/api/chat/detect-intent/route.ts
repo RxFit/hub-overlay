@@ -3,9 +3,23 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { GoogleGenerativeAI, SchemaType, type Schema } from '@google/generative-ai'
 
-const genAI = new GoogleGenerativeAI(
-  process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY || ''
-)
+/* Lazy-initialized so the API key is read at runtime, not module-load time.
+   Prevents an empty-key client if Railway injects env vars after import. */
+let _genAI: GoogleGenerativeAI | null = null
+function getGenAI(): GoogleGenerativeAI {
+  if (!_genAI) {
+    const key =
+      process.env.GEMINI_API_KEY ||
+      process.env.GOOGLE_API_KEY ||
+      process.env.GOOGLE_GENERATIVE_AI_API_KEY ||
+      ''
+    if (!key) {
+      throw new Error('No Gemini API key found. Set GEMINI_API_KEY, GOOGLE_API_KEY, or GOOGLE_GENERATIVE_AI_API_KEY.')
+    }
+    _genAI = new GoogleGenerativeAI(key)
+  }
+  return _genAI
+}
 
 export const runtime = 'nodejs'
 
@@ -49,8 +63,8 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-1.5-flash',
+    const model = getGenAI().getGenerativeModel({
+      model: 'gemini-2.5-flash',
       systemInstruction: `You are a strict intent classifier for an operations platform. 
 Classify the user's message into one of the available intents.
 If the message does not match any intent, return an empty string for the intent.

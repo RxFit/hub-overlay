@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, uniqueIndex, jsonb, integer, vector, index, boolean } from 'drizzle-orm/pg-core'
+import { pgTable, text, timestamp, uniqueIndex, jsonb, integer, vector, index } from 'drizzle-orm/pg-core'
 
 /**
  * Hub database schema — Railway Postgres
@@ -11,15 +11,11 @@ import { pgTable, text, timestamp, uniqueIndex, jsonb, integer, vector, index, b
 /* ── Tenants ─────────────────────────────────────────────────────────────── */
 
 export const tenants = pgTable('tenants', {
-  id:               text('id').primaryKey(),               // e.g. 'rxfit'
-  name:             text('name').notNull(),                // e.g. 'RxFit Athletics'
-  domain:           text('domain'),                        // e.g. 'rxfitatx.com'
-  vertexEngineId:   text('vertex_engine_id'),              // Discovery Engine ID for this tenant
-  vertexGcpProject: text('vertex_gcp_project'),            // GCP project (default: semantic-brain-desktop)
-  workspaceDomain:  text('workspace_domain'),              // Google Workspace domain to index
-  vertexStatus:     text('vertex_status').default('pending'), // pending | active | error | disabled
-  createdAt:        timestamp('created_at').defaultNow(),
-  updatedAt:        timestamp('updated_at').defaultNow(),
+  id:        text('id').primaryKey(),               // e.g. 'rxfit'
+  name:      text('name').notNull(),                // e.g. 'RxFit Athletics'
+  domain:    text('domain'),                        // e.g. 'rxfitatx.com'
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
 })
 
 /* ── Hub Users (replaces HUB_ROLES_SHEET_ID) ─────────────────────────────── */
@@ -36,7 +32,6 @@ export const hubUsers = pgTable(
     assignedBy:        text('assigned_by'),
     assignedAt:        timestamp('assigned_at').defaultNow(),
     lastLogin:         timestamp('last_login'),
-    googleRefreshToken: text('google_refresh_token'),
     createdAt:         timestamp('created_at').defaultNow(),
     updatedAt:         timestamp('updated_at').defaultNow(),
   },
@@ -124,6 +119,30 @@ export const documentChunks = pgTable('document_chunks', {
   embeddingIndex: index('document_chunks_embedding_hnsw_idx').using('hnsw', table.embedding.op('vector_cosine_ops'))
 }))
 
+/* ── Founder Lens Sections (per-org, per-role C-Suite customization) ────── */
+/**
+ * Replaces the old filesystem-backed FOUNDER_LENS.md files under
+ * ../orchestration, which do not exist in the deployed container.
+ * One row per (tenant, org, role); `sections` holds the structured
+ * FounderLensCustomSection payload as JSONB.
+ */
+export const founderLensSections = pgTable(
+  'founder_lens_sections',
+  {
+    id:        text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+    tenantId:  text('tenant_id').notNull().references(() => tenants.id),
+    orgId:     text('org_id').notNull(),                 // Paperclip company id / identifier
+    role:      text('role').notNull(),                   // ceo|cmo|cto|cfo|coo|marketing|technical|revenue
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    sections:  jsonb('sections').$type<Record<string, any>>().notNull(),
+    updatedBy: text('updated_by'),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  },
+  (t) => ({
+    orgRoleUniq: uniqueIndex('founder_lens_org_role_uniq').on(t.tenantId, t.orgId, t.role),
+  })
+)
+
 /* ── Tool Artifacts (Structured output from skill sessions) ────────────── */
 
 export const toolArtifacts = pgTable('tool_artifacts', {
@@ -138,15 +157,4 @@ export const toolArtifacts = pgTable('tool_artifacts', {
   createdBy:      text('created_by'),                      // User email
   createdAt:      timestamp('created_at').defaultNow().notNull(),
   updatedAt:      timestamp('updated_at').defaultNow().notNull(),
-})
-
-/* ── Circuit Breakers (distributed state) ────────────────────────────────── */
-
-export const circuitBreakers = pgTable('circuit_breakers', {
-  key:         text('key').primaryKey(),
-  state:       text('state').notNull().default('closed'), // 'closed' | 'open' | 'half-open'
-  failures:    integer('failures').notNull().default(0),
-  lastFailure: timestamp('last_failure'),
-  probing:     boolean('probing').notNull().default(false),
-  updatedAt:   timestamp('updated_at').defaultNow().notNull(),
 })

@@ -6,8 +6,8 @@
   },
   "database": {
     "mode": "postgres",
-    "connectionString": "postgresql://postgres:REDACTED_PASSWORD@postgres.railway.internal:5432/railway",
-    "postgresConnectionString": "postgresql://postgres:REDACTED_PASSWORD@postgres.railway.internal:5432/railway"
+    "connectionString": "",
+    "postgresConnectionString": ""
   },
   "logging": {
     "mode": "file",

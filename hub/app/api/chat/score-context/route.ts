@@ -12,8 +12,7 @@ export const maxDuration = 30
    POST /api/chat/score-context
 
    Evaluates whether an in-progress Interview Mode has collected enough context
-   to safely generate an ActionConfirmCard. Uses Claude Fable 5 (primary) or
-   Gemini 2.5 Pro (fallback) to score:
+   to safely generate an ActionConfirmCard. Uses Gemini 2.5 Pro to score:
 
    Input:
    {
@@ -173,30 +172,18 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const prompt = buildScoringPrompt(intent, context, dimensions)
-    let rawText: string
-
-    // Primary: Claude Fable 5 (superior reasoning for context evaluation)
-    try {
-      const { claudeChat } = await import('@/lib/claude')
-      rawText = await claudeChat(prompt, undefined, {
-        maxTokens: 256,
+    const model = genAI.getGenerativeModel({
+      model: 'gemini-2.5-pro',
+      generationConfig: {
+        // Low temperature for consistent structured output
         temperature: 0.1,
-      })
-    } catch (claudeErr) {
-      console.warn('[score-context] Claude failed, falling back to Gemini 2.5 Pro:', claudeErr)
+        maxOutputTokens: 256,
+      },
+    })
 
-      // Fallback: Gemini 2.5 Pro
-      const model = genAI.getGenerativeModel({
-        model: 'gemini-2.5-pro',
-        generationConfig: {
-          temperature: 0.1,
-          maxOutputTokens: 256,
-        },
-      })
-      const result = await model.generateContent(prompt)
-      rawText = result.response.text()
-    }
+    const prompt = buildScoringPrompt(intent, context, dimensions)
+    const result = await model.generateContent(prompt)
+    const rawText = result.response.text()
 
     const scoreResult = parseScoreResponse(rawText)
     return NextResponse.json(scoreResult)
@@ -205,8 +192,27 @@ export async function POST(req: NextRequest) {
     const message = err instanceof Error ? err.message : 'Scoring failed'
     console.error('[API] POST /api/chat/score-context error:', err)
 
-    // Fail open — don't block the user if scoring fails
-    // Return a "passed" result so ActionConfirmCard can still appear
+    // For high-stakes or destructive intents, FAIL CLOSED — a scoring outage
+    // must not let a consequential action through unvalidated.
+    const failClosedIntents = [
+      'send_communication', 'create_paperclip_issue', 'create_agent', 'launch_campaign',
+      'assign_issue', 'update_issue_state', 'restart_agent',
+      'create_workspace', 'delete_workspace', 'delete_agent',
+    ]
+    if (failClosedIntents.includes(intent)) {
+      const blocked: ContextScoreResult = {
+        score: 0,
+        passed: false,
+        weakDimension: 'validation',
+        followUpQuestion:
+          'I could not verify this action is safe to execute right now. Please re-state the key details so I can re-check before proceeding.',
+      }
+      return NextResponse.json(blocked, {
+        headers: { 'X-Score-Fallback': 'fail-closed', 'X-Score-Error': message.slice(0, 100) },
+      })
+    }
+
+    // Low-stakes / read-only intents — fail open so the UX isn't blocked.
     const fallback: ContextScoreResult = {
       score: 80,
       passed: true,
@@ -214,7 +220,7 @@ export async function POST(req: NextRequest) {
       followUpQuestion: null,
     }
     return NextResponse.json(fallback, {
-      headers: { 'X-Score-Fallback': 'true', 'X-Score-Error': message.slice(0, 100) },
+      headers: { 'X-Score-Fallback': 'fail-open', 'X-Score-Error': message.slice(0, 100) },
     })
   }
 }

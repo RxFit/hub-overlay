@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { upsertDocumentChunk, deleteDocumentChunks } from '@/lib/vector-store'
 import { createLogger } from '@/lib/logger'
+import { getDefaultTenantId } from '@/lib/tenant-context'
 
 const log = createLogger('embeddings-upsert')
 
@@ -50,7 +51,7 @@ export async function DELETE(req: NextRequest) {
 
     const { searchParams } = new URL(req.url)
     const sourceUrl = searchParams.get('sourceUrl')
-    const tenantId = searchParams.get('tenantId') || process.env.NEXT_PUBLIC_TENANT_ID || 'rxfit'
+    const tenantId = searchParams.get('tenantId') || getDefaultTenantId()
 
     if (!sourceUrl) {
       return NextResponse.json({ error: 'Missing required query param: sourceUrl' }, { status: 400 })

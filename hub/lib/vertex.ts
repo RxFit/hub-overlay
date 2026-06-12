@@ -4,22 +4,17 @@
  * Queries the Vertex AI Search engine to retrieve semantically relevant
  * content from indexed data stores (Google Drive, Gmail, Chat, etc.).
  *
- * Architecture:
- * - Each tenant gets their own Discovery Engine instance (full isolation)
- * - Engine config is stored in the `tenants` table
- * - Auth is handled by the consolidated google-auth.ts module
+ * Project: semantic-brain-desktop
+ * Engine:  semanticbrain_1779229063037
  *
- * Project: semantic-brain-desktop (default)
+ * Authentication: Uses a GCP service account key stored in the
+ * GOOGLE_SERVICE_ACCOUNT_KEY environment variable (JSON string).
+ * Falls back gracefully if not configured.
  */
 
-import { getServiceAccountAccessToken } from '@/lib/google-auth'
-import { createLogger } from '@/lib/logger'
-
-const log = createLogger('vertex')
-
-// Fallback defaults (used when tenant config is not yet in DB)
-const DEFAULT_GCP_PROJECT = process.env.VERTEX_GCP_PROJECT ?? 'semantic-brain-desktop'
-const DEFAULT_ENGINE_ID = process.env.VERTEX_ENGINE_ID ?? 'semanticbrain_1779229063037'
+const GCP_PROJECT = process.env.VERTEX_GCP_PROJECT ?? 'semantic-brain-desktop'
+const ENGINE_ID = process.env.VERTEX_ENGINE_ID ?? 'semanticbrain_1779229063037'
+const LOCATION = 'global'
 
 export interface VertexSearchResult {
   title: string
@@ -28,68 +23,73 @@ export interface VertexSearchResult {
   source?: string
 }
 
-/* ── Per-Tenant Engine Config Cache ── */
+/* ── GCP Access Token via Service Account ── */
 
-interface TenantVertexConfig {
-  engineId: string
-  gcpProject: string
-  fetchedAt: number
+interface ServiceAccountKey {
+  client_email: string
+  private_key: string
+  token_uri: string
 }
 
-const CONFIG_CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes
-const tenantConfigCache = new Map<string, TenantVertexConfig | null>()
+let cachedToken: { token: string; expiresAt: number } | null = null
 
-/**
- * Look up a tenant's Vertex AI engine configuration from the database.
- * Results are cached for 5 minutes to avoid DB hits on every chat message.
- *
- * Falls back to env var defaults if the tenant has no config in the DB.
- */
-async function getTenantVertexConfig(tenantId: string): Promise<{ engineId: string; gcpProject: string } | null> {
-  const cached = tenantConfigCache.get(tenantId)
-  if (cached !== undefined && Date.now() - cached!.fetchedAt < CONFIG_CACHE_TTL_MS) {
-    if (cached === null) return null
-    return { engineId: cached.engineId, gcpProject: cached.gcpProject }
+async function getAccessToken(): Promise<string | null> {
+  let keyJson = process.env.GOOGLE_SERVICE_ACCOUNT_KEY
+  if (!keyJson) return null
+
+  // Defensive: strip wrapping single/double quotes (common .env copy-paste error)
+  keyJson = keyJson.replace(/^['"]|['"]$/g, '')
+
+  // Return cached token if still valid (with 60s buffer)
+  if (cachedToken && Date.now() < cachedToken.expiresAt - 60_000) {
+    return cachedToken.token
   }
 
   try {
-    const { db } = await import('@/lib/db')
-    const { tenants } = await import('@/lib/schema')
-    const { eq } = await import('drizzle-orm')
+    const key: ServiceAccountKey = JSON.parse(keyJson)
 
-    const rows = await db.select({
-      vertexEngineId: tenants.vertexEngineId,
-      vertexGcpProject: tenants.vertexGcpProject,
-      vertexStatus: tenants.vertexStatus,
-    }).from(tenants).where(eq(tenants.id, tenantId)).limit(1)
+    // Build JWT
+    const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url')
+    const now = Math.floor(Date.now() / 1000)
+    const claimSet = {
+      iss: key.client_email,
+      scope: 'https://www.googleapis.com/auth/cloud-platform',
+      aud: key.token_uri,
+      iat: now,
+      exp: now + 3600,
+    }
+    const payload = Buffer.from(JSON.stringify(claimSet)).toString('base64url')
 
-    const tenant = rows[0]
+    // Sign with private key
+    const crypto = await import('crypto')
+    const signer = crypto.createSign('RSA-SHA256')
+    signer.update(`${header}.${payload}`)
+    const signature = signer.sign(key.private_key, 'base64url')
+    const jwt = `${header}.${payload}.${signature}`
 
-    if (!tenant?.vertexEngineId || tenant.vertexStatus !== 'active') {
-      // Tenant has no Vertex config or is disabled — try env var fallback
-      if (DEFAULT_ENGINE_ID) {
-        log.info({ tenantId }, 'Tenant has no Vertex config — using env var defaults')
-        const fallback = { engineId: DEFAULT_ENGINE_ID, gcpProject: DEFAULT_GCP_PROJECT, fetchedAt: Date.now() }
-        tenantConfigCache.set(tenantId, fallback)
-        return { engineId: fallback.engineId, gcpProject: fallback.gcpProject }
-      }
-      tenantConfigCache.set(tenantId, null)
+    // Exchange JWT for access token
+    const res = await fetch(key.token_uri, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+        assertion: jwt,
+      }),
+    })
+
+    if (!res.ok) {
+      console.error('[vertex] Token exchange failed:', res.status)
       return null
     }
 
-    const config: TenantVertexConfig = {
-      engineId: tenant.vertexEngineId,
-      gcpProject: tenant.vertexGcpProject ?? DEFAULT_GCP_PROJECT,
-      fetchedAt: Date.now(),
+    const data = await res.json() as { access_token: string; expires_in: number }
+    cachedToken = {
+      token: data.access_token,
+      expiresAt: Date.now() + data.expires_in * 1000,
     }
-    tenantConfigCache.set(tenantId, config)
-    return { engineId: config.engineId, gcpProject: config.gcpProject }
+    return cachedToken.token
   } catch (err) {
-    log.warn({ err, tenantId }, 'Failed to lookup tenant Vertex config — using env var defaults')
-    // Fallback to env vars on DB error
-    if (DEFAULT_ENGINE_ID) {
-      return { engineId: DEFAULT_ENGINE_ID, gcpProject: DEFAULT_GCP_PROJECT }
-    }
+    console.error('[vertex] Service account auth error:', err)
     return null
   }
 }
@@ -99,31 +99,22 @@ async function getTenantVertexConfig(tenantId: string): Promise<{ engineId: stri
 /**
  * Search the Semantic Brain for relevant content.
  *
- * Uses the tenant's dedicated Discovery Engine instance for full data isolation.
- * Falls back to env var defaults if the tenant has no config in the database.
- *
  * @param query - Natural language search query
- * @param tenantId - Tenant identifier (required — used to look up engine config)
+ * @param dataStore - Optional data store filter (e.g. 'rxfit-gdrive')
  * @returns Array of search results, or null if Vertex is unavailable
  */
 export async function searchSemanticBrain(
   query: string,
-  tenantId: string,
+  dataStore?: string
 ): Promise<VertexSearchResult[] | null> {
-  const token = await getServiceAccountAccessToken('https://www.googleapis.com/auth/cloud-platform')
+  const token = await getAccessToken()
   if (!token) {
-    log.warn('No service account configured — skipping semantic search')
-    return null
-  }
-
-  const config = await getTenantVertexConfig(tenantId)
-  if (!config) {
-    log.info({ tenantId }, 'Tenant has no Vertex AI engine configured — skipping')
+    console.warn('[vertex] No service account configured — skipping semantic search')
     return null
   }
 
   try {
-    const servingConfigPath = `projects/${config.gcpProject}/locations/global/collections/default_collection/engines/${config.engineId}/servingConfigs/default_serving_config`
+    const servingConfigPath = `projects/${GCP_PROJECT}/locations/${LOCATION}/collections/default_collection/engines/${ENGINE_ID}/servingConfigs/default_serving_config`
     const url = `https://discoveryengine.googleapis.com/v1/${servingConfigPath}:search`
 
     const body: Record<string, unknown> = {
@@ -140,7 +131,10 @@ export async function searchSemanticBrain(
       },
     }
 
-    // No tenant filter needed — each tenant has their own isolated engine
+    // Filter to specific data store if provided
+    if (dataStore) {
+      body.filter = `dataStore:\"${dataStore}\"`
+    }
 
     const res = await fetch(url, {
       method: 'POST',
@@ -154,7 +148,7 @@ export async function searchSemanticBrain(
 
     if (!res.ok) {
       const errBody = await res.text().catch(() => '')
-      log.error({ status: res.status, errBody, tenantId, engineId: config.engineId }, 'Vertex AI search failed')
+      console.error(`[vertex] Search failed: ${res.status} ${errBody}`)
       return null
     }
 
@@ -192,7 +186,7 @@ export async function searchSemanticBrain(
       }
     })
   } catch (err) {
-    log.error({ err, tenantId }, 'Vertex AI search error')
+    console.error('[vertex] Search error:', err)
     return null
   }
 }

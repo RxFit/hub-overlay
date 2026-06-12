@@ -2,6 +2,7 @@ import { db } from './db'
 import { agentMemory, eventLog } from './schema'
 import { eq, and, like, desc, lt } from 'drizzle-orm'
 import { createLogger } from './logger'
+import { getTenantId } from './tenant-context'
 
 const log = createLogger('agent-memory')
 
@@ -19,7 +20,7 @@ export interface MemoryInput {
  * Stores a piece of structured AI agent memory in the DB.
  */
 export async function storeMemory(input: MemoryInput, tx?: any) {
-  const tenantId = input.tenantId || process.env.NEXT_PUBLIC_TENANT_ID || 'rxfit'
+  const tenantId = input.tenantId || getTenantId()
   const client = tx || db
 
   log.info({ agentId: input.agentId, memoryType: input.memoryType }, 'Storing agent memory')
@@ -48,7 +49,7 @@ export async function queryMemories(opts: {
   limit?: number
   tenantId?: string
 }) {
-  const tenantId = opts.tenantId || process.env.NEXT_PUBLIC_TENANT_ID || 'rxfit'
+  const tenantId = opts.tenantId || getTenantId()
 
   const conditions = [eq(agentMemory.tenantId, tenantId)]
 
@@ -77,7 +78,7 @@ export async function queryMemories(opts: {
 /**
  * Delete a specific memory by its UUID.
  */
-export async function deleteMemory(id: string, tenantId = 'rxfit'): Promise<void> {
+export async function deleteMemory(id: string, tenantId = getTenantId()): Promise<void> {
   log.info({ id }, 'Deleting agent memory')
   await db
     .delete(agentMemory)
@@ -87,7 +88,7 @@ export async function deleteMemory(id: string, tenantId = 'rxfit'): Promise<void
 /**
  * Prunes memories that have passed their expiration date (expiresAt < now).
  */
-export async function pruneExpiredMemories(tenantId = 'rxfit'): Promise<void> {
+export async function pruneExpiredMemories(tenantId = getTenantId()): Promise<void> {
   const now = new Date()
   log.info('Running TTL pruning for expired agent memories')
   await db
@@ -98,7 +99,7 @@ export async function pruneExpiredMemories(tenantId = 'rxfit'): Promise<void> {
 /**
  * Prunes event logs older than 30 days to optimize DB size.
  */
-export async function pruneOldEventLogs(tenantId = 'rxfit'): Promise<void> {
+export async function pruneOldEventLogs(tenantId = getTenantId()): Promise<void> {
   const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
   log.info({ cutoff }, 'Pruning event logs older than 30 days')
   await db
