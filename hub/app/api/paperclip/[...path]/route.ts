@@ -7,6 +7,7 @@ import { PAPERCLIP_BASE_URL } from '@/lib/paperclipConfig'
 import { loopDetector } from '@/lib/loop-detector'
 import { breaker } from '@/lib/circuit-breaker'
 import { withRetry } from '@/lib/retry'
+import { getTenantId } from '@/lib/tenant-context'
 import crypto from 'crypto'
 
 const log = createLogger('paperclip/proxy')
@@ -97,6 +98,78 @@ async function proxyRequest(
     }
   }
 
+  // Block direct lists for scoped users
+  if (role !== 'superadmin' && !assignedProjects.includes('*')) {
+    if (
+      apiPath === '/api/issues' ||
+      apiPath === '/api/agents' ||
+      apiPath === '/api/projects' ||
+      apiPath === '/api/runs' ||
+      apiPath.startsWith('/api/issues?') ||
+      apiPath.startsWith('/api/agents?') ||
+      apiPath.startsWith('/api/projects?') ||
+      apiPath.startsWith('/api/runs?')
+    ) {
+      const isPost = method.toUpperCase() === 'POST'
+      const hasCompanyQuery = req.nextUrl.searchParams.has('companyId')
+      if (!(isPost && (apiPath === '/api/issues' || apiPath.startsWith('/api/issues?'))) && !(apiPath.startsWith('/api/runs') && hasCompanyQuery)) {
+        return NextResponse.json(
+          { error: 'Access denied: direct resource listing is restricted' },
+          { status: 403 }
+        )
+      }
+
+      if (apiPath.startsWith('/api/runs') && hasCompanyQuery) {
+        const qCompanyId = req.nextUrl.searchParams.get('companyId')
+        if (qCompanyId && !assignedProjects.includes(qCompanyId)) {
+          return NextResponse.json(
+            { error: 'Access denied: not assigned to this project' },
+            { status: 403 }
+          )
+        }
+      }
+    }
+  }
+
+  // Pre-check for specific resources (issues/agents/projects) on mutation (PATCH/DELETE)
+  const issueMatch = apiPath.match(/\/api\/issues\/([a-f0-9-]+)/)
+  const agentMatch = apiPath.match(/\/api\/agents\/([a-f0-9-]+)/)
+  const projectMatch = apiPath.match(/\/api\/projects\/([a-f0-9-]+)/)
+
+  const needPreCheck = method !== 'GET' && method !== 'HEAD' && (issueMatch || agentMatch || projectMatch)
+
+  if (role !== 'superadmin' && !assignedProjects.includes('*') && needPreCheck) {
+    let checkPath = ''
+    if (issueMatch) checkPath = `/api/issues/${issueMatch[1]}`
+    else if (agentMatch) checkPath = `/api/agents/${agentMatch[1]}`
+    else if (projectMatch) checkPath = `/api/projects/${projectMatch[1]}`
+
+    try {
+      const checkUrl = `${PAPERCLIP_BASE}${checkPath}`
+      const checkRes = await fetch(checkUrl, await buildFetchOpts())
+      if (!checkRes.ok) {
+        return NextResponse.json(
+          { error: 'Access denied: resource not found or inaccessible' },
+          { status: 403 }
+        )
+      }
+      const checkData = await checkRes.json()
+      const companyId = checkData.companyId || checkData.issue?.companyId || checkData.agent?.companyId || checkData.project?.companyId
+      if (!companyId || !assignedProjects.includes(companyId)) {
+        return NextResponse.json(
+          { error: 'Access denied: not assigned to this project' },
+          { status: 403 }
+        )
+      }
+    } catch (err) {
+      log.error({ err, checkPath }, 'Scope-check pre-verification failed')
+      return NextResponse.json(
+        { error: 'Access denied: verification failed' },
+        { status: 403 }
+      )
+    }
+  }
+
   // Forward request to Paperclip with session auth — preserve the query
   // string (e.g. ?limit=50&status=in_progress), which lives on req.nextUrl,
   // not in the catch-all path segments.
@@ -116,7 +189,7 @@ async function proxyRequest(
   // 1. Loop detection: Throw error and block sequential redundant writes
   if (requestBody && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method.toUpperCase())) {
     try {
-      loopDetector.detectAndRecord(method, apiPath, requestBody)
+      loopDetector.detectAndRecord(method, apiPath, requestBody, session.user.email ?? '__global__')
     } catch (err) {
       log.error({ err, path: apiPath, method }, 'Loop detected in proxy')
       return NextResponse.json(
@@ -177,7 +250,8 @@ async function proxyRequest(
     }
 
     // 3. Circuit breaker & Retry wrapper
-    const upstream = await breaker.execute('paperclip-api', () => withRetry(execute))
+    const tenantId = getTenantId()
+    const upstream = await breaker.execute(`${tenantId}:paperclip-api`, () => withRetry(execute))
     const data = await upstream.text()
 
     // If the user is staff (not admin) and this is a companies list,
@@ -196,6 +270,27 @@ async function proxyRequest(
         }
       } catch {
         // Not JSON or parse error — return as-is
+      }
+    }
+
+    // Post-check for GET requests
+    if (role !== 'superadmin' && !assignedProjects.includes('*') && method === 'GET') {
+      if (issueMatch || agentMatch || projectMatch) {
+        try {
+          const parsed = JSON.parse(data)
+          const companyId = parsed.companyId || parsed.issue?.companyId || parsed.agent?.companyId || parsed.project?.companyId
+          if (!companyId || !assignedProjects.includes(companyId)) {
+            return NextResponse.json(
+              { error: 'Access denied: not assigned to this project' },
+              { status: 403 }
+            )
+          }
+        } catch {
+          return NextResponse.json(
+            { error: 'Access denied: resource cannot be verified' },
+            { status: 403 }
+          )
+        }
       }
     }
 

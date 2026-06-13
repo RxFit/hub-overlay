@@ -91,7 +91,7 @@ async function runTests() {
 
   // Test pruning expired memories
   log.info('Testing TTL Pruning...')
-  await pruneExpiredMemories()
+  await pruneExpiredMemories('rxfit')
   const postPruneResult = await queryMemories({
     agentId: testAgentId,
   })

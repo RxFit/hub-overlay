@@ -22,4 +22,20 @@ describe('loopDetector', () => {
     expect(() => loopDetector.detectAndRecord('POST', '/api/issues', '{"title":"b"}')).not.toThrow()
     expect(() => loopDetector.detectAndRecord('POST', '/api/issues', '{"title":"c"}')).not.toThrow()
   })
+
+  it('isolates history by scope so user A does not trip user B', () => {
+    const body = JSON.stringify({ title: 'x' })
+    // User A executes 2 write requests
+    expect(() => loopDetector.detectAndRecord('POST', '/api/issues', body, 'userA@example.com')).not.toThrow()
+    expect(() => loopDetector.detectAndRecord('POST', '/api/issues', body, 'userA@example.com')).not.toThrow()
+
+    // User B executes a write request with same payload — should not throw
+    expect(() => loopDetector.detectAndRecord('POST', '/api/issues', body, 'userB@example.com')).not.toThrow()
+
+    // User A executes a 3rd write request — should trip for User A
+    expect(() => loopDetector.detectAndRecord('POST', '/api/issues', body, 'userA@example.com')).toThrow(LoopDetectedError)
+
+    // User B executes a 2nd write request — should not throw for User B
+    expect(() => loopDetector.detectAndRecord('POST', '/api/issues', body, 'userB@example.com')).not.toThrow()
+  })
 })

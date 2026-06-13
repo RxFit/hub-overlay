@@ -12,8 +12,6 @@
  * code receives tenant config via TenantProvider props.
  */
 
-import { headers } from 'next/headers'
-
 export const FALLBACK_TENANT_ID = 'rxfit'
 
 /**
@@ -24,11 +22,14 @@ export const FALLBACK_TENANT_ID = 'rxfit'
  * back to the env default.
  */
 export function getTenantId(): string {
-  try {
-    const headerTenant = headers().get('x-tenant-id')
-    if (headerTenant) return headerTenant
-  } catch {
-    // Not in a request scope (build/static generation/script) — use env.
+  if (typeof window === 'undefined') {
+    try {
+      const { headers } = require('next/headers')
+      const headerTenant = headers().get('x-tenant-id')
+      if (headerTenant) return headerTenant
+    } catch {
+      // Not in a request scope (build/static generation/script) — use env.
+    }
   }
   return process.env.NEXT_PUBLIC_TENANT_ID || FALLBACK_TENANT_ID
 }

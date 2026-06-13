@@ -13,6 +13,7 @@ export class LoopDetectedError extends Error {
 interface RequestRecord {
   signature: string
   timestamp: number
+  scope: string
 }
 
 /**
@@ -42,7 +43,7 @@ class LoopDetector {
    * Tracks a request and checks for loops.
    * Throws a LoopDetectedError if a loop is detected.
    */
-  detectAndRecord(method: string, path: string, body?: any): void {
+  detectAndRecord(method: string, path: string, body?: any, scope: string = '__global__'): void {
     const methodUpper = method.toUpperCase()
     // Skip GET/HEAD requests as they are safe and expected to be repeated
     if (['GET', 'HEAD'].includes(methodUpper)) {
@@ -55,18 +56,18 @@ class LoopDetector {
     // Filter out old history outside the window
     this.history = this.history.filter((h) => now - h.timestamp < this.TIME_WINDOW_MS)
 
-    // Check how many times this exact signature was repeated in our window
-    const occurrences = this.history.filter((h) => h.signature === signature)
+    // Check how many times this exact signature was repeated in our window for this scope
+    const occurrences = this.history.filter((h) => h.signature === signature && h.scope === scope)
 
     if (occurrences.length >= this.REPEAT_THRESHOLD - 1) {
       log.error(
-        { method: methodUpper, path, occurrences: occurrences.length + 1 },
+        { method: methodUpper, path, occurrences: occurrences.length + 1, scope },
         'CRITICAL: Sequential write request loop detected!',
       )
       throw new LoopDetectedError(methodUpper, path, occurrences.length + 1)
     }
 
-    this.history.push({ signature, timestamp: now })
+    this.history.push({ signature, timestamp: now, scope })
     if (this.history.length > this.MAX_HISTORY) {
       this.history.shift()
     }

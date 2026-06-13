@@ -5,6 +5,7 @@ import { createLogger } from '@/lib/logger'
 import { breaker } from '@/lib/circuit-breaker'
 import { withRetry } from '@/lib/retry'
 import { loopDetector } from '@/lib/loop-detector'
+import { getTenantId } from './tenant-context'
 import crypto from 'crypto'
 import {
   CompaniesResponseSchema,
@@ -163,13 +164,14 @@ export async function paperclipFetch<T>(
   path: string,
   opts?: RequestInit,
   schema?: ZodType<T>,
+  scope?: string,
 ): Promise<T> {
   const url = `${PAPERCLIP_BASE}${path}`
   const method = opts?.method || 'GET'
   const body = opts?.body
 
   // 1. Loop detection: Throw error and block sequential redundant writes
-  loopDetector.detectAndRecord(method, path, body)
+  loopDetector.detectAndRecord(method, path, body, scope)
 
   // 2. Idempotency headers: Attach unique key for writes to prevent duplicate execution on retry
   let finalOpts = opts
@@ -219,7 +221,8 @@ export async function paperclipFetch<T>(
     return json as T
   }
 
-  return breaker.execute('paperclip-api', () => withRetry(execute))
+  const tenantId = getTenantId()
+  return breaker.execute(`${tenantId}:paperclip-api`, () => withRetry(execute))
 }
 
 /** Build and execute a single fetch to Paperclip with current auth. */
@@ -253,15 +256,15 @@ export async function getCompany(companyId: string): Promise<Company> {
 export async function createCompany(data: {
   name: string
   description?: string
-}): Promise<Company> {
+}, scope?: string): Promise<Company> {
   return paperclipFetch<Company>('/api/companies', {
     method: 'POST',
     body: JSON.stringify(data),
-  })
+  }, undefined, scope)
 }
 
-export async function deleteCompany(companyId: string): Promise<void> {
-  await paperclipFetch<unknown>(`/api/companies/${companyId}`, { method: 'DELETE' })
+export async function deleteCompany(companyId: string, scope?: string): Promise<void> {
+  await paperclipFetch<unknown>(`/api/companies/${companyId}`, { method: 'DELETE' }, undefined, scope)
 }
 
 /* ── Issues ── */
@@ -304,7 +307,8 @@ export async function getIssue(_companyId: string, issueId: string): Promise<Iss
 
 export async function createIssue(
   companyId: string,
-  data: { title: string; description?: string; priority?: string; assigneeId?: string }
+  data: { title: string; description?: string; priority?: string; assigneeId?: string },
+  scope?: string
 ): Promise<Issue> {
   // Paperclip API expects `assigneeAgentId` (not `assigneeId`) and the
   // critical|high|medium|low priority vocabulary (no urgent/none).
@@ -315,7 +319,7 @@ export async function createIssue(
   const res = await paperclipFetch(`/api/companies/${companyId}/issues`, {
     method: 'POST',
     body: JSON.stringify(payload),
-  }, IssueResponseSchema)
+  }, IssueResponseSchema, scope)
   // The API returns the created issue as a bare object (201)
   return normalizeIssue(pickItem<Record<string, unknown>>(res, 'issue'))
 }
@@ -323,7 +327,8 @@ export async function createIssue(
 export async function updateIssue(
   _companyId: string,
   issueId: string,
-  data: { state?: string; priority?: string; assigneeId?: string; title?: string }
+  data: { state?: string; priority?: string; assigneeId?: string; title?: string },
+  scope?: string
 ): Promise<Issue> {
   // Translate the Hub's update vocabulary onto Paperclip's PATCH /api/issues/:id
   // contract: `status` (not `state`), `assigneeAgentId` (not `assigneeId`).
@@ -339,6 +344,7 @@ export async function updateIssue(
       body: JSON.stringify(payload),
     },
     IssueResponseSchema,
+    scope
   )
   return normalizeIssue(pickItem<Record<string, unknown>>(res, 'issue'))
 }
@@ -448,7 +454,8 @@ export async function getAgent(_companyId: string, agentId: string): Promise<Age
 
 export async function createAgent(
   companyId: string,
-  data: { name: string; role?: string; instructions?: string; adapterType?: string }
+  data: { name: string; role?: string; instructions?: string; adapterType?: string },
+  scope?: string
 ): Promise<Agent> {
   const res = await paperclipFetch(
     `/api/companies/${companyId}/agents`,
@@ -457,6 +464,7 @@ export async function createAgent(
       body: JSON.stringify(data),
     },
     AgentResponseSchema,
+    scope
   )
   return normalizeAgent(pickItem<Record<string, unknown>>(res, 'agent'))
 }
@@ -464,7 +472,8 @@ export async function createAgent(
 export async function updateAgent(
   _companyId: string,
   agentId: string,
-  data: { name?: string; instructions?: string; status?: string }
+  data: { name?: string; instructions?: string; status?: string },
+  scope?: string
 ): Promise<Agent> {
   const res = await paperclipFetch(
     `/api/agents/${agentId}`,
@@ -473,14 +482,17 @@ export async function updateAgent(
       body: JSON.stringify(data),
     },
     AgentResponseSchema,
+    scope
   )
   return normalizeAgent(pickItem<Record<string, unknown>>(res, 'agent'))
 }
 
-export async function deleteAgent(_companyId: string, agentId: string): Promise<void> {
+export async function deleteAgent(_companyId: string, agentId: string, scope?: string): Promise<void> {
   await paperclipFetch<unknown>(
     `/api/agents/${agentId}`,
     { method: 'DELETE' },
+    undefined,
+    scope
   )
 }
 

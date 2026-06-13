@@ -15,6 +15,7 @@
 import { createLogger } from '@/lib/logger'
 import { breaker } from '@/lib/circuit-breaker'
 import { withRetry } from '@/lib/retry'
+import { getTenantId } from './tenant-context'
 
 const log = createLogger('paperclipSession')
 
@@ -52,7 +53,8 @@ async function signIn(): Promise<string> {
   }
 
   // Start the sign-in and store the promise so concurrent callers share it
-  signInPromise = breaker.execute('paperclip-auth', () =>
+  const tenantId = getTenantId()
+  signInPromise = breaker.execute(`${tenantId}:paperclip-auth`, () =>
     withRetry(() => doSignIn(), { maxAttempts: 2, baseMs: 1000 }),
   )
 

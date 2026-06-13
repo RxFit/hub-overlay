@@ -78,7 +78,7 @@ export async function queryMemories(opts: {
 /**
  * Delete a specific memory by its UUID.
  */
-export async function deleteMemory(id: string, tenantId = getTenantId()): Promise<void> {
+export async function deleteMemory(id: string, tenantId: string): Promise<void> {
   log.info({ id }, 'Deleting agent memory')
   await db
     .delete(agentMemory)
@@ -88,7 +88,7 @@ export async function deleteMemory(id: string, tenantId = getTenantId()): Promis
 /**
  * Prunes memories that have passed their expiration date (expiresAt < now).
  */
-export async function pruneExpiredMemories(tenantId = getTenantId()): Promise<void> {
+export async function pruneExpiredMemories(tenantId: string): Promise<void> {
   const now = new Date()
   log.info('Running TTL pruning for expired agent memories')
   await db
@@ -99,7 +99,7 @@ export async function pruneExpiredMemories(tenantId = getTenantId()): Promise<vo
 /**
  * Prunes event logs older than 30 days to optimize DB size.
  */
-export async function pruneOldEventLogs(tenantId = getTenantId()): Promise<void> {
+export async function pruneOldEventLogs(tenantId: string): Promise<void> {
   const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
   log.info({ cutoff }, 'Pruning event logs older than 30 days')
   await db

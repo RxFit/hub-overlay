@@ -13,6 +13,7 @@
  */
 
 import type { RoleConfig } from '@/types'
+import { getTenantId } from './tenant-context'
 
 /* ── Tenant Config Interface ── */
 
@@ -138,8 +139,7 @@ export const TENANT_CONFIGS: Record<string, TenantConfig> = {
  * Reads from NEXT_PUBLIC_TENANT_ID env var, defaults to 'rxfit'.
  */
 export function getTenantConfig(): TenantConfig {
-  const tenantId =
-    (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_TENANT_ID) || 'rxfit'
+  const tenantId = getTenantId()
   return TENANT_CONFIGS[tenantId] ?? TENANT_CONFIGS.rxfit
 }
 

@@ -95,7 +95,7 @@ export async function POST(req: NextRequest) {
         identifier: issuePrefix.trim().toUpperCase(),
         description: `${companyName} workspace — provisioned via Hub Admin Panel`,
       }),
-    })
+    }, undefined, session?.user?.email ?? undefined)
     results.company = companyRes.company ?? companyRes
     const companyId = (results.company as Record<string, string>).id
 
@@ -134,7 +134,7 @@ export async function POST(req: NextRequest) {
             },
             reportsTo: reportsToId,
           }),
-        })
+        }, undefined, session?.user?.email ?? undefined)
         const agent = agentRes.agent ?? agentRes
         createdAgents[template.role] = agent.id
         results.agents.push(agent)

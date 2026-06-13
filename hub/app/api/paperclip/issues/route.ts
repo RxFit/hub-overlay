@@ -101,7 +101,7 @@ export async function POST(req: Request) {
       description,
       priority: priority || 'medium',
       assigneeId,
-    })
+    }, user.email)
 
     await recordEvent({
       eventType: 'issue.created',
