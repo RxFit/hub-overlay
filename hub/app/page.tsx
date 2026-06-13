@@ -808,16 +808,20 @@ export default function HubPage() {
       setMessages(prev => [...prev, { id: assistantId, role: 'assistant' as const, content: '' }])
       setIsTyping(false)
 
+      let buffer = ''
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
 
-        const chunk = decoder.decode(value, { stream: true })
-        const lines = chunk.split('\n')
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
 
         for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6)
+          const trimmed = line.trim()
+          if (!trimmed) continue
+          if (trimmed.startsWith('data: ')) {
+            const data = trimmed.slice(6)
             if (data === '[DONE]') break
             try {
               const parsed = JSON.parse(data)
@@ -907,6 +911,7 @@ export default function HubPage() {
 
             const newState = startInterview(intent, extractedEntities)
             setInterviewState(newState)
+            setActiveModel('Claude Fable 5')
             
             // If the state is still active, it means we have unanswered questions.
             if (newState.active) {
@@ -946,6 +951,7 @@ export default function HubPage() {
       if (interviewState?.active && interviewState.intent) {
         const nextState = advanceInterview(interviewState, message)
         setInterviewState(nextState)
+        setActiveModel('Claude Fable 5')
 
         // ── Context Sufficiency Score Gate ──
         // Fire score check asynchronously after every answer so the badge
@@ -1068,23 +1074,45 @@ Respond with EXACTLY one of:
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   messages: [{ role: 'user', content: evalPrompt }],
-                  useCase: 'deep_dive',
+                  useCase: 'execute',
                 }),
               }).then(async (res) => {
                 const reader = res.body?.getReader()
                 if (!reader) return
                 let fullText = ''
                 const decoder = new TextDecoder()
+                let buffer = ''
                 while (true) {
                   const { done, value } = await reader.read()
                   if (done) break
-                  const chunk = decoder.decode(value)
-                  const lines = chunk.split('\n').filter(l => l.startsWith('data: '))
+                  buffer += decoder.decode(value, { stream: true })
+                  const lines = buffer.split('\n')
+                  buffer = lines.pop() ?? ''
                   for (const line of lines) {
-                    const data = line.slice(6)
-                    if (data === '[DONE]') continue
-                    try { const p = JSON.parse(data); if (p.text) fullText += p.text } catch { /* skip */ }
+                    const trimmed = line.trim()
+                    if (!trimmed) continue
+                    if (trimmed.startsWith('data: ')) {
+                      const data = trimmed.slice(6)
+                      if (data === '[DONE]') continue
+                      try {
+                        const p = JSON.parse(data)
+                        if (p.text) fullText += p.text
+                        if (p.modelUsed) {
+                          setActiveModel(p.modelUsed)
+                        }
+                      } catch { /* skip */ }
+                    }
                   }
+                }
+                if (buffer.trim().startsWith('data: ')) {
+                  const data = buffer.trim().slice(6)
+                  try {
+                    const p = JSON.parse(data)
+                    if (p.text) fullText += p.text
+                    if (p.modelUsed) {
+                      setActiveModel(p.modelUsed)
+                    }
+                  } catch { /* skip */ }
                 }
                 const cleanResponse = fullText.replace(/<!--suggestedTools:\[.*?\]-->/g, '').trim()
                 if (cleanResponse.toUpperCase().includes('SUFFICIENT')) {
