@@ -1001,7 +1001,7 @@ Respond with EXACTLY one of:
     } finally {
       setActionExecuting(false)
     }
-  }, [resolveActiveCompany])
+  }, [resolveActiveCompany, mutate])
 
   return (
     <div

@@ -21,6 +21,9 @@ export interface MemoryInput {
  */
 export async function storeMemory(input: MemoryInput, tx?: any) {
   const tenantId = input.tenantId || getTenantId()
+  if (!input.tenantId) {
+    log.debug({ agentId: input.agentId }, 'storeMemory: no explicit tenantId — resolved via getTenantId() fallback')
+  }
   const client = tx || db
 
   log.info({ agentId: input.agentId, memoryType: input.memoryType }, 'Storing agent memory')
@@ -50,6 +53,9 @@ export async function queryMemories(opts: {
   tenantId?: string
 }) {
   const tenantId = opts.tenantId || getTenantId()
+  if (!opts.tenantId) {
+    log.debug('queryMemories: no explicit tenantId — resolved via getTenantId() fallback')
+  }
 
   const conditions = [eq(agentMemory.tenantId, tenantId)]
 

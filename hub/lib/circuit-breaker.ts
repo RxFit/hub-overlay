@@ -114,5 +114,19 @@ export class CircuitBreaker {
     return entry
   }
 }
-
+/**
+ * Global singleton circuit breaker — intentionally one instance per Next.js process.
+ *
+ * ARCHITECTURAL DECISION (2026-06-14):
+ * The breaker is global because it protects the upstream Paperclip API as a whole.
+ * Per-tenant isolation is achieved via the **key** parameter: callers pass
+ * `${tenantId}:paperclip-api`, so each tenant gets independent failure counts
+ * and circuit state. A per-tenant CircuitBreaker *instance* is unnecessary
+ * because the Map-based key lookup already provides isolation.
+ *
+ * If the Paperclip API is fully down (infra failure), all tenants' circuits
+ * trip independently — which is correct, since each tenant's requests fail
+ * independently. A "global" circuit that blocks all tenants when one fails
+ * would be wrong; the keyed approach avoids that.
+ */
 export const breaker = new CircuitBreaker()

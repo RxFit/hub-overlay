@@ -103,8 +103,10 @@ async function processGoogleDelta(resourceId: string, resourceUri: string) {
   }
 
   // Phase 1 (multi-tenancy): derive tenant from webhook channel/hostname.
+  // PHASE 2 TODO: When multi-tenant webhook channels exist, derive tenantId
+  // from the channel token or a channel-to-tenant lookup instead of env default.
   const { getDefaultTenantId } = await import('@/lib/tenant-context');
-  const tenantId = getDefaultTenantId();
+  const tenantId = getDefaultTenantId(); // eslint-disable-line deprecation/deprecation
   const sourceUrl = metadata.webViewLink || `https://docs.google.com/document/d/${fileId}/edit`;
 
   // Use the ingest client to handle chunking, clearing, and uploading
@@ -130,7 +132,8 @@ async function deleteChunksForFile(fileId: string) {
   const { documentChunks } = await import('@/lib/schema');
   const { like, and, eq } = await import('drizzle-orm');
   const { getDefaultTenantId } = await import('@/lib/tenant-context');
-  const tenantId = getDefaultTenantId();
+  const tenantId = getDefaultTenantId(); // eslint-disable-line deprecation/deprecation
+  // PHASE 2 TODO: derive tenant from the webhook channel metadata.
 
   const deleted = await db.delete(documentChunks).where(
     and(

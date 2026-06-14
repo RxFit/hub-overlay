@@ -22,6 +22,9 @@ export interface EventOptions {
  */
 export async function recordEvent(opts: EventOptions, tx?: any): Promise<void> {
   const tenantId = opts.tenantId || getTenantId()
+  if (!opts.tenantId) {
+    log.debug({ eventType: opts.eventType }, 'recordEvent: no explicit tenantId — resolved via getTenantId() fallback')
+  }
   const client = tx || db
 
   try {

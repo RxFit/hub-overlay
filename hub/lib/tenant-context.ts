@@ -14,6 +14,7 @@
 
 export const FALLBACK_TENANT_ID = 'rxfit'
 
+
 /**
  * Resolve the active tenant ID for the current request.
  *
@@ -29,6 +30,8 @@ export function getTenantId(): string {
       if (headerTenant) return headerTenant
     } catch {
       // Not in a request scope (build/static generation/script) — use env.
+      // eslint-disable-next-line no-console
+      console.warn('[tenant-context] getTenantId() called outside request scope — falling back to env/default')
     }
   }
   return process.env.NEXT_PUBLIC_TENANT_ID || FALLBACK_TENANT_ID
@@ -37,6 +40,10 @@ export function getTenantId(): string {
 /**
  * Resolve tenant ID outside of a request scope (cron jobs, scripts,
  * webhook handlers that derive tenant from payload/hostname instead).
+ *
+ * @deprecated Phase 2 multi-tenancy: callers should accept an explicit
+ * `tenantId` parameter instead of relying on this env-var default.
+ * The fallback to 'rxfit' is only correct for single-tenant deploys.
  */
 export function getDefaultTenantId(): string {
   return process.env.NEXT_PUBLIC_TENANT_ID || FALLBACK_TENANT_ID

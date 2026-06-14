@@ -4,18 +4,18 @@ import { authOptions } from '@/lib/auth'
 import { eq, and } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { kpis, tenants } from '@/lib/schema'
-import { getDefaultTenantId } from '@/lib/tenant-context'
+import { getTenantId } from '@/lib/tenant-context'
 
 export const runtime = 'nodejs'
 
-// Phase 1 (multi-tenancy): resolve per-request from hostname instead of env.
-const TENANT_ID = getDefaultTenantId()
+// Phase 1 (multi-tenancy): resolved per-request via getTenantId().
+// When middleware sets x-tenant-id from hostname, this will auto-resolve.
 
-/** Ensure the rxfit tenant row exists (idempotent) */
-async function ensureTenant() {
+/** Ensure the tenant row exists (idempotent) */
+async function ensureTenant(tenantId: string) {
   await db
     .insert(tenants)
-    .values({ id: TENANT_ID, name: 'RxFit Athletics', domain: 'rxfit.co' })
+    .values({ id: tenantId, name: 'RxFit Athletics', domain: 'rxfit.co' })
     .onConflictDoNothing()
 }
 
@@ -28,7 +28,8 @@ export async function GET(_req: NextRequest) {
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   try {
-    await ensureTenant()
+    const TENANT_ID = getTenantId()
+    await ensureTenant(TENANT_ID)
     const role = (session.user as Record<string, unknown>)?.role as string | undefined
     const isAdmin = role === 'admin' || role === 'superadmin'
 
@@ -72,7 +73,8 @@ export async function POST(req: NextRequest) {
 
     if (!label) return NextResponse.json({ error: 'label is required' }, { status: 400 })
 
-    await ensureTenant()
+    await ensureTenant(getTenantId())
+    const TENANT_ID = getTenantId()
     const [row] = await db
       .insert(kpis)
       .values({
@@ -125,7 +127,7 @@ export async function PATCH(req: NextRequest) {
     const [row] = await db
       .update(kpis)
       .set(updateData)
-      .where(and(eq(kpis.id, id), eq(kpis.tenantId, TENANT_ID)))
+      .where(and(eq(kpis.id, id), eq(kpis.tenantId, getTenantId())))
       .returning()
 
     if (!row) return NextResponse.json({ error: 'KPI not found or access denied' }, { status: 404 })
@@ -156,7 +158,7 @@ export async function DELETE(req: NextRequest) {
 
     const result = await db
       .delete(kpis)
-      .where(and(eq(kpis.id, id), eq(kpis.tenantId, TENANT_ID)))
+      .where(and(eq(kpis.id, id), eq(kpis.tenantId, getTenantId())))
       .returning({ id: kpis.id })
 
     if (!result.length) return NextResponse.json({ error: 'KPI not found or access denied' }, { status: 404 })

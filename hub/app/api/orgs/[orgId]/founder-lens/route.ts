@@ -5,7 +5,7 @@ import { and, eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { founderLensSections, tenants } from '@/lib/schema'
 import type { FounderLensConfig, FounderLensCustomSection } from '@/types'
-import { getDefaultTenantId } from '@/lib/tenant-context'
+import { getTenantId } from '@/lib/tenant-context'
 
 export const runtime = 'nodejs'
 
@@ -17,8 +17,8 @@ export const runtime = 'nodejs'
    POST /api/orgs/[orgId]/founder-lens  → upsert CUSTOM sections per role
    ══════════════════════════════════════════════════════════════════════════════ */
 
-// Phase 1 (multi-tenancy): resolve per-request from hostname instead of env.
-const TENANT_ID = getDefaultTenantId()
+// Phase 1 (multi-tenancy): resolved per-request via getTenantId().
+// When middleware sets x-tenant-id from hostname, this will auto-resolve.
 
 // Valid role keys accepted by the wizard.
 const VALID_ROLES = new Set([
@@ -26,10 +26,10 @@ const VALID_ROLES = new Set([
 ])
 
 /** Idempotently ensure the tenant row exists (FK target). */
-async function ensureTenant() {
+async function ensureTenant(tenantId: string) {
   await db
     .insert(tenants)
-    .values({ id: TENANT_ID, name: 'RxFit Athletics', domain: 'rxfitatx.com' })
+    .values({ id: tenantId, name: 'RxFit Athletics', domain: 'rxfitatx.com' })
     .onConflictDoNothing()
 }
 
@@ -71,7 +71,8 @@ export async function GET(
   }
 
   try {
-    await ensureTenant()
+    const TENANT_ID = getTenantId()
+    await ensureTenant(TENANT_ID)
     const rows = await db
       .select()
       .from(founderLensSections)
@@ -134,7 +135,8 @@ export async function POST(
   const rolesUpdated: string[] = []
 
   try {
-    await ensureTenant()
+    const TENANT_ID = getTenantId()
+    await ensureTenant(TENANT_ID)
 
     for (const section of body.roles) {
       const role = section.role

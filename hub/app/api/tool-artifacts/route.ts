@@ -8,12 +8,12 @@ import {
   updateToolArtifact,
   archiveToolArtifact,
 } from '@/lib/tool-artifacts'
-import { getDefaultTenantId } from '@/lib/tenant-context'
+import { getTenantId } from '@/lib/tenant-context'
 
 export const runtime = 'nodejs'
 
-// Phase 1 (multi-tenancy): resolve per-request from hostname instead of env.
-const TENANT_ID = getDefaultTenantId()
+// Phase 1 (multi-tenancy): resolved per-request via getTenantId().
+// When middleware sets x-tenant-id from hostname, this will auto-resolve.
 
 /**
  * GET /api/tool-artifacts?toolId=issue-tree
@@ -36,6 +36,7 @@ export async function GET(req: NextRequest) {
     // Admins see all tenant artifacts; staff are scoped to artifacts they created.
     const isAdmin = role === 'admin' || role === 'superadmin'
     const createdBy = isAdmin ? undefined : (session.user.email ?? '__none__')
+    const TENANT_ID = getTenantId()
     const artifacts = await getToolArtifacts(TENANT_ID, toolId, 20, createdBy)
     return NextResponse.json({ artifacts })
   } catch (err) {
@@ -66,7 +67,7 @@ export async function POST(req: NextRequest) {
     }
 
     const artifact = await saveToolArtifact({
-      tenantId: TENANT_ID,
+      tenantId: getTenantId(),
       toolId,
       chatId: chatId ?? undefined,
       title,
@@ -105,7 +106,7 @@ export async function PATCH(req: NextRequest) {
 
     // Verify artifact belongs to this tenant (IDOR prevention)
     const existing = await getToolArtifact(id)
-    if (!existing || existing.tenantId !== TENANT_ID) {
+    if (!existing || existing.tenantId !== getTenantId()) {
       return NextResponse.json({ error: 'Artifact not found' }, { status: 404 })
     }
 
@@ -142,7 +143,7 @@ export async function DELETE(req: NextRequest) {
 
     // Verify artifact belongs to this tenant (IDOR prevention)
     const existing = await getToolArtifact(id)
-    if (!existing || existing.tenantId !== TENANT_ID) {
+    if (!existing || existing.tenantId !== getTenantId()) {
       return NextResponse.json({ error: 'Artifact not found' }, { status: 404 })
     }
 

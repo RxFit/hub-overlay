@@ -10,19 +10,20 @@ import { runAllSources } from '@/lib/kpi-sources'
 import { createLogger } from '@/lib/logger'
 import { recordEvent } from '@/lib/event-logger'
 import { pruneExpiredMemories, pruneOldEventLogs } from '@/lib/agent-memory'
-import { getDefaultTenantId } from '@/lib/tenant-context'
+import { getTenantId } from '@/lib/tenant-context'
 
 export const runtime = 'nodejs'
 
 const log = createLogger('kpis/sync')
-// Phase 1 (multi-tenancy): resolve per-request from hostname instead of env.
-const TENANT_ID = getDefaultTenantId()
+// Phase 1 (multi-tenancy): resolved per-request via getTenantId().
+// When middleware sets x-tenant-id from hostname, this will auto-resolve.
+// Cron calls (no session) fall through to NEXT_PUBLIC_TENANT_ID env var.
 
-/** Ensure the rxfit tenant row exists */
-async function ensureTenant() {
+/** Ensure the tenant row exists */
+async function ensureTenant(tenantId: string) {
   await db
     .insert(tenants)
-    .values({ id: TENANT_ID, name: 'RxFit Athletics', domain: 'rxfit.co' })
+    .values({ id: tenantId, name: 'RxFit Athletics', domain: 'rxfit.co' })
     .onConflictDoNothing()
 }
 
@@ -80,7 +81,8 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    await ensureTenant()
+    const TENANT_ID = getTenantId()
+    await ensureTenant(TENANT_ID)
     const now = new Date()
 
     // Run all sources in parallel (each handles its own missing-credential case)
@@ -221,6 +223,7 @@ export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions)
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+  const TENANT_ID = getTenantId()
   const rows = await db
     .select({
       source: kpis.source,

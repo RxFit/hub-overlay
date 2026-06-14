@@ -14,6 +14,34 @@ const log = createLogger('paperclip/proxy')
 
 const PAPERCLIP_BASE = PAPERCLIP_BASE_URL
 
+/** Resource listing endpoints that require company-scoped access for non-superadmin users. */
+const SCOPED_LIST_PATHS = ['/api/issues', '/api/agents', '/api/projects', '/api/runs']
+
+/**
+ * Determines whether a request to a list endpoint should be blocked for scoped users.
+ * Allows: POST /api/issues (issue creation) and /api/runs?companyId=... (scoped run queries).
+ */
+function isBlockedListAccess(
+  apiPath: string,
+  method: string,
+  searchParams: URLSearchParams
+): boolean {
+  const matchesList = SCOPED_LIST_PATHS.some(
+    p => apiPath === p || apiPath.startsWith(`${p}?`)
+  )
+  if (!matchesList) return false
+
+  // Allow POST to /api/issues (issue creation)
+  if (method.toUpperCase() === 'POST' && (apiPath === '/api/issues' || apiPath.startsWith('/api/issues?'))) {
+    return false
+  }
+  // Allow /api/runs with companyId query (scoped run query)
+  if (apiPath.startsWith('/api/runs') && searchParams.has('companyId')) {
+    return false
+  }
+  return true
+}
+
 // Allowed API path prefixes for the proxy — covers full Paperclip surface
 const ALLOWED_PREFIXES = [
   '/api/companies',         // list + detail + create + nested resources
@@ -100,37 +128,30 @@ async function proxyRequest(
 
   // Block direct lists for scoped users
   if (role !== 'superadmin' && !assignedProjects.includes('*')) {
-    if (
-      apiPath === '/api/issues' ||
-      apiPath === '/api/agents' ||
-      apiPath === '/api/projects' ||
-      apiPath === '/api/runs' ||
-      apiPath.startsWith('/api/issues?') ||
-      apiPath.startsWith('/api/agents?') ||
-      apiPath.startsWith('/api/projects?') ||
-      apiPath.startsWith('/api/runs?')
-    ) {
-      const isPost = method.toUpperCase() === 'POST'
-      const hasCompanyQuery = req.nextUrl.searchParams.has('companyId')
-      if (!(isPost && (apiPath === '/api/issues' || apiPath.startsWith('/api/issues?'))) && !(apiPath.startsWith('/api/runs') && hasCompanyQuery)) {
+    if (isBlockedListAccess(apiPath, method, req.nextUrl.searchParams)) {
+      return NextResponse.json(
+        { error: 'Access denied: direct resource listing is restricted' },
+        { status: 403 }
+      )
+    }
+
+    // For allowed /api/runs?companyId=..., verify the user is assigned to that company
+    if (apiPath.startsWith('/api/runs') && req.nextUrl.searchParams.has('companyId')) {
+      const qCompanyId = req.nextUrl.searchParams.get('companyId')
+      if (qCompanyId && !assignedProjects.includes(qCompanyId)) {
         return NextResponse.json(
-          { error: 'Access denied: direct resource listing is restricted' },
+          { error: 'Access denied: not assigned to this project' },
           { status: 403 }
         )
-      }
-
-      if (apiPath.startsWith('/api/runs') && hasCompanyQuery) {
-        const qCompanyId = req.nextUrl.searchParams.get('companyId')
-        if (qCompanyId && !assignedProjects.includes(qCompanyId)) {
-          return NextResponse.json(
-            { error: 'Access denied: not assigned to this project' },
-            { status: 403 }
-          )
-        }
       }
     }
   }
 
+  // KNOWN LIMITATION (TOCTOU): This GET-then-mutate pattern has a theoretical
+  // time-of-check/time-of-use race — the resource's companyId could change
+  // between the pre-check GET and the forwarded mutation. Practical risk is
+  // near-zero: company reassignment is an admin-only, infrequent operation.
+  // Accepted risk per code review 2026-06-13 (R2).
   // Pre-check for specific resources (issues/agents/projects) on mutation (PATCH/DELETE)
   const issueMatch = apiPath.match(/\/api\/issues\/([a-f0-9-]+)/)
   const agentMatch = apiPath.match(/\/api\/agents\/([a-f0-9-]+)/)

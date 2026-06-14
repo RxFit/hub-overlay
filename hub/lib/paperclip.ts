@@ -171,6 +171,13 @@ export async function paperclipFetch<T>(
   const body = opts?.body
 
   // 1. Loop detection: Throw error and block sequential redundant writes
+  // ARCHITECTURAL DECISION (2026-06-14):
+  // The `scope` parameter is caller-provided. In the proxy route (route.ts),
+  // scope = session.user.email (per-user isolation). Here in the server-side
+  // path, scope comes from the caller — if omitted, defaults to '__global__'.
+  // This is intentional: server-side calls (e.g. agent orchestration) are not
+  // user-scoped, so they share a global loop detection window. If a future
+  // caller needs per-tenant loop isolation, pass `tenantId` as the scope.
   loopDetector.detectAndRecord(method, path, body, scope)
 
   // 2. Idempotency headers: Attach unique key for writes to prevent duplicate execution on retry
