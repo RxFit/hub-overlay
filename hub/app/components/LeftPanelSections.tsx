@@ -1151,23 +1151,6 @@ function formatTime(isoString: string): string {
   }
 }
 
-function formatShortDate(isoString: string): string {
-  try {
-    const d = new Date(isoString)
-    const now = new Date()
-    const isToday = d.toDateString() === now.toDateString()
-    const tomorrow = new Date(now)
-    tomorrow.setDate(tomorrow.getDate() + 1)
-    const isTomorrow = d.toDateString() === tomorrow.toDateString()
-
-    if (isToday) return 'Today'
-    if (isTomorrow) return 'Tomorrow'
-    return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
-  } catch {
-    return isoString
-  }
-}
-
 function formatRelativeDate(isoString: string): string {
   try {
     const d = new Date(isoString)
