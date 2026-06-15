@@ -2,7 +2,9 @@ const https = require('https');
 
 const PAPERCLIP_URL = "https://rxfit-paperclip-11747747730.us-central1.run.app";
 const EMAIL = "Danny@rxfitatx.com";
-const PASSWORD = "Paperclip2026!";
+// SECURITY: plaintext password removed 2026-06-12 (was committed to the repo — change it).
+const PASSWORD = process.env.PAPERCLIP_BOARD_PASSWORD;
+if (!PASSWORD) { console.error('Set PAPERCLIP_BOARD_PASSWORD env var'); process.exit(1); }
 
 const COMPANIES = {
   "RxFit Enterprise": "829b2493-97ed-4cb9-8775-ff8298dcf650",

@@ -20,7 +20,9 @@
 
 $PAPERCLIP_URL  = "https://rxfit-paperclip-11747747730.us-central1.run.app"
 $DANNY_EMAIL    = "Danny@rxfitatx.com"
-$DANNY_PASSWORD = "Paperclip2026!"
+# SECURITY: plaintext password removed 2026-06-12 (was committed to the repo — change it).
+$DANNY_PASSWORD = $env:PAPERCLIP_BOARD_PASSWORD
+if (-not $DANNY_PASSWORD) { Write-Error "Set PAPERCLIP_BOARD_PASSWORD env var"; exit 1 }
 
 # ── Agent UUIDs by Company (from migration payload) ───────────────────────────
 

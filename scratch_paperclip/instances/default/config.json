@@ -5,9 +5,7 @@
     "source": "configure"
   },
   "database": {
-    "mode": "postgres",
-    "connectionString": "",
-    "postgresConnectionString": ""
+    "mode": "postgres"
   },
   "logging": {
     "mode": "file",

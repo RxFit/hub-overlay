@@ -2,8 +2,9 @@ const { Client } = require('pg');
 const crypto = require('crypto');
 const { scryptSync } = require('crypto');
 
-const DB_URL = process.env.DATABASE_URL;
-if (!DB_URL) { console.error('DATABASE_URL not set'); process.exit(1); }
+// SECURITY: hardcoded credential removed 2026-06-12. Set PAPERCLIP_DB_URL to run.
+const DB_URL = process.env.PAPERCLIP_DB_URL;
+if (!DB_URL) { console.error('PAPERCLIP_DB_URL env var is required'); process.exit(1); }
 
 // Better Auth uses scrypt with these exact parameters:
 // N: 16384, r: 16, p: 1, dkLen: 64
@@ -25,7 +26,10 @@ async function main() {
   await client.connect();
 
   const userId = 'danny-rxfit-admin';
-  const password = 'RxFit2026!';
+  // SECURITY: plaintext password removed 2026-06-12 (it was committed to the repo —
+  // change the account password if it was ever used). Pass via env to run.
+  const password = process.env.NEW_PASSWORD;
+  if (!password) { console.error('NEW_PASSWORD env var is required'); process.exit(1); }
   const hash = hashPassword(password);
 
   console.log(`Generated scrypt hash: ${hash.substring(0, 40)}...`);

@@ -1,8 +1,10 @@
 const { Client } = require('pg');
 const crypto = require('crypto');
 
-const DB_URL = process.env.DATABASE_URL;
-if (!DB_URL) { console.error('DATABASE_URL not set'); process.exit(1); }
+// SECURITY: hardcoded credential removed 2026-06-12 (it was committed AND publicly
+// routable via the Railway proxy — rotate that password). Set PAPERCLIP_DB_URL to run.
+const DB_URL = process.env.PAPERCLIP_DB_URL;
+if (!DB_URL) { console.error('PAPERCLIP_DB_URL env var is required'); process.exit(1); }
 const EMAIL = 'danny@rxfitatx.com';
 
 async function main() {

@@ -5,9 +5,7 @@
     "source": "configure"
   },
   "database": {
-    "mode": "postgres",
-    "connectionString": "",
-    "postgresConnectionString": ""
+    "mode": "postgres"
   },
   "logging": {
     "mode": "file",
@@ -24,7 +22,7 @@
   },
   "auth": {
     "baseUrlMode": "explicit",
-    "publicBaseUrl": "https://rxfit-paperclip-11747747730.us-central1.run.app",
+    "publicBaseUrl": "https://api.paperclip.casatrejo.com",
     "disableSignUp": true
   },
   "telemetry": {

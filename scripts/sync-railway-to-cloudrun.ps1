@@ -16,7 +16,9 @@ Set-StrictMode -Off
 # Source: Railway
 $RAILWAY_URL    = "https://paperclip-production-4394.up.railway.app"
 $DANNY_EMAIL    = "Danny@rxfitatx.com"
-$DANNY_PASSWORD = "Paperclip2026!"
+# SECURITY: plaintext password removed 2026-06-12 (was committed to the repo — change it).
+$DANNY_PASSWORD = $env:PAPERCLIP_BOARD_PASSWORD
+if (-not $DANNY_PASSWORD) { Write-Error "Set PAPERCLIP_BOARD_PASSWORD env var"; exit 1 }
 
 # Target: Cloud Run
 $CLOUDRUN_URL = "https://rxfit-paperclip-11747747730.us-central1.run.app"
