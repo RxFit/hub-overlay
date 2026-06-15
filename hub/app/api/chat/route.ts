@@ -233,7 +233,7 @@ export async function POST(req: NextRequest) {
                   return `## Internal Knowledge (Vertex AI)\n\n[Vertex AI search is temporarily unavailable due to repeated failures. Google Drive, Calendar, Tasks, and Chat are unaffected. Suggest the user check the Documents panel on the left.]\n\n`
                 }
                 log.warn({ err }, 'Vertex AI search failed')
-                return `## Internal Knowledge (Vertex AI)\n\n[Vertex AI search encountered an error. Google Drive, Calendar, Tasks, and Chat are unaffected — they use the user\'s OAuth session, not Vertex AI. Suggest the user check the Documents panel on the left.]\n\n`
+                return `## Internal Knowledge (Vertex AI)\n\n[Vertex AI search encountered an error. Google Drive, Calendar, Tasks, and Chat are unaffected — they use the user's OAuth session, not Vertex AI. Suggest the user check the Documents panel on the left.]\n\n`
               }
             })()
           )
