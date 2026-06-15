@@ -6,6 +6,18 @@
 > All board-level API calls require the board token in `~/.paperclip/auth.json`.
 > CLI profile: `hub-local`
 
+> ⚠️ **TWO PAPERCLIP INSTANCES EXIST — do not mix their IDs.**
+> 1. **Local instance** (`127.0.0.1:3100`) — the "HUB Overlay" org described in THIS file.
+>    Used by Antigravity/CLI workflows and the watchdog scripts in `scripts/paperclip/`.
+>    Company `05787964-…`, agents `a26e5555-…` (CEO), `c56e5206-…` (COO), `9eeb28d1-…` (CTO).
+> 2. **Cloud Run instance** (`https://api.paperclip.casatrejo.com`) —
+>    the "RxFit" org the **Hub web app** (`hub/`) talks to. Its company/agent IDs live in
+>    `hub/lib/paperclipConfig.ts` and are DIFFERENT from the IDs below.
+>    `railway/paperclip/` is a legacy (Railway) deployment config.
+> Issues created from the Hub chat UI land on the Cloud Run instance, NOT this local org.
+> 
+> *Decision (2026-06-13): We are explicitly KEEPING the local Paperclip instance at 127.0.0.1:3100 as an isolated sandbox for Antigravity's developer tasks, separated from the Hub Web App's production tasks.*
+
 ## Instance
 - **API Base:** `http://127.0.0.1:3100`
 - **Dashboard:** `http://127.0.0.1:3100` → select HUB Overlay
@@ -88,31 +100,3 @@ npx -y paperclipai dashboard
 `C:\Users\danie\Documents\antigravity\vibrant-chandrasekhar`
 
 <!-- END:paperclip-org -->
-
-<!-- BEGIN:obsidian-vault -->
-## Obsidian Vault — AntigravityHQ
-
-> Centralized institutional memory for all Antigravity projects.
-> Git-versioned, queryable, and indexed by Obsidian.
-
-### Vault
-- **Path:** `C:\AntigravityHQ`
-- **Type:** Single unified vault (all projects share one vault)
-
-### Chat Memory
-- **Location:** `chats/hub-paperclip/`
-- **Format:** Obsidian-compatible markdown with YAML frontmatter
-- **Updated by:** Memory Extractor (`extract-memory.mjs`) + direct agent writes
-
-### CEO Directive
-> Before closing ANY issue, the CEO agent MUST:
-> 1. Query `C:\AntigravityHQ\chats\hub-paperclip\` for prior context
-> 2. Verify the deliverable matches the original request (Pre-Flight Verification)
-> 3. Flag any reinterpretations: `REINTERPRETED: User said X, agent delivered Y`
-> 4. Declare any gaps: `UNDELIVERED: {component} — {reason}`
-
-### Scoping Rules
-- **Default scope:** Read only from `chats/hub-paperclip/`
-- **Cross-project reads:** Only when explicitly requested by user or Antigravity
-- **Write scope:** Only to `chats/hub-paperclip/`
-<!-- END:obsidian-vault -->
