@@ -888,7 +888,7 @@ Respond with EXACTLY one of:
   }, [doSend])
 
   /* ── Handle context injection from panels ── */
-  const handleChatInject = useCallback((message: string, useCase: string = 'recall') => {
+  const handleChatInject = useCallback((message: string, useCase: string = 'deep_dive') => {
     setMobileLeftOpen(false)
     setMobileRightOpen(false)
     setMobileTab('chat')

@@ -77,6 +77,25 @@ export async function DELETE(
   req: NextRequest,
   { params }: { params: { path: string[] } }
 ) {
+  // S10 fix: Destructive operations on companies/agents require admin+ role.
+  // The client-side Interview Mode name-matching is just UX; THIS is the
+  // real security boundary. Without this, staff/onboarding users could
+  // craft a direct DELETE request and bypass all client-side guards.
+  const session = await getServerSession(authOptions)
+  const userRole = (session?.user as Record<string, unknown>)?.role as string
+  const segments = params.path[0] === 'api' ? params.path.slice(1) : params.path
+  const apiPath = '/api/' + segments.join('/')
+
+  const isCompanyDelete = /^\/api\/companies\/[a-f0-9-]+$/.test(apiPath)
+  const isAgentDelete = /^\/api\/agents\/[a-f0-9-]+$/.test(apiPath)
+
+  if ((isCompanyDelete || isAgentDelete) && userRole !== 'superadmin' && userRole !== 'admin') {
+    return NextResponse.json(
+      { error: 'Forbidden — admin or superadmin role required for destructive operations' },
+      { status: 403 }
+    )
+  }
+
   return proxyRequest(req, params.path, 'DELETE')
 }
 

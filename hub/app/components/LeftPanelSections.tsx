@@ -227,7 +227,16 @@ export function TasksSection({ onInjectChat }: { onInjectChat: (msg: string) => 
               isFading={fadingIds.has(task.id)}
               isToggling={togglingIds.has(task.id)}
               onToggle={() => resolvedListId && handleToggleTask(task, resolvedListId)}
-              onInjectChat={() => onInjectChat(`Tell me about task: ${task.title}`)}
+              onInjectChat={() => {
+                // Carry the task's real details inline so the assistant has the
+                // data even if this item is outside the live-context snapshot
+                // (e.g. completed, or beyond the per-list cap). Prevents the
+                // "no data → Paperclip warming up" deflection.
+                const due = task.due ? `, due ${new Date(task.due).toLocaleDateString('en-US', { timeZone: 'America/Chicago' })}` : ''
+                const status = task.status === 'completed' ? ' (completed)' : ''
+                const notes = task.notes ? `. Notes: ${task.notes.replace(/\s+/g, ' ').slice(0, 500)}` : ''
+                onInjectChat(`Tell me about this task from my "${activeListName}" list: "${task.title}"${due}${status}${notes}`)
+              }}
             />
           ))}
         </div>
@@ -664,10 +673,23 @@ export function CalendarSection({ onInjectChat }: { onInjectChat: (msg: string) 
                   key={event.id}
                   event={event}
                   onClick={() => {
-                    const dateStr = event.start.dateTime
-                      ? formatShortDate(event.start.dateTime)
+                    // Carry the event's real details inline so the assistant has
+                    // the data even if this item is outside the live-context snapshot.
+                    // Mirrors the structured task injection pattern (TaskRow L230-238).
+                    const startStr = event.start.dateTime
+                      ? new Date(event.start.dateTime).toLocaleString('en-US', { timeZone: 'America/Chicago', dateStyle: 'medium', timeStyle: 'short' })
                       : event.start.date ?? ''
-                    onInjectChat(`Tell me about event: ${event.summary} on ${dateStr}`)
+                    const endStr = event.end?.dateTime
+                      ? `, ends ${new Date(event.end.dateTime).toLocaleTimeString('en-US', { timeZone: 'America/Chicago', timeStyle: 'short' })}`
+                      : ''
+                    const loc = (event as any).location ? `, location: ${(event as any).location}` : ''
+                    const attendees = (event as any).attendees?.length
+                      ? `, attendees: ${(event as any).attendees.map((a: any) => a.email || a.displayName).slice(0, 5).join(', ')}`
+                      : ''
+                    const desc = (event as any).description
+                      ? `. Description: ${(event as any).description.replace(/\s+/g, ' ').slice(0, 300)}`
+                      : ''
+                    onInjectChat(`Tell me about this calendar event: "${event.summary}" on ${startStr}${endStr}${loc}${attendees}${desc}`)
                   }}
                   onDelete={() => setDeleteConfirm({
                     id: event.id,

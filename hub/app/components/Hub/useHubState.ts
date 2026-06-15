@@ -1,3 +1,21 @@
+/**
+ * ╔══════════════════════════════════════════════════════════════════════╗
+ * ║  ⚠️  DEPRECATED — DO NOT USE OR REFERENCE                          ║
+ * ║                                                                     ║
+ * ║  This file is a DEAD parallel implementation of the Hub chat stack. ║
+ * ║  The LIVE implementation is in app/page.tsx.                         ║
+ * ║                                                                     ║
+ * ║  This file has ZERO imports — nothing references useHubState().     ║
+ * ║  It contains unfixed bugs (useCase:'recall' default, inline         ║
+ * ║  executeAction without role enforcement, bare string injections).   ║
+ * ║                                                                     ║
+ * ║  It exists only as a reference. Delete when the migration to        ║
+ * ║  page.tsx is confirmed stable (post hub-00018 deploy).              ║
+ * ║                                                                     ║
+ * ║  2026-06-14: Marked deprecated after Claude Coworks audit revealed  ║
+ * ║  this file was being confused with the live stack.                   ║
+ * ╚══════════════════════════════════════════════════════════════════════╝
+ */
 'use client'
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'

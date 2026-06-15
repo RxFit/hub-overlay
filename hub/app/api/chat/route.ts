@@ -11,6 +11,7 @@ import { searchWeb, fetchUrlWithExa } from '@/lib/exa'
 import { loadSkillContent } from '@/lib/skills-loader'
 import { needsInternalSearch, needsExternalSearch } from '@/lib/search-routing'
 import { ChatRequestSchema } from '@/lib/zod-schemas'
+import { buildGoogleWorkspaceContext } from '@/lib/google-context'
 import type { ChatMessage, ChatAttachment } from '@/types'
 
 const log = createLogger('chat')
@@ -23,13 +24,18 @@ export const maxDuration = 120
  * Critical for preventing pre-stream work from blocking the SSE response.
  */
 async function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T, label: string): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout>
   const timer = new Promise<T>((resolve) => {
-    setTimeout(() => {
+    timeoutId = setTimeout(() => {
       log.warn({ ms, label }, `Timeout exceeded for ${label} — using fallback`)
       resolve(fallback)
     }, ms)
   })
-  return Promise.race([promise, timer])
+  try {
+    return await Promise.race([promise, timer])
+  } finally {
+    clearTimeout(timeoutId!)
+  }
 }
 
 // Search-routing heuristics live in lib/search-routing.ts (word-boundary
@@ -57,111 +63,141 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Messages array required', details: msgValidation.error.issues }, { status: 400 })
   }
 
-  // Build context from live Paperclip data
-  // HARDENED: 8-second aggregate timeout prevents pre-stream hang
-  let projectContext = ''
-  let agentActivity = ''
-
-  // Extract user scoping for Paperclip context
+  // ── Parallel pre-stream context assembly ──
+  // Paperclip context (8s timeout) and Google Workspace context (6s timeout)
+  // were previously sequential (worst case 14s before streaming starts).
+  // Now they run concurrently via Promise.all (worst case 8s).
+  //
+  // The Google OAuth token is resolved first since it's a local JWT decode
+  // (sub-ms) that both the Google WS fetch and attachment handling need.
   const chatUser = session.user as Record<string, unknown>
   const chatRole = chatUser.role as string
   const chatAssignedProjects = (chatUser.assignedProjects as string[]) ?? []
+  let projectContext = ''
+  let agentActivity = ''
 
-  const paperclipContextResult = await withTimeout(
-    (async () => {
-      try {
-        let companies = await getCompanies()
+  const googleToken = await getToken({ req })
+  const googleAccessToken = googleToken?.accessToken as string | undefined
 
-        // Scope to user's assigned workspaces (admin/superadmin with ['*'] see all)
-        if (chatRole !== 'superadmin' && !chatAssignedProjects.includes('*')) {
-          companies = companies.filter(c => chatAssignedProjects.includes(c.id))
+  const [paperclipContextResult, googleWsResult] = await Promise.all([
+    // Branch 1: Paperclip orchestration context (8s timeout)
+    withTimeout(
+      (async () => {
+        try {
+          let companies = await getCompanies()
+
+          // Scope to user's assigned workspaces (admin/superadmin with ['*'] see all)
+          if (chatRole !== 'superadmin' && !chatAssignedProjects.includes('*')) {
+            companies = companies.filter(c => chatAssignedProjects.includes(c.id))
+          }
+
+          const pc = companies
+            .map(c => `- ${c.name} (${c.identifier}): ${c.issueCount ?? '?'} issues, ${c.memberCount ?? '?'} members`)
+            .join('\n')
+
+          // Get recent issues across scoped companies (first 3 for context)
+          const issuePromises = companies.slice(0, 3).map(c =>
+            getIssues(c.id, { limit: 5 }).catch(() => [])
+          )
+          const issueResults = await Promise.all(issuePromises)
+          const allIssues = issueResults.flat()
+          let aa = allIssues
+            .slice(0, 10)
+            .map(i => `- [${i.identifier}] ${i.title} (${i.state?.name ?? 'unknown'})`)
+            .join('\n')
+
+          // Also get agent status for system prompt context — INDIVIDUAL details, not just counts
+          try {
+            const agentPromises = companies.slice(0, 3).map(c =>
+              getAgents(c.id).catch(() => [])
+            )
+            const agentResults = await Promise.all(agentPromises)
+            const allAgents = agentResults.flat()
+            const healthy = allAgents.filter(a => a.status === 'active').length
+            const errored = allAgents.filter(a => a.status === 'error').length
+            const inactive = allAgents.filter(a => a.status === 'inactive').length
+            aa += '\nAgent Fleet Status: ' + allAgents.length + ' total — ' + healthy + ' active, ' + errored + ' errored, ' + inactive + ' inactive'
+
+            // List individual agents so the LLM has real data for audits
+            if (allAgents.length > 0) {
+              aa += '\n\nAgent Details:'
+              for (const agent of allAgents) {
+                const heartbeat = agent.lastHeartbeat
+                  ? ` (last heartbeat: ${new Date(agent.lastHeartbeat).toLocaleString('en-US', { timeZone: 'America/Chicago' })})`
+                  : ' (no heartbeat recorded)'
+                aa += `\n  - ${agent.name}: ${agent.status.toUpperCase()}${heartbeat}`
+              }
+            }
+
+            // Surface errored agents prominently
+            const erroredAgents = allAgents.filter(a => a.status === 'error')
+            if (erroredAgents.length > 0) {
+              aa += '\n\n⚠️ ERRORED AGENTS:'
+              for (const agent of erroredAgents) {
+                aa += `\n  - ${agent.name} (${agent.id}) — status: error, adapter: ${agent.adapter}`
+              }
+            }
+          } catch (agentErr) {
+            log.warn({ err: agentErr }, 'Agent status fetch failed — skipping agent context')
+          }
+
+          // Fetch recent runs to provide actual execution history for audit queries
+          try {
+            const runPromises = companies.slice(0, 3).map(c =>
+              getRuns(c.id, { limit: 5 }).catch(() => [])
+            )
+            const runResults = await Promise.all(runPromises)
+            const allRuns = runResults.flat()
+            if (allRuns.length > 0) {
+              aa += '\n\nRecent Agent Runs:'
+              for (const run of allRuns.slice(0, 10)) {
+                const duration = run.durationMs ? `${(run.durationMs / 1000).toFixed(1)}s` : 'n/a'
+                const started = run.startedAt ? new Date(run.startedAt).toLocaleString('en-US', { timeZone: 'America/Chicago' }) : 'unknown'
+                aa += `\n  - [${run.issueIdentifier}] ${run.agentName}: ${run.status.toUpperCase()} (${duration}, started: ${started})`
+              }
+              const failedRuns = allRuns.filter(r => r.status === 'failed')
+              if (failedRuns.length > 0) {
+                aa += `\n\n⚠️ ${failedRuns.length} FAILED RUNS in recent history`
+              }
+            }
+          } catch (runErr) {
+            log.warn({ err: runErr }, 'Run history fetch failed — skipping run context')
+          }
+
+          return { projectContext: pc, agentActivity: aa }
+        } catch (ctxErr) {
+          log.warn({ err: ctxErr }, 'Paperclip context fetch failed — proceeding without project context')
+          return { projectContext: '[Paperclip orchestration data unavailable — this does NOT affect Google Drive, Calendar, Tasks, Gmail, or Chat. Those services are powered by the user\'s OAuth session and work independently via the left panel.]', agentActivity: '' }
         }
+      })(),
+      8_000,
+      { projectContext: '[Paperclip project context timed out — Google Workspace features (Drive, Calendar, Tasks, Chat, Gmail) are unaffected and remain available via the left panel.]', agentActivity: '' },
+      'paperclip-context'
+    ),
 
-        const pc = companies
-          .map(c => `- ${c.name} (${c.identifier}): ${c.issueCount ?? '?'} issues, ${c.memberCount ?? '?'} members`)
-          .join('\n')
-
-        // Get recent issues across scoped companies (first 3 for context)
-        const issuePromises = companies.slice(0, 3).map(c =>
-          getIssues(c.id, { limit: 5 }).catch(() => [])
+    // Branch 2: Google Workspace context (6s timeout) — runs in parallel
+    googleAccessToken
+      ? withTimeout(
+          buildGoogleWorkspaceContext(googleAccessToken).catch((err) => {
+            log.warn({ err }, 'Google Workspace context fetch failed — proceeding without it')
+            return null
+          }),
+          6_000,
+          null,
+          'google-workspace-context',
         )
-        const issueResults = await Promise.all(issuePromises)
-        const allIssues = issueResults.flat()
-        let aa = allIssues
-          .slice(0, 10)
-          .map(i => `- [${i.identifier}] ${i.title} (${i.state?.name ?? 'unknown'})`)
-          .join('\n')
+      : Promise.resolve(null),
+  ])
 
-        // Also get agent status for system prompt context — INDIVIDUAL details, not just counts
-        try {
-          const agentPromises = companies.slice(0, 3).map(c =>
-            getAgents(c.id).catch(() => [])
-          )
-          const agentResults = await Promise.all(agentPromises)
-          const allAgents = agentResults.flat()
-          const healthy = allAgents.filter(a => a.status === 'active').length
-          const errored = allAgents.filter(a => a.status === 'error').length
-          const inactive = allAgents.filter(a => a.status === 'inactive').length
-          aa += '\nAgent Fleet Status: ' + allAgents.length + ' total — ' + healthy + ' active, ' + errored + ' errored, ' + inactive + ' inactive'
-
-          // List individual agents so the LLM has real data for audits
-          if (allAgents.length > 0) {
-            aa += '\n\nAgent Details:'
-            for (const agent of allAgents) {
-              const heartbeat = agent.lastHeartbeat
-                ? ` (last heartbeat: ${new Date(agent.lastHeartbeat).toLocaleString('en-US', { timeZone: 'America/Chicago' })})`
-                : ' (no heartbeat recorded)'
-              aa += `\n  - ${agent.name}: ${agent.status.toUpperCase()}${heartbeat}`
-            }
-          }
-
-          // Surface errored agents prominently
-          const erroredAgents = allAgents.filter(a => a.status === 'error')
-          if (erroredAgents.length > 0) {
-            aa += '\n\n⚠️ ERRORED AGENTS:'
-            for (const agent of erroredAgents) {
-              aa += `\n  - ${agent.name} (${agent.id}) — status: error, adapter: ${agent.adapter}`
-            }
-          }
-        } catch (agentErr) {
-          log.warn({ err: agentErr }, 'Agent status fetch failed — skipping agent context')
-        }
-
-        // Fetch recent runs to provide actual execution history for audit queries
-        try {
-          const runPromises = companies.slice(0, 3).map(c =>
-            getRuns(c.id, { limit: 5 }).catch(() => [])
-          )
-          const runResults = await Promise.all(runPromises)
-          const allRuns = runResults.flat()
-          if (allRuns.length > 0) {
-            aa += '\n\nRecent Agent Runs:'
-            for (const run of allRuns.slice(0, 10)) {
-              const duration = run.durationMs ? `${(run.durationMs / 1000).toFixed(1)}s` : 'n/a'
-              const started = run.startedAt ? new Date(run.startedAt).toLocaleString('en-US', { timeZone: 'America/Chicago' }) : 'unknown'
-              aa += `\n  - [${run.issueIdentifier}] ${run.agentName}: ${run.status.toUpperCase()} (${duration}, started: ${started})`
-            }
-            const failedRuns = allRuns.filter(r => r.status === 'failed')
-            if (failedRuns.length > 0) {
-              aa += `\n\n⚠️ ${failedRuns.length} FAILED RUNS in recent history`
-            }
-          }
-        } catch (runErr) {
-          log.warn({ err: runErr }, 'Run history fetch failed — skipping run context')
-        }
-
-        return { projectContext: pc, agentActivity: aa }
-      } catch (ctxErr) {
-        log.warn({ err: ctxErr }, 'Paperclip context fetch failed — proceeding without project context')
-        return { projectContext: '[Paperclip orchestration data unavailable — this does NOT affect Google Drive, Calendar, Tasks, Gmail, or Chat. Those services are powered by the user\'s OAuth session and work independently via the left panel.]', agentActivity: '' }
-      }
-    })(),
-    8_000,
-    { projectContext: '[Paperclip project context timed out — Google Workspace features (Drive, Calendar, Tasks, Chat, Gmail) are unaffected and remain available via the left panel.]', agentActivity: '' },
-    'paperclip-context'
-  )
   projectContext = paperclipContextResult.projectContext
   agentActivity = paperclipContextResult.agentActivity
+
+  let googleWorkspaceDetail: string | undefined
+  let googleWorkspaceCounts: { taskCount?: number; upcomingEvents?: number; recentFiles?: number } = {}
+  if (googleWsResult) {
+    googleWorkspaceDetail = googleWsResult.detail
+    googleWorkspaceCounts = googleWsResult.counts
+  }
 
   const effectiveUseCase = activeSkill ? 'deep_dive' : useCase
 
@@ -302,8 +338,7 @@ export async function POST(req: NextRequest) {
   // Resolve attachments into text context
   let attachmentContext = ''
   if (attachments && attachments.length > 0) {
-    const token = await getToken({ req })
-    const accessToken = token?.accessToken as string | undefined
+    const accessToken = googleAccessToken
 
     const resolvedParts: string[] = []
 
@@ -381,6 +416,8 @@ export async function POST(req: NextRequest) {
   const systemPrompt = buildSystemPrompt({
     projects: projectContext,
     agentActivity,
+    googleWorkspace: Object.keys(googleWorkspaceCounts).length > 0 ? googleWorkspaceCounts : undefined,
+    googleWorkspaceDetail,
     injectedContext: allInjectedContext || undefined,
     activeSkill: activeSkill || undefined,
     activeSkillContent,
