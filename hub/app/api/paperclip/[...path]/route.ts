@@ -77,7 +77,7 @@ export async function DELETE(
   req: NextRequest,
   { params }: { params: { path: string[] } }
 ) {
-  // S10 fix: Destructive operations on companies/agents require admin+ role.
+  // S10 fix: Destructive operations on companies/agents/issues require admin+ role.
   // The client-side Interview Mode name-matching is just UX; THIS is the
   // real security boundary. Without this, staff/onboarding users could
   // craft a direct DELETE request and bypass all client-side guards.
@@ -88,24 +88,28 @@ export async function DELETE(
 
   const isCompanyDelete = /^\/api\/companies\/[a-f0-9-]+$/.test(apiPath)
   const isAgentDelete = /^\/api\/agents\/[a-f0-9-]+$/.test(apiPath)
+  const isIssueDelete = /^\/api\/issues\/[a-f0-9-]+$/.test(apiPath)
 
-  if ((isCompanyDelete || isAgentDelete) && userRole !== 'superadmin' && userRole !== 'admin') {
+  if ((isCompanyDelete || isAgentDelete || isIssueDelete) && userRole !== 'superadmin' && userRole !== 'admin') {
     return NextResponse.json(
       { error: 'Forbidden — admin or superadmin role required for destructive operations' },
       { status: 403 }
     )
   }
 
-  return proxyRequest(req, params.path, 'DELETE')
+  // Pass the already-fetched session to avoid a second getServerSession call
+  return proxyRequest(req, params.path, 'DELETE', session)
 }
 
 async function proxyRequest(
   req: NextRequest,
   pathSegments: string[],
-  method: string
+  method: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  preAuthSession?: any
 ) {
-  // Auth check
-  const session = await getServerSession(authOptions)
+  // Auth check — reuse pre-authenticated session if provided (DELETE handler)
+  const session = preAuthSession ?? await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }

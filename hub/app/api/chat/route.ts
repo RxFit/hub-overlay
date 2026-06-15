@@ -12,31 +12,14 @@ import { loadSkillContent } from '@/lib/skills-loader'
 import { needsInternalSearch, needsExternalSearch } from '@/lib/search-routing'
 import { ChatRequestSchema } from '@/lib/zod-schemas'
 import { buildGoogleWorkspaceContext } from '@/lib/google-context'
+import { withTimeout } from '@/lib/timeout'
+import { breaker, CircuitOpenError } from '@/lib/circuit-breaker'
 import type { ChatMessage, ChatAttachment } from '@/types'
 
 const log = createLogger('chat')
 
 export const runtime = 'nodejs'
 export const maxDuration = 120
-
-/**
- * Race a promise against a timeout. Returns fallback value on timeout.
- * Critical for preventing pre-stream work from blocking the SSE response.
- */
-async function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T, label: string): Promise<T> {
-  let timeoutId: ReturnType<typeof setTimeout>
-  const timer = new Promise<T>((resolve) => {
-    timeoutId = setTimeout(() => {
-      log.warn({ ms, label }, `Timeout exceeded for ${label} — using fallback`)
-      resolve(fallback)
-    }, ms)
-  })
-  try {
-    return await Promise.race([promise, timer])
-  } finally {
-    clearTimeout(timeoutId!)
-  }
-}
 
 // Search-routing heuristics live in lib/search-routing.ts (word-boundary
 // matched + unit-tested) — imported above as needsInternalSearch / needsExternalSearch.
@@ -233,7 +216,9 @@ export async function POST(req: NextRequest) {
           searchPromises.push(
             (async () => {
               try {
-                const vertexResults = await searchSemanticBrain(query)
+                // Circuit breaker: trips after 3 consecutive Vertex AI failures,
+                // opens for 60s. Prevents repeated 10s timeout hangs during outages.
+                const vertexResults = await breaker.execute('vertex-ai', () => searchSemanticBrain(query))
                 if (vertexResults && vertexResults.length > 0) {
                   const vertexContext = vertexResults
                     .map(r => `**${r.title}** ${r.uri ? `(${r.uri})` : ''}\n${r.snippet}`)
@@ -243,6 +228,10 @@ export async function POST(req: NextRequest) {
                 // Vertex returned no results — tell the LLM explicitly so it doesn't fabricate diagnostics
                 return `## Internal Knowledge (Vertex AI)\n\n[No matching documents found in the internal knowledge base for this query. The user can search Google Drive directly from the Documents panel on the left sidebar, or try refining their search terms. Do NOT blame Paperclip or claim Google services are down — they are independent.]\n\n`
               } catch (err) {
+                if (err instanceof CircuitOpenError) {
+                  log.warn({ key: 'vertex-ai' }, 'Vertex AI circuit is OPEN — skipping search')
+                  return `## Internal Knowledge (Vertex AI)\n\n[Vertex AI search is temporarily unavailable due to repeated failures. Google Drive, Calendar, Tasks, and Chat are unaffected. Suggest the user check the Documents panel on the left.]\n\n`
+                }
                 log.warn({ err }, 'Vertex AI search failed')
                 return `## Internal Knowledge (Vertex AI)\n\n[Vertex AI search encountered an error. Google Drive, Calendar, Tasks, and Chat are unaffected — they use the user\'s OAuth session, not Vertex AI. Suggest the user check the Documents panel on the left.]\n\n`
               }
@@ -300,10 +289,11 @@ export async function POST(req: NextRequest) {
           searchPromises.push(
             (async () => {
               try {
-                const exaResults = await searchWeb(query, {
+                // Circuit breaker: trips after 3 consecutive Exa failures
+                const exaResults = await breaker.execute('exa-search', () => searchWeb(query, {
                   numResults: 5,
                   useAutoprompt: true,
-                })
+                }))
                 if (exaResults.length > 0) {
                   const exaContext = exaResults
                     .map(r => {
@@ -316,6 +306,10 @@ export async function POST(req: NextRequest) {
                   return `## External Web Research (Exa.AI)\n\n${exaContext}\n\n`
                 }
               } catch (err) {
+                if (err instanceof CircuitOpenError) {
+                  log.warn({ key: 'exa-search' }, 'Exa circuit is OPEN — skipping web search')
+                  return null
+                }
                 log.warn({ err }, 'Exa.AI search failed')
               }
               return null

@@ -683,12 +683,12 @@ export function CalendarSection({ onInjectChat }: { onInjectChat: (msg: string) 
                     const endStr = event.end?.dateTime
                       ? `, ends ${new Date(event.end.dateTime).toLocaleTimeString('en-US', { timeZone: userTz, timeStyle: 'short' })}`
                       : ''
-                    const loc = (event as any).location ? `, location: ${(event as any).location}` : ''
-                    const attendees = (event as any).attendees?.length
-                      ? `, attendees: ${(event as any).attendees.map((a: any) => a.email || a.displayName).slice(0, 5).join(', ')}`
+                    const loc = event.location ? `, location: ${event.location}` : ''
+                    const attendees = event.attendees?.length
+                      ? `, attendees: ${event.attendees.map(a => a.email || a.displayName).slice(0, 5).join(', ')}`
                       : ''
-                    const desc = (event as any).description
-                      ? `. Description: ${(event as any).description.replace(/\s+/g, ' ').slice(0, 300)}`
+                    const desc = event.description
+                      ? `. Description: ${event.description.replace(/\s+/g, ' ').slice(0, 300)}`
                       : ''
                     onInjectChat(`Tell me about this calendar event: "${event.summary}" on ${startStr}${endStr}${loc}${attendees}${desc}`)
                   }}

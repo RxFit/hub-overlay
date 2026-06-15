@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { GoogleGenerativeAI, SchemaType, type Schema } from '@google/generative-ai'
+import { withTimeout } from '@/lib/timeout'
 
 /* Lazy-initialized so the API key is read at runtime, not module-load time.
    Prevents an empty-key client if Railway injects env vars after import. */
@@ -80,7 +81,16 @@ ${availableIntents.map(i => `- ID: ${i.id}\n  Description: ${i.description}\n  E
       }
     })
 
-    const result = await model.generateContent(message)
+    // HARDENED: 5s timeout prevents indefinite hang if Gemini is unresponsive
+    const result = await withTimeout(
+      model.generateContent(message),
+      5_000,
+      null,
+      'detect-intent'
+    )
+    if (!result) {
+      return NextResponse.json({ intent: null, extractedEntities: {} })
+    }
     const text = result.response.text()
     const parsed = JSON.parse(text)
 

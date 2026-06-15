@@ -558,6 +558,10 @@ export default function HubPage() {
       attachments: msgAttachments,
     }
 
+    // P7 fix: capture API call intent from inside the setMessages updater
+    // so we can fire it OUTSIDE (prevents double-firing under React concurrent mode)
+    let pendingSendToApi: { message: string; updated: ChatMsg[]; useCase: string; msgAttachments?: ChatAttachment[] } | null = null
+
     setMessages(prev => {
       const updated = [...prev, newMessage]
 
@@ -865,10 +869,17 @@ Respond with EXACTLY one of:
       setContextScore(undefined)
       setContextWeakDim(null)
 
-      // No interview — send to Gemini API
-      sendToApi(message, updated, useCase, msgAttachments)
+      // P7 fix: fire API call OUTSIDE setMessages updater to prevent
+      // double-firing under React concurrent mode / Strict Mode.
+      pendingSendToApi = { message, updated, useCase, msgAttachments }
       return updated
     })
+
+    // Execute the API call outside the state updater (P7 fix from /review)
+    if (pendingSendToApi) {
+      const { message: msg, updated: msgs, useCase: uc, msgAttachments: att } = pendingSendToApi
+      sendToApi(msg, msgs, uc, att)
+    }
   }, [interviewState, sendToApi, canUseInterviewMode, quotedReply])
 
   /* ── Handle manual send from input ── */
