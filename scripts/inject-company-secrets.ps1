@@ -1,7 +1,7 @@
 <#
   inject-company-secrets.ps1
   ──────────────────────────────────────────────────────────────────────────────
-  Injects API secrets into all 3 Paperclip companies (RxFit, NotebookRx, FridgeSnap)
+  Injects API secrets into Paperclip companies (RxFit, NotebookRx)
   via the Paperclip Cloud Run API.
 
   USAGE:
@@ -25,7 +25,6 @@ if (-not $DANNY_PASSWORD) { Write-Error "Set PAPERCLIP_BOARD_PASSWORD env var"; 
 $COMPANIES = @{
   "RxFit Enterprise" = "829b2493-97ed-4cb9-8775-ff8298dcf650"
   "NotebookRx"       = "05ca9da4-5ea1-4dc3-8a17-be9faa821dfb"
-  "FridgeSnap"       = "fe281b7a-23c7-4b10-883c-997eebc841dc"
 }
 
 # ── Secret Sources ────────────────────────────────────────────────────────────
@@ -158,7 +157,7 @@ function Set-CompanySecret {
 }
 
 # ── Inject secrets into all companies ────────────────────────────────────────
-Write-Host "`n🔑 Injecting secrets into all 3 companies..." -ForegroundColor Cyan
+Write-Host "`n🔑 Injecting secrets into all companies..." -ForegroundColor Cyan
 
 $secrets = @{
   "EXA_API_KEY"          = $EXA_API_KEY

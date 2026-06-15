@@ -17,12 +17,8 @@
 | Technical (Wellness Technical) | `3f9303e2-8562-4cd6-8bb8-fc91d17b903e` | `716fd661-408d-46ce-8e5d-ec4c80e031a4` |
 | Revenue (Wellness Revenue) | `d3f3c593-95de-440d-904c-9663936698b0` | `5d20c04f-ec3e-4da5-98f4-a6072f7cfca0` |
 
-## FridgeSnap (API key: sk_pc_b890...c03)
-| Workspace | Company ID | Issue ID |
-|---|---|---|
-| Marketing (FridgeSnap - Marketing) | `9f847dd9-554f-4fca-8d79-57da9ce20f9c` | `f45ede45-c1b9-450f-aa9c-741d770b8050` |
-| Technical (FridgeSnap Technical) | `280ecdc1-3a48-4699-81d5-b9363978d77c` | `456be090-97ee-42ed-8974-353fa2ead879` |
-| Revenue (FridgeSnap Revenue) | `aa21fe75-e1ae-4614-9b8c-e91bef79e683` | `3f315dc3-d2e8-46b5-b967-f31638e74757` |
+## ~~FridgeSnap~~ [REMOVED 2026-06-15]
+
 
 ## RxFit-SEO-Agent (API key: sk_pc_b351...b93)
 | Workspace | Company ID | Issue ID |
@@ -64,7 +60,7 @@ _Pre-Cog mitigations active: forward-only budget authority, historical inbox cut
 |---|---|---|---|---|
 | RxFit | CEO - RxFit | `8f2acc3d-f2dc-4f8c-897e-7c400e91fd85` | `0648c755-cd93-4d9d-96d9-dd71e658b614` | CEO-1 |
 | WellnessApp | App Wellness CEO | `dc29930a-a333-4b4b-a53e-3f539ed590b3` | `79f0695c-1c7f-4593-9ada-0b58db7e2792` | APP-1 |
-| FridgeSnap | Snap CEO | `f62b8673-8b69-4b1d-afcb-7e6821b8ebfc` | `9f551a20-2c9e-44c7-996b-15b6c9672225` | SNA-1 |
+| ~~FridgeSnap~~ | ~~Snap CEO~~ | REMOVED | REMOVED | -- |
 | SEO Agent | SEO Agent CEO | `309b5b18-c53a-482c-b1ff-60a784eb9515` | `dfe8e608-42cb-4db3-b9c8-5dfdbd049113` | SEO-1 |
 | JadeCoS | Chief Jade CEO | `e4c98c03-ad6c-4642-a5c1-a4befa29964a` | `c5a7c3b8-c34f-4d8d-9ef5-3acc6cca157d` | CHI-1 |
 | NotebookRx | Rx Notebook CEO | `fed76e8a-dd28-4c86-ac90-2922e43f65e9` | `76f5148d-d680-4d5f-bc32-febaa6362c79` | RXN-1 |

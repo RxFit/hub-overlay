@@ -11,7 +11,7 @@
  * Usage:
  *   node orchestration/scripts/bootstrap-project.js --project RxFit
  *   node orchestration/scripts/bootstrap-project.js --project WellnessApp
- *   node orchestration/scripts/bootstrap-project.js --project FridgeSnap
+ *   node orchestration/scripts/bootstrap-project.js --project RxFit
  *   node orchestration/scripts/bootstrap-project.js --project RxFit-SEO-Agent
  *   node orchestration/scripts/bootstrap-project.js --project JadeCoS
  *   node orchestration/scripts/bootstrap-project.js --project NotebookRx

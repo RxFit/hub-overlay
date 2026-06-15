@@ -1,8 +1,8 @@
 <#
   restore-heartbeats.ps1
   ──────────────────────────────────────────────────────────────────────────────
-  Recreates all heartbeat routines for C-Suite agents across all 3 Paperclip
-  companies (RxFit, NotebookRx, FridgeSnap) after the migration DB wipe.
+  Recreates all heartbeat routines for C-Suite agents across Paperclip
+  companies (RxFit, NotebookRx) after the migration DB wipe.
 
   Cadences (from .paperclip.yaml):
     CEO  -> Weekly (604800s)
@@ -45,16 +45,6 @@ $COMPANIES = @{
       CTO = "089b1965-0000-0000-0000-000000000000"
       CFO = "fb6211da-0000-0000-0000-000000000000"
       COO = "ce37b65a-0000-0000-0000-000000000000"
-    }
-  }
-  "FridgeSnap" = @{
-    Id     = "fe281b7a-23c7-4b10-883c-997eebc841dc"
-    Agents = @{
-      CEO = "81f22332-0000-0000-0000-000000000000"
-      CMO = "a8b620e3-0000-0000-0000-000000000000"
-      CTO = "d24f9384-0000-0000-0000-000000000000"
-      CFO = "c7936618-0000-0000-0000-000000000000"
-      COO = $null   # FridgeSnap has no COO
     }
   }
 }

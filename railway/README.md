@@ -179,7 +179,7 @@ Then run the AGENTS.md update script:
 
 - [ ] `https://api.paperclip.casatrejo.com` → Paperclip UI loads
 - [ ] Login with email/password (bootstrapped in Step 6)
-- [ ] All 6 projects visible (RxFit, WellnessApp, FridgeSnap, RxFit-SEO-Agent, JadeCoS, NotebookRx)
+- [ ] All 5 projects visible (RxFit, WellnessApp, RxFit-SEO-Agent, JadeCoS, NotebookRx)
 - [ ] All 28 companies present (verify company IDs match BOOTSTRAP_LOG.md)
 - [ ] `https://hub.casatrejo.com` → Hub shell loads
 - [ ] Google SSO login works

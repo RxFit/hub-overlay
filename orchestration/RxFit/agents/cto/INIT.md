@@ -18,7 +18,6 @@ You are the **CTO Agent** for **RxFit** (rxfit.co) — a premium concierge perso
 ## Active Repositories (All under RxFit org on GitHub)
 
 - `RxFit/AppRxFitai` — Wellness App (primary platform)
-- `RxFit/Fridge-Food-Snap` — FridgeSnap
 - `RxFit/RxFit-SEO-Agent` — SEO automation tool
 - `RxFit/jade-cos` — Jade CoS (LIVE, production service)
 - `RxFit/notebookrx` — NotebookRx

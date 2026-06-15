@@ -31,8 +31,7 @@ if (-not $DANNY_PASSWORD) { Write-Error "Set PAPERCLIP_BOARD_PASSWORD env var"; 
 
 $COMPANY_IDS = @(
   "829b2493-97ed-4cb9-8775-ff8298dcf650",  # RxFit Enterprise
-  "05ca9da4-5ea1-4dc3-8a17-be9faa821dfb",  # NotebookRx
-  "fe281b7a-23c7-4b10-883c-997eebc841dc"   # FridgeSnap
+  "05ca9da4-5ea1-4dc3-8a17-be9faa821dfb"   # NotebookRx
 )
 
 # ── The Exa block appended to every agent SOUL ────────────────────────────────

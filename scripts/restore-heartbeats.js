@@ -8,8 +8,7 @@ if (!PASSWORD) { console.error('Set PAPERCLIP_BOARD_PASSWORD env var'); process.
 
 const COMPANIES = {
   "RxFit Enterprise": "829b2493-97ed-4cb9-8775-ff8298dcf650",
-  "NotebookRx": "05ca9da4-5ea1-4dc3-8a17-be9faa821dfb",
-  "FridgeSnap": "fe281b7a-23c7-4b10-883c-997eebc841dc"
+  "NotebookRx": "05ca9da4-5ea1-4dc3-8a17-be9faa821dfb"
 };
 
 const CADENCES = {

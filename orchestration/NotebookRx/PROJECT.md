@@ -40,8 +40,6 @@ NotebookRx
       │
       ├── Feeds patterns to ─────► Jade CoS (operational health intelligence)
       │
-      ├── Complements ───────────► FridgeSnap (nutrition data enrichment)
-      │
       ├── Stores data in ─────────► Cloud SQL (antigravity_brain, pgvector for semantic search)
       │
       └── Monetized via ──────────► Stripe (premium tier features)
