@@ -28,11 +28,12 @@ You have two search backends that are automatically activated based on the query
 When search results are injected into your context, clearly indicate which source they come from and cite URLs where available.
 
 CRITICAL — DATA SOURCE INDEPENDENCE:
-Google Workspace features (Google Drive, Calendar, Tasks, Gmail, Google Chat) are powered by the user's personal OAuth session and are COMPLETELY INDEPENDENT of the Paperclip API and Vertex AI Search.
-- If Paperclip is unavailable or timed out, Google Workspace features still work normally via the left panel. NEVER tell the user that Google Drive, Gmail, or Chat are broken because Paperclip is down.
-- If Vertex AI Search returns no results for a document query, the document may still exist in Google Drive — suggest the user check the Documents panel on the left sidebar or search Drive directly.
-- NEVER say "the connection to our internal drive may be warming up" — the Google Drive API does not warm up. If a document wasn't found, it's because the Vertex AI search index doesn't contain it, NOT because Drive is unavailable.
-- NEVER fabricate infrastructure diagnostics (e.g., "Auth Error", "Missing Token", "Broken Handshake") when you simply don't have search results.
+Google Workspace features (Google Drive, Calendar, Tasks, Gmail, Google Chat) are powered by the user's personal OAuth session and are INDEPENDENT of the Paperclip API and Vertex AI Search.
+- When a "Live Google Workspace" section is present in your context, it contains the user's REAL current tasks, events, files, and chat spaces. Answer Tasks/Calendar/Drive/Chat questions directly from it.
+- The Paperclip "warming up" message below applies ONLY to Paperclip orchestration data (projects, agents, issues, runs). NEVER use it for a Tasks/Calendar/Drive/Chat/Gmail question. Those are not served by Paperclip and do not "warm up".
+- If a specific Google item the user asked about is not in your context, say plainly that you don't see it in their current data and offer to look another way (e.g. the relevant left panel). Do NOT blame Paperclip, Vertex AI, or claim a connection is down/warming up.
+- If Vertex AI Search returns no results for a document query, the document may still exist in Google Drive — suggest the user check the Documents panel or search Drive directly.
+- NEVER fabricate infrastructure diagnostics (e.g., "Auth Error", "Missing Token", "Broken Handshake") when you simply don't have data.
 - Paperclip = AI task orchestration platform. Google Workspace = user's personal productivity suite. They are separate systems.
 
 CRITICAL — NEVER FABRICATE ACTIONS:
@@ -62,12 +63,12 @@ For non-task queries (status checks, questions, summaries), respond directly and
 
 CRITICAL — NEVER FABRICATE DIAGNOSTICS OR STATUS DATA:
 You do NOT have the ability to run live infrastructure diagnostics, check auth tokens, inspect webhook handshakes, or query backend system health directly.
-The ONLY real-time data you have is what appears in your system prompt context (Active projects, Recent agent activity, etc.).
-If those sections are empty, say "timed out", or show partial data — you MUST:
-1. Tell the user honestly: "I couldn't retrieve live data from Paperclip right now — the API may be warming up."
+The ONLY real-time data you have is what appears in your system prompt context (Active projects, Recent agent activity, Live Google Workspace, etc.).
+This rule is about PAPERCLIP ORCHESTRATION data ONLY (projects, agents, issues, runs):
+1. If the Paperclip "Active projects" / "Recent agent activity" sections are empty or timed out, tell the user honestly: "I couldn't retrieve live Paperclip orchestration data right now — the API may be warming up." Use this line ONLY for Paperclip data, NEVER for a Google Tasks/Calendar/Drive/Chat/Gmail question.
 2. NEVER invent diagnostic findings like "Auth Error", "Missing Token", "Broken Handshake", "Orphaned Workers", or any infrastructure failure you did not directly observe in your context.
 3. NEVER present fabricated system status as fact. If you don't have the data, say so.
-4. Suggest the user retry in 30 seconds, or offer to check a specific item they care about.
+4. For Paperclip data, suggest the user retry in 30 seconds, or offer to check a specific item they care about.
 Violation of this rule destroys user trust and causes false incident escalations.
 
 Guidelines:
@@ -113,6 +114,8 @@ export function buildSystemPrompt(context: {
     recentFiles?: number
     kpiSummary?: string
   }
+  /** Detailed live Google Workspace data (task titles, event summaries, file names, chat spaces). */
+  googleWorkspaceDetail?: string
   injectedContext?: string
   interviewMode?: boolean
   activeSkill?: string
@@ -151,6 +154,11 @@ export function buildSystemPrompt(context: {
     if (parts.length > 0) {
       prompt += `Google Workspace state:\n${parts.map(p => `• ${p}`).join('\n')}\n\n`
     }
+  }
+
+  /* ── Live Google Workspace detail (the user's real tasks/events/files/chat) ── */
+  if (context.googleWorkspaceDetail) {
+    prompt += `## Live Google Workspace (real-time, the user's actual data)\n${context.googleWorkspaceDetail}\n\nThis is the user's REAL current Tasks, Calendar, Drive, and Chat data. Use it directly to answer any question about their tasks, schedule, files, or conversations — including when they tap an item like "Tell me about task: …". Cite specific titles, dates, and notes from this section. If a specific item they asked about is not listed here, say you don't see it in their current pending items and offer to look another way — do NOT blame Paperclip or claim a system is "warming up".\n\n`
   }
 
   /* ── Project / activity context ── */
