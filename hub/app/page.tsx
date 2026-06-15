@@ -892,19 +892,23 @@ Respond with EXACTLY one of:
     setMobileLeftOpen(false)
     setMobileRightOpen(false)
     setMobileTab('chat')
-    // Create a user message and send it
     const userMsg = { 
       id: crypto.randomUUID(), 
       role: 'user' as const, 
       content: message, 
       timestamp: new Date().toISOString() 
     }
+    // Capture the updated messages array via functional updater, but fire the
+    // API call OUTSIDE the updater to prevent double-firing under React
+    // concurrent mode / Strict Mode (P7 fix from /review).
+    let updatedMessages: ChatMsg[] = []
     setMessages(prev => {
-      const updated = [...prev, userMsg]
-      // Trigger the chat API call (reuse existing send logic)
-      sendToApi(message, updated, useCase)
-      return updated
+      updatedMessages = [...prev, userMsg]
+      return updatedMessages
     })
+    // React batches state updates synchronously within event handlers,
+    // so updatedMessages is populated by the time we reach here.
+    sendToApi(message, updatedMessages, useCase)
   }, [sendToApi])
 
   /* ── Handle skill activation from popover or inline link ── */

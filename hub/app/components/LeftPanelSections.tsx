@@ -676,11 +676,12 @@ export function CalendarSection({ onInjectChat }: { onInjectChat: (msg: string) 
                     // Carry the event's real details inline so the assistant has
                     // the data even if this item is outside the live-context snapshot.
                     // Mirrors the structured task injection pattern (TaskRow L230-238).
+                    const userTz = Intl.DateTimeFormat().resolvedOptions().timeZone
                     const startStr = event.start.dateTime
-                      ? new Date(event.start.dateTime).toLocaleString('en-US', { timeZone: 'America/Chicago', dateStyle: 'medium', timeStyle: 'short' })
+                      ? new Date(event.start.dateTime).toLocaleString('en-US', { timeZone: userTz, dateStyle: 'medium', timeStyle: 'short' })
                       : event.start.date ?? ''
                     const endStr = event.end?.dateTime
-                      ? `, ends ${new Date(event.end.dateTime).toLocaleTimeString('en-US', { timeZone: 'America/Chicago', timeStyle: 'short' })}`
+                      ? `, ends ${new Date(event.end.dateTime).toLocaleTimeString('en-US', { timeZone: userTz, timeStyle: 'short' })}`
                       : ''
                     const loc = (event as any).location ? `, location: ${(event as any).location}` : ''
                     const attendees = (event as any).attendees?.length
