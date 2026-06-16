@@ -1,0 +1,126 @@
+# ⚠️ REFERENCE ONLY — Do not apply directly with `gcloud run services replace`.
+# Deploy via: gcloud run deploy hub --source . --region us-central1 --project rxfit-automation
+# This file documents the service configuration. Last synced: 2026-06-14.
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  annotations:
+    run.googleapis.com/ingress: all
+    run.googleapis.com/ingress-status: all
+  labels:
+    cloud.googleapis.com/location: us-central1
+  name: hub
+  namespace: '11747747730'
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/maxScale: '20'
+        autoscaling.knative.dev/minScale: '1'
+        run.googleapis.com/client-name: gcloud
+        run.googleapis.com/client-version: 569.0.0
+        run.googleapis.com/cloudsql-instances: rxfit-automation:us-central1:hub-pg
+        run.googleapis.com/startup-cpu-boost: 'true'
+    spec:
+      containerConcurrency: 80
+      containers:
+      - env:
+        # === Core App Config ===
+        - name: NEXTAUTH_URL
+          value: https://hub.casatrejo.com
+        - name: PAPERCLIP_BASE_URL
+          value: https://rxfit-paperclip-11747747730.us-central1.run.app
+        - name: SUPERADMIN_EMAILS
+          value: danny@rxfitatx.com
+        - name: VERTEX_GCP_PROJECT
+          value: semantic-brain-desktop
+        - name: VERTEX_ENGINE_ID
+          value: semanticbrain_1779229063037
+        - name: DEFAULT_PAPERCLIP_COMPANY_ID
+          value: 8f2acc3d-f2dc-4f8c-897e-7c400e91fd85
+        - name: ADMIN_TEAM
+          value: Danny Trejo
+        - name: NODE_ENV
+          value: production
+        # === Secrets (from Secret Manager) ===
+        - name: NEXTAUTH_SECRET
+          valueFrom:
+            secretKeyRef:
+              key: latest
+              name: hub-nextauth-secret
+        - name: GOOGLE_CLIENT_ID
+          valueFrom:
+            secretKeyRef:
+              key: latest
+              name: hub-google-client-id
+        - name: GOOGLE_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              key: latest
+              name: hub-google-client-secret
+        - name: GEMINI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              key: latest
+              name: hub-gemini-api-key
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              key: latest
+              name: hub-database-url
+        - name: GOOGLE_SERVICE_ACCOUNT_KEY
+          valueFrom:
+            secretKeyRef:
+              key: latest
+              name: hub-google-sa-key
+        - name: PAPERCLIP_API_KEY
+          valueFrom:
+            secretKeyRef:
+              key: latest
+              name: hub-paperclip-api-key
+        - name: PAPERCLIP_AUTH_EMAIL
+          valueFrom:
+            secretKeyRef:
+              key: latest
+              name: hub-paperclip-auth-email
+        - name: PAPERCLIP_AUTH_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: latest
+              name: hub-paperclip-auth-password
+        - name: EXA_API_KEY
+          valueFrom:
+            secretKeyRef:
+              key: latest
+              name: hub-exa-api-key
+        # === Anthropic (migrated to Secret Manager 2026-06-14) ===
+        - name: Anthropic_API_Key
+          valueFrom:
+            secretKeyRef:
+              key: latest
+              name: hub-anthropic-api-key
+        - name: anthropic_token
+          valueFrom:
+            secretKeyRef:
+              key: latest
+              name: hub-anthropic-token
+        # === Image (updated to v3 with paperclipConfig fix) ===
+        image: us-central1-docker.pkg.dev/rxfit-automation/cloud-run-source-deploy/hub:v3
+        ports:
+        - containerPort: 3000
+          name: http1
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+        startupProbe:
+          failureThreshold: 1
+          periodSeconds: 240
+          tcpSocket:
+            port: 3000
+          timeoutSeconds: 240
+      serviceAccountName: 11747747730-compute@developer.gserviceaccount.com
+      timeoutSeconds: 300
+  traffic:
+  - latestRevision: true
+    percent: 100

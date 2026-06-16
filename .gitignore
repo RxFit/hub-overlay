@@ -1,0 +1,40 @@
+# --- Dependencies ---
+node_modules/
+.pnp
+.pnp.js
+
+# --- Build / output ---
+.next/
+out/
+build/
+dist/
+.turbo/
+*.tsbuildinfo
+
+# --- Secrets & env ---
+.env
+.env.*
+!.env.example
+!.env*.example
+*.key
+!*.key.example
+master.key
+secrets-manifest.local.json
+
+# --- Backups, logs, scratch artifacts ---
+backups/
+*.log
+audit-output*.txt
+*-logs.txt
+paperclip_logs.txt
+
+# --- OS / editor cruft ---
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+
+# --- Python ---
+__pycache__/
+*.pyc
