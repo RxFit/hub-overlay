@@ -137,6 +137,21 @@ export const authOptions: NextAuthOptions = {
     maxAge: 30 * 24 * 60 * 60, // 30 days
   },
   callbacks: {
+    // ── Redirect confinement ──
+    // Pin every post-auth redirect to THIS app's own origin (baseUrl === NEXTAUTH_URL).
+    // Defense-in-depth against a contaminated/stale callbackUrl bouncing the user to
+    // another tenant's domain (e.g. a sibling app like fridgesnap). This governs the
+    // app-level redirect, not the Google OAuth redirect_uri (that derives from NEXTAUTH_URL).
+    async redirect({ url, baseUrl }) {
+      try {
+        if (url.startsWith('/')) return `${baseUrl}${url}`
+        if (new URL(url).origin === baseUrl) return url
+      } catch {
+        // malformed url — fall through to safe default
+      }
+      return baseUrl
+    },
+
     async jwt({ token, user, account }) {
       // ── Initial sign-in: capture OAuth tokens and resolve role ──
       if (account && user) {
@@ -187,4 +202,20 @@ export const authOptions: NextAuthOptions = {
     error: '/login',
   },
   secret: process.env.NEXTAUTH_SECRET,
+}
+
+/* ── Startup OAuth diagnostic ──
+ * Logs which Google OAuth client and callback URL THIS deployment actually uses.
+ * Client IDs are NOT secret (they appear in the browser's OAuth request URL), so
+ * logging the id is safe — the client SECRET is never logged. This is the fastest
+ * way to catch a contaminated client_id (e.g. a sibling app's OAuth client) that
+ * causes a redirect_uri_mismatch or a foreign consent screen. Check Cloud Run logs
+ * for "[auth] OAuth config" after deploy and confirm the client_id + host are the Hub's. */
+if (process.env.NODE_ENV !== 'test') {
+  const nextAuthUrl = process.env.NEXTAUTH_URL || '(NEXTAUTH_URL unset)'
+  console.info('[auth] OAuth config →', JSON.stringify({
+    nextAuthUrl,
+    computedCallback: `${nextAuthUrl}/api/auth/callback/google`,
+    googleClientId: process.env.GOOGLE_CLIENT_ID || '(GOOGLE_CLIENT_ID unset)',
+  }))
 }
