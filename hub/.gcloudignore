@@ -1,0 +1,28 @@
+# .gcloudignore — prevents non-hub files from uploading to Cloud Run
+# The hub/ directory is the deployment unit. Everything else is config/docs.
+
+# Include the default .gitignore behavior
+#!include:.gitignore
+
+# Orchestration configs (agent SOULs, KPIs, etc.)
+orchestration/
+
+# Scripts (PowerShell/JS admin tools)
+scripts/
+
+# Memory (local agent memory, untracked)
+Memory/
+
+# Railway (legacy migration data)
+railway/
+
+# Docs and audit reports at repo root
+*.md
+!hub/**/*.md
+
+# Service reference (not used by deploy)
+service.yaml
+
+# Git
+.git/
+.gitignore
