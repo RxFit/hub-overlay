@@ -1,5 +1,24 @@
+# Build artifacts & dependencies (reinstalled/built in the image)
 node_modules
 .next
 out
 .wrangler
 .git
+
+# ── Skill toolkit trim ──
+# The app only reads each skill's SKILL.md at runtime (lib/skills-loader.ts).
+# Everything below is dev tooling, never loaded by the running server — keep it
+# out of the image (~2.5MB of build context + faster builds).
+skills/**/test/
+skills/**/*.test.ts
+skills/**/docs/
+skills/**/scripts/
+skills/**/bin/
+skills/gstack/.agents/
+skills/**/CHANGELOG.md
+skills/**/*.tmpl
+
+# Local env & logs (never ship secrets/logs into the image)
+.env*.local
+*.log
+npm-debug.log*

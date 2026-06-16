@@ -24,6 +24,136 @@ export const maxDuration = 120
 // Search-routing heuristics live in lib/search-routing.ts (word-boundary
 // matched + unit-tested) — imported above as needsInternalSearch / needsExternalSearch.
 
+/**
+ * Search pipeline (Vertex AI + pgvector + Exa). Depends only on the query and
+ * useCase, so it can run concurrently with context assembly. 10s aggregate timeout.
+ */
+async function runSearchPipeline(query: string, effectiveUseCase: string): Promise<string[]> {
+  return withTimeout(
+    (async () => {
+        const searchPromises: Promise<string | null>[] = []
+
+        const explicitInternalReq = needsInternalSearch(query)
+        const shouldRunVertex = effectiveUseCase === 'deep_dive' || effectiveUseCase === 'interview' || (effectiveUseCase === 'execute' && explicitInternalReq)
+        const shouldRunPgVector = effectiveUseCase === 'recall' || effectiveUseCase === 'deep_dive' || effectiveUseCase === 'interview' || (effectiveUseCase === 'execute' && explicitInternalReq)
+
+        log.info({ effectiveUseCase, shouldRunVertex, shouldRunPgVector, explicitInternalReq }, 'Search routing decision')
+
+        // Try Vertex AI for internal context
+        if (shouldRunVertex) {
+          searchPromises.push(
+            (async () => {
+              try {
+                // Circuit breaker: trips after 3 consecutive Vertex AI failures,
+                // opens for 60s. Prevents repeated 10s timeout hangs during outages.
+                const vertexResults = await breaker.execute('vertex-ai', () => searchSemanticBrain(query))
+                if (vertexResults && vertexResults.length > 0) {
+                  const vertexContext = vertexResults
+                    .map(r => `**${r.title}** ${r.uri ? `(${r.uri})` : ''}\n${r.snippet}`)
+                    .join('\n\n---\n\n')
+                  return `## Internal Knowledge (Vertex AI — Google Drive/Workspace)\n\n${vertexContext}\n\n`
+                }
+                // Vertex returned no results — tell the LLM explicitly so it doesn't fabricate diagnostics
+                return `## Internal Knowledge (Vertex AI)\n\n[No matching documents found in the internal knowledge base for this query. The user can search Google Drive directly from the Documents panel on the left sidebar, or try refining their search terms. Do NOT blame Paperclip or claim Google services are down — they are independent.]\n\n`
+              } catch (err) {
+                if (err instanceof CircuitOpenError) {
+                  log.warn({ key: 'vertex-ai' }, 'Vertex AI circuit is OPEN — skipping search')
+                  return `## Internal Knowledge (Vertex AI)\n\n[Vertex AI search is temporarily unavailable due to repeated failures. Google Drive, Calendar, Tasks, and Chat are unaffected. Suggest the user check the Documents panel on the left.]\n\n`
+                }
+                log.warn({ err }, 'Vertex AI search failed')
+                return `## Internal Knowledge (Vertex AI)\n\n[Vertex AI search encountered an error. Google Drive, Calendar, Tasks, and Chat are unaffected — they use the user's OAuth session, not Vertex AI. Suggest the user check the Documents panel on the left.]\n\n`
+              }
+            })()
+          )
+        } else {
+          log.info({ effectiveUseCase }, 'Vertex AI search skipped by routing policy')
+        }
+
+        // Query pgvector Obsidian semantic database for project insights
+        if (shouldRunPgVector) {
+          searchPromises.push(
+            (async () => {
+              try {
+                const { getTenantId } = await import('@/lib/tenant-context')
+                const tenantId = getTenantId()
+                const { searchSimilarDocuments, SIMILARITY_THRESHOLD } = await import('@/lib/vector-store')
+                const requestedLimit = 3
+                const pgvectorResults = await searchSimilarDocuments(tenantId, query, requestedLimit)
+                
+                // Log per-chunk scores for observability
+                if (pgvectorResults && pgvectorResults.length > 0) {
+                  const scores = pgvectorResults.map(r => ({
+                    id: r.id,
+                    sourceUrl: r.sourceUrl,
+                    similarity: Number(r.similarity).toFixed(4),
+                  }))
+                  log.info({ scores, threshold: SIMILARITY_THRESHOLD }, 'pgvector semantic results returned')
+                }
+
+                if (pgvectorResults && pgvectorResults.length < requestedLimit) {
+                  const discarded = requestedLimit - pgvectorResults.length
+                  log.info({ returned: pgvectorResults.length, discarded, threshold: SIMILARITY_THRESHOLD },
+                    'Few chunks met relevance threshold')
+                }
+                
+                if (pgvectorResults && pgvectorResults.length > 0) {
+                  const pgvectorContext = pgvectorResults
+                    .map(r => `**Source: ${r.sourceUrl}** (Similarity: ${(Number(r.similarity) * 100).toFixed(1)}%)\n${r.content}`)
+                    .join('\n\n---\n\n')
+                  return `## Internal Knowledge (Obsidian Semantic Database)\n\n${pgvectorContext}\n\n`
+                }
+              } catch (err) {
+                log.warn({ err }, 'pgvector semantic search failed')
+              }
+              return null
+            })()
+          )
+        } else {
+          log.info({ effectiveUseCase }, 'pgvector search skipped by routing policy')
+        }
+
+        // Use Exa.AI for external queries
+        if (needsExternalSearch(query)) {
+          searchPromises.push(
+            (async () => {
+              try {
+                // Circuit breaker: trips after 3 consecutive Exa failures
+                const exaResults = await breaker.execute('exa-search', () => searchWeb(query, {
+                  numResults: 5,
+                  useAutoprompt: true,
+                }))
+                if (exaResults.length > 0) {
+                  const exaContext = exaResults
+                    .map(r => {
+                      let entry = `**${r.title ?? 'Untitled'}** — [${r.url}]`
+                      if (r.publishedDate) entry += ` (${r.publishedDate.split('T')[0]})`
+                      if (r.snippet) entry += `\n${r.snippet}`
+                      return entry
+                    })
+                    .join('\n\n---\n\n')
+                  return `## External Web Research (Exa.AI)\n\n${exaContext}\n\n`
+                }
+              } catch (err) {
+                if (err instanceof CircuitOpenError) {
+                  log.warn({ key: 'exa-search' }, 'Exa circuit is OPEN — skipping web search')
+                  return null
+                }
+                log.warn({ err }, 'Exa.AI search failed')
+              }
+              return null
+            })()
+          )
+        }
+
+        const results = await Promise.all(searchPromises)
+        return results.filter((r): r is string => r !== null)
+      })(),
+    10_000,
+    [] as string[],
+    'search-pipeline',
+  )
+}
+
 export async function POST(req: NextRequest) {
   // Auth check
   const session = await getServerSession(authOptions)
@@ -61,6 +191,15 @@ export async function POST(req: NextRequest) {
 
   const googleToken = await getToken({ req })
   const googleAccessToken = googleToken?.accessToken as string | undefined
+
+  // Search depends only on the query + useCase (not on Paperclip/Google context),
+  // so kick it off NOW to run CONCURRENTLY with the context fetches below.
+  const effectiveUseCase = activeSkill ? 'deep_dive' : useCase
+  const lastUserMsg = messages.filter(m => m.role === 'user').pop()
+  const query = lastUserMsg?.content ?? ''
+  const searchPromise: Promise<string[]> = query
+    ? runSearchPipeline(query, effectiveUseCase)
+    : Promise.resolve([])
 
   const [paperclipContextResult, googleWsResult] = await Promise.all([
     // Branch 1: Paperclip orchestration context (8s timeout)
@@ -182,152 +321,8 @@ export async function POST(req: NextRequest) {
     googleWorkspaceCounts = googleWsResult.counts
   }
 
-  const effectiveUseCase = activeSkill ? 'deep_dive' : useCase
-
-  // ── Intelligent Search Routing ──
-  // Vertex AI → internal data (Google Drive, Gmail, Chat)
-  // pgvector → Obsidian semantic database
-  // Exa.AI   → external data (web, competitors, news, public URLs)
-  //
-  // Routing matrix (effectiveUseCase × intent):
-  //   recall    → pgvector only (fast recall from Obsidian)
-  //   deep_dive → Vertex AI + pgvector (full internal context)
-  //   interview → Vertex AI + pgvector (needs context for smart questions)
-  //   execute   → skip unless query explicitly references internal data
-  const lastUserMsg = messages.filter(m => m.role === 'user').pop()
-  const searchContextParts: string[] = []
-
-  if (lastUserMsg) {
-    const query = lastUserMsg.content
-
-    // HARDENED: 10-second aggregate timeout on all search operations
-    const searchResults = await withTimeout(
-      (async () => {
-        const searchPromises: Promise<string | null>[] = []
-
-        const explicitInternalReq = needsInternalSearch(query)
-        const shouldRunVertex = effectiveUseCase === 'deep_dive' || effectiveUseCase === 'interview' || (effectiveUseCase === 'execute' && explicitInternalReq)
-        const shouldRunPgVector = effectiveUseCase === 'recall' || effectiveUseCase === 'deep_dive' || effectiveUseCase === 'interview' || (effectiveUseCase === 'execute' && explicitInternalReq)
-
-        log.info({ effectiveUseCase, shouldRunVertex, shouldRunPgVector, explicitInternalReq }, 'Search routing decision')
-
-        // Try Vertex AI for internal context
-        if (shouldRunVertex) {
-          searchPromises.push(
-            (async () => {
-              try {
-                // Circuit breaker: trips after 3 consecutive Vertex AI failures,
-                // opens for 60s. Prevents repeated 10s timeout hangs during outages.
-                const vertexResults = await breaker.execute('vertex-ai', () => searchSemanticBrain(query))
-                if (vertexResults && vertexResults.length > 0) {
-                  const vertexContext = vertexResults
-                    .map(r => `**${r.title}** ${r.uri ? `(${r.uri})` : ''}\n${r.snippet}`)
-                    .join('\n\n---\n\n')
-                  return `## Internal Knowledge (Vertex AI — Google Drive/Workspace)\n\n${vertexContext}\n\n`
-                }
-                // Vertex returned no results — tell the LLM explicitly so it doesn't fabricate diagnostics
-                return `## Internal Knowledge (Vertex AI)\n\n[No matching documents found in the internal knowledge base for this query. The user can search Google Drive directly from the Documents panel on the left sidebar, or try refining their search terms. Do NOT blame Paperclip or claim Google services are down — they are independent.]\n\n`
-              } catch (err) {
-                if (err instanceof CircuitOpenError) {
-                  log.warn({ key: 'vertex-ai' }, 'Vertex AI circuit is OPEN — skipping search')
-                  return `## Internal Knowledge (Vertex AI)\n\n[Vertex AI search is temporarily unavailable due to repeated failures. Google Drive, Calendar, Tasks, and Chat are unaffected. Suggest the user check the Documents panel on the left.]\n\n`
-                }
-                log.warn({ err }, 'Vertex AI search failed')
-                return `## Internal Knowledge (Vertex AI)\n\n[Vertex AI search encountered an error. Google Drive, Calendar, Tasks, and Chat are unaffected — they use the user's OAuth session, not Vertex AI. Suggest the user check the Documents panel on the left.]\n\n`
-              }
-            })()
-          )
-        } else {
-          log.info({ effectiveUseCase }, 'Vertex AI search skipped by routing policy')
-        }
-
-        // Query pgvector Obsidian semantic database for project insights
-        if (shouldRunPgVector) {
-          searchPromises.push(
-            (async () => {
-              try {
-                const { getTenantId } = await import('@/lib/tenant-context')
-                const tenantId = getTenantId()
-                const { searchSimilarDocuments, SIMILARITY_THRESHOLD } = await import('@/lib/vector-store')
-                const requestedLimit = 3
-                const pgvectorResults = await searchSimilarDocuments(tenantId, query, requestedLimit)
-                
-                // Log per-chunk scores for observability
-                if (pgvectorResults && pgvectorResults.length > 0) {
-                  const scores = pgvectorResults.map(r => ({
-                    id: r.id,
-                    sourceUrl: r.sourceUrl,
-                    similarity: Number(r.similarity).toFixed(4),
-                  }))
-                  log.info({ scores, threshold: SIMILARITY_THRESHOLD }, 'pgvector semantic results returned')
-                }
-
-                if (pgvectorResults && pgvectorResults.length < requestedLimit) {
-                  const discarded = requestedLimit - pgvectorResults.length
-                  log.info({ returned: pgvectorResults.length, discarded, threshold: SIMILARITY_THRESHOLD },
-                    'Few chunks met relevance threshold')
-                }
-                
-                if (pgvectorResults && pgvectorResults.length > 0) {
-                  const pgvectorContext = pgvectorResults
-                    .map(r => `**Source: ${r.sourceUrl}** (Similarity: ${(Number(r.similarity) * 100).toFixed(1)}%)\n${r.content}`)
-                    .join('\n\n---\n\n')
-                  return `## Internal Knowledge (Obsidian Semantic Database)\n\n${pgvectorContext}\n\n`
-                }
-              } catch (err) {
-                log.warn({ err }, 'pgvector semantic search failed')
-              }
-              return null
-            })()
-          )
-        } else {
-          log.info({ effectiveUseCase }, 'pgvector search skipped by routing policy')
-        }
-
-        // Use Exa.AI for external queries
-        if (needsExternalSearch(query)) {
-          searchPromises.push(
-            (async () => {
-              try {
-                // Circuit breaker: trips after 3 consecutive Exa failures
-                const exaResults = await breaker.execute('exa-search', () => searchWeb(query, {
-                  numResults: 5,
-                  useAutoprompt: true,
-                }))
-                if (exaResults.length > 0) {
-                  const exaContext = exaResults
-                    .map(r => {
-                      let entry = `**${r.title ?? 'Untitled'}** — [${r.url}]`
-                      if (r.publishedDate) entry += ` (${r.publishedDate.split('T')[0]})`
-                      if (r.snippet) entry += `\n${r.snippet}`
-                      return entry
-                    })
-                    .join('\n\n---\n\n')
-                  return `## External Web Research (Exa.AI)\n\n${exaContext}\n\n`
-                }
-              } catch (err) {
-                if (err instanceof CircuitOpenError) {
-                  log.warn({ key: 'exa-search' }, 'Exa circuit is OPEN — skipping web search')
-                  return null
-                }
-                log.warn({ err }, 'Exa.AI search failed')
-              }
-              return null
-            })()
-          )
-        }
-
-        const results = await Promise.all(searchPromises)
-        return results.filter((r): r is string => r !== null)
-      })(),
-      10_000,
-      [] as string[],
-      'search-pipeline'
-    )
-    searchContextParts.push(...searchResults)
-  }
-
-  const searchContext = searchContextParts.join('')
+  const searchResults = await searchPromise
+  const searchContext = searchResults.join('')
 
   // Resolve attachments into text context
   let attachmentContext = ''
