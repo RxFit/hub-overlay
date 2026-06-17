@@ -6,6 +6,14 @@ import type { TaskItem, CalendarEvent, DriveFile } from '@/app/hooks/useHubData'
 import { useKPIData } from '@/app/hooks/useKPIData'
 import type { LiveKPI, ProjectKPI, ToolArtifactRecord, ChatAttachment } from '@/types'
 import { AnimatedNumber } from './AnimatedNumber'
+import {
+  buildTaskInjectMessage,
+  buildEventInjectMessage,
+  buildDocumentInject,
+  formatTime,
+  formatShortDate,
+  formatRelativeDate,
+} from '@/lib/panel-inject'
 import useSWR from 'swr'
 
 /* ══════════════════════════════════════════════════════════════════════════════
@@ -901,20 +909,10 @@ export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string,
                   key={file.id}
                   file={file}
                   onClick={() => {
-                    const msg = activeFilter === 'transcripts'
-                      ? `Summarize the meeting transcript "${file.name}" using its attached content.`
-                      : `Tell me about the document "${file.name}" using its attached content.`
-                    // Attach the real Drive file so the chat route resolves the
-                    // document's actual content (Vertex semantic search → Drive
-                    // export) instead of answering from just the file name.
-                    const attachment: ChatAttachment = {
-                      id: file.id,
-                      type: 'document',
-                      label: file.name,
-                      fileId: file.id,
-                      mimeType: file.mimeType,
-                    }
-                    onInjectChat(msg, [attachment])
+                    // Attaches the real Drive fileId so the chat route resolves
+                    // the document's actual content, not just the file name.
+                    const { message, attachment } = buildDocumentInject(file, activeFilter === 'transcripts')
+                    onInjectChat(message, [attachment])
                   }}
                 />
               ))}
@@ -1123,90 +1121,9 @@ export function ProjectHealthSection({
 
 /* ══════════════════════════════════════════════════════════════════════════════
    UTILITY FUNCTIONS
+   (Inject-payload builders + date formatters live in lib/panel-inject.ts so they
+   are unit-testable without React — imported at the top of this file.)
    ══════════════════════════════════════════════════════════════════════════════ */
-
-/**
- * Build a context-rich chat message for a tapped task. Carries the task's list,
- * due date, status, and notes inline so the assistant can answer about THIS task
- * even when it falls outside the live Google Workspace snapshot window the chat
- * route fetches (pending-only, first 5 lists).
- */
-function buildTaskInjectMessage(task: TaskItem, listName: string): string {
-  const lines = [
-    `Tell me about this task from my "${listName}" list:`,
-    `• Title: ${task.title}`,
-    `• Status: ${task.status === 'completed' ? 'Completed' : 'Pending'}`,
-  ]
-  if (task.due) lines.push(`• Due: ${formatRelativeDate(task.due)}`)
-  if (task.notes) lines.push(`• Notes: ${task.notes.replace(/\s+/g, ' ').slice(0, 500)}`)
-  return lines.join('\n')
-}
-
-/**
- * Build a context-rich chat message for a tapped calendar event. Carries the
- * date/time, location, and description inline so the assistant has the event's
- * real details regardless of the snapshot window.
- */
-function buildEventInjectMessage(event: CalendarEvent): string {
-  const when = event.start.dateTime
-    ? `${formatShortDate(event.start.dateTime)} at ${formatTime(event.start.dateTime)}`
-    : event.start.date
-      ? `${formatShortDate(event.start.date + 'T00:00:00')} (all day)`
-      : 'unscheduled'
-  const lines = [
-    `Tell me about this calendar event:`,
-    `• Title: ${event.summary || '(untitled)'}`,
-    `• When: ${when}`,
-  ]
-  if (event.location) lines.push(`• Location: ${event.location}`)
-  if (event.description) lines.push(`• Details: ${event.description.replace(/\s+/g, ' ').slice(0, 500)}`)
-  return lines.join('\n')
-}
-
-function formatTime(isoString: string): string {
-  try {
-    const d = new Date(isoString)
-    return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-  } catch {
-    return isoString
-  }
-}
-
-function formatShortDate(isoString: string): string {
-  try {
-    const d = new Date(isoString)
-    const now = new Date()
-    const isToday = d.toDateString() === now.toDateString()
-    const tomorrow = new Date(now)
-    tomorrow.setDate(tomorrow.getDate() + 1)
-    const isTomorrow = d.toDateString() === tomorrow.toDateString()
-
-    if (isToday) return 'Today'
-    if (isTomorrow) return 'Tomorrow'
-    return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
-  } catch {
-    return isoString
-  }
-}
-
-function formatRelativeDate(isoString: string): string {
-  try {
-    const d = new Date(isoString)
-    const now = new Date()
-    const diffMs = now.getTime() - d.getTime()
-    const diffMins = Math.floor(diffMs / 60_000)
-    const diffHours = Math.floor(diffMs / 3_600_000)
-    const diffDays = Math.floor(diffMs / 86_400_000)
-
-    if (diffMins < 1) return 'just now'
-    if (diffMins < 60) return `${diffMins}m ago`
-    if (diffHours < 24) return `${diffHours}h ago`
-    if (diffDays < 7) return `${diffDays}d ago`
-    return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
-  } catch {
-    return isoString
-  }
-}
 
 function getDriveIcon(mimeType: string): string {
   if (mimeType.includes('spreadsheet') || mimeType.includes('excel')) return '📊'
