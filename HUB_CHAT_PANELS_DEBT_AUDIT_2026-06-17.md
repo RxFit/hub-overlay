@@ -25,18 +25,21 @@ Net: −56 lines, no behavior change.
 
 ## ⚠️ Flagged — real debt, not auto-fixed (needs a focused change / your call)
 
-### E1 — Side effects fired *inside* a `setMessages` updater (`doSend`)
-The initial-send path runs `detectIntent(message).then(… sendToApi(…))` **inside** the
-`setMessages(prev => { … })` updater (≈`app/page.tsx:575`). State updaters must be pure —
-React may invoke them more than once (and does, under StrictMode in dev), which can
-**double-fire intent detection and a duplicate `/api/chat` request**. The codebase already
-established the correct pattern elsewhere (the "P7 fix": capture intent in the updater, fire
-the call *after* it — used by the non-interview branch and `handleChatInject`), but this
-path and the interview-advance branch (`:625`–`:867`, which also calls `setActiveModel` /
-nested `setMessages` / `runQualityGate` from inside the updater) were never converted.
-**Why not auto-fixed:** `doSend` is a large, intricate, untested function; converting it
-safely deserves its own focused change. **Recommend:** lift `detectIntent` and the
-interview-advance side effects out of the updater behind the same pending-action pattern.
+### E1 — Side effects fired *inside* a `setMessages` updater (`doSend`) — ✅ FIXED
+The initial-send path ran `detectIntent(message).then(… sendToApi(…))` **inside** the
+`setMessages(prev => { … })` updater, and the interview-advance branch likewise called
+`setInterviewState` / `setActiveModel` / the score fetch / `runQualityGate` from inside it.
+State updaters must be pure — React may invoke them more than once (and does, under
+StrictMode in dev), so this could **double-fire intent detection and a duplicate `/api/chat`
+request** (plus duplicate scoring calls).
+
+**Fix:** `doSend` was restructured so the updater is pure — it only appends precomputed
+message(s) and captures the post-append list (`committed`). All side effects (intent
+detection, interview advance, scoring, quality gate, sends) are assigned to a single
+`runAfter` closure and fired **once, after the commit**. `advanceInterview` /
+`startInterview` are pure and are computed up front to decide what to render. This mirrors
+the established "P7" pattern and now covers every branch (start / advance / normal send).
+Verified: `tsc --noEmit` clean, `vitest` 31/31.
 
 ### E2 — Duplicate `projects.find(...)` for the active company
 The active-company lookup runs twice per render: once inline in the page to compute

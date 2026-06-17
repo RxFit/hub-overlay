@@ -561,16 +561,19 @@ export default function HubPage() {
       attachments: msgAttachments,
     }
 
-    // P7 fix: capture API call intent from inside the setMessages updater
-    // so we can fire it OUTSIDE (prevents double-firing under React concurrent mode)
-    let pendingSendToApi: { message: string; updated: ChatMsg[]; useCase: string; msgAttachments?: ChatAttachment[] } | null = null
+    // ── P7 (E1): keep the setMessages updater PURE ──
+    // React may invoke a state updater more than once (and does under StrictMode
+    // in dev). All branch decisions and side effects (intent detection, interview
+    // advance, scoring, sends) are computed/deferred here and fired AFTER the
+    // commit so they run exactly once. `committed` captures the post-append list
+    // for the sends that need it. `advanceInterview` / `startInterview` are pure.
+    const immediate: ChatMsg[] = [newMessage]
+    let runAfter: (() => void) | null = null
+    let committed: ChatMsg[] = []
 
-    setMessages(prev => {
-      const updated = [...prev, newMessage]
-
-      // Check if message triggers interview mode (disabled for onboarding users)
-      if (canUseInterviewMode && !interviewState?.active) {
-        // Kick off async intent detection without blocking the UI rendering of the user message
+    if (canUseInterviewMode && !interviewState?.active) {
+      // Branch A — possible interview start. Intent detection is async; defer it.
+      runAfter = () => {
         detectIntent(message).then(({ intent, extractedEntities }) => {
           if (intent) {
             // Role gating: check if user has permission for this intent
@@ -589,7 +592,7 @@ export default function HubPage() {
             const newState = startInterview(intent, extractedEntities)
             setInterviewState(newState)
             setActiveModel('Claude Fable 5')
-            
+
             // If the state is still active, it means we have unanswered questions.
             if (newState.active) {
               const question = getCurrentQuestion(newState)
@@ -615,48 +618,45 @@ export default function HubPage() {
             }
           } else {
             // No intent detected, just send to normal chat API
-            sendToApi(fullMessage, updated, 'deep_dive', msgAttachments)
+            sendToApi(fullMessage, committed, 'deep_dive', msgAttachments)
           }
         }).catch(() => {
-          sendToApi(fullMessage, updated, 'deep_dive', msgAttachments)
+          sendToApi(fullMessage, committed, 'deep_dive', msgAttachments)
         })
-
-        return updated
       }
+    } else if (interviewState?.active && interviewState.intent) {
+      // Branch B — advance the active interview. advanceInterview is pure, so it
+      // is safe to compute here (outside the updater) to decide what to render.
+      const nextState = advanceInterview(interviewState, message)
+      const intentForScore = nextState.intent ?? interviewState.intent
+      const contextForScore = nextState.context
 
-      // If interview is active, advance it
-      if (interviewState?.active && interviewState.intent) {
-        const nextState = advanceInterview(interviewState, message)
-        setInterviewState(nextState)
-        setActiveModel('Claude Fable 5')
-
-        // ── Context Sufficiency Score Gate ──
-        // Fire score check asynchronously after every answer so the badge
-        // updates in real-time without blocking the UI.
-        const intentForScore = nextState.intent ?? interviewState.intent
-        const contextForScore = nextState.context
-        if (intentForScore) {
-          setIsScoring(true)
-          fetch('/api/chat/score-context', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              intent: intentForScore,
-              context: contextForScore,
-              currentStep: nextState.step,
-              totalSteps: getTotalQuestions(intentForScore),
-            }),
+      // ── Context Sufficiency Score Gate ──
+      // Fire score check asynchronously after every answer so the badge
+      // updates in real-time without blocking the UI.
+      const fireScoreGate = () => {
+        if (!intentForScore) return
+        setIsScoring(true)
+        fetch('/api/chat/score-context', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            intent: intentForScore,
+            context: contextForScore,
+            currentStep: nextState.step,
+            totalSteps: getTotalQuestions(intentForScore),
+          }),
+        })
+          .then(r => r.json())
+          .then((result: { score?: number; weakDimension?: string | null }) => {
+            if (typeof result.score === 'number') {
+              setContextScore(result.score)
+              setContextWeakDim(result.weakDimension ?? null)
+            }
           })
-            .then(r => r.json())
-            .then((result: { score?: number; weakDimension?: string | null }) => {
-              if (typeof result.score === 'number') {
-                setContextScore(result.score)
-                setContextWeakDim(result.weakDimension ?? null)
-              }
-            })
-            .catch(() => { /* fail silently — score stays at previous value */ })
-            .finally(() => setIsScoring(false))
-        }
+          .catch(() => { /* fail silently — score stays at previous value */ })
+          .finally(() => setIsScoring(false))
+      }
 
         if (!nextState.active && nextState.spec) {
           // Interview answers collected — show confirm card immediately to prevent latency.
@@ -837,53 +837,62 @@ Respond with EXACTLY one of:
             }])
           }
 
-          // Show thinking indicator immediately, then run the gate
+          // Confirm path: append the thinking indicator now; run the gate after commit.
           const thinkingMsg: ChatMsg = {
             id: crypto.randomUUID(),
             role: 'assistant' as const,
             content: `🧠 **Scoring context quality…** (${isScoring ? 'evaluating' : 'finalizing'})`,
             timestamp: new Date().toISOString(),
           }
-          // Run the async gate — we can't await inside setMessages callback,
-          // so start it immediately and let it update state
-          runQualityGate(nextState.spec)
-          return [...updated, thinkingMsg]
-
+          immediate.push(thinkingMsg)
+          // Capture the narrowed (non-null) spec for the deferred closure — TS
+          // doesn't preserve property narrowing across a function boundary.
+          const confirmedSpec = nextState.spec
+          runAfter = () => {
+            setInterviewState(nextState)
+            setActiveModel('Claude Fable 5')
+            fireScoreGate()
+            // Run the async gate — it updates state on its own.
+            runQualityGate(confirmedSpec)
+          }
         } else {
           const question = getCurrentQuestionWithDefaults(nextState)
           if (question) {
-            // Show the next question; score badge will update from the async score fetch above
+            // Show the next question; score badge updates from the async score fetch.
             const qMsg: ChatMsg = {
               id: crypto.randomUUID(),
               role: 'assistant' as const,
               content: `✦ **${question.question}**${question.defaultValue ? `\n\n_${nextState._editDefaults ? 'Previous answer' : 'Default'}: ${question.defaultValue}_` : ''}`,
               timestamp: new Date().toISOString(),
             }
-            return [...updated, qMsg]
+            immediate.push(qMsg)
+          }
+          runAfter = () => {
+            setInterviewState(nextState)
+            setActiveModel('Claude Fable 5')
+            fireScoreGate()
           }
         }
-        return updated
+    } else {
+      // Branch C — no active interview; normal chat send.
+      runAfter = () => {
+        // Reset context score when not in interview mode
+        setContextScore(undefined)
+        setContextWeakDim(null)
+        sendToApi(fullMessage, committed, 'deep_dive', msgAttachments)
       }
+    }
 
-      // No active interview — always use deep_dive for general chat
-      const useCase = 'deep_dive'
-
-      // Reset context score when not in interview mode
-      setContextScore(undefined)
-      setContextWeakDim(null)
-
-      // P7 fix: fire API call OUTSIDE setMessages updater to prevent
-      // double-firing under React concurrent mode / Strict Mode.
-      pendingSendToApi = { message, updated, useCase, msgAttachments }
-      return updated
+    // Pure updater: append the precomputed message(s) and capture the result so
+    // deferred sends can reference the post-append list.
+    setMessages(prev => {
+      committed = [...prev, ...immediate]
+      return committed
     })
 
-    // Execute the API call outside the state updater (P7 fix from /review)
-    if (pendingSendToApi) {
-      const { message: msg, updated: msgs, useCase: uc, msgAttachments: att } = pendingSendToApi
-      sendToApi(msg, msgs, uc, att)
-    }
-  }, [interviewState, sendToApi, canUseInterviewMode, quotedReply])
+    // Side effects run exactly once, AFTER the commit (P7/E1).
+    runAfter?.()
+  }, [interviewState, sendToApi, canUseInterviewMode, quotedReply, userRole])
 
   /* ── Handle manual send from input ── */
   const handleSend = useCallback(() => {
