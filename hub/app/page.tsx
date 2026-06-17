@@ -109,7 +109,6 @@ function RightPanel({
   userRole,
   kpiLoading,
   onCustomizeCSuite,
-  activeOrgId,
 }: {
   isOpen?: boolean
   onClose?: () => void
@@ -121,7 +120,6 @@ function RightPanel({
   userRole?: string
   kpiLoading?: boolean
   onCustomizeCSuite: (orgId: string, orgName: string) => void
-  activeOrgId?: string
 }) {
   // Build Paperclip workspace URL from the active project
   const paperclipBaseUrl = process.env.NEXT_PUBLIC_PAPERCLIP_URL || 'https://rxfit-paperclip-11747747730.us-central1.run.app'
@@ -171,7 +169,9 @@ function RightPanel({
 
       <div className="panel-content">
         <ProjectHealthSection projects={projects} onInjectChat={onInjectChat} userRole={userRole} isLoading={kpiLoading} />
-        <ExecutionFeed onInjectChat={onInjectChat} onCustomizeCSuite={onCustomizeCSuite} orgId={activeOrgId || activeCompany?.companyId} />
+        {/* orgId derives from activeCompany (same projects.find the page used for the
+            now-removed activeOrgId prop — both resolved to this exact value). */}
+        <ExecutionFeed onInjectChat={onInjectChat} onCustomizeCSuite={onCustomizeCSuite} orgId={activeCompany?.companyId} />
       </div>
     </aside>
   )
@@ -937,6 +937,13 @@ Respond with EXACTLY one of:
     sendToApi(message, updatedMessages, useCase, injectAttachments)
   }, [sendToApi])
 
+  // Stable per-panel inject handlers — referentially constant across renders so
+  // memoized panel children (e.g. FeedCard) don't re-render on unrelated state
+  // changes like chat-input typing.
+  const injectRecall = useCallback((msg: string, atts?: ChatAttachment[]) => handleChatInject(msg, 'recall', atts), [handleChatInject])
+  const injectExecute = useCallback((msg: string) => handleChatInject(msg, 'execute'), [handleChatInject])
+  const injectDeepDive = useCallback((msg: string) => handleChatInject(msg, 'deep_dive'), [handleChatInject])
+
   /* ── Handle skill activation from popover or inline link ── */
   const handleSkillActivate = useCallback((skillId: string) => {
     const skill = SKILL_MAP[skillId]
@@ -1083,7 +1090,7 @@ Respond with EXACTLY one of:
       </div>
 
       <div className="panels-container">
-        <LeftPanel isOpen={mobileLeftOpen} onClose={handleClosePanels} onInjectChat={(msg, atts) => handleChatInject(msg, 'recall', atts)} panelRef={leftPanelRef} activeProject={activeProject} workspaceName={projects?.[0]?.companyName} />
+        <LeftPanel isOpen={mobileLeftOpen} onClose={handleClosePanels} onInjectChat={injectRecall} panelRef={leftPanelRef} activeProject={activeProject} workspaceName={projects?.[0]?.companyName} />
 
         {/* ── Center Panel: AI Chat (inlined for shared state) ── */}
         <main className="panel-center" aria-label="AI Chat">
@@ -1349,7 +1356,7 @@ Respond with EXACTLY one of:
             activeSkill={activeSkill}
             messages={messages}
             onDismiss={handleSkillDeactivate}
-            onInjectChat={(msg) => handleChatInject(msg, 'deep_dive')}
+            onInjectChat={injectDeepDive}
             onSaveArtifacts={handleSaveToolArtifacts}
             isCollapsed={toolPanelCollapsed}
             onToggleCollapse={() => setToolPanelCollapsed(c => !c)}
@@ -1367,11 +1374,10 @@ Respond with EXACTLY one of:
           <RightPanel
             isOpen={mobileRightOpen}
             onClose={handleClosePanels}
-            onInjectChat={(msg) => handleChatInject(msg, 'execute')}
+            onInjectChat={injectExecute}
             panelRef={rightPanelRef}
             projects={projects}
             activeProject={activeProject}
-            activeOrgId={activeProject !== 'all' ? projects?.find(p => p.identifier?.toLowerCase() === activeProject?.toLowerCase() || p.companyName?.toLowerCase().includes(activeProject?.toLowerCase() || ''))?.companyId : undefined}
             userRole={userRole}
             kpiLoading={kpiLoading}
             onCustomizeCSuite={(orgId, orgName) => {

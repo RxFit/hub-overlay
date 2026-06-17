@@ -41,21 +41,26 @@ detection, interview advance, scoring, quality gate, sends) are assigned to a si
 the established "P7" pattern and now covers every branch (start / advance / normal send).
 Verified: `tsc --noEmit` clean, `vitest` 31/31.
 
-### E2 — Duplicate `projects.find(...)` for the active company
-The active-company lookup runs twice per render: once inline in the page to compute
-`activeOrgId` (`app/page.tsx:1374`) and again inside `RightPanel` (`:128`), then OR-combined
-(`:174`). Cheap, but duplicated logic that can drift. **Recommend:** compute once and pass
-down, or derive `activeOrgId` from the `RightPanel`-side `activeCompany`.
+### E2 — Duplicate `projects.find(...)` for the active company — ✅ FIXED
+The active-company lookup ran twice per render: inline in the page to compute `activeOrgId`
+and again inside `RightPanel`, then OR-combined. Analysis showed the two always resolved to
+the **same** value (`activeCompany?.companyId`), so the `activeOrgId` prop and its page-side
+`find` were fully redundant. Removed the prop and the page-side computation; `RightPanel`
+derives `orgId` from its own `activeCompany`. Exact behavior preserved.
 
-### E3 — `FeedFilterBar` re-rendered in four branches (`RightPanelSections.tsx`)
-The loading / error / empty / content branches each render their own `<FeedFilterBar>` (and
-the loading branch passes hardcoded zero counts). Functional but repetitive JSX.
-**Recommend:** render the filter bar once above the branch switch.
+### E3 — `FeedFilterBar` re-rendered in four branches — ✅ FIXED
+The loading / error / empty / content branches each rendered their own `<FeedFilterBar>`
+(the loading branch with hardcoded zero counts). Hoisted to render **once** above a single
+ternary body switch. (During loading, `items` is empty so the shared `counts` is all-zero —
+same as the old hardcoded value.)
 
-### E4 — Feed cards not memoized
-`FeedCard` / the feed list re-render fully on every filter tab change and every 30 s feed
-refresh (`useFeed` polls at 30 s). Fine at current list sizes; if the feed grows, wrap
-`FeedCard` in `React.memo` and key the memo on `item.id`.
+### E4 — Feed cards not memoized — ✅ FIXED
+Wrapped `FeedCard` in `React.memo` (keyed on `item.id`) **and** stabilized the per-panel
+inject handlers in `page.tsx` (`injectRecall` / `injectExecute` / `injectDeepDive` via
+`useCallback`) so the memo is actually effective — previously the inline
+`(msg) => handleChatInject(...)` wrappers were new on every render, which would have defeated
+`memo`. Now unrelated re-renders (e.g. typing in the chat input) no longer re-render the feed
+cards. The stabilized handlers also reduce re-renders across the left-panel sections.
 
 ---
 

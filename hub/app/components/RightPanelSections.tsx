@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, memo } from 'react'
 import { useFeed } from '@/app/hooks/useHubData'
 import { useStallDetector } from '@/app/hooks/useStallDetector'
 import { BusinessManagerPanel } from '@/app/components/BusinessManagerPanel'
@@ -50,7 +50,7 @@ function FeedSkeleton() {
    FEED CARD
    ══════════════════════════════════════════════════════════════════════════════ */
 
-function FeedCard({
+const FeedCard = memo(function FeedCard({
   item,
   index,
   onInjectChat,
@@ -103,7 +103,7 @@ function FeedCard({
       )}
     </button>
   )
-}
+})
 
 /* ══════════════════════════════════════════════════════════════════════════════
    FEED FILTER BAR
@@ -265,70 +265,51 @@ export function ExecutionFeed({
       {/* ── Activity Feed ── */}
       <div style={{ padding: 'var(--space-4, 16px)' }}>
 
-        {/* Loading state */}
-        {isLoading && (
-          <>
-            <FeedFilterBar active={activeFilter} onChange={setActiveFilter} counts={{ all: 0, needs_you: 0, completed: 0, in_progress: 0 }} />
-            <FeedSkeleton />
-          </>
-        )}
+        {/* Filter bar — rendered once; counts are all-zero while loading (items is empty) */}
+        <FeedFilterBar active={activeFilter} onChange={setActiveFilter} counts={counts} />
 
-        {/* Error state */}
-        {!isLoading && error && (
-          <>
-            <FeedFilterBar active={activeFilter} onChange={setActiveFilter} counts={counts} />
-            <div className="feed-empty" role="alert">
-              <div className="feed-empty__icon">⚠️</div>
-              <div className="feed-empty__text">Unable to load activity feed — try refreshing</div>
-              <button
-                className="feed-filter-btn"
-                onClick={handleRetry}
-                disabled={retrying}
-                style={{ marginTop: 'var(--space-3)' }}
-              >
-                {retrying ? 'Retrying…' : 'Retry'}
-              </button>
+        {isLoading ? (
+          <FeedSkeleton />
+        ) : error ? (
+          <div className="feed-empty" role="alert">
+            <div className="feed-empty__icon">⚠️</div>
+            <div className="feed-empty__text">Unable to load activity feed — try refreshing</div>
+            <button
+              className="feed-filter-btn"
+              onClick={handleRetry}
+              disabled={retrying}
+              style={{ marginTop: 'var(--space-3)' }}
+            >
+              {retrying ? 'Retrying…' : 'Retry'}
+            </button>
+          </div>
+        ) : filteredItems.length === 0 ? (
+          <div className="feed-empty" role="status">
+            <div className="feed-empty__icon">💤</div>
+            <div className="feed-empty__text">
+              {activeFilter === 'all'
+                ? 'No activity yet — your agents are idle'
+                : `No ${activeFilter.replace('_', ' ')} items`}
             </div>
-          </>
-        )}
-
-        {/* Empty state */}
-        {!isLoading && !error && filteredItems.length === 0 && (
-          <>
-            <FeedFilterBar active={activeFilter} onChange={setActiveFilter} counts={counts} />
-            <div className="feed-empty" role="status">
-              <div className="feed-empty__icon">💤</div>
-              <div className="feed-empty__text">
-                {activeFilter === 'all'
-                  ? 'No activity yet — your agents are idle'
-                  : `No ${activeFilter.replace('_', ' ')} items`}
-              </div>
-            </div>
-          </>
-        )}
-
-        {/* Feed content */}
-        {!isLoading && !error && filteredItems.length > 0 && (
-          <>
-            <FeedFilterBar active={activeFilter} onChange={setActiveFilter} counts={counts} />
-            <div role="list" aria-label="Activity feed">
-              {grouped.map((group) => (
-                <div key={group.label}>
-                  <DateGroupLabel label={group.label} />
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2, 8px)' }}>
-                    {group.items.map(({ item, globalIndex }) => (
-                      <FeedCard
-                        key={item.id}
-                        item={item}
-                        index={globalIndex}
-                        onInjectChat={onInjectChat}
-                      />
-                    ))}
-                  </div>
+          </div>
+        ) : (
+          <div role="list" aria-label="Activity feed">
+            {grouped.map((group) => (
+              <div key={group.label}>
+                <DateGroupLabel label={group.label} />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2, 8px)' }}>
+                  {group.items.map(({ item, globalIndex }) => (
+                    <FeedCard
+                      key={item.id}
+                      item={item}
+                      index={globalIndex}
+                      onInjectChat={onInjectChat}
+                    />
+                  ))}
                 </div>
-              ))}
-            </div>
-          </>
+              </div>
+            ))}
+          </div>
         )}
 
       </div>
