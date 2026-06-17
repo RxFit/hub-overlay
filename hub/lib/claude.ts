@@ -11,7 +11,12 @@ import type { ChatMessage } from '@/types'
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 const ANTHROPIC_VERSION = '2023-06-01'
-const CLAUDE_MODEL = 'claude-sonnet-4-6'
+
+/* Model rotation: Fable 5 is primary; Sonnet 4.6 is the backup it falls back to
+   (e.g. while Fable 5 is unavailable). When Fable 5 recovers, the cooldown in
+   the rotation layer (lib/gemini.ts) expires and it is tried first again. */
+export const CLAUDE_PRIMARY_MODEL = 'claude-fable-5'
+export const CLAUDE_BACKUP_MODEL = 'claude-sonnet-4-6'
 
 function getApiKey(): string {
   const key = process.env.ANTHROPIC_API_KEY
@@ -59,9 +64,9 @@ function classifyError(status: number, body: string): ClaudeError {
 export async function claudeChat(
   messages: ChatMessage[],
   systemPrompt: string,
-  options: { maxTokens?: number; temperature?: number } = {}
+  options: { model?: string; maxTokens?: number; temperature?: number } = {}
 ): Promise<string> {
-  const { maxTokens = 2048, temperature = 0.3 } = options
+  const { model = CLAUDE_PRIMARY_MODEL, maxTokens = 2048, temperature = 0.3 } = options
   const apiKey = getApiKey()
 
   const controller = new AbortController()
@@ -77,7 +82,7 @@ export async function claudeChat(
         'content-type': 'application/json',
       },
       body: JSON.stringify({
-        model: CLAUDE_MODEL,
+        model,
         max_tokens: maxTokens,
         temperature,
         system: systemPrompt,
@@ -103,9 +108,9 @@ export async function claudeChat(
 export async function* streamClaudeChat(
   messages: ChatMessage[],
   systemPrompt: string,
-  options: { maxTokens?: number; temperature?: number } = {}
+  options: { model?: string; maxTokens?: number; temperature?: number } = {}
 ): AsyncGenerator<string> {
-  const { maxTokens = 4096, temperature = 0.7 } = options
+  const { model = CLAUDE_PRIMARY_MODEL, maxTokens = 4096, temperature = 0.7 } = options
   const apiKey = getApiKey()
 
   const controller = new AbortController()
@@ -121,7 +126,7 @@ export async function* streamClaudeChat(
         'content-type': 'application/json',
       },
       body: JSON.stringify({
-        model: CLAUDE_MODEL,
+        model,
         max_tokens: maxTokens,
         temperature,
         stream: true,

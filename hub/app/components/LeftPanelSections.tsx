@@ -4,7 +4,7 @@ import { useState, useEffect, ReactNode, useCallback } from 'react'
 import { useTasks, useCalendar, useDrive } from '@/app/hooks/useHubData'
 import type { TaskItem, CalendarEvent, DriveFile } from '@/app/hooks/useHubData'
 import { useKPIData } from '@/app/hooks/useKPIData'
-import type { LiveKPI, ProjectKPI, ToolArtifactRecord } from '@/types'
+import type { LiveKPI, ProjectKPI, ToolArtifactRecord, ChatAttachment } from '@/types'
 import { AnimatedNumber } from './AnimatedNumber'
 import useSWR from 'swr'
 
@@ -227,7 +227,7 @@ export function TasksSection({ onInjectChat }: { onInjectChat: (msg: string) => 
               isFading={fadingIds.has(task.id)}
               isToggling={togglingIds.has(task.id)}
               onToggle={() => resolvedListId && handleToggleTask(task, resolvedListId)}
-              onInjectChat={() => onInjectChat(`Tell me about task: ${task.title}`)}
+              onInjectChat={() => onInjectChat(buildTaskInjectMessage(task, activeListName))}
             />
           ))}
         </div>
@@ -663,12 +663,7 @@ export function CalendarSection({ onInjectChat }: { onInjectChat: (msg: string) 
                 <CalendarRow
                   key={event.id}
                   event={event}
-                  onClick={() => {
-                    const dateStr = event.start.dateTime
-                      ? formatShortDate(event.start.dateTime)
-                      : event.start.date ?? ''
-                    onInjectChat(`Tell me about event: ${event.summary} on ${dateStr}`)
-                  }}
+                  onClick={() => onInjectChat(buildEventInjectMessage(event))}
                   onDelete={() => setDeleteConfirm({
                     id: event.id,
                     summary: event.summary,
@@ -809,7 +804,7 @@ const DOC_FILTERS: { key: DocFilter; label: string }[] = [
   { key: 'transcripts', label: 'Transcripts' },
 ]
 
-export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string) => void }) {
+export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void }) {
   const [activeFilter, setActiveFilter] = useState<DocFilter>('recent')
   const { files, isLoading, error } = useDrive(activeFilter === 'artifacts' ? 'recent' : activeFilter)
   
@@ -907,9 +902,19 @@ export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string)
                   file={file}
                   onClick={() => {
                     const msg = activeFilter === 'transcripts'
-                      ? `Summarize the meeting transcript: ${file.name}`
-                      : `Find document: ${file.name}`
-                    onInjectChat(msg)
+                      ? `Summarize the meeting transcript "${file.name}" using its attached content.`
+                      : `Tell me about the document "${file.name}" using its attached content.`
+                    // Attach the real Drive file so the chat route resolves the
+                    // document's actual content (Vertex semantic search → Drive
+                    // export) instead of answering from just the file name.
+                    const attachment: ChatAttachment = {
+                      id: file.id,
+                      type: 'document',
+                      label: file.name,
+                      fileId: file.id,
+                      mimeType: file.mimeType,
+                    }
+                    onInjectChat(msg, [attachment])
                   }}
                 />
               ))}
@@ -1119,6 +1124,44 @@ export function ProjectHealthSection({
 /* ══════════════════════════════════════════════════════════════════════════════
    UTILITY FUNCTIONS
    ══════════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Build a context-rich chat message for a tapped task. Carries the task's list,
+ * due date, status, and notes inline so the assistant can answer about THIS task
+ * even when it falls outside the live Google Workspace snapshot window the chat
+ * route fetches (pending-only, first 5 lists).
+ */
+function buildTaskInjectMessage(task: TaskItem, listName: string): string {
+  const lines = [
+    `Tell me about this task from my "${listName}" list:`,
+    `• Title: ${task.title}`,
+    `• Status: ${task.status === 'completed' ? 'Completed' : 'Pending'}`,
+  ]
+  if (task.due) lines.push(`• Due: ${formatRelativeDate(task.due)}`)
+  if (task.notes) lines.push(`• Notes: ${task.notes.replace(/\s+/g, ' ').slice(0, 500)}`)
+  return lines.join('\n')
+}
+
+/**
+ * Build a context-rich chat message for a tapped calendar event. Carries the
+ * date/time, location, and description inline so the assistant has the event's
+ * real details regardless of the snapshot window.
+ */
+function buildEventInjectMessage(event: CalendarEvent): string {
+  const when = event.start.dateTime
+    ? `${formatShortDate(event.start.dateTime)} at ${formatTime(event.start.dateTime)}`
+    : event.start.date
+      ? `${formatShortDate(event.start.date + 'T00:00:00')} (all day)`
+      : 'unscheduled'
+  const lines = [
+    `Tell me about this calendar event:`,
+    `• Title: ${event.summary || '(untitled)'}`,
+    `• When: ${when}`,
+  ]
+  if (event.location) lines.push(`• Location: ${event.location}`)
+  if (event.description) lines.push(`• Details: ${event.description.replace(/\s+/g, ' ').slice(0, 500)}`)
+  return lines.join('\n')
+}
 
 function formatTime(isoString: string): string {
   try {
