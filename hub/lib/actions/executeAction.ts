@@ -6,6 +6,17 @@ interface ExecuteActionDeps {
   mutate: (key: string) => any
 }
 
+/**
+ * Headers for high-stakes Paperclip issue creation. Carries the server-issued
+ * quality-gate token (P0-2) so the proxy can verify the context-sufficiency gate
+ * was satisfied server-side before the agent is triggered.
+ */
+function issueHeaders(spec: ActionSpec): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (spec.gateToken) headers['X-Gate-Token'] = spec.gateToken
+  return headers
+}
+
 function pickList<T>(data: unknown, key: string): T[] {
   if (Array.isArray(data)) return data as T[]
   if (data && typeof data === 'object' && key in data) {
@@ -154,7 +165,7 @@ export async function executeAction(
 
       const scIssueRes = await fetch('/api/paperclip/issues', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: issueHeaders(spec),
         body: JSON.stringify({
           title: commTitle,
           description: commDesc,
@@ -182,7 +193,7 @@ export async function executeAction(
 
       const res = await fetch('/api/paperclip/issues', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: issueHeaders(spec),
         body: JSON.stringify({
           title: issueTitle,
           description: issueDesc,
@@ -387,7 +398,7 @@ export async function executeAction(
 
       const issueRes = await fetch('/api/paperclip/issues', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: issueHeaders(spec),
         body: JSON.stringify({
           title: issueTitle,
           description: issueDesc,
@@ -433,7 +444,7 @@ export async function executeAction(
 
       const issueRes = await fetch('/api/paperclip/issues', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: issueHeaders(spec),
         body: JSON.stringify({
           title: issueTitle,
           description: issueDesc,

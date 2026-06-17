@@ -8,6 +8,8 @@ import { loopDetector } from '@/lib/loop-detector'
 import { breaker } from '@/lib/circuit-breaker'
 import { withRetry } from '@/lib/retry'
 import { getTenantId } from '@/lib/tenant-context'
+import { verifyGateToken } from '@/lib/gateToken'
+import { requiredWriteRank, ROLE_RANK } from '@/lib/proxyAuthz'
 import crypto from 'crypto'
 
 const log = createLogger('paperclip/proxy')
@@ -77,27 +79,11 @@ export async function DELETE(
   req: NextRequest,
   { params }: { params: { path: string[] } }
 ) {
-  // S10 fix: Destructive operations on companies/agents/issues require admin+ role.
-  // The client-side Interview Mode name-matching is just UX; THIS is the
-  // real security boundary. Without this, staff/onboarding users could
-  // craft a direct DELETE request and bypass all client-side guards.
+  // Destructive operations are role-gated inside proxyRequest via
+  // requiredWriteRank() — the real security boundary (client-side Interview Mode
+  // name-matching is just UX). Pre-fetch the session here only to avoid a second
+  // getServerSession call in proxyRequest.
   const session = await getServerSession(authOptions)
-  const userRole = (session?.user as Record<string, unknown>)?.role as string
-  const segments = params.path[0] === 'api' ? params.path.slice(1) : params.path
-  const apiPath = '/api/' + segments.join('/')
-
-  const isCompanyDelete = /^\/api\/companies\/[a-f0-9-]+$/.test(apiPath)
-  const isAgentDelete = /^\/api\/agents\/[a-f0-9-]+$/.test(apiPath)
-  const isIssueDelete = /^\/api\/issues\/[a-f0-9-]+$/.test(apiPath)
-
-  if ((isCompanyDelete || isAgentDelete || isIssueDelete) && userRole !== 'superadmin' && userRole !== 'admin') {
-    return NextResponse.json(
-      { error: 'Forbidden — admin or superadmin role required for destructive operations' },
-      { status: 403 }
-    )
-  }
-
-  // Pass the already-fetched session to avoid a second getServerSession call
   return proxyRequest(req, params.path, 'DELETE', session)
 }
 
@@ -132,6 +118,35 @@ async function proxyRequest(
   const user = session.user as Record<string, unknown>
   const role = user.role as string
   const assignedProjects = (user.assignedProjects as string[]) ?? []
+
+  // P0-1: Role-tier enforcement for mutations. Mirrors INTENT_PERMISSIONS so a
+  // scoped staff user cannot bypass client-side gating by calling the API
+  // directly (e.g. PATCH an issue, restart/create an agent).
+  const requiredRank = requiredWriteRank(method, apiPath)
+  if (requiredRank > 0 && (ROLE_RANK[role] ?? 0) < requiredRank) {
+    return NextResponse.json(
+      { error: 'Forbidden — insufficient role for this operation' },
+      { status: 403 }
+    )
+  }
+
+  // P0-2: High-stakes issue creation must carry a server-issued, HMAC-signed
+  // quality-gate token. Every POST /api/issues originates from Interview Mode's
+  // executeAction (high-stakes intents: create issue / send comm / create agent
+  // / launch campaign). Without a valid, unexpired, above-threshold token we
+  // fail closed — the gate is no longer bypassable from the browser.
+  if (method.toUpperCase() === 'POST' && apiPath === '/api/issues') {
+    const gate = verifyGateToken(req.headers.get('x-gate-token'))
+    if (!gate.valid) {
+      log.warn({ path: apiPath, reason: gate.reason }, 'Quality-gate token rejected')
+      return NextResponse.json(
+        {
+          error: `Quality gate not satisfied (${gate.reason ?? 'no valid gate token'}). Re-run this action through the assistant so it can be re-validated.`,
+        },
+        { status: 403 }
+      )
+    }
+  }
 
   // If the request targets a specific company, check access
   const companyMatch = apiPath.match(/\/api\/companies\/([a-f0-9-]+)/)
