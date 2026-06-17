@@ -293,7 +293,7 @@ function shouldUseClaude(useCase: string, hasActiveSkill: boolean): boolean {
  * 5xx, overload, timeouts). Auth / key / permission failures share the same
  * credential across every model, so retrying the next model just burns the
  * fallback budget and still fails. */
-function isRateLimitError(err: unknown): boolean {
+export function isRateLimitError(err: unknown): boolean {
   const msg = (err instanceof Error ? err.message : String(err)).toLowerCase()
   return msg.includes('429')
     || msg.includes('rate limit')
@@ -302,7 +302,7 @@ function isRateLimitError(err: unknown): boolean {
     || msg.includes('overloaded')
 }
 
-function isAuthOrKeyError(err: unknown): boolean {
+export function isAuthOrKeyError(err: unknown): boolean {
   const msg = (err instanceof Error ? err.message : String(err)).toLowerCase()
   return /(^|\D)(401|403)(\D|$)/.test(msg)
     || msg.includes('api key')
@@ -321,7 +321,7 @@ function isAuthOrKeyError(err: unknown): boolean {
  * blowing past the client's 45 s abort. This races each `.next()` against an
  * idle timer and tears the underlying stream down on early exit.
  */
-async function* withIdleWatchdog<T>(
+export async function* withIdleWatchdog<T>(
   iterator: AsyncIterator<T>,
   idleMs: number,
   label: string,
@@ -474,12 +474,20 @@ async function* streamGeminiWithFallback(
 
       const chat = model.startChat({ history: contents })
 
-      // HARDENED: 60-second timeout on initial stream connection
+      // HARDENED: 60-second timeout on initial stream connection.
+      // The timer is cleared once the race settles so a successful connect
+      // doesn't leave a 60 s timer pending (one per call) until it fires.
       const resultPromise = chat.sendMessageStream(lastMessage.content)
+      let connectTimer: ReturnType<typeof setTimeout> | undefined
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error(`Gemini stream timeout (${modelName})`)), 60_000)
+        connectTimer = setTimeout(() => reject(new Error(`Gemini stream timeout (${modelName})`)), 60_000)
       })
-      const result = await Promise.race([resultPromise, timeoutPromise])
+      let result: Awaited<typeof resultPromise>
+      try {
+        result = await Promise.race([resultPromise, timeoutPromise])
+      } finally {
+        if (connectTimer) clearTimeout(connectTimer)
+      }
 
       // Emit modelUsed event
       yield { modelUsed: getModelDisplayName(modelName) }
