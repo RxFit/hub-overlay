@@ -6,7 +6,7 @@ import { useSession, signIn } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { TasksSection, CalendarSection, DocumentsSection, KPISection, ProjectHealthSection } from '@/app/components/LeftPanelSections'
 import { ExecutionFeed } from '@/app/components/RightPanelSections'
-import { InterviewBadge, ContextInjectionBanner, ActionConfirmCard, SkillBadge } from '@/app/components/ChatEnhancements'
+import { InterviewBadge, ActionConfirmCard, SkillBadge } from '@/app/components/ChatEnhancements'
 import { ToolPanel } from '@/app/components/ToolPanel'
 import { ToolPanelCollapsedRail, MobileToolEdge } from '@/app/components/ToolPanelCollapsedRail'
 import type { ToolArtifactData } from '@/types'
@@ -113,7 +113,7 @@ function RightPanel({
 }: {
   isOpen?: boolean
   onClose?: () => void
-  onInjectChat: (msg: string, useCase?: string) => void
+  onInjectChat: (msg: string) => void
   panelRef?: React.Ref<HTMLElement>
   style?: React.CSSProperties
   projects?: import('@/types').ProjectKPI[]
@@ -300,7 +300,6 @@ export default function HubPage() {
 
   // Interview Mode state
   const [interviewState, setInterviewState] = useState<InterviewState | null>(null)
-  const [injectedContext, setInjectedContext] = useState<string | null>(null)
   const [actionSpec, setActionSpec] = useState<InterviewState['spec']>(null)
 
   // Context Sufficiency Score — live gate state
@@ -616,10 +615,10 @@ export default function HubPage() {
             }
           } else {
             // No intent detected, just send to normal chat API
-            sendToApi(fullMessage, updated, activeSkill ? 'deep_dive' : 'deep_dive', msgAttachments)
+            sendToApi(fullMessage, updated, 'deep_dive', msgAttachments)
           }
         }).catch(() => {
-          sendToApi(fullMessage, updated, activeSkill ? 'deep_dive' : 'deep_dive', msgAttachments)
+          sendToApi(fullMessage, updated, 'deep_dive', msgAttachments)
         })
 
         return updated
@@ -1133,14 +1132,6 @@ Respond with EXACTLY one of:
                 }}
                 contextScore={isScoring ? undefined : contextScore}
                 weakDimension={contextWeakDim ?? undefined}
-              />
-            )}
-
-            {/* Context injection banner */}
-            {injectedContext && (
-              <ContextInjectionBanner
-                source={injectedContext}
-                onDismiss={() => setInjectedContext(null)}
               />
             )}
 

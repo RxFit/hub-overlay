@@ -159,53 +159,6 @@ export function InterviewBadge({
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
-   CONTEXT INJECTION BANNER
-   Shows when context is injected from a panel tap (progressive disclosure)
-   ══════════════════════════════════════════════════════════════════════════════ */
-
-export function ContextInjectionBanner({
-  source,
-  onDismiss,
-}: {
-  source: string
-  onDismiss: () => void
-}) {
-  const swipe = useSwipeDismiss(onDismiss)
-
-  return (
-    <div
-      role="status"
-      aria-live="polite"
-      className="context-banner"
-      onTouchStart={swipe.onTouchStart}
-      onTouchMove={swipe.onTouchMove}
-      onTouchEnd={swipe.onTouchEnd}
-      style={swipe.style}
-    >
-      {/* Icon */}
-      <span aria-hidden="true" className="context-banner__icon">
-        📌
-      </span>
-
-      {/* Source text */}
-      <div className="context-banner__text">
-        <span className="context-banner__label">Context:</span>{' '}
-        {source}
-      </div>
-
-      {/* Dismiss */}
-      <button
-        onClick={onDismiss}
-        aria-label="Dismiss context"
-        className="context-banner__dismiss"
-      >
-        ✕
-      </button>
-    </div>
-  )
-}
-
-/* ══════════════════════════════════════════════════════════════════════════════
    ACTION CONFIRM CARD
    Renders the structured action spec for user approval after interview
    ══════════════════════════════════════════════════════════════════════════════ */
