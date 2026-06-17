@@ -237,8 +237,8 @@ export function chatMessagesToContents(messages: ChatMessage[]): Content[] {
  * and deliver reasoning-grade intelligence are allowed. This allowlist is
  * the single source of truth — any model not listed will be rejected at runtime.
  *
- * NOTE: Claude Fable 5 (claude-sonnet-4-6) is managed separately in hub/lib/claude.ts,
- * not the Google SDK — see hub/lib/claude.ts.
+ * NOTE: The Claude chain (Fable 5 → Sonnet 4.6) is managed separately in
+ * hub/lib/claude.ts, not the Google SDK — see hub/lib/claude.ts.
  */
 const APPROVED_GEMINI_MODELS: readonly string[] = [
   'gemini-2.5-flash',    // Primary — fast, 1M context
@@ -254,10 +254,16 @@ function assertApprovedGeminiModel(model: string): void {
   }
 }
 
+/* Claude rotation chain: Fable 5 primary → Sonnet 4.6 backup. When Fable 5 is
+   unavailable it falls through to Sonnet 4.6; once Fable 5's cooldown expires it
+   is tried first again. Both run through lib/claude.ts on the same API key. */
+const CLAUDE_MODEL_CHAIN = ['claude-fable-5', 'claude-sonnet-4-6'] as const
+
 /** Human-friendly model display names for the UI badge */
 function getModelDisplayName(model: string): string {
   switch (model) {
-    case 'claude-sonnet-4-6': return 'Claude Fable 5'
+    case 'claude-fable-5': return 'Claude Fable 5'
+    case 'claude-sonnet-4-6': return 'Claude Sonnet 4.6'
     case 'gemini-2.5-flash': return 'Gemini 2.5 Flash'
     case 'gemini-2.5-pro': return 'Gemini 2.5 Pro'
     default: return model
@@ -267,10 +273,10 @@ function getModelDisplayName(model: string): string {
 /**
  * UseCase-based routing: decides whether to try Claude first.
  *
- * Model priority by use case:
- *   interview  → Claude → Gemini 2.5 Pro → Gemini 2.5 Flash
- *   deep_dive (with skill active) → Claude → Gemini 2.5 Pro → Gemini 2.5 Flash
- *   execute (Pre-Cog quality gate) → Claude → Gemini 2.5 Pro → Gemini 2.5 Flash
+ * Model priority by use case (Claude chain = Fable 5 → Sonnet 4.6):
+ *   interview  → Claude Fable 5 → Claude Sonnet 4.6 → Gemini 2.5 Flash → Gemini 2.5 Pro
+ *   deep_dive (with skill active) → Claude Fable 5 → Claude Sonnet 4.6 → Gemini Flash → Gemini Pro
+ *   execute (Pre-Cog quality gate) → Claude Fable 5 → Claude Sonnet 4.6 → Gemini Flash → Gemini Pro
  *
  *   recall     → Gemini 2.5 Flash → Gemini 2.5 Pro
  *   deep_dive (no skill) → Gemini 2.5 Flash → Gemini 2.5 Pro
@@ -377,34 +383,49 @@ export async function* streamChat(
   useCase: string = 'deep_dive',
   hasActiveSkill: boolean = false
 ): AsyncGenerator<string | { modelUsed: string }> {
-  if (shouldUseClaude(useCase, hasActiveSkill) && !isModelInCooldown('claude-sonnet-4-6')) {
-    let claudeEmitted = false
-    try {
-      const { streamClaudeChat } = await import('@/lib/claude')
+  if (shouldUseClaude(useCase, hasActiveSkill)) {
+    const { streamClaudeChat } = await import('@/lib/claude')
 
-      // Emit modelUsed event BEFORE streaming
-      yield { modelUsed: getModelDisplayName('claude-sonnet-4-6') }
+    // Walk the Claude chain (Fable 5 → Sonnet 4.6) before handing off to Gemini.
+    for (let i = 0; i < CLAUDE_MODEL_CHAIN.length; i++) {
+      const claudeModel = CLAUDE_MODEL_CHAIN[i]
+      if (isModelInCooldown(claudeModel)) continue
 
-      // Idle watchdog guards against a connected-then-stalled Claude stream.
-      const claudeIter = streamClaudeChat(messages, systemPrompt)[Symbol.asyncIterator]()
-      for await (const chunk of withIdleWatchdog(claudeIter, 30_000, 'claude')) {
-        claudeEmitted = true
-        yield chunk
+      let claudeEmitted = false
+      try {
+        // Emit modelUsed event BEFORE streaming
+        yield { modelUsed: getModelDisplayName(claudeModel) }
+
+        // Idle watchdog guards against a connected-then-stalled Claude stream.
+        const claudeIter = streamClaudeChat(messages, systemPrompt, { model: claudeModel })[Symbol.asyncIterator]()
+        for await (const chunk of withIdleWatchdog(claudeIter, 30_000, claudeModel)) {
+          claudeEmitted = true
+          yield chunk
+        }
+        return // Claude success — done
+      } catch (err: unknown) {
+        // W-2 FIX: Classify error to determine cooldown behavior
+        const claudeErr = (err as { claudeError?: { type: string } })?.claudeError
+        const isRateLimit = claudeErr?.type === 'rate_limit'
+        recordModelFailure(claudeModel, isRateLimit)
+
+        // CRITICAL: if this model already streamed tokens before failing, those
+        // tokens are on the wire. Rotating would restart the answer and
+        // duplicate/garble it. Propagate the error instead.
+        if (claudeEmitted) {
+          throw err
+        }
+
+        // Auth/key/billing failures share the credential across the whole Claude
+        // chain — the backup can't succeed either, so skip straight to Gemini.
+        if (claudeErr?.type === 'auth') {
+          console.warn(`[streamChat] Claude ${claudeModel} auth failure — skipping Claude chain, falling back to Gemini:`, err)
+          break
+        }
+
+        // Otherwise try the next Claude model (backup), then Gemini.
+        console.warn(`[streamChat] Claude ${claudeModel} failed pre-stream (${isRateLimit ? 'rate_limit' : 'error'}), trying next model:`, err)
       }
-      return // Claude success — done
-    } catch (err: unknown) {
-      // W-2 FIX: Classify error to determine cooldown behavior
-      const claudeErr = (err as { claudeError?: { type: string } })?.claudeError
-      const isRateLimit = claudeErr?.type === 'rate_limit'
-      recordModelFailure('claude-sonnet-4-6', isRateLimit)
-
-      // CRITICAL: if Claude already streamed tokens before failing, those tokens
-      // are on the wire. Falling back to Gemini would restart the answer and
-      // duplicate/garble it. Propagate the error instead of rotating.
-      if (claudeEmitted) {
-        throw err
-      }
-      console.warn(`[streamChat] Claude failed pre-stream (${isRateLimit ? 'rate_limit' : 'error'}), falling back to Gemini:`, err)
     }
   }
 

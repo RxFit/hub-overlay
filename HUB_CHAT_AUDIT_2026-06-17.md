@@ -30,13 +30,19 @@ the diverged codebase (as the 06-14 audit predicted) and are the most likely cau
 instead of overwriting it, so a mid-stream failure preserves already-streamed text
 (`app/page.tsx`).
 
-### Open item (flagged, not changed — needs a product decision)
-- **Model-identity labeling.** `getModelDisplayName()` maps `claude-sonnet-4-6` → "Claude
-  Fable 5", and the same "Fable 5" label is hardcoded in `app/page.tsx` and
-  `score-context/route.ts`. The routed model id is **Sonnet 4.6**, not Fable 5
-  (`claude-fable-5`). This is a cosmetic/branding mismatch, not a rotation-correctness bug,
-  so I left the routed model untouched. Decide whether to (a) relabel the badge to "Claude
-  Sonnet 4.6" or (b) actually route to `claude-fable-5`.
+### Resolved follow-up — Fable 5 primary, Sonnet 4.6 backup
+The earlier "Fable 5 vs Sonnet 4.6" labeling mismatch is now a real two-model chain:
+- The Claude rotation is **`claude-fable-5` (primary) → `claude-sonnet-4-6` (backup)**, in
+  front of the Gemini chain (`CLAUDE_MODEL_CHAIN` in `lib/gemini.ts`).
+- `lib/claude.ts` exports `CLAUDE_PRIMARY_MODEL` / `CLAUDE_BACKUP_MODEL` and both
+  `streamClaudeChat` / `claudeChat` take a `model` option.
+- Badges now read "Claude Fable 5" and "Claude Sonnet 4.6" accurately
+  (`getModelDisplayName`).
+- When Fable 5 fails pre-stream, it rotates to Sonnet 4.6; an **auth** failure skips the
+  whole Claude chain (shared key) straight to Gemini. A per-model cooldown means that while
+  Fable 5 is down it's skipped, and **once it recovers (cooldown expires) it is tried first
+  again** — Fable 5 stays primary.
+- `score-context` scoring also tries Fable 5 → Sonnet 4.6 → Gemini 2.5 Pro.
 
 ---
 
