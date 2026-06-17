@@ -70,7 +70,7 @@ const ONBOARDING_SUGGESTIONS = [
 // AnimatedNumber is now imported from @/app/components/AnimatedNumber
 
 /* ── Left Panel: Context Layer ── */
-function LeftPanel({ isOpen, onClose, onInjectChat, panelRef, style, activeProject, workspaceName }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string, useCase?: string) => void; panelRef?: React.Ref<HTMLElement>; style?: React.CSSProperties; activeProject?: string; workspaceName?: string }) {
+function LeftPanel({ isOpen, onClose, onInjectChat, panelRef, style, activeProject, workspaceName }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void; panelRef?: React.Ref<HTMLElement>; style?: React.CSSProperties; activeProject?: string; workspaceName?: string }) {
   const tenant = useTenant()
   return (
     <aside ref={panelRef} className={`panel-left ${isOpen ? 'mobile-open' : ''}`} aria-label="Context Layer" style={style}>
@@ -502,9 +502,13 @@ export default function HubPage() {
                 )
               }
               if (parsed.error) {
-                // Server sent an error event — show it to the user
+                // Server sent an error event — APPEND it so any text already
+                // streamed into this bubble (e.g. a model that failed mid-stream)
+                // is preserved rather than discarded.
                 setMessages(prev =>
-                  prev.map(m => m.id === assistantId ? { ...m, content: `⚠️ ${parsed.error}` } : m)
+                  prev.map(m => m.id === assistantId
+                    ? { ...m, content: (m.content ? m.content + '\n\n' : '') + `⚠️ ${parsed.error}` }
+                    : m)
                 )
               }
               // Parse modelUsed event for dynamic badge
@@ -899,15 +903,18 @@ Respond with EXACTLY one of:
   }, [doSend])
 
   /* ── Handle context injection from panels ── */
-  const handleChatInject = useCallback((message: string, useCase: string = 'deep_dive') => {
+  const handleChatInject = useCallback((message: string, useCase: string = 'deep_dive', injectAttachments?: ChatAttachment[]) => {
     setMobileLeftOpen(false)
     setMobileRightOpen(false)
     setMobileTab('chat')
-    const userMsg = { 
-      id: crypto.randomUUID(), 
-      role: 'user' as const, 
-      content: message, 
-      timestamp: new Date().toISOString() 
+    const userMsg = {
+      id: crypto.randomUUID(),
+      role: 'user' as const,
+      content: message,
+      timestamp: new Date().toISOString(),
+      // Carry any panel-attached context (e.g. a tapped Drive document's fileId)
+      // so the chat route resolves its real content, and the chip renders.
+      attachments: injectAttachments && injectAttachments.length > 0 ? injectAttachments : undefined,
     }
     // Capture the updated messages array via functional updater, but fire the
     // API call OUTSIDE the updater to prevent double-firing under React
@@ -919,7 +926,7 @@ Respond with EXACTLY one of:
     })
     // React batches state updates synchronously within event handlers,
     // so updatedMessages is populated by the time we reach here.
-    sendToApi(message, updatedMessages, useCase)
+    sendToApi(message, updatedMessages, useCase, injectAttachments)
   }, [sendToApi])
 
   /* ── Handle skill activation from popover or inline link ── */
@@ -1068,7 +1075,7 @@ Respond with EXACTLY one of:
       </div>
 
       <div className="panels-container">
-        <LeftPanel isOpen={mobileLeftOpen} onClose={handleClosePanels} onInjectChat={(msg) => handleChatInject(msg, 'recall')} panelRef={leftPanelRef} activeProject={activeProject} workspaceName={projects?.[0]?.companyName} />
+        <LeftPanel isOpen={mobileLeftOpen} onClose={handleClosePanels} onInjectChat={(msg, atts) => handleChatInject(msg, 'recall', atts)} panelRef={leftPanelRef} activeProject={activeProject} workspaceName={projects?.[0]?.companyName} />
 
         {/* ── Center Panel: AI Chat (inlined for shared state) ── */}
         <main className="panel-center" aria-label="AI Chat">

@@ -282,6 +282,69 @@ function shouldUseClaude(useCase: string, hasActiveSkill: boolean): boolean {
   return false
 }
 
+/* ── Error classification for rotation decisions ──
+ * A rotation only helps for transient / model-specific failures (rate limits,
+ * 5xx, overload, timeouts). Auth / key / permission failures share the same
+ * credential across every model, so retrying the next model just burns the
+ * fallback budget and still fails. */
+function isRateLimitError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase()
+  return msg.includes('429')
+    || msg.includes('rate limit')
+    || msg.includes('resource_exhausted')
+    || msg.includes('quota')
+    || msg.includes('overloaded')
+}
+
+function isAuthOrKeyError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase()
+  return /(^|\D)(401|403)(\D|$)/.test(msg)
+    || msg.includes('api key')
+    || msg.includes('api_key')
+    || msg.includes('permission')
+    || msg.includes('unauthenticated')
+    || msg.includes('unauthorized')
+    || msg.includes('invalid key')
+    || msg.includes('billing')
+}
+
+/**
+ * Wraps an async iterator with a per-step idle watchdog. The existing 60 s
+ * connect timeout only covers *opening* the stream; a model that connects then
+ * stalls mid-stream would otherwise hang to the route's maxDuration (120 s),
+ * blowing past the client's 45 s abort. This races each `.next()` against an
+ * idle timer and tears the underlying stream down on early exit.
+ */
+async function* withIdleWatchdog<T>(
+  iterator: AsyncIterator<T>,
+  idleMs: number,
+  label: string,
+): AsyncGenerator<T> {
+  try {
+    while (true) {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const idle = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label} idle watchdog fired — no output for ${idleMs}ms`)),
+          idleMs,
+        )
+      })
+      let result: IteratorResult<T>
+      try {
+        result = await Promise.race([iterator.next(), idle])
+      } finally {
+        if (timer) clearTimeout(timer)
+      }
+      if (result.done) return
+      yield result.value
+    }
+  } finally {
+    // Close the upstream reader if we exit early (idle fire, downstream break,
+    // or error propagation) so the underlying fetch/stream isn't left dangling.
+    await iterator.return?.()
+  }
+}
+
 /* ── W-3 FIX: Map-based cooldown cache ──
  * Tracks failure state PER MODEL independently, preventing flip-flop
  * when multiple models fail in sequence. */
@@ -315,13 +378,17 @@ export async function* streamChat(
   hasActiveSkill: boolean = false
 ): AsyncGenerator<string | { modelUsed: string }> {
   if (shouldUseClaude(useCase, hasActiveSkill) && !isModelInCooldown('claude-sonnet-4-6')) {
+    let claudeEmitted = false
     try {
       const { streamClaudeChat } = await import('@/lib/claude')
 
       // Emit modelUsed event BEFORE streaming
       yield { modelUsed: getModelDisplayName('claude-sonnet-4-6') }
 
-      for await (const chunk of streamClaudeChat(messages, systemPrompt)) {
+      // Idle watchdog guards against a connected-then-stalled Claude stream.
+      const claudeIter = streamClaudeChat(messages, systemPrompt)[Symbol.asyncIterator]()
+      for await (const chunk of withIdleWatchdog(claudeIter, 30_000, 'claude')) {
+        claudeEmitted = true
         yield chunk
       }
       return // Claude success — done
@@ -330,7 +397,14 @@ export async function* streamChat(
       const claudeErr = (err as { claudeError?: { type: string } })?.claudeError
       const isRateLimit = claudeErr?.type === 'rate_limit'
       recordModelFailure('claude-sonnet-4-6', isRateLimit)
-      console.warn(`[streamChat] Claude failed (${isRateLimit ? 'rate_limit' : 'error'}), falling back to Gemini:`, err)
+
+      // CRITICAL: if Claude already streamed tokens before failing, those tokens
+      // are on the wire. Falling back to Gemini would restart the answer and
+      // duplicate/garble it. Propagate the error instead of rotating.
+      if (claudeEmitted) {
+        throw err
+      }
+      console.warn(`[streamChat] Claude failed pre-stream (${isRateLimit ? 'rate_limit' : 'error'}), falling back to Gemini:`, err)
     }
   }
 
@@ -354,6 +428,11 @@ async function* streamGeminiWithFallback(
   if (!lastMessage || lastMessage.role !== 'user') {
     throw new Error('Last message must be from the user')
   }
+
+  // Tracks whether ANY model has streamed a token yet. Once true, rotation is
+  // off the table — the partial answer is already on the wire and restarting
+  // would duplicate it.
+  let emittedAny = false
 
   for (let i = 0; i < modelsToTry.length; i++) {
     const modelName = modelsToTry[i]
@@ -388,20 +467,34 @@ async function* streamGeminiWithFallback(
         yield `⚠️ *Primary model unavailable — using ${modelName}*\n\n`
       }
 
-      for await (const chunk of result.stream) {
+      // Idle watchdog guards against a connected-then-stalled Gemini stream.
+      const streamIter = result.stream[Symbol.asyncIterator]()
+      for await (const chunk of withIdleWatchdog(streamIter, 30_000, modelName)) {
         const text = chunk.text()
         if (text) {
+          emittedAny = true
           yield text
         }
       }
 
       return // Success
     } catch (err) {
-      recordModelFailure(modelName, false)
+      const isRateLimit = isRateLimitError(err)
+      recordModelFailure(modelName, isRateLimit)
+
+      // Mid-stream failure after emitting text: rotating restarts the answer and
+      // duplicates it on the wire. Propagate instead.
+      if (emittedAny) throw err
+
+      // Auth/key/permission/billing errors share the credential across every
+      // model — the next model can't succeed, so fail fast instead of burning
+      // the 2 s fallback delay.
+      if (isAuthOrKeyError(err)) throw err
+
       if (isLastAttempt) {
         throw err // All approved models exhausted
       }
-      console.warn(`[gemini] ${modelName} failed, falling back to ${modelsToTry[i + 1]}:`, err)
+      console.warn(`[gemini] ${modelName} failed (${isRateLimit ? 'rate_limit' : 'error'}), falling back to ${modelsToTry[i + 1]}:`, err)
     }
   }
 }
