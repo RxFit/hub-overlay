@@ -150,6 +150,7 @@ interface CalendarEvent {
   status: string
   location?: string
   organizer?: { email: string; displayName?: string }
+  attendees?: { email?: string; displayName?: string; responseStatus?: string }[]
 }
 
 interface CalendarResponse {

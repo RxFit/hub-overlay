@@ -97,7 +97,7 @@ $deployCmd = @(
   "--timeout=120",
   "--min-instances=0",
   "--max-instances=3",
-  "--set-env-vars=`"$envVarString`""
+  "--update-env-vars=`"$envVarString`""
 ) -join " "
 
 Write-Host "`n📋 Deploy command:" -ForegroundColor Cyan
@@ -130,7 +130,7 @@ gcloud run deploy $SERVICE `
   --timeout=120 `
   --min-instances=0 `
   --max-instances=3 `
-  --set-env-vars="$envVarString"
+  --update-env-vars="$envVarString"
 
 if ($LASTEXITCODE -ne 0) {
   Write-Host "`n❌ Deploy failed!" -ForegroundColor Red

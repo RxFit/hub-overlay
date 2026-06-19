@@ -1,0 +1,22 @@
+#!/usr/bin/env sh
+# pre-push — Runs type check + tests before allowing git push.
+# Prevents pushing broken code to master.
+# Installed by: chore: build hardening (2026-06-18)
+
+cd hub
+
+echo "🔍 Pre-push: Type checking..."
+npx tsc --noEmit
+if [ $? -ne 0 ]; then
+  echo "❌ Type errors found. Fix before pushing."
+  exit 1
+fi
+
+echo "🧪 Pre-push: Running tests..."
+npm run test
+if [ $? -ne 0 ]; then
+  echo "❌ Tests failed. Fix before pushing."
+  exit 1
+fi
+
+echo "✅ Pre-push checks passed."
