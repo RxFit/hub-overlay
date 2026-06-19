@@ -6,6 +6,8 @@ import { createIssue, getAgents } from '@/lib/paperclip'
 import { recordEvent } from '@/lib/event-logger'
 import { RXFIT_CEO_COMPANY_ID, RXFIT_CEO_AGENT_ID } from '@/lib/paperclipConfig'
 import { CreateIssueRequestSchema } from '@/lib/zod-schemas'
+import { verifyGateToken } from '@/lib/gateToken'
+import { canWrite } from '@/lib/proxyAuthz'
 import type { HubUser } from '@/types'
 
 const log = createLogger('paperclip/issues')
@@ -23,6 +25,31 @@ export async function POST(req: Request) {
 
   const user = session.user as unknown as HubUser
   const userRole = (session.user as unknown as Record<string, unknown>).role as string
+
+  // P0-1: role-tier enforcement. This dedicated route handles POST
+  // /api/paperclip/issues and therefore bypasses the [...path] proxy where the
+  // role gate lives — so the same guard must be enforced here.
+  if (!canWrite(userRole, 'POST', '/api/issues')) {
+    return NextResponse.json(
+      { error: 'Forbidden — insufficient role for this operation' },
+      { status: 403 }
+    )
+  }
+
+  // P0-2: issue creation briefs/triggers an agent (high-stakes), so it must
+  // carry the server-issued, HMAC-signed quality-gate token minted by
+  // /api/chat/score-context. The [...path] proxy enforces this for other writes,
+  // but POST /api/paperclip/issues is served by THIS route — without the check
+  // here the gate is bypassed entirely (the token was sent but never verified).
+  // Fail closed: a missing/forged/expired/below-threshold token is rejected.
+  const gate = verifyGateToken(req.headers.get('x-gate-token'))
+  if (!gate.valid) {
+    log.warn({ reason: gate.reason }, 'Quality-gate token rejected on issue creation')
+    return NextResponse.json(
+      { error: `Quality gate not satisfied (${gate.reason ?? 'no valid gate token'}). Re-run this action through the assistant so it can be re-validated.` },
+      { status: 403 }
+    )
+  }
 
   let body: Record<string, unknown>
   try {
