@@ -1,0 +1,78 @@
+/**
+ * Shared Google-route auth + error mapping (audit P1-2).
+ *
+ * Every Google REST route resolved the OAuth token by hand and, in its catch
+ * block, returned HTTP 500 for ANY failure. But `lib/google.ts` throws
+ * `"Google API error <status>: ..."`, so an expired/revoked Google session
+ * (upstream 401/403) surfaced to the browser as a 500 — and the client's
+ * `useAuthErrorRecovery` only re-triggers sign-in on HTTP 401. The session
+ * therefore went dark with an opaque error instead of self-healing.
+ *
+ * `googleApiErrorResponse` maps the thrown error back to the right status:
+ *   - auth failures (401/403, invalid_grant) → 401 `{ reauth: true }`
+ *   - transient upstream/network (429/5xx/timeout) → 502
+ *   - everything else → its own 4xx, or 500
+ */
+import { NextResponse } from 'next/server'
+import { getToken } from 'next-auth/jwt'
+import type { NextRequest } from 'next/server'
+
+/**
+ * Map a thrown Google REST error message to the HTTP status the Hub should
+ * return. Pure + exported for unit testing.
+ */
+export function mapGoogleErrorToStatus(message: string): number {
+  const lower = message.toLowerCase()
+
+  // A revoked/expired refresh or consent → re-auth.
+  if (lower.includes('invalid_grant') || lower.includes('invalid credentials')) return 401
+
+  // The first 3-digit token is the upstream HTTP status (lib/google.ts formats
+  // messages as "Google API error <status>: ..." / "<op> <status>: ...").
+  const m = message.match(/\b(\d{3})\b/)
+  const status = m ? parseInt(m[1], 10) : 0
+
+  if (status === 401 || status === 403) return 401
+  if (status === 429 || (status >= 500 && status <= 599)) return 502
+  if (/\b(timeout|timed out|network|fetch failed|econn|enotfound|socket)\b/i.test(message)) return 502
+  if (status >= 400 && status <= 499) return status
+  return 500
+}
+
+/** Build the Next response for a thrown Google REST error. */
+export function googleApiErrorResponse(err: unknown): NextResponse {
+  const message = err instanceof Error ? err.message : 'Google API error'
+  const status = mapGoogleErrorToStatus(message)
+  if (status === 401) {
+    return NextResponse.json(
+      { error: 'Google session expired — please sign in again', reauth: true },
+      { status: 401 },
+    )
+  }
+  return NextResponse.json({ error: message }, { status })
+}
+
+export type GoogleAuth =
+  | { ok: true; accessToken: string }
+  | { ok: false; response: NextResponse }
+
+/**
+ * Resolve the caller's Google OAuth access token, honoring a failed-refresh
+ * signal. Returns a ready-made 401 `{ reauth: true }` response when the token is
+ * missing or the refresh failed (token.error), so routes never fire Google
+ * calls with a dead credential.
+ */
+export async function resolveGoogleAuth(req: NextRequest): Promise<GoogleAuth> {
+  const token = await getToken({ req })
+  const accessToken = token?.accessToken as string | undefined
+  if (!accessToken || token?.error === 'RefreshAccessTokenError') {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { error: 'Google session expired — please sign in again', reauth: true },
+        { status: 401 },
+      ),
+    }
+  }
+  return { ok: true, accessToken }
+}

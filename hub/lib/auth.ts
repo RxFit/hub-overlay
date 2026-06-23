@@ -60,10 +60,15 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
       accessToken: refreshed.access_token as string,
       accessTokenExpires: Date.now() + (refreshed.expires_in as number) * 1000,
       refreshToken: (refreshed.refresh_token as string) ?? token.refreshToken,
+      error: undefined, // clear any prior RefreshAccessTokenError on success
     }
   } catch (error) {
     console.error('Error refreshing access token:', error)
-    return { ...token, error: 'RefreshAccessTokenError' }
+    // P1-2: drop the dead access token (and expiry) so downstream Google routes'
+    // `if (!accessToken)` guard fires and returns 401 → the client re-auths,
+    // instead of firing Google calls with a stale token that 401s into an
+    // opaque 500 the UI can't recover from.
+    return { ...token, accessToken: undefined, accessTokenExpires: 0, error: 'RefreshAccessTokenError' }
   }
 }
 
