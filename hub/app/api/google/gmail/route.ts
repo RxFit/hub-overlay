@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
-import { getToken } from 'next-auth/jwt'
 import { authOptions } from '@/lib/auth'
+import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
 
 export const runtime = 'nodejs'
 
@@ -10,6 +10,7 @@ const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me'
 async function gmailGet<T>(path: string, accessToken: string): Promise<T> {
   const res = await fetch(`${GMAIL_BASE}${path}`, {
     headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(10_000),
   })
   if (!res.ok) {
     const text = await res.text().catch(() => 'unknown')
@@ -26,6 +27,7 @@ async function gmailPost<T>(path: string, accessToken: string, body: unknown): P
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10_000),
   })
   if (!res.ok) {
     const text = await res.text().catch(() => 'unknown')
@@ -39,9 +41,9 @@ export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions)
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const token = await getToken({ req })
-  const accessToken = token?.accessToken as string | undefined
-  if (!accessToken) return NextResponse.json({ error: 'No access token' }, { status: 401 })
+  const auth = await resolveGoogleAuth(req)
+  if (!auth.ok) return auth.response
+  const accessToken = auth.accessToken
 
   const { searchParams } = req.nextUrl
   const view = searchParams.get('view') || 'inbox'
@@ -91,8 +93,7 @@ export async function GET(req: NextRequest) {
       unreadCount,
     })
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
-    return NextResponse.json({ error: message }, { status: 500 })
+    return googleApiErrorResponse(err)
   }
 }
 
@@ -101,9 +102,9 @@ export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions)
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const token = await getToken({ req })
-  const accessToken = token?.accessToken as string | undefined
-  if (!accessToken) return NextResponse.json({ error: 'No access token' }, { status: 401 })
+  const auth = await resolveGoogleAuth(req)
+  if (!auth.ok) return auth.response
+  const accessToken = auth.accessToken
 
   const body = await req.json()
   const { to, subject, message, threadId, inReplyTo } = body
@@ -160,8 +161,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ sent: true, messageId: sent.id, threadId: sent.threadId })
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
-    return NextResponse.json({ error: message }, { status: 500 })
+    return googleApiErrorResponse(err)
   }
 }
 

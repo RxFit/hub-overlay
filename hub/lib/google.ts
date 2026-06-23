@@ -13,6 +13,9 @@ async function googleFetch<T>(
   opts?: RequestInit
 ): Promise<T> {
   const res = await fetch(url, {
+    // Bound every Google call (10s) so a hung upstream can't block the route to
+    // its maxDuration; callers may override via opts.signal.
+    signal: AbortSignal.timeout(10_000),
     ...opts,
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -239,10 +242,11 @@ export async function deleteCalendarEvent(
 ): Promise<void> {
   const calId = encodeURIComponent(calendarId)
   const res = await fetch(
-    `${CALENDAR_BASE}/calendars/${calId}/events/${eventId}`,
+    `${CALENDAR_BASE}/calendars/${calId}/events/${encodeURIComponent(eventId)}`,
     {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(10_000),
     }
   )
   if (!res.ok && res.status !== 204 && res.status !== 410) {
