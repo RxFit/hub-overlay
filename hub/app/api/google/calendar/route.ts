@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
+import { clampInt } from '@/lib/num'
 import { authOptions } from '@/lib/auth'
 import { listUpcomingEvents, createCalendarEvent, deleteCalendarEvent, listCalendars, GoogleCalendarEvent } from '@/lib/google'
 
@@ -22,7 +23,7 @@ export async function GET(req: NextRequest) {
 
   try {
     // How many events to show in the final list (caller-controlled, default 100)
-    const displayMax = maxResults ? parseInt(maxResults, 10) : 100
+    const displayMax = clampInt(maxResults, 100, 1, 100)
     // Fetch generously per-calendar so we don't miss events after sorting
     const perCalMax = 50
     let events: GoogleCalendarEvent[] = []

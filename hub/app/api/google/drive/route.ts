@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
+import { clampInt } from '@/lib/num'
 import { listRecentFiles } from '@/lib/google'
 
 export const runtime = 'nodejs'
@@ -55,7 +56,7 @@ export async function GET(req: NextRequest) {
 
   try {
     const files = await listRecentFiles(accessToken, {
-      maxResults: maxResults ? parseInt(maxResults, 10) : 15,
+      maxResults: clampInt(maxResults, 15, 1, 100),
       query,
     })
     return NextResponse.json({ files })
