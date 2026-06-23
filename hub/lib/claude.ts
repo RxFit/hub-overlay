@@ -19,7 +19,14 @@ export const CLAUDE_PRIMARY_MODEL = 'claude-fable-5'
 export const CLAUDE_BACKUP_MODEL = 'claude-sonnet-4-6'
 
 function getApiKey(): string {
-  const key = process.env.ANTHROPIC_API_KEY
+  // Accept the canonical name plus the casings the Cloud Run service mounts
+  // (Anthropic_API_Key / anthropic_token) — env vars are case-sensitive on
+  // Linux, so without these fallbacks Claude/Fable 5 is silently unavailable in
+  // production and every request falls back to Gemini.
+  const key =
+    process.env.ANTHROPIC_API_KEY ||
+    process.env.Anthropic_API_Key ||
+    process.env.anthropic_token
   if (!key) {
     throw new Error('ANTHROPIC_API_KEY is not set. Claude Fable 5 is unavailable.')
   }

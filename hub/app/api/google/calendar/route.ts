@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
-import { getToken } from 'next-auth/jwt'
+import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
 import { authOptions } from '@/lib/auth'
 import { listUpcomingEvents, createCalendarEvent, deleteCalendarEvent, listCalendars, GoogleCalendarEvent } from '@/lib/google'
 
@@ -12,11 +12,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const token = await getToken({ req })
-  const accessToken = token?.accessToken as string | undefined
-  if (!accessToken) {
-    return NextResponse.json({ error: 'No Google access token' }, { status: 401 })
-  }
+  const auth = await resolveGoogleAuth(req)
+  if (!auth.ok) return auth.response
+  const accessToken = auth.accessToken
 
   const { searchParams } = new URL(req.url)
   const maxResults = searchParams.get('maxResults')
@@ -56,8 +54,7 @@ export async function GET(req: NextRequest) {
     }
     return NextResponse.json({ events })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error'
-    return NextResponse.json({ error: message }, { status: 500 })
+    return googleApiErrorResponse(error)
   }
 }
 
@@ -67,11 +64,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const token = await getToken({ req })
-  const accessToken = token?.accessToken as string | undefined
-  if (!accessToken) {
-    return NextResponse.json({ error: 'No Google access token' }, { status: 401 })
-  }
+  const auth = await resolveGoogleAuth(req)
+  if (!auth.ok) return auth.response
+  const accessToken = auth.accessToken
 
   let body: {
     summary: string
@@ -98,8 +93,7 @@ export async function POST(req: NextRequest) {
     const event = await createCalendarEvent(accessToken, body)
     return NextResponse.json({ event })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error'
-    return NextResponse.json({ error: message }, { status: 500 })
+    return googleApiErrorResponse(error)
   }
 }
 
@@ -109,11 +103,9 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const token = await getToken({ req })
-  const accessToken = token?.accessToken as string | undefined
-  if (!accessToken) {
-    return NextResponse.json({ error: 'No Google access token' }, { status: 401 })
-  }
+  const auth = await resolveGoogleAuth(req)
+  if (!auth.ok) return auth.response
+  const accessToken = auth.accessToken
 
   let body: { eventId: string; calendarId?: string }
   try {
@@ -130,7 +122,6 @@ export async function DELETE(req: NextRequest) {
     await deleteCalendarEvent(accessToken, body.eventId, body.calendarId)
     return NextResponse.json({ success: true })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error'
-    return NextResponse.json({ error: message }, { status: 500 })
+    return googleApiErrorResponse(error)
   }
 }

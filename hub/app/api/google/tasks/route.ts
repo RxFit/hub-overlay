@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
-import { getToken } from 'next-auth/jwt'
 import { authOptions } from '@/lib/auth'
+import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
 import { listTaskLists, listTasks, createTask, completeTask, uncompleteTask } from '@/lib/google'
 
 export const runtime = 'nodejs'
@@ -12,11 +12,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const token = await getToken({ req })
-  const accessToken = token?.accessToken as string | undefined
-  if (!accessToken) {
-    return NextResponse.json({ error: 'No Google access token' }, { status: 401 })
-  }
+  const auth = await resolveGoogleAuth(req)
+  if (!auth.ok) return auth.response
+  const accessToken = auth.accessToken
 
   const { searchParams } = new URL(req.url)
   const taskListId = searchParams.get('taskListId')
@@ -37,8 +35,7 @@ export async function GET(req: NextRequest) {
     const taskLists = await listTaskLists(accessToken)
     return NextResponse.json({ taskLists })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error'
-    return NextResponse.json({ error: message }, { status: 500 })
+    return googleApiErrorResponse(error)
   }
 }
 
@@ -48,11 +45,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const token = await getToken({ req })
-  const accessToken = token?.accessToken as string | undefined
-  if (!accessToken) {
-    return NextResponse.json({ error: 'No Google access token' }, { status: 401 })
-  }
+  const auth = await resolveGoogleAuth(req)
+  if (!auth.ok) return auth.response
+  const accessToken = auth.accessToken
 
   let body: { action: string; taskListId: string; taskId?: string; title?: string; notes?: string; due?: string }
   try {
@@ -94,7 +89,6 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error'
-    return NextResponse.json({ error: message }, { status: 500 })
+    return googleApiErrorResponse(error)
   }
 }

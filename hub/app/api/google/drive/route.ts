@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
-import { getToken } from 'next-auth/jwt'
 import { authOptions } from '@/lib/auth'
+import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
 import { listRecentFiles } from '@/lib/google'
 
 export const runtime = 'nodejs'
@@ -42,11 +42,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const token = await getToken({ req })
-  const accessToken = token?.accessToken as string | undefined
-  if (!accessToken) {
-    return NextResponse.json({ error: 'No Google access token' }, { status: 401 })
-  }
+  const auth = await resolveGoogleAuth(req)
+  if (!auth.ok) return auth.response
+  const accessToken = auth.accessToken
 
   const { searchParams } = new URL(req.url)
   const maxResults = searchParams.get('maxResults')
@@ -62,7 +60,6 @@ export async function GET(req: NextRequest) {
     })
     return NextResponse.json({ files })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error'
-    return NextResponse.json({ error: message }, { status: 500 })
+    return googleApiErrorResponse(error)
   }
 }
