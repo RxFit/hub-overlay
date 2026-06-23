@@ -146,6 +146,9 @@ export interface GoogleCalendarEvent {
   status: string
   organizer?: { email: string; displayName?: string }
   attendees?: { email: string; responseStatus: string }[]
+  /** Source calendar this event was fetched from — required to delete it from the
+   *  correct calendar (events.list doesn't include it; the route tags it). */
+  calendarId?: string
 }
 
 export interface GoogleCalendarListEntry {

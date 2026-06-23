@@ -151,6 +151,8 @@ interface CalendarEvent {
   location?: string
   organizer?: { email: string; displayName?: string }
   attendees?: { email?: string; displayName?: string; responseStatus?: string }[]
+  /** Source calendar (tagged by the API route) — needed to delete from the right calendar. */
+  calendarId?: string
 }
 
 interface CalendarResponse {

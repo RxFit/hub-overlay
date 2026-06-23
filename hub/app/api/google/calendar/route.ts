@@ -29,7 +29,10 @@ export async function GET(req: NextRequest) {
     let events: GoogleCalendarEvent[] = []
 
     if (calendarId) {
-      events = await listUpcomingEvents(accessToken, { maxResults: perCalMax, calendarId })
+      // Tag each event with its source calendar so the client can delete it
+      // from the right calendar (events.list omits this).
+      events = (await listUpcomingEvents(accessToken, { maxResults: perCalMax, calendarId }))
+        .map(e => ({ ...e, calendarId }))
     } else {
       const cals = await listCalendars(accessToken)
       // Only fetch from selected/primary calendars
@@ -37,7 +40,9 @@ export async function GET(req: NextRequest) {
 
       const allEvents = await Promise.all(
         selectedCals.map(cal =>
-          listUpcomingEvents(accessToken, { maxResults: perCalMax, calendarId: cal.id }).catch(() => [])
+          listUpcomingEvents(accessToken, { maxResults: perCalMax, calendarId: cal.id })
+            .then(evs => evs.map(e => ({ ...e, calendarId: cal.id })))
+            .catch(() => [])
         )
       )
 
