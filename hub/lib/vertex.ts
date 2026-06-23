@@ -97,6 +97,44 @@ async function getAccessToken(): Promise<string | null> {
 /* ── Vertex AI Search Query ── */
 
 /**
+ * Build the Discovery Engine `:search` request body (audit P0-4).
+ *
+ * To restrict a blended/multi-datastore engine to one datastore, the correct
+ * mechanism is `dataStoreSpecs` referencing the FULL datastore resource path.
+ * The previous code used `filter: dataStore:"<id>"`, but `filter` keys must be
+ * document schema fields — `dataStore` is not one, so Vertex returned
+ * 400 INVALID_ARGUMENT and the search silently fell back to null (the Semantic
+ * Brain was dead for every scoped/attachment query). A bare id is expanded to a
+ * full resource path; an already-qualified path is used as-is.
+ *
+ * Exported for unit testing the request shape (the live call needs GCP creds).
+ */
+export function buildSearchBody(query: string, dataStore?: string): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    query,
+    pageSize: 5,
+    // NOTE: queryExpansionSpec and spellCorrectionSpec are NOT supported
+    // on multi-datastore engines (returns 400 INVALID_ARGUMENT)
+    contentSearchSpec: {
+      snippetSpec: { returnSnippet: true, maxSnippetCount: 3 },
+      extractiveContentSpec: {
+        maxExtractiveAnswerCount: 2,
+        maxExtractiveSegmentCount: 3,
+      },
+    },
+  }
+
+  if (dataStore) {
+    const dataStorePath = dataStore.includes('/')
+      ? dataStore
+      : `projects/${GCP_PROJECT}/locations/${LOCATION}/collections/default_collection/dataStores/${dataStore}`
+    body.dataStoreSpecs = [{ dataStore: dataStorePath }]
+  }
+
+  return body
+}
+
+/**
  * Search the Semantic Brain for relevant content.
  *
  * @param query - Natural language search query
@@ -117,24 +155,7 @@ export async function searchSemanticBrain(
     const servingConfigPath = `projects/${GCP_PROJECT}/locations/${LOCATION}/collections/default_collection/engines/${ENGINE_ID}/servingConfigs/default_serving_config`
     const url = `https://discoveryengine.googleapis.com/v1/${servingConfigPath}:search`
 
-    const body: Record<string, unknown> = {
-      query,
-      pageSize: 5,
-      // NOTE: queryExpansionSpec and spellCorrectionSpec are NOT supported
-      // on multi-datastore engines (returns 400 INVALID_ARGUMENT)
-      contentSearchSpec: {
-        snippetSpec: { returnSnippet: true, maxSnippetCount: 3 },
-        extractiveContentSpec: {
-          maxExtractiveAnswerCount: 2,
-          maxExtractiveSegmentCount: 3,
-        },
-      },
-    }
-
-    // Filter to specific data store if provided
-    if (dataStore) {
-      body.filter = `dataStore:\"${dataStore}\"`
-    }
+    const body = buildSearchBody(query, dataStore)
 
     const res = await fetch(url, {
       method: 'POST',
