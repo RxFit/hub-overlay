@@ -9,6 +9,7 @@ import { fetchUrlContent, fetchDriveDocContent } from '@/lib/content-fetch'
 import { searchSemanticBrain } from '@/lib/vertex'
 import { searchWeb, fetchUrlWithExa } from '@/lib/exa'
 import { loadSkillContent } from '@/lib/skills-loader'
+import { SKILL_MAP } from '@/lib/skills'
 import { needsInternalSearch, needsExternalSearch } from '@/lib/search-routing'
 import { ChatRequestSchema } from '@/lib/zod-schemas'
 import { buildGoogleWorkspaceContext } from '@/lib/google-context'
@@ -431,12 +432,19 @@ export async function POST(req: NextRequest) {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: chunk })}\n\n`))
         }
 
-        // Parse suggestedTools metadata from AI response
+        // Parse suggestedTools metadata from AI response.
+        // P1-1: validate every id against the real skill catalog before emitting,
+        // so injected/hallucinated content can't surface bogus or unsafe tool ids.
         const toolMatch = fullText.match(/<!--suggestedTools:(\[.*?\])-->/)
         if (toolMatch) {
           try {
-            const tools = JSON.parse(toolMatch[1])
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ suggestedTools: tools })}\n\n`))
+            const parsed = JSON.parse(toolMatch[1])
+            const tools = Array.isArray(parsed)
+              ? parsed.filter((id: unknown): id is string => typeof id === 'string' && id in SKILL_MAP).slice(0, 5)
+              : []
+            if (tools.length > 0) {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ suggestedTools: tools })}\n\n`))
+            }
           } catch {
             // Skip malformed suggestedTools
           }
