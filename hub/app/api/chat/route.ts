@@ -357,11 +357,13 @@ export async function POST(req: NextRequest) {
           // Vertex AI semantic search first (token-efficient), Drive API fallback
           let docText: string | null = null
 
-          // Attempt Vertex AI semantic search for the document
+          // Attempt Vertex AI semantic search for the document.
+          // Datastore is env-configurable (P0-4); should become tenant-derived
+          // with the per-tenant work (P0-3) rather than a single shared store.
           if (lastUserMsg) {
             const vertexResults = await searchSemanticBrain(
               `${lastUserMsg.content} ${att.label}`,
-              'rxfit-gdrive'
+              process.env.VERTEX_DATA_STORE_ID || 'rxfit-gdrive'
             )
             if (vertexResults && vertexResults.length > 0) {
               docText = vertexResults
