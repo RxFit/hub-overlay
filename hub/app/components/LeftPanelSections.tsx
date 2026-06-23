@@ -675,8 +675,9 @@ export function CalendarSection({ onInjectChat }: { onInjectChat: (msg: string) 
                   onDelete={() => setDeleteConfirm({
                     id: event.id,
                     summary: event.summary,
-                    // calendarId is left undefined — server defaults to 'primary'
-                    // (organizer.email is NOT the calendar ID)
+                    // Delete from the event's SOURCE calendar (tagged by the API
+                    // route); falls back to 'primary' server-side if absent.
+                    calendarId: event.calendarId,
                   })}
                 />
               ))}
