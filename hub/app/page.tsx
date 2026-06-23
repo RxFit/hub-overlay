@@ -473,7 +473,7 @@ export default function HubPage() {
       let fullText = ''
 
       // Add an empty assistant message that we'll stream into
-      const assistantId = String(Date.now())
+      const assistantId = crypto.randomUUID()
       setMessages(prev => [...prev, { id: assistantId, role: 'assistant' as const, content: '' }])
       setIsTyping(false)
 
@@ -531,7 +531,7 @@ export default function HubPage() {
       console.error('Chat API Error:', err);
       setIsTyping(false);
       setMessages(prev => [...prev, {
-        id: String(Date.now()),
+        id: crypto.randomUUID(),
         role: 'assistant' as const,
         content: isTimeout
           ? "⏱️ That took longer than expected. Try asking again — things usually speed up quickly."

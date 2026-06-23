@@ -109,14 +109,19 @@ function normalizeIssue(raw: Record<string, unknown>): Issue {
         color: '#999999',
       }
   const rawPriority = typeof raw.priority === 'string' ? raw.priority : 'medium'
+  // Paperclip distinguishes agent assignment (assigneeAgentId) from human/board
+  // assignment (assigneeUserId). Capturing only the agent id meant human-assigned
+  // issues showed no assignee (audit P1-3).
+  const assigneeAgentId = (raw.assigneeAgentId as string | null) ?? (raw.assigneeId as string | null) ?? null
+  const assigneeUserId = (raw.assigneeUserId as string | null) ?? null
   return {
     ...(raw as unknown as Issue),
     identifier: (raw.identifier as string) ?? String(raw.id ?? '').slice(0, 8),
     priority: PRIORITY_FROM_PAPERCLIP[rawPriority] ?? 'medium',
     state,
-    assigneeId: (raw.assigneeId as string | null)
-      ?? (raw.assigneeAgentId as string | null)
-      ?? null,
+    assigneeId: assigneeAgentId ?? assigneeUserId,
+    assigneeUserId,
+    assigneeType: assigneeAgentId ? 'agent' : assigneeUserId ? 'user' : null,
     assigneeName: (raw.assigneeName as string | null) ?? null,
   }
 }

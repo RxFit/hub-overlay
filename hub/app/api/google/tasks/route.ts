@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
+import { clampInt } from '@/lib/num'
 import { listTaskLists, listTasks, createTask, completeTask, uncompleteTask } from '@/lib/google'
 
 export const runtime = 'nodejs'
@@ -26,7 +27,7 @@ export async function GET(req: NextRequest) {
       const maxResults = searchParams.get('maxResults')
       const tasks = await listTasks(accessToken, taskListId, {
         showCompleted,
-        maxResults: maxResults ? parseInt(maxResults, 10) : undefined,
+        maxResults: maxResults ? clampInt(maxResults, 100, 1, 100) : undefined,
       })
       return NextResponse.json({ tasks })
     }

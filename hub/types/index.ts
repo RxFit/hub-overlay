@@ -19,6 +19,10 @@ export interface Issue {
   priority: 'urgent' | 'high' | 'medium' | 'low' | 'none'
   state: IssueState
   assigneeId: string | null
+  /** Human (board user) assignee id, when the issue is assigned to a person not an agent. */
+  assigneeUserId: string | null
+  /** Which kind of entity the issue is assigned to. */
+  assigneeType: 'agent' | 'user' | null
   assigneeName: string | null
   companyId: string
   createdAt: string

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
+import { clampInt } from '@/lib/num'
 
 export const runtime = 'nodejs'
 
@@ -48,7 +49,7 @@ export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl
   const view = searchParams.get('view') || 'inbox'
   const threadId = searchParams.get('threadId')
-  const maxResults = parseInt(searchParams.get('maxResults') || '20', 10)
+  const maxResults = clampInt(searchParams.get('maxResults'), 20, 1, 100)
 
   try {
     // Return a specific thread
