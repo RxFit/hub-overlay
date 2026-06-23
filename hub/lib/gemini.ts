@@ -1,6 +1,7 @@
 import { GoogleGenerativeAI, type Content } from '@google/generative-ai'
 import type { ChatMessage } from '@/types'
 import { SKILL_CATALOG_PROMPT } from './skills'
+import { fenceUntrusted, UNTRUSTED_CONTENT_POLICY } from './prompt-safety'
 
 /* Lazy-initialized so the API key is read at runtime, not build time.
    Prevents empty-key 403s when Railway injects env vars after the build step. */
@@ -132,6 +133,7 @@ export function buildSystemPrompt(context: {
   })
 
   let prompt = HUB_SYSTEM_PROMPT + '\n\n'
+  prompt += UNTRUSTED_CONTENT_POLICY + '\n\n'
   prompt += `Current date and time: ${dateStr}, ${timeStr}\n\n`
 
   /* ── Role context ── */
@@ -158,7 +160,7 @@ export function buildSystemPrompt(context: {
 
   /* ── Live Google Workspace detail (the user's real tasks/events/files/chat) ── */
   if (context.googleWorkspaceDetail) {
-    prompt += `## Live Google Workspace (real-time, the user's actual data)\n${context.googleWorkspaceDetail}\n\nThis is the user's REAL current Tasks, Calendar, Drive, and Chat data. Use it directly to answer any question about their tasks, schedule, files, or conversations — including when they tap an item like "Tell me about task: …". Cite specific titles, dates, and notes from this section. If a specific item they asked about is not listed here, say you don't see it in their current pending items and offer to look another way — do NOT blame Paperclip or claim a system is "warming up".\n\n`
+    prompt += `## Live Google Workspace (real-time, the user's actual data)\n${fenceUntrusted('Live Google Workspace', context.googleWorkspaceDetail)}\n\nThis is the user's REAL current Tasks, Calendar, Drive, and Chat data. Use it directly to answer any question about their tasks, schedule, files, or conversations — including when they tap an item like "Tell me about task: …". Cite specific titles, dates, and notes from this section. If a specific item they asked about is not listed here, say you don't see it in their current pending items and offer to look another way — do NOT blame Paperclip or claim a system is "warming up".\n\n`
   }
 
   /* ── Project / activity context ── */
@@ -217,7 +219,7 @@ Question sequences by intent:
 
   /* ── Injected context from panel taps (progressive disclosure) ── */
   if (context.injectedContext) {
-    prompt += `Currently active context (user tapped a panel item to inject this):\n${context.injectedContext}\n\nUse this context to inform your response. The user is asking about this specific item.\n\n`
+    prompt += `Currently active context (retrieved on the user's behalf — web results, documents, attachments):\n${fenceUntrusted('retrieved context', context.injectedContext)}\n\nUse this context to inform your response. The user is asking about this specific item.\n\n`
   }
 
   return prompt
