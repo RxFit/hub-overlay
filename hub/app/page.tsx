@@ -668,9 +668,14 @@ export default function HubPage() {
             // Fetch a FRESH context-sufficiency score. Reading the async badge
             // state (contextScore) here is unreliable — this closure captured a
             // stale value, and the real follow-up question was never populated.
-            let finalScore = 80
+            // Default to 0, not 80 (P0-2): an unreachable/non-numeric gate must
+            // never read as a pass. The server is the source of truth and only a
+            // genuine pass returns a signed gateToken, which the write boundary
+            // re-verifies — but defaulting closed here keeps the UX honest too.
+            let finalScore = 0
             let finalWeak: string | null = null
             let followUpQuestion: string | null = null
+            let gateToken: string | undefined
             try {
               const scoreRes = await fetch('/api/chat/score-context', {
                 method: 'POST',
@@ -686,6 +691,7 @@ export default function HubPage() {
               if (typeof scoreData.score === 'number') finalScore = scoreData.score
               finalWeak = scoreData.weakDimension ?? null
               followUpQuestion = scoreData.followUpQuestion ?? null
+              gateToken = typeof scoreData.gateToken === 'string' ? scoreData.gateToken : undefined
               setContextScore(finalScore)
               setContextWeakDim(finalWeak)
             } catch {
@@ -793,7 +799,7 @@ Respond with EXACTLY one of:
                 }
                 const cleanResponse = fullText.replace(/<!--suggestedTools:\[.*?\]-->/g, '').trim()
                 if (cleanResponse.toUpperCase().includes('SUFFICIENT')) {
-                  setActionSpec(spec)
+                  setActionSpec({ ...spec, gateToken })
                   setMessages(prev => {
                     const filtered = prev.filter(m => m.id !== thinkingId)
                     return [...filtered, {
@@ -814,7 +820,7 @@ Respond with EXACTLY one of:
                   })
                 }
               }).catch(() => {
-                setActionSpec(spec)
+                setActionSpec({ ...spec, gateToken })
                 setMessages(prev => {
                   const filtered = prev.filter(m => m.id !== thinkingId)
                   return [...filtered, {
@@ -828,7 +834,7 @@ Respond with EXACTLY one of:
             }
 
             // Non-CEO-routed: show confirm card directly
-            setActionSpec(spec)
+            setActionSpec({ ...spec, gateToken })
             setMessages(prev => [...prev, {
               id: crypto.randomUUID(),
               role: 'assistant' as const,

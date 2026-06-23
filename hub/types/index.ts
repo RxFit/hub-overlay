@@ -238,6 +238,12 @@ export interface ActionSpec {
   targetSystems: string[]
   summary: string
   requiredPermission?: ActionPermission
+  /**
+   * Server-issued, HMAC-signed quality-gate token (P0-2). Minted by
+   * /api/chat/score-context on a genuine pass and forwarded on high-stakes
+   * writes so the API boundary can verify the gate was satisfied server-side.
+   */
+  gateToken?: string
 }
 
 /** Minimum Hub role required to execute an action */
@@ -364,6 +370,7 @@ export interface ContextScoreResult {
   passed: boolean                  // score >= 80
   weakDimension: string | null     // e.g. "outcome", "timeline", "constraints"
   followUpQuestion: string | null  // AI-generated clarifying question when score < 80
+  gateToken?: string               // P0-2: server-signed token, present only on a genuine pass
 }
 
 export type ExtendedInterviewIntent = InterviewIntent | 'create_task_for_agent'

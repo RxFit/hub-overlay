@@ -3,6 +3,22 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import type { ContextScoreResult, InterviewIntent } from '@/types'
+import { issueGateToken, GATE_PASS_THRESHOLD } from '@/lib/gateToken'
+
+/**
+ * Attach a server-signed gate token to a genuinely passing result (P0-2). This
+ * is the only place a token is minted; the write boundary trusts nothing else.
+ * If signing is misconfigured we return the result without a token, which makes
+ * downstream high-stakes writes fail closed rather than slip through.
+ */
+function withGateToken(result: ContextScoreResult, intent: string): ContextScoreResult {
+  if (!result.passed || result.score < GATE_PASS_THRESHOLD) return result
+  try {
+    return { ...result, gateToken: issueGateToken(intent, result.score) }
+  } catch {
+    return result
+  }
+}
 
 export const runtime = 'nodejs'
 export const maxDuration = 30
@@ -155,7 +171,7 @@ export async function POST(req: NextRequest) {
       weakDimension: null,
       followUpQuestion: null,
     }
-    return NextResponse.json(result)
+    return NextResponse.json(withGateToken(result, intent))
   }
 
   const dimensions = INTENT_DIMENSIONS[intent] ?? ['outcome', 'timeline', 'constraints']
@@ -189,7 +205,7 @@ export async function POST(req: NextRequest) {
         rawText = await claudeChat(scorerMessages, scorerSystem, { model: CLAUDE_BACKUP_MODEL, maxTokens: 256, temperature: 0.1 })
       }
       const scoreResult = parseScoreResponse(rawText)
-      return NextResponse.json(scoreResult)
+      return NextResponse.json(withGateToken(scoreResult, intent))
     } catch (claudeErr) {
       console.warn('[score-context] Claude chain failed, falling back to Gemini 2.5 Pro:', claudeErr)
 
@@ -201,7 +217,7 @@ export async function POST(req: NextRequest) {
       const result = await model.generateContent(prompt)
       const rawText = result.response.text()
       const scoreResult = parseScoreResponse(rawText)
-      return NextResponse.json(scoreResult)
+      return NextResponse.json(withGateToken(scoreResult, intent))
     }
 
   } catch (err) {
