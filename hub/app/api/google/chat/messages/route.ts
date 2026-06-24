@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getToken } from 'next-auth/jwt'
 import type { NextRequest } from 'next/server'
 import { listChatMessages, sendChatMessage } from '@/lib/google'
+import { GoogleChatSendSchema } from '@/lib/zod-schemas'
 
 export async function GET(req: NextRequest) {
   const token = await getToken({ req })
@@ -42,12 +43,15 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const body = await req.json()
-    const { spaceId, text, threadKey } = body
-
-    if (!spaceId || !text?.trim()) {
-      return NextResponse.json({ error: 'Missing spaceId or text' }, { status: 400 })
+    const raw = await req.json()
+    const parsed = GoogleChatSendSchema.safeParse(raw)
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: 'Validation failed', details: parsed.error.issues },
+        { status: 400 }
+      )
     }
+    const { spaceId, text, threadKey } = parsed.data
 
     const message = await sendChatMessage(
       token.accessToken as string,

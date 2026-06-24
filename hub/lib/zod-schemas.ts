@@ -207,3 +207,38 @@ export type ValidatedMemoryType = z.infer<typeof MemoryTypeSchema>
 export type ValidatedStoreMemoryRequest = z.infer<typeof StoreMemoryRequestSchema>
 export type ValidatedQueryMemoryRequest = z.infer<typeof QueryMemoryRequestSchema>
 
+
+/* ── Google write-request schemas ──
+ * Bound user input on Google mutations so a malformed/oversized payload is
+ * rejected with a 400 before it reaches Google (prevents OOM, opaque upstream
+ * errors, and rate-limit hits from pathological field sizes). Audit P1/P2. */
+
+export const GoogleTaskCreateSchema = z.object({
+  title: z.string().trim().min(1).max(1024),
+  notes: z.string().max(8192).optional(),
+  due: z.string().max(64).optional(),
+})
+
+export const GoogleCalendarCreateSchema = z.object({
+  summary: z.string().trim().min(1).max(1024),
+  description: z.string().max(8192).optional(),
+  start: z.string().min(1).max(64),
+  end: z.string().min(1).max(64),
+  attendees: z.array(z.string().email().max(320)).max(100).optional(),
+  location: z.string().max(1024).optional(),
+  calendarId: z.string().max(1024).optional(),
+})
+
+export const GoogleGmailSendSchema = z.object({
+  to: z.string().trim().min(1).max(2048),
+  subject: z.string().max(998).optional(),
+  message: z.string().min(1).max(1_000_000),
+  threadId: z.string().max(256).optional(),
+  inReplyTo: z.string().max(998).optional(),
+})
+
+export const GoogleChatSendSchema = z.object({
+  spaceId: z.string().trim().min(1).max(256),
+  text: z.string().trim().min(1).max(4096),
+  threadKey: z.string().max(256).optional(),
+})

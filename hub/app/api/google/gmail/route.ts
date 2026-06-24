@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
 import { clampInt } from '@/lib/num'
+import { GoogleGmailSendSchema } from '@/lib/zod-schemas'
 
 export const runtime = 'nodejs'
 
@@ -107,12 +108,20 @@ export async function POST(req: NextRequest) {
   if (!auth.ok) return auth.response
   const accessToken = auth.accessToken
 
-  const body = await req.json()
-  const { to, subject, message, threadId, inReplyTo } = body
-
-  if (!to || !message) {
-    return NextResponse.json({ error: 'to and message are required' }, { status: 400 })
+  let bodyJson: unknown
+  try {
+    bodyJson = await req.json()
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
+  const parsed = GoogleGmailSendSchema.safeParse(bodyJson)
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: 'Validation failed', details: parsed.error.issues },
+      { status: 400 }
+    )
+  }
+  const { to, subject, message, threadId, inReplyTo } = parsed.data
 
   // ── Header-injection guard ──
   // Any value interpolated into an RFC-2822 header line must not contain

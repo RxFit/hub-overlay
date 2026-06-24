@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
 import { clampInt } from '@/lib/num'
+import { GoogleTaskCreateSchema } from '@/lib/zod-schemas'
 import { listTaskLists, listTasks, createTask, completeTask, uncompleteTask } from '@/lib/google'
 
 export const runtime = 'nodejs'
@@ -65,10 +66,14 @@ export async function POST(req: NextRequest) {
 
   try {
     if (action === 'create') {
-      if (!title) {
-        return NextResponse.json({ error: 'title is required' }, { status: 400 })
+      const parsed = GoogleTaskCreateSchema.safeParse({ title, notes, due })
+      if (!parsed.success) {
+        return NextResponse.json(
+          { error: 'Validation failed', details: parsed.error.issues },
+          { status: 400 }
+        )
       }
-      const task = await createTask(accessToken, taskListId, { title, notes, due })
+      const task = await createTask(accessToken, taskListId, parsed.data)
       return NextResponse.json({ task })
     }
 
