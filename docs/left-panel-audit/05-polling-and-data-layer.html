@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Left Panel Audit · Plan 05 — Polling Cost &amp; Data-Layer Consolidation</title>
+<style>
+body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:920px;margin:2rem auto;padding:0 1rem;line-height:1.55;color:#1a1a1a}
+h1{border-bottom:3px solid #2563eb;padding-bottom:.3rem}
+h2{margin-top:2rem;color:#1e3a8a;border-bottom:1px solid #e5e7eb;padding-bottom:.2rem}
+h3{margin-top:1.4rem}
+code,pre{font-family:ui-monospace,Menlo,monospace}
+pre{background:#f6f8fa;padding:.8rem;border-radius:6px;overflow:auto;border:1px solid #e5e7eb;font-size:.86rem}
+table{border-collapse:collapse;width:100%}
+th,td{border:1px solid #d1d5db;padding:.4rem .6rem;text-align:left;vertical-align:top;font-size:.9rem}
+th{background:#f3f4f6}
+.badge{display:inline-block;padding:.15rem .6rem;border-radius:999px;color:#fff;font-size:.8rem;font-weight:600}
+.p0{background:#dc2626}.p1{background:#d97706}.p2{background:#2563eb}
+pre.before{background:#fef2f2;border-color:#fecaca}pre.after{background:#f0fdf4;border-color:#bbf7d0}
+blockquote{border-left:4px solid #9ca3af;margin:0;padding-left:1rem;color:#4b5563}
+ul{margin:.4rem 0}
+</style>
+</head>
+<body>
+
+<h1>Plan 05 — Polling Cost &amp; Data-Layer Consolidation <span class="badge p1">P1</span></h1>
+
+<p><strong>Summary.</strong> The left panel over-fetches in three structurally distinct ways:
+(1) <code>CollapsibleSection</code> only toggles CSS visibility, so collapsed KPI / Tasks / Calendar / Documents sections keep their SWR hooks mounted and keep polling on every interval;
+(2) the heaviest endpoint, <code>/api/kpis</code>, is subscribed <em>twice</em> (in <code>HubPage</code> and again inside <code>KPISection</code>) with no <code>dedupingInterval</code> and <code>revalidateOnFocus:true</code>, and overlaps with <code>/api/projects</code>;
+and (3) chat unread counts run a raw <code>setInterval</code> that bypasses SWR entirely, re-fetching messages that <code>useMessages</code> already caches, with a stale-closure footgun on <code>spaces</code>.
+This plan gates polling on section open-state, lifts and dedupes the KPI subscription, routes unread counts through the SWR cache (or a single batched endpoint), and standardizes SWR config across the data hooks.</p>
+
+<p>All file paths are relative to the repo root <code>/home/user/hub-overlay</code>; the app lives under <code>hub/</code>.</p>
+
+<h2>Why this matters</h2>
+<ul>
+<li><strong>Wasted quota &amp; rate-limit pressure.</strong> Google Tasks/Calendar/Drive/Chat and Paperclip KPI endpoints all poll continuously even when their section is collapsed or off-screen. Tasks alone fire an N+1 fan-out (list fetch + one fetch per task list) every 30s regardless of visibility.</li>
+<li><strong>Duplicate subscriptions.</strong> <code>/api/kpis</code> has two live SWR subscriptions. SWR dedupes the network request only inside its (currently unset) <code>dedupingInterval</code> window; with <code>revalidateOnFocus:true</code> and no deduping window, focus events and interval drift can produce redundant fetches and double re-renders.</li>
+<li><strong>Overlapping sources of truth.</strong> <code>/api/kpis</code> (via <code>useKPIData</code>) and <code>/api/projects</code> (via <code>useProjects</code>, used in <code>BrandedHeader</code>) both return project/health data and both poll at 60s with <code>revalidateOnFocus</code>, doubling the project-health request volume.</li>
+<li><strong>SWR-bypass.</strong> <code>useUnreadCounts</code> hand-rolls <code>setInterval(…,60_000)</code> and manual <code>fetch</code> calls against the same <code>/api/google/chat/messages</code> URLs SWR already owns — no dedupe, no cache reuse, and a stale-closure bug where the effect depends on <code>[spaceIds]</code> but its callback closes over the full <code>spaces</code> array.</li>
+<li><strong>Config drift.</strong> <code>useProjects</code>/<code>useCompanies</code> set <code>dedupingInterval:30_000</code>; <code>useKPIData</code> and the <code>useHubData</code> hooks do not. Inconsistent <code>revalidateOnFocus</code> and retry settings make caching behavior unpredictable.</li>
+</ul>
+
+<h2>Findings</h2>
+<table>
+<thead><tr><th>#</th><th>Ref</th><th>File · location (verified)</th><th>Problem</th><th>Fix</th></tr></thead>
+<tbody>
+<tr>
+<td>1</td><td>P2-6</td>
+<td><code>hub/app/components/LeftPanelSections.tsx</code> · <code>CollapsibleSection</code> lines 62–116</td>
+<td>Only toggles a CSS class (<code>collapsible-body--open/--closed</code>, line 110); children stay mounted, so collapsed sections keep their SWR hooks alive and polling. Intervals: <code>useKPIData</code> 60s; <code>useTasks</code> 30s (list) + 30s (per-list batch); <code>useCalendar</code> 60s; <code>useDrive</code> 120s; chat spaces 120s / messages 30s / unread 60s.</td>
+<td>Gate <code>refreshInterval</code> on open-state — pass an <code>isOpen</code>/<code>isVisible</code> flag down to each hook and use <code>refreshInterval:0</code> when closed.</td>
+</tr>
+<tr>
+<td>2</td><td>—</td>
+<td><code>hub/app/hooks/useHubData.ts</code> · <code>useTasks</code> list fetch line 90, per-list batch line 124</td>
+<td>N+1 every 30s: the task-lists request (line 90) <em>and</em> the per-list aggregate fan-out (line 124) both poll at <code>refreshInterval:30_000</code>.</td>
+<td>Raise the per-list aggregate cadence to 60s and fetch the list set once (lower its cadence too), so the fan-out doesn't re-run every 30s.</td>
+</tr>
+<tr>
+<td>3</td><td>KPI P1-3</td>
+<td><code>hub/app/page.tsx</code> line 226 &amp; <code>LeftPanelSections.tsx</code> · <code>KPISection</code> line 968</td>
+<td><code>useKPIData(activeProject)</code> is subscribed twice. No <code>dedupingInterval</code> in <code>useKPIData</code> (<code>hub/app/hooks/useKPIData.ts</code> line 31) while <code>revalidateOnFocus:true</code>.</td>
+<td>Lift <code>useKPIData</code> to <code>HubPage</code>, pass <code>kpis</code> into <code>KPISection</code> as a prop (mirroring <code>projects</code> → <code>ProjectHealthSection</code>, page.tsx line 171); add <code>dedupingInterval:30_000</code>.</td>
+</tr>
+<tr>
+<td>4</td><td>KPI P1-4</td>
+<td><code>/api/kpis</code> (<code>useKPIData</code>) vs <code>/api/projects</code> (<code>useProjects</code> in <code>BrandedHeader.tsx</code> line 36)</td>
+<td>Both return overlapping project/health data; each polls 60s with <code>revalidateOnFocus:true</code>.</td>
+<td>Consolidate onto one authoritative source (the lifted <code>useKPIData</code> result) so project health is fetched once.</td>
+</tr>
+<tr>
+<td>5</td><td>P2-5</td>
+<td><code>hub/app/hooks/useGoogleChat.ts</code> · <code>useUnreadCounts</code> lines 229–297 (<code>setInterval</code> line 288); <code>useMessages</code> lines 115–132 (SWR line 120)</td>
+<td>Raw <code>setInterval(computeUnreads, 60_000)</code> manually re-fetches <code>/api/google/chat/messages?…</code> already owned by <code>useMessages</code> — N×2 manual fetches, no SWR dedupe. Effect depends on <code>[spaceIds]</code> (line 294) but the callback closes over <code>spaces</code> — stale-closure footgun.</td>
+<td>Read from the SWR cache (or add one batched <code>/api/google/chat/unread</code> endpoint behind a single SWR hook); fix the dependency/closure.</td>
+</tr>
+<tr>
+<td>6</td><td>P2-4</td>
+<td><code>useKPIData.ts</code> line 31 vs <code>useProjects.ts</code> 27–31 / <code>useCompanies.ts</code> 26–30 vs <code>useBusinessManager.ts</code> 48–54 vs <code>useHubData.ts</code> hooks</td>
+<td>Inconsistent <code>dedupingInterval</code> (<code>useProjects</code>/<code>useCompanies</code> have <code>30_000</code>; <code>useKPIData</code>/<code>useHubData</code> have none), <code>revalidateOnFocus</code>, and retry config.</td>
+<td>Standardize: add <code>dedupingInterval:30_000</code> where missing; reconcile <code>revalidateOnFocus</code>.</td>
+</tr>
+</tbody>
+</table>
+
+<h2>Implementation</h2>
+
+<h3>Change 1 — Gate polling on section open-state</h3>
+<p><strong>Files:</strong> <code>hub/app/components/LeftPanelSections.tsx</code>, <code>hub/app/hooks/useHubData.ts</code>, <code>hub/app/hooks/useKPIData.ts</code></p>
+<p>Step 1a — expose open-state from <code>CollapsibleSection</code> via a render-prop child so the inner content can mount/poll conditionally. The component currently keeps <code>isOpen</code> in local state (line 73) but never passes it to children.</p>
+<pre class="before">// LeftPanelSections.tsx (lines 62-116, abridged)
+export function CollapsibleSection({
+  title, protocolNum, defaultOpen = true, children,
+}: {
+  title: string; protocolNum: string; defaultOpen?: boolean; children: ReactNode
+}) {
+  const [isOpen, setIsOpen] = useState(defaultOpen)
+  return (
+    &lt;section aria-label={title}&gt;
+      &lt;button onClick={() =&gt; setIsOpen(!isOpen)} aria-expanded={isOpen} … &gt;…&lt;/button&gt;
+      &lt;div … className={`collapsible-body ${isOpen ? 'collapsible-body--open' : 'collapsible-body--closed'}`}&gt;
+        {children}
+      &lt;/div&gt;
+    &lt;/section&gt;
+  )
+}</pre>
+<pre class="after">// LeftPanelSections.tsx — allow children to receive isOpen
+type CollapsibleChild = ReactNode | ((isOpen: boolean) =&gt; ReactNode)
+
+export function CollapsibleSection({
+  title, protocolNum, defaultOpen = true, children,
+}: {
+  title: string; protocolNum: string; defaultOpen?: boolean; children: CollapsibleChild
+}) {
+  const [isOpen, setIsOpen] = useState(defaultOpen)
+  const body = typeof children === 'function' ? children(isOpen) : children
+  return (
+    &lt;section aria-label={title}&gt;
+      &lt;button onClick={() =&gt; setIsOpen(!isOpen)} aria-expanded={isOpen} … &gt;…&lt;/button&gt;
+      &lt;div … className={`collapsible-body ${isOpen ? 'collapsible-body--open' : 'collapsible-body--closed'}`}&gt;
+        {body}
+      &lt;/div&gt;
+    &lt;/section&gt;
+  )
+}</pre>
+<p>Step 1b — thread an <code>enabled</code>/<code>isOpen</code> argument into each data hook and gate <code>refreshInterval</code>. Example for <code>useCalendar</code> (currently lines 165–179, <code>refreshInterval:60_000</code> at line 170):</p>
+<pre class="before">// useHubData.ts (lines 165-171)
+export function useCalendar() {
+  const { data, error, isLoading, mutate } = useSWR&lt;CalendarResponse&gt;(
+    '/api/google/calendar?maxResults=100',
+    fetcher,
+    { refreshInterval: 60_000, revalidateOnFocus: false }
+  )</pre>
+<pre class="after">// useHubData.ts
+export function useCalendar(isOpen: boolean = true) {
+  const { data, error, isLoading, mutate } = useSWR&lt;CalendarResponse&gt;(
+    '/api/google/calendar?maxResults=100',
+    fetcher,
+    { refreshInterval: isOpen ? 60_000 : 0, revalidateOnFocus: false, dedupingInterval: 30_000 }
+  )</pre>
+<p>Apply the same pattern to <code>useTasks</code> (lines 82–137, both SWR calls), <code>useDrive</code> (lines 205–218), and <code>useKPIData</code> (lines 23–41). Keep the request key stable when closed — gate only <code>refreshInterval</code> so the last-fetched data stays cached and renders instantly on re-open. (Setting the key to <code>null</code> when closed would also stop the request but would drop the cached data and re-show skeletons on re-open; prefer <code>refreshInterval:0</code>.)</p>
+<p>Step 1c — wire the section components to pass <code>isOpen</code> down. Each section currently renders <code>&lt;CollapsibleSection&gt;</code> with the hook called at the top of the component body (e.g. <code>TasksSection</code> calls <code>useTasks()</code> at line 123, <code>CalendarSection</code> calls <code>useCalendar()</code> at line 508, <code>DocumentsSection</code> calls <code>useDrive(...)</code> at line 818). Restructure so the hook lives inside the render-prop and receives <code>isOpen</code>. Minimal sketch for <code>CalendarSection</code> (lines 507–508):</p>
+<pre class="before">export function CalendarSection({ onInjectChat }: { onInjectChat: (msg: string) =&gt; void }) {
+  const { events, isLoading, error, mutate } = useCalendar()
+  // …render CollapsibleSection with body…
+}</pre>
+<pre class="after">function CalendarSectionBody({ isOpen, onInjectChat }: { isOpen: boolean; onInjectChat: (msg: string) =&gt; void }) {
+  const { events, isLoading, error, mutate } = useCalendar(isOpen)
+  // …existing body markup…
+}
+export function CalendarSection({ onInjectChat }: { onInjectChat: (msg: string) =&gt; void }) {
+  return (
+    &lt;CollapsibleSection title="Calendar" protocolNum="…" defaultOpen&gt;
+      {(isOpen) =&gt; &lt;CalendarSectionBody isOpen={isOpen} onInjectChat={onInjectChat} /&gt;}
+    &lt;/CollapsibleSection&gt;
+  )
+}</pre>
+<p><strong>Rationale.</strong> A collapsed section is invisible; polling it spends quota for data the user can't see. Splitting body into a child component keeps Rules-of-Hooks intact (the hook runs unconditionally inside <code>*SectionBody</code>; only the <em>interval</em> is gated). Keeping the SWR key stable preserves the cache so re-opening is instant.</p>
+
+<h3>Change 2 — Dedupe the Tasks N+1 cadence</h3>
+<p><strong>File:</strong> <code>hub/app/hooks/useHubData.ts</code> (<code>useTasks</code>, lines 82–137)</p>
+<p>Both SWR calls poll at 30s: the task-lists fetch (line 90) and the per-list aggregate fan-out (line 124). The fan-out re-fetches every list every 30s.</p>
+<pre class="before">// list fetch — line 87-91
+useSWR&lt;TasksResponse&gt;('/api/google/tasks', fetcher,
+  { refreshInterval: 30_000, revalidateOnFocus: false })
+// …
+// per-list aggregate — line 107-125
+useSWR&lt;Record&lt;string, TaskItem[]&gt;&gt;(allListsKey, async () =&gt; { /* Promise.all fan-out */ },
+  { refreshInterval: 30_000, revalidateOnFocus: false })</pre>
+<pre class="after">// list fetch — task lists change rarely; poll slowly
+useSWR&lt;TasksResponse&gt;('/api/google/tasks', fetcher,
+  { refreshInterval: isOpen ? 300_000 : 0, revalidateOnFocus: false, dedupingInterval: 30_000 })
+// …
+// per-list aggregate — raise to 60s and gate on open-state
+useSWR&lt;Record&lt;string, TaskItem[]&gt;&gt;(allListsKey, async () =&gt; { /* Promise.all fan-out */ },
+  { refreshInterval: isOpen ? 60_000 : 0, revalidateOnFocus: false, dedupingInterval: 30_000 })</pre>
+<p><strong>Rationale.</strong> The set of task lists is near-static; re-fetching it every 30s and re-running the per-list fan-out every 30s is the dominant Tasks cost. Lists move to 5-min cadence and the task content moves to 60s, halving the fan-out rate; gating on <code>isOpen</code> (Change 1) stops both when collapsed. <code>mutate</code> still gives instant refresh on user action.</p>
+
+<h3>Change 3 — Lift &amp; dedupe the KPI subscription</h3>
+<p><strong>Files:</strong> <code>hub/app/hooks/useKPIData.ts</code>, <code>hub/app/page.tsx</code>, <code>hub/app/components/LeftPanelSections.tsx</code></p>
+<p>3a — add <code>dedupingInterval</code> to <code>useKPIData</code> (line 28–32):</p>
+<pre class="before">// useKPIData.ts (lines 28-32)
+const { data, error, isLoading, mutate } = useSWR&lt;KPIDataResponse&gt;(
+  key,
+  fetcher,
+  { refreshInterval: 60_000, revalidateOnFocus: true }
+)</pre>
+<pre class="after">// useKPIData.ts — gate interval (Change 1) + dedupe + reconcile focus revalidation
+export function useKPIData(companyId?: string | null, isOpen: boolean = true) {
+  const key = companyId &amp;&amp; companyId !== 'all'
+    ? `/api/kpis?companyId=${encodeURIComponent(companyId)}`
+    : '/api/kpis'
+  const { data, error, isLoading, mutate } = useSWR&lt;KPIDataResponse&gt;(
+    key,
+    fetcher,
+    { refreshInterval: isOpen ? 60_000 : 0, revalidateOnFocus: false, dedupingInterval: 30_000 }
+  )</pre>
+<p>3b — <code>KPISection</code> currently owns its own subscription (line 968). Change it to accept <code>kpis</code> + <code>isLoading</code> as props, mirroring how <code>projects</code> is passed to <code>ProjectHealthSection</code> (page.tsx line 171). It already filters out Paperclip-sourced KPIs (line 972) — keep that filter.</p>
+<pre class="before">// LeftPanelSections.tsx — KPISection (lines 961-972)
+export function KPISection({ activeProject, onInjectChat }: {
+  activeProject?: string; onInjectChat: (msg: string) =&gt; void
+}) {
+  const { kpis: allKpis, isLoading } = useKPIData(activeProject)
+  const kpis = allKpis.filter(kpi =&gt; kpi.source !== 'paperclip')</pre>
+<pre class="after">// LeftPanelSections.tsx — KPISection receives data as props
+export function KPISection({ kpis: allKpis, isLoading, onInjectChat }: {
+  kpis: LiveKPI[]; isLoading: boolean; onInjectChat: (msg: string) =&gt; void
+}) {
+  const kpis = allKpis.filter(kpi =&gt; kpi.source !== 'paperclip')</pre>
+<p>3c — in <code>HubPage</code>, the single <code>useKPIData(activeProject)</code> call already exists at line 226 (it currently only consumes <code>projects</code>). Destructure <code>kpis</code> and <code>isLoading</code> there too, then pass them down through <code>LeftPanel</code> (the wrapper at page.tsx line 73, which renders <code>&lt;KPISection&gt;</code> at line 89).</p>
+<pre class="before">// page.tsx line 226
+const { projects, isLoading: kpiLoading } = useKPIData(activeProject)
+// …
+// page.tsx line 89 (inside LeftPanel)
+&lt;KPISection activeProject={activeProject} onInjectChat={onInjectChat} /&gt;</pre>
+<pre class="after">// page.tsx line 226 — single subscription, surface kpis too
+const { projects, kpis, isLoading: kpiLoading } = useKPIData(activeProject)
+// thread kpis + kpiLoading through LeftPanel props, then:
+// page.tsx line 89
+&lt;KPISection kpis={kpis} isLoading={kpiLoading} onInjectChat={onInjectChat} /&gt;</pre>
+<p>Add <code>kpis</code> and <code>kpiLoading</code> to <code>LeftPanel</code>'s props type (page.tsx line 73) and to the call site that renders <code>&lt;LeftPanel … /&gt;</code>. Import <code>LiveKPI</code> in <code>LeftPanelSections.tsx</code> if not already (it is imported at line 7).</p>
+<p><strong>Rationale.</strong> One subscription instead of two means one SWR cache entry feeding both consumers, half the re-render churn, and a single <code>refreshInterval</code> timer. <code>dedupingInterval:30_000</code> collapses focus-driven and interval-driven revalidations within a 30s window; turning <code>revalidateOnFocus</code> off removes the remaining redundant focus fetch. This mirrors the existing <code>projects</code>→<code>ProjectHealthSection</code> prop pattern, so the file stays internally consistent.</p>
+
+<h3>Change 4 — Consolidate KPI / Projects onto one source</h3>
+<p><strong>Files:</strong> <code>hub/app/components/BrandedHeader.tsx</code> (line 36), <code>hub/app/page.tsx</code></p>
+<p><code>BrandedHeader</code> calls <code>useProjects()</code> (line 36) for the project list; <code>HubPage</code> already has the richer <code>useKPIData</code> result which includes <code>projects: ProjectKPI[]</code> (see <code>KPIDataResponse</code>, <code>useKPIData.ts</code> lines 13–17). Both <code>/api/kpis</code> and <code>/api/projects</code> poll 60s with <code>revalidateOnFocus</code>.</p>
+<p>Preferred approach: make the lifted <code>useKPIData.projects</code> the authoritative project/health source and pass it into <code>BrandedHeader</code> as a prop, dropping the <code>useProjects()</code> call there. If <code>BrandedHeader</code>'s display needs fields only present on <code>useProjects</code>' <code>Project</code> type (not <code>ProjectKPI</code>), keep <code>useProjects</code> but align its cadence and rely on its existing <code>dedupingInterval:30_000</code> (lines 27–31) — and in that case document the overlap as accepted rather than fully removing the second endpoint.</p>
+<pre class="before">// BrandedHeader.tsx line 36
+const { projects, isLoading: projectsLoading } = useProjects()</pre>
+<pre class="after">// BrandedHeader.tsx — receive projects from HubPage's single KPI subscription
+export function BrandedHeader({ projects, projectsLoading, /* …existing props… */ }: {
+  projects: ProjectKPI[]; projectsLoading: boolean; /* … */
+}) {
+  // (useProjects() call removed)</pre>
+<p><strong>Rationale.</strong> Project health is currently fetched by two endpoints on overlapping timers. Routing <code>BrandedHeader</code> through the already-present <code>useKPIData.projects</code> removes a whole 60s polling loop. Where the type shapes genuinely differ, this change is gated behind a field-compatibility check rather than forced — note it explicitly in the PR. This is the cross-plan coordination point with Plan 02 (KPI error wiring) — see <em>Dependencies &amp; sequencing</em>.</p>
+
+<h3>Change 5 — Route chat unread through SWR (kill the raw setInterval)</h3>
+<p><strong>File:</strong> <code>hub/app/hooks/useGoogleChat.ts</code> (<code>useUnreadCounts</code>, lines 229–297)</p>
+<p>The current implementation runs <code>setInterval(computeUnreads, 60_000)</code> (line 288) inside an effect whose dependency array is <code>[spaceIds]</code> (line 294), while <code>computeUnreads</code> closes over the full <code>spaces</code> array (lines 246–251) — a stale-closure footgun if <code>spaces</code> changes content without changing the sorted-id string. Each tick manually fetches <code>/api/google/chat/readstate</code> and <code>/api/google/chat/messages?…&amp;pageSize=50</code> (lines 253, 261), duplicating the exact messages URL <code>useMessages</code> already caches (line 117/120).</p>
+<p><strong>Preferred fix (one batched endpoint).</strong> Add a server route <code>GET /api/google/chat/unread</code> that accepts the space-id set and returns <code>{ unread: Record&lt;string,number&gt;, total: number }</code>, then back the hook with a single SWR subscription:</p>
+<pre class="after">// useGoogleChat.ts — useUnreadCounts via SWR
+export function useUnreadCounts(spaces: ChatSpace[]) {
+  const spaceIds = spaces.map(s =&gt; s.name).sort()
+  const key = spaceIds.length
+    ? `/api/google/chat/unread?spaceIds=${encodeURIComponent(spaceIds.join(','))}`
+    : null
+  const { data } = useSWR&lt;{ unread: Record&lt;string, number&gt;; total: number }&gt;(
+    key, fetcher,
+    { refreshInterval: 60_000, revalidateOnFocus: false, dedupingInterval: 30_000 }
+  )
+  const unreadMap = new Map(Object.entries(data?.unread ?? {}))
+  return { unreadMap, totalUnread: data?.total ?? 0 }
+}</pre>
+<p><strong>Fallback fix (no new endpoint).</strong> If adding a route is out of scope for this PR, keep the per-space readstate fetch but read message data from the SWR cache instead of re-fetching it, and fix the closure: depend the effect on the actual <code>spaces</code> identity (or a content hash) and read <code>spaces</code> from a ref so the interval callback never goes stale. At minimum, replace the manual <code>fetch(.../messages…)</code> (line 261) with <code>useSWRConfig().cache.get(key)</code> for the same key <code>useMessages</code> uses (line 117), avoiding the duplicate network call. The batched endpoint is strongly preferred because it also collapses N readstate requests into one.</p>
+<p>Both consumers — <code>page.tsx</code> line 253 and <code>GoogleChatPanel.tsx</code> line 797 — call <code>useUnreadCounts(spaces)</code> and read <code>{ unreadMap, totalUnread }</code>; the return shape is unchanged, so no call-site edits are required.</p>
+<p><strong>Rationale.</strong> The current loop is the single worst offender: N×2 un-deduped fetches per minute, immune to SWR caching, plus a latent staleness bug. Moving it under SWR gives dedupe, focus control, and cache reuse for free; the batched endpoint additionally removes the per-space fan-out entirely.</p>
+
+<h3>Change 6 — Standardize SWR config</h3>
+<p><strong>Files:</strong> <code>hub/app/hooks/useKPIData.ts</code>, <code>hub/app/hooks/useHubData.ts</code> (and verify <code>useGoogleChat.ts</code>)</p>
+<p>Reconcile config against the already-consistent <code>useProjects.ts</code> (lines 27–31) / <code>useCompanies.ts</code> (lines 26–30), which both use <code>refreshInterval:60_000, revalidateOnFocus:true, dedupingInterval:30_000</code>. Target conventions for left-panel polling hooks:</p>
+<ul>
+<li><code>dedupingInterval: 30_000</code> on every left-panel hook (currently missing from <code>useKPIData</code> and all <code>useHubData</code> hooks).</li>
+<li><code>revalidateOnFocus</code>: keep <code>false</code> for the high-frequency Google hooks (Tasks/Calendar/Drive already do) and set <code>useKPIData</code> to <code>false</code> (Change 3); leave the slow Paperclip/companies hooks as-is.</li>
+<li>Gate <code>refreshInterval</code> on <code>isOpen</code> (Change 1) consistently.</li>
+<li>Leave <code>useBusinessManager</code> (5-min cadence, retry config, lines 48–54) and <code>useSpaceMembers</code> (5-min, line 204) untouched — their cadence is intentional.</li>
+</ul>
+<p><strong>Rationale.</strong> A single, predictable caching contract makes the dedupe windows actually line up across hooks that hit related endpoints, and prevents future drift.</p>
+
+<h2>Files touched</h2>
+<table>
+<thead><tr><th>File</th><th>Changes</th></tr></thead>
+<tbody>
+<tr><td><code>hub/app/components/LeftPanelSections.tsx</code></td><td>Render-prop <code>CollapsibleSection</code> (C1); split <code>KPISection</code>/<code>CalendarSection</code>/<code>TasksSection</code>/<code>DocumentsSection</code> bodies + thread <code>isOpen</code> (C1); <code>KPISection</code> takes <code>kpis</code>/<code>isLoading</code> props (C3).</td></tr>
+<tr><td><code>hub/app/hooks/useHubData.ts</code></td><td><code>useTasks</code>/<code>useCalendar</code>/<code>useDrive</code> accept <code>isOpen</code>, gate <code>refreshInterval</code>, add <code>dedupingInterval</code> (C1, C2, C6); raise Tasks cadences (C2).</td></tr>
+<tr><td><code>hub/app/hooks/useKPIData.ts</code></td><td>Accept <code>isOpen</code>, gate interval, add <code>dedupingInterval:30_000</code>, set <code>revalidateOnFocus:false</code> (C3, C6).</td></tr>
+<tr><td><code>hub/app/page.tsx</code></td><td>Surface <code>kpis</code> from the existing line-226 <code>useKPIData</code> call; thread <code>kpis</code>/<code>kpiLoading</code> through <code>LeftPanel</code> into <code>KPISection</code> (C3); pass <code>projects</code> into <code>BrandedHeader</code> (C4).</td></tr>
+<tr><td><code>hub/app/components/BrandedHeader.tsx</code></td><td>Receive <code>projects</code> via props; drop/realign <code>useProjects()</code> (C4).</td></tr>
+<tr><td><code>hub/app/hooks/useGoogleChat.ts</code></td><td>Rewrite <code>useUnreadCounts</code> under SWR (C5); add <code>dedupingInterval</code> where missing (C6).</td></tr>
+<tr><td><code>hub/app/api/google/chat/unread/route.ts</code> <em>(new, if batched approach)</em></td><td>Batched unread endpoint returning <code>{ unread, total }</code> (C5).</td></tr>
+</tbody>
+</table>
+
+<h2>Testing</h2>
+<ul>
+<li><strong>Typecheck:</strong> <code>npx tsc --noEmit</code> (run from <code>hub/</code>). Confirm prop-type changes for <code>KPISection</code>, <code>LeftPanel</code>, and <code>BrandedHeader</code> compile.</li>
+<li><strong>Unit:</strong> <code>npx vitest run</code> (from <code>hub/</code>). Existing hook/section tests must still pass; add a test asserting <code>useUnreadCounts</code> derives from a single SWR key.</li>
+<li><strong>Manual — collapse stops polling:</strong> open the app, open devtools → Network, filter to <code>/api/google/calendar</code> (or <code>/api/kpis</code>), collapse that section, and confirm the periodic request stops firing while collapsed and resumes on re-open without a skeleton flash (cache preserved).</li>
+<li><strong>Manual — single KPI request:</strong> filter Network to <code>/api/kpis</code> and confirm exactly <em>one</em> request per refresh cycle (not two), and that a window blur/focus does not trigger an extra fetch within the 30s dedupe window.</li>
+<li><strong>Manual — unread:</strong> filter to <code>/api/google/chat/messages</code> and confirm the unread loop no longer issues its own duplicate message fetches; if the batched endpoint was added, confirm a single <code>/api/google/chat/unread</code> request every 60s.</li>
+</ul>
+
+<h2>Acceptance criteria</h2>
+<ul>
+<li>Collapsing any of KPI / Tasks / Calendar / Documents stops that section's polling (verified in Network); re-opening resumes it and shows cached data immediately.</li>
+<li><code>/api/kpis</code> has exactly one live SWR subscription; only one request fires per refresh cycle; <code>useKPIData</code> has <code>dedupingInterval:30_000</code> and <code>revalidateOnFocus:false</code>.</li>
+<li><code>KPISection</code> receives <code>kpis</code>/<code>isLoading</code> as props (no internal <code>useKPIData</code> call).</li>
+<li>The Tasks per-list fan-out polls no faster than 60s; the task-lists fetch polls no faster than 5min.</li>
+<li><code>useUnreadCounts</code> contains no raw <code>setInterval</code> and issues no duplicate <code>/api/google/chat/messages</code> fetches; the return shape <code>{ unreadMap, totalUnread }</code> is unchanged for both consumers.</li>
+<li>Project health is fetched from a single authoritative source, or the residual overlap is explicitly documented as accepted.</li>
+<li>All left-panel polling hooks carry <code>dedupingInterval:30_000</code> and a reconciled <code>revalidateOnFocus</code>.</li>
+<li><code>npx tsc --noEmit</code> and <code>npx vitest run</code> pass.</li>
+</ul>
+
+<h2>Dependencies &amp; sequencing</h2>
+<ul>
+<li><strong>Coordinates with Plan 02 (KPI error wiring).</strong> Plan 02 surfaces <code>useKPIData</code>'s <code>error</code> into <code>KPISection</code>. This plan lifts <code>useKPIData</code> to <code>HubPage</code> and converts <code>KPISection</code> to a props-driven component — so the <code>error</code> Plan 02 needs must also be threaded as a prop (<code>error</code> alongside <code>kpis</code>/<code>isLoading</code>) rather than read from a hook inside <code>KPISection</code>. Land Change 3 first (or in the same PR) and have Plan 02 build on the lifted shape; otherwise the two plans will conflict on <code>KPISection</code>'s signature.</li>
+<li>Within this plan: do <strong>Change 1</strong> (gating infra) first, since Changes 2, 3, and 6 all add the <code>isOpen</code> argument it introduces. <strong>Change 3</strong> before <strong>Change 4</strong> (Change 4 consumes the lifted <code>useKPIData.projects</code>). <strong>Change 5</strong> is independent and can land separately; the batched-endpoint variant adds a new route file.</li>
+</ul>
+
+<h2>Rollback</h2>
+<ul>
+<li>Each change is independently revertable. To roll back gating (C1/C2), restore the unconditional <code>refreshInterval</code> literals and the plain <code>children: ReactNode</code> signature on <code>CollapsibleSection</code>.</li>
+<li>To roll back the KPI lift (C3/C4), restore <code>useKPIData(activeProject)</code> inside <code>KPISection</code> (line 968) and <code>useProjects()</code> inside <code>BrandedHeader</code> (line 36); remove the props threading in <code>page.tsx</code>. Behavior returns to double-subscription but functional.</li>
+<li>To roll back the unread rewrite (C5), restore the <code>setInterval</code>-based <code>useUnreadCounts</code>; the return shape is unchanged so no consumer edits are needed. If the batched route was added, it can be left in place unused or deleted.</li>
+<li>No database/schema changes; rollback is purely code-level. Revert by reverting the PR.</li>
+</ul>
+
+</body>
+</html>
