@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
 import { clampInt } from '@/lib/num'
+import { GoogleCalendarCreateSchema } from '@/lib/zod-schemas'
 import { authOptions } from '@/lib/auth'
 import { listUpcomingEvents, createCalendarEvent, deleteCalendarEvent, listCalendars, GoogleCalendarEvent } from '@/lib/google'
 
@@ -74,26 +75,21 @@ export async function POST(req: NextRequest) {
   if (!auth.ok) return auth.response
   const accessToken = auth.accessToken
 
-  let body: {
-    summary: string
-    description?: string
-    start: string
-    end: string
-    attendees?: string[]
-    calendarId?: string
-  }
+  let raw: unknown
   try {
-    body = await req.json()
+    raw = await req.json()
   } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
-  if (!body.summary || !body.start || !body.end) {
+  const parsed = GoogleCalendarCreateSchema.safeParse(raw)
+  if (!parsed.success) {
     return NextResponse.json(
-      { error: 'summary, start, and end are required' },
+      { error: 'Validation failed', details: parsed.error.issues },
       { status: 400 }
     )
   }
+  const body = parsed.data
 
   try {
     const event = await createCalendarEvent(accessToken, body)
