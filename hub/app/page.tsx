@@ -38,6 +38,7 @@ import {
   isHighStakesIntent,
 } from '@/lib/interview'
 import { PAPERCLIP_BASE_URL } from '@/lib/paperclipConfig'
+import { shouldRouteThroughSend } from '@/lib/inject-routing'
 import { useCompanies } from '@/app/hooks/useCompanies'
 import type { InterviewState, ActionSpec, ChatAttachment, ActiveSkill } from '@/types'
 import { executeAction } from '@/lib/actions/executeAction'
@@ -70,7 +71,7 @@ const ONBOARDING_SUGGESTIONS = [
 // AnimatedNumber is now imported from @/app/components/AnimatedNumber
 
 /* ── Left Panel: Context Layer ── */
-function LeftPanelImpl({ isOpen, onClose, onInjectChat, panelRef, closeBtnRef, isMobileViewport, style, activeProject, workspaceName, kpis, kpiLoading }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void; panelRef?: React.Ref<HTMLElement>; closeBtnRef?: React.Ref<HTMLButtonElement>; isMobileViewport?: boolean; style?: React.CSSProperties; activeProject?: string; workspaceName?: string; kpis?: import('@/types').LiveKPI[]; kpiLoading?: boolean }) {
+function LeftPanelImpl({ isOpen, onClose, onInjectChat, onInjectAction, panelRef, closeBtnRef, isMobileViewport, style, activeProject, workspaceName, kpis, kpiLoading }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void; onInjectAction: (msg: string, attachments?: ChatAttachment[]) => void; panelRef?: React.Ref<HTMLElement>; closeBtnRef?: React.Ref<HTMLButtonElement>; isMobileViewport?: boolean; style?: React.CSSProperties; activeProject?: string; workspaceName?: string; kpis?: import('@/types').LiveKPI[]; kpiLoading?: boolean }) {
   const tenant = useTenant()
   return (
     <aside
@@ -101,7 +102,7 @@ function LeftPanelImpl({ isOpen, onClose, onInjectChat, panelRef, closeBtnRef, i
           <CalendarSection onInjectChat={onInjectChat} />
         </SectionErrorBoundary>
         <SectionErrorBoundary label="Tasks">
-          <TasksSection onInjectChat={onInjectChat} />
+          <TasksSection onInjectChat={onInjectChat} onInjectAction={onInjectAction} />
         </SectionErrorBoundary>
         <SectionErrorBoundary label="Documents">
           <DocumentsSection onInjectChat={onInjectChat} />
@@ -535,11 +536,14 @@ export default function HubPage() {
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
         body: JSON.stringify({
+          // Per-message `attachments` are intentionally NOT sent: the chat route reads
+          // only role/content from history plus the top-level `attachments` below.
+          // Carry the message's real timestamp; fall back to now only if it's missing.
           messages: allMessages.map(m => ({
             id: m.id,
             role: m.role,
             content: m.content,
-            timestamp: new Date().toISOString(),
+            timestamp: m.timestamp ?? new Date().toISOString(),
           })),
           useCase,
           attachments: msgAttachments && msgAttachments.length > 0 ? msgAttachments : undefined,
@@ -1023,19 +1027,40 @@ Respond with EXACTLY one of:
     doSend(suggestion)
   }, [doSend])
 
-  /* ── Handle context injection from panels ── */
+  /* ── Handle context injection from panels ──
+   * Two routing modes:
+   *  - 'execute'  → action-style inject: delegate to doSend so detectIntent,
+   *                 role-gating, and Interview Mode run exactly as if the user
+   *                 had typed the sentence (parity with handleSend).
+   *  - other      → read-style inject ('recall' / 'deep_dive'): keep the direct
+   *                 sendToApi path (no intent detection on informational lookups).
+   */
   const handleChatInject = useCallback((message: string, useCase: string = 'deep_dive', injectAttachments?: ChatAttachment[]) => {
     setMobileLeftOpen(false)
     setMobileRightOpen(false)
     setMobileTab('chat')
-    const userMsg = {
+
+    // Defense-in-depth: mirror the 5-attachment cap enforced in handleAddAttachment
+    // and server-side (route.ts). The inject path previously forwarded these uncapped.
+    const cappedAttachments = injectAttachments && injectAttachments.length > 0
+      ? injectAttachments.slice(0, 5)
+      : undefined
+
+    // Action-style injects go through the shared send core for full parity.
+    if (shouldRouteThroughSend(useCase)) {
+      doSend(message, cappedAttachments)
+      return
+    }
+
+    // Read-style injects: direct, intent-free send (unchanged behavior).
+    const userMsg: ChatMsg = {
       id: crypto.randomUUID(),
       role: 'user' as const,
       content: message,
       timestamp: new Date().toISOString(),
       // Carry any panel-attached context (e.g. a tapped Drive document's fileId)
       // so the chat route resolves its real content, and the chip renders.
-      attachments: injectAttachments && injectAttachments.length > 0 ? injectAttachments : undefined,
+      attachments: cappedAttachments,
     }
     // Capture the updated messages array via functional updater, but fire the
     // API call OUTSIDE the updater to prevent double-firing under React
@@ -1047,8 +1072,8 @@ Respond with EXACTLY one of:
     })
     // React batches state updates synchronously within event handlers,
     // so updatedMessages is populated by the time we reach here.
-    sendToApi(message, updatedMessages, useCase, injectAttachments)
-  }, [sendToApi])
+    sendToApi(message, updatedMessages, useCase, cappedAttachments)
+  }, [sendToApi, doSend])
 
   // Stable per-panel inject handlers — referentially constant across renders so
   // memoized panel children (e.g. FeedCard) don't re-render on unrelated state
@@ -1203,7 +1228,7 @@ Respond with EXACTLY one of:
       </div>
 
       <div className="panels-container">
-        <LeftPanel isOpen={mobileLeftOpen} onClose={handleClosePanels} onInjectChat={injectRecall} panelRef={leftPanelRef} closeBtnRef={leftCloseBtnRef} isMobileViewport={isMobileViewport} activeProject={activeProject} workspaceName={projects?.[0]?.companyName} kpis={kpis} kpiLoading={kpiLoading} />
+        <LeftPanel isOpen={mobileLeftOpen} onClose={handleClosePanels} onInjectChat={injectRecall} onInjectAction={injectExecute} panelRef={leftPanelRef} closeBtnRef={leftCloseBtnRef} isMobileViewport={isMobileViewport} activeProject={activeProject} workspaceName={projects?.[0]?.companyName} kpis={kpis} kpiLoading={kpiLoading} />
 
         {/* ── Center Panel: AI Chat (inlined for shared state) ── */}
         <main className="panel-center" aria-label="AI Chat">

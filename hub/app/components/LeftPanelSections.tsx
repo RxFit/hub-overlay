@@ -239,15 +239,15 @@ export function CollapsibleSection({
    TASKS SECTION
    ══════════════════════════════════════════════════════════════════════════════ */
 
-function TasksSectionImpl({ onInjectChat }: { onInjectChat: (msg: string) => void }) {
+function TasksSectionImpl({ onInjectChat, onInjectAction }: { onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void; onInjectAction: (msg: string, attachments?: ChatAttachment[]) => void }) {
   return (
     <CollapsibleSection title="Tasks" protocolNum="03" defaultOpen>
-      {(isOpen) => <TasksSectionBody isOpen={isOpen} onInjectChat={onInjectChat} />}
+      {(isOpen) => <TasksSectionBody isOpen={isOpen} onInjectChat={onInjectChat} onInjectAction={onInjectAction} />}
     </CollapsibleSection>
   )
 }
 
-function TasksSectionBody({ isOpen, onInjectChat }: { isOpen: boolean; onInjectChat: (msg: string) => void }) {
+function TasksSectionBody({ isOpen, onInjectChat, onInjectAction }: { isOpen: boolean; onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void; onInjectAction: (msg: string, attachments?: ChatAttachment[]) => void }) {
   const { taskLists, tasksByList, isLoading, error, mutate } = useTasks(isOpen)
   const [activeListId, setActiveListId] = useState<string | null>(null)
 
@@ -353,7 +353,7 @@ function TasksSectionBody({ isOpen, onInjectChat }: { isOpen: boolean; onInjectC
       {/* FAB: open AI chat to create a task */}
       <button
         className="tasks-fab"
-        onClick={() => onInjectChat(`I want to create a new task in my ${activeListName} list`)}
+        onClick={() => onInjectAction(`I want to create a new task in my ${activeListName} list`)}
         aria-label={`Create task in ${activeListName}`}
         title={`Create task in ${activeListName}`}
       >
@@ -626,7 +626,7 @@ function CalendarEventModal({ defaultDate, onClose, onCreated }: CalendarEventMo
    CALENDAR SECTION
    ══════════════════════════════════════════════════════════════════════════════ */
 
-function CalendarSectionImpl({ onInjectChat }: { onInjectChat: (msg: string) => void }) {
+function CalendarSectionImpl({ onInjectChat }: { onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void }) {
   return (
     <CollapsibleSection title="Calendar" protocolNum="02" defaultOpen>
       {(isOpen) => <CalendarSectionBody isOpen={isOpen} onInjectChat={onInjectChat} />}
@@ -634,7 +634,7 @@ function CalendarSectionImpl({ onInjectChat }: { onInjectChat: (msg: string) => 
   )
 }
 
-function CalendarSectionBody({ isOpen, onInjectChat }: { isOpen: boolean; onInjectChat: (msg: string) => void }) {
+function CalendarSectionBody({ isOpen, onInjectChat }: { isOpen: boolean; onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void }) {
   const { events, isLoading, error, mutate } = useCalendar(isOpen)
   const [selectedDate, setSelectedDate] = useState<Date>(() => new Date())
   const [weekStart, setWeekStart] = useState<Date>(() => getMonday(new Date()))
@@ -1093,7 +1093,7 @@ function KPISectionImpl({
 }: {
   kpis: LiveKPI[]
   isLoading: boolean
-  onInjectChat: (msg: string) => void
+  onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void
 }) {
   // Mandate: Left Panel = Google ecosystem + business metrics only.
   // Paperclip orchestration metrics belong on the Right Panel.
@@ -1183,7 +1183,7 @@ export function ProjectHealthSection({
   isLoading,
 }: {
   projects?: ProjectKPI[]
-  onInjectChat: (msg: string) => void
+  onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void
   userRole?: string
   isLoading?: boolean
 }) {
