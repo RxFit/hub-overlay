@@ -15,6 +15,7 @@ import {
   formatTime,
   formatShortDate,
   formatRelativeDate,
+  formatDueDate,
 } from '@/lib/panel-inject'
 import useSWR from 'swr'
 
@@ -322,7 +323,7 @@ function TaskRow({
   onToggle: () => void
   onInjectChat: () => void
 }) {
-  const dueDate = task.due ? formatRelativeDate(task.due) : null
+  const dueDate = task.due ? formatDueDate(task.due) : null
   const isCompleted = task.status === 'completed'
 
   return (
@@ -375,8 +376,17 @@ interface CalendarEventModalProps {
   onCreated: () => void
 }
 
+/** Local calendar date as YYYY-MM-DD, WITHOUT the UTC shift that
+ *  new Date().toISOString() introduces for negative-offset users. */
+function toLocalISODate(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
 function CalendarEventModal({ defaultDate, onClose, onCreated }: CalendarEventModalProps) {
-  const today = defaultDate || new Date().toISOString().split('T')[0]
+  const today = defaultDate || toLocalISODate(new Date())
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [date, setDate] = useState(today)
@@ -395,6 +405,9 @@ function CalendarEventModal({ defaultDate, onClose, onCreated }: CalendarEventMo
     try {
       const start = `${date}T${startTime}:00`
       const end = `${date}T${endTime}:00`
+      // Anchor the naive local datetime to the user's actual zone so Google
+      // doesn't reinterpret it against the calendar default (wrong-hour bug).
+      const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
       const emailList = attendees.split(',').map(s => s.trim()).filter(Boolean)
       await writeFetch('/api/google/calendar', {
         method: 'POST',
@@ -406,6 +419,7 @@ function CalendarEventModal({ defaultDate, onClose, onCreated }: CalendarEventMo
           end,
           attendees: emailList.length ? emailList : undefined,
           location: location.trim() || undefined,
+          timeZone: timeZone || undefined,
         }),
       })
       onCreated()
@@ -606,7 +620,7 @@ export function CalendarSection({ onInjectChat }: { onInjectChat: (msg: string) 
   })
 
   const dayName = selectedDate.toLocaleDateString([], { weekday: 'long' })
-  const selectedDateISO = selectedDate.toISOString().split('T')[0]
+  const selectedDateISO = toLocalISODate(selectedDate)
 
   async function handleDeleteConfirm() {
     if (!deleteConfirm) return
@@ -717,7 +731,7 @@ export function CalendarSection({ onInjectChat }: { onInjectChat: (msg: string) 
                   onClick={() => onInjectChat(buildEventInjectMessage(event))}
                   onDelete={() => setDeleteConfirm({
                     id: event.id,
-                    summary: event.summary,
+                    summary: event.summary || '(untitled)',
                     // Delete from the event's SOURCE calendar (tagged by the API
                     // route); falls back to 'primary' server-side if absent.
                     calendarId: event.calendarId,
@@ -823,11 +837,11 @@ function CalendarRow({
       <button
         onClick={onClick}
         className="cal-event-row__main"
-        aria-label={`Event: ${event.summary} at ${startTime}`}
+        aria-label={`Event: ${event.summary || '(untitled)'} at ${startTime}`}
       >
         <span className="calendar-time-badge">{startTime}</span>
         <div className="calendar-details">
-          <div className="calendar-summary">{event.summary}</div>
+          <div className="calendar-summary">{event.summary || '(untitled)'}</div>
           {(event as any).location && (
             <div className="calendar-meta">{(event as any).location}</div>
           )}
@@ -838,7 +852,7 @@ function CalendarRow({
       <button
         className="cal-row-delete-btn"
         onClick={(e) => { e.stopPropagation(); onDelete() }}
-        aria-label={`Delete event: ${event.summary}`}
+        aria-label={`Delete event: ${event.summary || '(untitled)'}`}
         title="Delete event"
       >
         🗑

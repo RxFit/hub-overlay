@@ -226,6 +226,9 @@ export const GoogleCalendarCreateSchema = z.object({
   end: z.string().min(1).max(64),
   attendees: z.array(z.string().email().max(320)).max(100).optional(),
   location: z.string().max(1024).optional(),
+  // IANA time-zone name (e.g. "America/Chicago"). Bounded so a pathological
+  // value can't reach Google. Optional: all-day events omit it.
+  timeZone: z.string().max(64).optional(),
   calendarId: z.string().max(1024).optional(),
 })
 

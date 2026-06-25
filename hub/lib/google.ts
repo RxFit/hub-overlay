@@ -210,18 +210,31 @@ export async function createCalendarEvent(
     start: string   // ISO datetime or date
     end: string     // ISO datetime or date
     attendees?: string[]  // email addresses
+    location?: string
+    timeZone?: string  // IANA tz, e.g. "America/Chicago"; required for correct timed events
     calendarId?: string
   }
 ): Promise<GoogleCalendarEvent> {
   const calId = encodeURIComponent(event.calendarId ?? 'primary')
   const isAllDay = event.start.length === 10  // "2026-05-30" vs "2026-05-30T10:00:00"
 
+  // For timed events, attach the caller's IANA time zone so Google anchors the
+  // naive local datetime to the right offset instead of the calendar default.
+  const startField = isAllDay
+    ? { date: event.start }
+    : { dateTime: event.start, ...(event.timeZone ? { timeZone: event.timeZone } : {}) }
+  const endField = isAllDay
+    ? { date: event.end }
+    : { dateTime: event.end, ...(event.timeZone ? { timeZone: event.timeZone } : {}) }
+
   const body: Record<string, unknown> = {
     summary: event.summary,
     description: event.description,
-    start: isAllDay ? { date: event.start } : { dateTime: event.start },
-    end: isAllDay ? { date: event.end } : { dateTime: event.end },
+    start: startField,
+    end: endField,
   }
+
+  if (event.location) body.location = event.location
 
   if (event.attendees?.length) {
     body.attendees = event.attendees.map(email => ({ email }))

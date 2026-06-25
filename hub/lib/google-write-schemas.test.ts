@@ -28,6 +28,19 @@ describe('Google write-request schemas', () => {
     }).success).toBe(false)
   })
 
+  it('accepts and preserves a bounded IANA timeZone, rejecting over-length values', () => {
+    const parsed = GoogleCalendarCreateSchema.safeParse({
+      summary: 'Sync', start: '2026-06-20T09:00:00', end: '2026-06-20T10:00:00', timeZone: 'America/Chicago',
+    })
+    expect(parsed.success).toBe(true)
+    // timeZone survives in parsed.data (Zod would otherwise strip an unknown key).
+    expect(parsed.success && parsed.data.timeZone).toBe('America/Chicago')
+
+    expect(GoogleCalendarCreateSchema.safeParse({
+      summary: 'x', start: 's', end: 'e', timeZone: 'z'.repeat(65),
+    }).success).toBe(false)
+  })
+
   it('requires recipient + message and caps message size on gmail send', () => {
     expect(GoogleGmailSendSchema.safeParse({ to: 'a@b.com', message: 'hi' }).success).toBe(true)
     expect(GoogleGmailSendSchema.safeParse({ to: '', message: 'hi' }).success).toBe(false)
