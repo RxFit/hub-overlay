@@ -1,7 +1,8 @@
 'use client'
 
-import { useState, useEffect, ReactNode, useCallback, useMemo, memo, Component } from 'react'
+import { useState, useEffect, useRef, ReactNode, useCallback, useMemo, memo, Component } from 'react'
 import type { ErrorInfo } from 'react'
+import { useModalA11y } from '@/app/hooks/useModalA11y'
 import { signIn } from 'next-auth/react'
 import { useTasks, useCalendar, useDrive } from '@/app/hooks/useHubData'
 import { writeFetch } from '@/app/hooks/useWriteFetch'
@@ -316,12 +317,23 @@ function TasksSectionBody({ isOpen, onInjectChat, onInjectAction }: { isOpen: bo
     <>
       {/* List tab strip */}
       {taskLists.length > 1 && (
-        <div className="doc-filter-tabs" role="tablist" aria-label="Task lists" style={{ marginBottom: '6px' }}>
+        <div
+          className="doc-filter-tabs"
+          role="tablist"
+          aria-label="Task lists"
+          style={{ marginBottom: '6px' }}
+          onKeyDown={(e) =>
+            handleRovingKeydown(e, '[role="tab"]', (i) => setActiveListId(taskLists[i].id))
+          }
+        >
           {taskLists.map(list => (
             <button
               key={list.id}
+              id={`task-tab-${list.id}`}
               role="tab"
               aria-selected={resolvedListId === list.id}
+              aria-controls="task-tabpanel"
+              tabIndex={resolvedListId === list.id ? 0 : -1}
               className={`feed-filter-btn${resolvedListId === list.id ? ' active' : ''}`}
               onClick={() => setActiveListId(list.id)}
               title={list.title}
@@ -332,23 +344,29 @@ function TasksSectionBody({ isOpen, onInjectChat, onInjectAction }: { isOpen: bo
         </div>
       )}
 
-      {/* Task list */}
-      {visibleTasks.length === 0 ? (
-        <SectionMessage message={`No pending tasks in ${activeListName}`} type="empty" />
-      ) : (
-        <div role="list" aria-label={`${activeListName} tasks`}>
-          {visibleTasks.map(task => (
-            <TaskRow
-              key={task.id}
-              task={task}
-              isFading={fadingIds.has(task.id)}
-              isToggling={togglingIds.has(task.id)}
-              onToggle={() => resolvedListId && handleToggleTask(task, resolvedListId)}
-              onInjectChat={() => onInjectChat(buildTaskInjectMessage(task, activeListName))}
-            />
-          ))}
-        </div>
-      )}
+      {/* Task list (tab panel) */}
+      <div
+        id="task-tabpanel"
+        role="tabpanel"
+        aria-labelledby={resolvedListId ? `task-tab-${resolvedListId}` : undefined}
+      >
+        {visibleTasks.length === 0 ? (
+          <SectionMessage message={`No pending tasks in ${activeListName}`} type="empty" />
+        ) : (
+          <div role="list" aria-label={`${activeListName} tasks`}>
+            {visibleTasks.map(task => (
+              <TaskRow
+                key={task.id}
+                task={task}
+                isFading={fadingIds.has(task.id)}
+                isToggling={togglingIds.has(task.id)}
+                onToggle={() => resolvedListId && handleToggleTask(task, resolvedListId)}
+                onInjectChat={() => onInjectChat(buildTaskInjectMessage(task, activeListName))}
+              />
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* FAB: open AI chat to create a task */}
       <button
@@ -451,6 +469,9 @@ function CalendarEventModal({ defaultDate, onClose, onCreated }: CalendarEventMo
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useModalA11y(dialogRef, onClose)
+
   async function handleSave(e: React.FormEvent) {
     e.preventDefault()
     if (!title.trim() || !date || !startTime || !endTime) return
@@ -496,6 +517,8 @@ function CalendarEventModal({ defaultDate, onClose, onCreated }: CalendarEventMo
       />
       {/* Modal */}
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         className="cal-event-modal"
         role="dialog"
         aria-modal="true"
@@ -518,7 +541,6 @@ function CalendarEventModal({ defaultDate, onClose, onCreated }: CalendarEventMo
               onChange={e => setTitle(e.target.value)}
               placeholder="Event title"
               required
-              autoFocus
             />
           </div>
 
@@ -745,7 +767,14 @@ function CalendarSectionBody({ isOpen, onInjectChat }: { isOpen: boolean; onInje
         </div>
 
         {/* Week strip */}
-        <div className="calendar-week-strip" role="listbox" aria-label="Week days">
+        <div
+          className="calendar-week-strip"
+          role="listbox"
+          aria-label="Week days"
+          onKeyDown={(e) =>
+            handleRovingKeydown(e, '[role="option"]', (i) => setSelectedDate(new Date(weekDays[i])))
+          }
+        >
           {weekDays.map((day) => {
             const dayStr = day.toDateString()
             const isToday = dayStr === today.toDateString()
@@ -765,6 +794,7 @@ function CalendarSectionBody({ isOpen, onInjectChat }: { isOpen: boolean; onInje
                 key={dayStr}
                 role="option"
                 aria-selected={isSelected}
+                tabIndex={isSelected ? 0 : -1}
                 aria-label={`${day.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })}${hasEvents ? ', has events' : ''}`}
                 className={classNames}
                 onClick={() => setSelectedDate(new Date(day))}
@@ -812,38 +842,13 @@ function CalendarSectionBody({ isOpen, onInjectChat }: { isOpen: boolean; onInje
 
       {/* Delete Confirm Dialog */}
       {deleteConfirm && (
-        <>
-          <div className="cal-event-modal-backdrop" onClick={() => setDeleteConfirm(null)} aria-hidden="true" />
-          <div className="cal-event-modal cal-delete-dialog" role="alertdialog" aria-modal="true" aria-label="Confirm event deletion">
-            <div className="cal-event-modal__header">
-              <h3 className="cal-event-modal__title">Delete Event?</h3>
-              <button className="cal-event-modal__close" onClick={() => setDeleteConfirm(null)} aria-label="Cancel">✕</button>
-            </div>
-            <div style={{ padding: '16px 20px' }}>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0 0 16px' }}>
-                Are you sure you want to delete <strong style={{ color: 'var(--text-primary)' }}>&quot;{deleteConfirm.summary}&quot;</strong>? This cannot be undone.
-              </p>
-              {deleteError && (
-                <div className="cal-event-form__error" role="alert">{deleteError}</div>
-              )}
-              <div className="cal-event-form__actions">
-                <button
-                  className="cal-event-form__btn cal-event-form__btn--cancel"
-                  onClick={() => setDeleteConfirm(null)}
-                >
-                  Cancel
-                </button>
-                <button
-                  className="cal-event-form__btn cal-event-form__btn--delete"
-                  onClick={handleDeleteConfirm}
-                  disabled={deleting}
-                >
-                  {deleting ? 'Deleting…' : 'Delete Event'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </>
+        <DeleteConfirmDialog
+          summary={deleteConfirm.summary}
+          error={deleteError}
+          deleting={deleting}
+          onCancel={() => setDeleteConfirm(null)}
+          onConfirm={handleDeleteConfirm}
+        />
       )}
     </>
   )
@@ -919,6 +924,62 @@ function CalendarRow({
   )
 }
 
+function DeleteConfirmDialog({
+  summary,
+  error,
+  deleting,
+  onCancel,
+  onConfirm,
+}: {
+  summary: string
+  error: string | null
+  deleting: boolean
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useModalA11y(dialogRef, onCancel)
+
+  return (
+    <>
+      <div className="cal-event-modal-backdrop" onClick={onCancel} aria-hidden="true" />
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        className="cal-event-modal cal-delete-dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-label="Confirm event deletion"
+      >
+        <div className="cal-event-modal__header">
+          <h3 className="cal-event-modal__title">Delete Event?</h3>
+          <button className="cal-event-modal__close" onClick={onCancel} aria-label="Cancel">✕</button>
+        </div>
+        <div style={{ padding: '16px 20px' }}>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0 0 16px' }}>
+            Are you sure you want to delete <strong style={{ color: 'var(--text-primary)' }}>&quot;{summary}&quot;</strong>? This cannot be undone.
+          </p>
+          {error && (
+            <div className="cal-event-form__error" role="alert">{error}</div>
+          )}
+          <div className="cal-event-form__actions">
+            <button className="cal-event-form__btn cal-event-form__btn--cancel" onClick={onCancel}>
+              Cancel
+            </button>
+            <button
+              className="cal-event-form__btn cal-event-form__btn--delete"
+              onClick={onConfirm}
+              disabled={deleting}
+            >
+              {deleting ? 'Deleting…' : 'Delete Event'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </>
+  )
+}
+
 /* ══════════════════════════════════════════════════════════════════════════════
    DOCUMENTS SECTION
    ══════════════════════════════════════════════════════════════════════════════ */
@@ -976,12 +1037,22 @@ function DocumentsSectionBody({ isOpen, onInjectChat }: { isOpen: boolean; onInj
   return (
     <>
       {/* Filter tabs */}
-      <div className="doc-filter-tabs" role="tablist" aria-label="Document filters">
+      <div
+        className="doc-filter-tabs"
+        role="tablist"
+        aria-label="Document filters"
+        onKeyDown={(e) =>
+          handleRovingKeydown(e, '[role="tab"]', (i) => setActiveFilter(DOC_FILTERS[i].key))
+        }
+      >
         {DOC_FILTERS.map((f) => (
           <button
             key={f.key}
+            id={`doc-tab-${f.key}`}
             role="tab"
             aria-selected={activeFilter === f.key}
+            aria-controls="doc-tabpanel"
+            tabIndex={activeFilter === f.key ? 0 : -1}
             className={`feed-filter-btn${activeFilter === f.key ? ' active' : ''}`}
             onClick={() => setActiveFilter(f.key)}
           >
@@ -990,7 +1061,13 @@ function DocumentsSectionBody({ isOpen, onInjectChat }: { isOpen: boolean; onInj
         ))}
       </div>
 
-      {/* Artifacts tab content */}
+      {/* Tab panel */}
+      <div
+        id="doc-tabpanel"
+        role="tabpanel"
+        aria-labelledby={`doc-tab-${activeFilter}`}
+        tabIndex={0}
+      >
       {activeFilter === 'artifacts' ? (
         artifactsState ? (
           artifactsState
@@ -999,26 +1076,26 @@ function DocumentsSectionBody({ isOpen, onInjectChat }: { isOpen: boolean; onInj
         ) : (
           <div role="list" aria-label="Saved tool artifacts">
             {artifactsData.artifacts.map((artifact) => (
-              <button
-                key={artifact.id}
-                role="listitem"
-                onClick={() => {
-                  const { message, attachment } = buildArtifactInject(artifact)
-                  onInjectChat(message, [attachment])
-                }}
-                aria-label={`Artifact: ${artifact.title}`}
-                className="section-row"
-              >
-                <span aria-hidden="true" className="document-icon">
-                  {getToolIcon(artifact.toolId)}
-                </span>
-                <div className="document-info">
-                  <div className="document-name">{artifact.title}</div>
-                  <div className="document-modified">
-                    {artifact.toolId} · {formatShortDate(artifact.createdAt)}
+              <div role="listitem" key={artifact.id}>
+                <button
+                  onClick={() => {
+                    const { message, attachment } = buildArtifactInject(artifact)
+                    onInjectChat(message, [attachment])
+                  }}
+                  aria-label={`Artifact: ${artifact.title}`}
+                  className="section-row"
+                >
+                  <span aria-hidden="true" className="document-icon">
+                    {getToolIcon(artifact.toolId)}
+                  </span>
+                  <div className="document-info">
+                    <div className="document-name">{artifact.title}</div>
+                    <div className="document-modified">
+                      {artifact.toolId} · {formatShortDate(artifact.createdAt)}
+                    </div>
                   </div>
-                </div>
-              </button>
+                </button>
+              </div>
             ))}
           </div>
         )
@@ -1047,6 +1124,7 @@ function DocumentsSectionBody({ isOpen, onInjectChat }: { isOpen: boolean; onInj
           )}
         </>
       )}
+      </div>
     </>
   )
 }
@@ -1058,27 +1136,28 @@ const DocumentRow = memo(function DocumentRow(
   const modified = formatRelativeDate(file.modifiedTime)
 
   return (
-    <button
-      role="listitem"
-      onClick={onClick}
-      aria-label={`Document: ${file.name}, modified ${modified}`}
-      className="section-row"
-    >
-      {/* File type icon */}
-      <span aria-hidden="true" className="document-icon">
-        {icon}
-      </span>
+    <div role="listitem">
+      <button
+        onClick={onClick}
+        aria-label={`Document: ${file.name}, modified ${modified}`}
+        className="section-row"
+      >
+        {/* File type icon */}
+        <span aria-hidden="true" className="document-icon">
+          {icon}
+        </span>
 
-      {/* File info */}
-      <div className="document-info">
-        <div className="document-name">
-          {file.name}
+        {/* File info */}
+        <div className="document-info">
+          <div className="document-name">
+            {file.name}
+          </div>
+          <div className="document-modified">
+            {modified}
+          </div>
         </div>
-        <div className="document-modified">
-          {modified}
-        </div>
-      </div>
-    </button>
+      </button>
+    </div>
   )
 })
 
@@ -1138,14 +1217,14 @@ function KPISectionImpl({
               <div className="kpi-label">
                 {kpi.label}
               </div>
-              <div className="kpi-value">
+              <div className="kpi-value" aria-hidden="true">
                 <AnimatedNumber value={String(kpi.value)} delay={i * 120} />
               </div>
               <div
                 className={`kpi-trend ${trendClass}`}
-                aria-label={`Trend: ${kpi.trendDirection} ${kpi.trend}`}
+                aria-hidden="true"
               >
-                <span aria-hidden="true" className="rx-star">✦</span> {kpi.trend}
+                <span className="rx-star">✦</span> {kpi.trend}
               </div>
             </button>
           )
@@ -1277,4 +1356,30 @@ function getDriveIcon(mimeType: string): string {
   if (mimeType.includes('folder')) return '📁'
   if (mimeType.includes('form')) return '📋'
   return '📄'
+}
+
+/**
+ * Roving keyboard navigation for a horizontal composite widget (tablist / listbox).
+ * Wire to the container's onKeyDown. `optionSelector` targets the option elements.
+ * Moves focus with ArrowLeft/Right + Home/End and calls onSelect with the new index.
+ */
+function handleRovingKeydown(
+  e: React.KeyboardEvent<HTMLElement>,
+  optionSelector: string,
+  onSelect: (index: number) => void,
+) {
+  const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End']
+  if (!keys.includes(e.key)) return
+  const container = e.currentTarget
+  const options = Array.from(container.querySelectorAll<HTMLElement>(optionSelector))
+  if (options.length === 0) return
+  const current = options.indexOf(document.activeElement as HTMLElement)
+  let next = current
+  if (e.key === 'ArrowRight') next = current < 0 ? 0 : (current + 1) % options.length
+  else if (e.key === 'ArrowLeft') next = current <= 0 ? options.length - 1 : current - 1
+  else if (e.key === 'Home') next = 0
+  else if (e.key === 'End') next = options.length - 1
+  e.preventDefault()
+  options[next]?.focus()
+  onSelect(next)
 }
