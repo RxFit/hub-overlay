@@ -1,0 +1,68 @@
+import { NextResponse } from 'next/server'
+import { getToken } from 'next-auth/jwt'
+import type { NextRequest } from 'next/server'
+import { getSpaceReadState, listChatMessages } from '@/lib/google'
+
+export const runtime = 'nodejs'
+
+/**
+ * GET /api/google/chat/unread?spaceIds=spaces/A,spaces/B
+ *
+ * Batched unread-count endpoint (Plan 05 / Change 5). Collapses what used to be
+ * a client-side `setInterval` fan-out (N readstate + N messages fetches per
+ * tick, bypassing SWR) into a single request. For each requested space it
+ * compares the user's `lastReadTime` against the latest messages and returns:
+ *
+ *   { unread: Record<spaceId, number>, total: number }
+ *
+ * Per-space failures degrade silently (count 0) so one bad space never blanks
+ * the badge. Concurrency is throttled to stay under Google API rate limits.
+ */
+export async function GET(req: NextRequest) {
+  const token = await getToken({ req })
+  if (!token?.accessToken) {
+    return NextResponse.json({ error: 'Unauthorized', code: 'NO_TOKEN' }, { status: 401 })
+  }
+
+  const accessToken = token.accessToken as string
+  const raw = req.nextUrl.searchParams.get('spaceIds') ?? ''
+  const spaceIds = raw.split(',').map(s => s.trim()).filter(Boolean)
+
+  if (spaceIds.length === 0) {
+    return NextResponse.json({ unread: {}, total: 0 })
+  }
+
+  const unread: Record<string, number> = {}
+  let total = 0
+  const MAX_CONCURRENT = 5
+
+  try {
+    for (let i = 0; i < spaceIds.length; i += MAX_CONCURRENT) {
+      const batch = spaceIds.slice(i, i + MAX_CONCURRENT)
+      await Promise.all(
+        batch.map(async (spaceId) => {
+          try {
+            const readState = await getSpaceReadState(accessToken, spaceId)
+            if (!readState.lastReadTime) return
+
+            const messages = await listChatMessages(accessToken, spaceId, 50)
+            const lastRead = new Date(readState.lastReadTime).getTime()
+            const count = messages.filter(
+              m => new Date(m.createTime).getTime() > lastRead
+            ).length
+
+            unread[spaceId] = count
+            total += count
+          } catch {
+            // Individual space failure (e.g. missing read-state scope) — skip.
+          }
+        })
+      )
+    }
+
+    return NextResponse.json({ unread, total })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to compute unread counts'
+    return NextResponse.json({ error: message }, { status: 500 })
+  }
+}

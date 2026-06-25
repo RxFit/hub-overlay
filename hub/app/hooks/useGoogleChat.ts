@@ -1,7 +1,7 @@
 'use client'
 
 import useSWR, { useSWRConfig } from 'swr'
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback } from 'react'
 
 /* ── Shared fetcher (reuses the same error contract as useHubData) ── */
 
@@ -215,83 +215,42 @@ export function useSpaceMembers(spaceId: string | null) {
    useUnreadCounts — for badge computation
    ══════════════════════════════════════════ */
 
-interface ReadStateResponse {
-  spaceId: string
-  lastReadTime: string | null
-  code?: string
+interface UnreadResponse {
+  unread: Record<string, number>
+  total: number
 }
 
 /**
- * Computes unread counts by comparing SpaceReadState.lastReadTime
- * against the latest messages for each visible space.
- * Polls every 60s (slower than messages to stay under rate limits).
+ * Builds the single SWR key for the batched unread endpoint from a space set.
+ * Exported for unit testing — asserts the hook derives all of its data from one
+ * stable, deduped key (Plan 05 / Change 5) instead of a per-space fan-out.
+ * Returns `null` (SWR's "skip" sentinel) when there are no spaces.
+ */
+export function buildUnreadKey(spaces: ChatSpace[]): string | null {
+  const spaceIds = spaces.map(s => s.name).sort()
+  return spaceIds.length
+    ? `/api/google/chat/unread?spaceIds=${encodeURIComponent(spaceIds.join(','))}`
+    : null
+}
+
+/**
+ * Computes unread counts via a single batched SWR subscription against
+ * `/api/google/chat/unread`. The server compares each space's lastReadTime
+ * against its latest messages. Polls every 60s (slower than messages, deduped
+ * within 30s) and reuses SWR's cache — no raw setInterval, no duplicate
+ * message fetches, and no stale-closure footgun on the spaces array.
  */
 export function useUnreadCounts(spaces: ChatSpace[]) {
-  const spaceIds = spaces.map(s => s.name).sort().join(',')
+  const key = buildUnreadKey(spaces)
 
-  const [unreadMap, setUnreadMap] = useState<Map<string, number>>(new Map())
-  const [totalUnread, setTotalUnread] = useState(0)
+  const { data } = useSWR<UnreadResponse>(
+    key,
+    fetcher,
+    { refreshInterval: 60_000, revalidateOnFocus: false, dedupingInterval: 30_000 }
+  )
 
-  useEffect(() => {
-    if (spaces.length === 0) return
-
-    let cancelled = false
-    const MAX_CONCURRENT = 5 // Throttle to avoid Google API rate limits
-
-    async function computeUnreads() {
-      const map = new Map<string, number>()
-      let total = 0
-
-      // Process spaces in batches of MAX_CONCURRENT
-      for (let i = 0; i < spaces.length; i += MAX_CONCURRENT) {
-        if (cancelled) return
-        const batch = spaces.slice(i, i + MAX_CONCURRENT)
-
-        await Promise.all(
-          batch.map(async (space) => {
-            try {
-              const rsRes = await fetch(
-                `/api/google/chat/readstate?spaceId=${encodeURIComponent(space.name)}`
-              )
-              if (!rsRes.ok) return
-              const rs: ReadStateResponse = await rsRes.json()
-
-              if (!rs.lastReadTime) return
-
-              const msgRes = await fetch(
-                `/api/google/chat/messages?spaceId=${encodeURIComponent(space.name)}&pageSize=50`
-              )
-              if (!msgRes.ok) return
-              const msgData: { messages: ChatMessage[] } = await msgRes.json()
-
-              const lastRead = new Date(rs.lastReadTime).getTime()
-              const unread = (msgData.messages ?? []).filter(
-                m => new Date(m.createTime).getTime() > lastRead
-              ).length
-
-              map.set(space.name, unread)
-              total += unread
-            } catch {
-              // Individual space failure — skip silently
-            }
-          })
-        )
-      }
-
-      if (!cancelled) {
-        setUnreadMap(map)
-        setTotalUnread(total)
-      }
-    }
-
-    computeUnreads()
-    const interval = setInterval(computeUnreads, 60_000)
-
-    return () => {
-      cancelled = true
-      clearInterval(interval)
-    }
-  }, [spaceIds])
+  const unreadMap = new Map<string, number>(Object.entries(data?.unread ?? {}))
+  const totalUnread = data?.total ?? 0
 
   return { unreadMap, totalUnread }
 }

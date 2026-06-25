@@ -5,7 +5,6 @@ import { signIn } from 'next-auth/react'
 import { useTasks, useCalendar, useDrive } from '@/app/hooks/useHubData'
 import { writeFetch } from '@/app/hooks/useWriteFetch'
 import type { TaskItem, CalendarEvent, DriveFile } from '@/app/hooks/useHubData'
-import { useKPIData } from '@/app/hooks/useKPIData'
 import type { LiveKPI, ProjectKPI, ToolArtifactRecord, ChatAttachment } from '@/types'
 import { AnimatedNumber } from './AnimatedNumber'
 import {
@@ -139,6 +138,15 @@ function renderSectionState({
    COLLAPSIBLE SECTION — reusable wrapper with animated open/close
    ══════════════════════════════════════════════════════════════════════════════ */
 
+/**
+ * Children may be a plain node or a render-prop `(isOpen) => node`. The
+ * render-prop form lets a section's data hook gate its polling on open-state
+ * (see Plan 05): the hook still runs unconditionally inside the child body, but
+ * its `refreshInterval` is set to 0 while collapsed so an invisible section
+ * stops spending quota.
+ */
+type CollapsibleChild = ReactNode | ((isOpen: boolean) => ReactNode)
+
 export function CollapsibleSection({
   title,
   protocolNum,
@@ -148,9 +156,10 @@ export function CollapsibleSection({
   title: string
   protocolNum: string
   defaultOpen?: boolean
-  children: ReactNode
+  children: CollapsibleChild
 }) {
   const [isOpen, setIsOpen] = useState(defaultOpen)
+  const body = typeof children === 'function' ? children(isOpen) : children
 
   return (
     <section aria-label={title}>
@@ -189,7 +198,7 @@ export function CollapsibleSection({
         aria-label={title}
         className={`collapsible-body ${isOpen ? 'collapsible-body--open' : 'collapsible-body--closed'}`}
       >
-        {children}
+        {body}
       </div>
     </section>
   )
@@ -200,7 +209,15 @@ export function CollapsibleSection({
    ══════════════════════════════════════════════════════════════════════════════ */
 
 export function TasksSection({ onInjectChat }: { onInjectChat: (msg: string) => void }) {
-  const { taskLists, tasksByList, isLoading, error, mutate } = useTasks()
+  return (
+    <CollapsibleSection title="Tasks" protocolNum="03" defaultOpen>
+      {(isOpen) => <TasksSectionBody isOpen={isOpen} onInjectChat={onInjectChat} />}
+    </CollapsibleSection>
+  )
+}
+
+function TasksSectionBody({ isOpen, onInjectChat }: { isOpen: boolean; onInjectChat: (msg: string) => void }) {
+  const { taskLists, tasksByList, isLoading, error, mutate } = useTasks(isOpen)
   const [activeListId, setActiveListId] = useState<string | null>(null)
 
   // Auto-select first list once loaded
@@ -224,11 +241,7 @@ export function TasksSection({ onInjectChat }: { onInjectChat: (msg: string) => 
 
   const state = renderSectionState({ isLoading, error, skeletonLines: 4 })
   if (state) {
-    return (
-      <CollapsibleSection title="Tasks" protocolNum="03" defaultOpen>
-        {state}
-      </CollapsibleSection>
-    )
+    return <>{state}</>
   }
 
   const currentTasks = resolvedListId ? (tasksByList[resolvedListId] ?? []) : []
@@ -269,7 +282,7 @@ export function TasksSection({ onInjectChat }: { onInjectChat: (msg: string) => 
   const activeListName = taskLists.find(l => l.id === resolvedListId)?.title ?? 'Tasks'
 
   return (
-    <CollapsibleSection title="Tasks" protocolNum="03" defaultOpen>
+    <>
       {/* List tab strip */}
       {taskLists.length > 1 && (
         <div className="doc-filter-tabs" role="tablist" aria-label="Task lists" style={{ marginBottom: '6px' }}>
@@ -315,7 +328,7 @@ export function TasksSection({ onInjectChat }: { onInjectChat: (msg: string) => 
       >
         + Task
       </button>
-    </CollapsibleSection>
+    </>
   )
 }
 
@@ -582,7 +595,15 @@ function CalendarEventModal({ defaultDate, onClose, onCreated }: CalendarEventMo
    ══════════════════════════════════════════════════════════════════════════════ */
 
 export function CalendarSection({ onInjectChat }: { onInjectChat: (msg: string) => void }) {
-  const { events, isLoading, error, mutate } = useCalendar()
+  return (
+    <CollapsibleSection title="Calendar" protocolNum="02" defaultOpen>
+      {(isOpen) => <CalendarSectionBody isOpen={isOpen} onInjectChat={onInjectChat} />}
+    </CollapsibleSection>
+  )
+}
+
+function CalendarSectionBody({ isOpen, onInjectChat }: { isOpen: boolean; onInjectChat: (msg: string) => void }) {
+  const { events, isLoading, error, mutate } = useCalendar(isOpen)
   const [selectedDate, setSelectedDate] = useState<Date>(() => new Date())
   const [weekStart, setWeekStart] = useState<Date>(() => getMonday(new Date()))
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -592,11 +613,7 @@ export function CalendarSection({ onInjectChat }: { onInjectChat: (msg: string) 
 
   const state = renderSectionState({ isLoading, error, skeletonLines: 3 })
   if (state) {
-    return (
-      <CollapsibleSection title="Calendar" protocolNum="02" defaultOpen>
-        {state}
-      </CollapsibleSection>
-    )
+    return <>{state}</>
   }
 
   // Build the 7 days of the current week
@@ -653,7 +670,6 @@ export function CalendarSection({ onInjectChat }: { onInjectChat: (msg: string) 
 
   return (
     <>
-      <CollapsibleSection title="Calendar" protocolNum="02" defaultOpen>
         {/* Create event button in section body */}
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '4px' }}>
           <button
@@ -750,7 +766,6 @@ export function CalendarSection({ onInjectChat }: { onInjectChat: (msg: string) 
             </div>
           )}
         </div>
-      </CollapsibleSection>
 
       {/* Create Event Modal */}
       {showCreateModal && (
@@ -895,9 +910,17 @@ const DOC_FILTERS: { key: DocFilter; label: string }[] = [
 ]
 
 export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void }) {
+  return (
+    <CollapsibleSection title="Documents" protocolNum="04" defaultOpen={false}>
+      {(isOpen) => <DocumentsSectionBody isOpen={isOpen} onInjectChat={onInjectChat} />}
+    </CollapsibleSection>
+  )
+}
+
+function DocumentsSectionBody({ isOpen, onInjectChat }: { isOpen: boolean; onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void }) {
   const [activeFilter, setActiveFilter] = useState<DocFilter>('recent')
   const isArtifactsTab = activeFilter === 'artifacts'
-  const { files, isLoading, error, mutate } = useDrive(activeFilter, !isArtifactsTab)
+  const { files, isLoading, error, mutate } = useDrive(activeFilter, !isArtifactsTab, isOpen)
 
   /* Fetch tool artifacts when artifacts tab is active */
   const { data: artifactsData, isLoading: artifactsLoading, error: artifactsError } = useSWR<{ artifacts: ToolArtifactRecord[] }>(
@@ -917,7 +940,7 @@ export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string,
   const driveState = renderSectionState({ isLoading, error, skeletonLines: 3, onRetry: () => mutate?.() })
 
   return (
-    <CollapsibleSection title="Documents" protocolNum="04" defaultOpen={false}>
+    <>
       {/* Filter tabs */}
       <div className="doc-filter-tabs" role="tablist" aria-label="Document filters">
         {DOC_FILTERS.map((f) => (
@@ -990,7 +1013,7 @@ export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string,
           )}
         </>
       )}
-    </CollapsibleSection>
+    </>
   )
 }
 
@@ -1030,19 +1053,19 @@ const DocumentRow = memo(function DocumentRow(
    ══════════════════════════════════════════════════════════════════════════════ */
 
 export function KPISection({
-  activeProject,
+  kpis: allKpis,
+  isLoading,
   onInjectChat,
 }: {
-  activeProject?: string
+  kpis: LiveKPI[]
+  isLoading: boolean
   onInjectChat: (msg: string) => void
 }) {
-  const { kpis: allKpis, isLoading, error } = useKPIData(activeProject)
-
   // Mandate: Left Panel = Google ecosystem + business metrics only.
   // Paperclip orchestration metrics belong on the Right Panel.
   const kpis = allKpis.filter(kpi => kpi.source !== 'paperclip')
 
-  const state = renderSectionState({ isLoading, error, skeletonLines: 4 })
+  const state = renderSectionState({ isLoading, skeletonLines: 4 })
   if (state) {
     return (
       <CollapsibleSection title="KPIs" protocolNum="01" defaultOpen>

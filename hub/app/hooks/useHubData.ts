@@ -105,9 +105,13 @@ interface TasksResponse {
 /**
  * Fetch all tasks from the user's default task list.
  * First fetches task lists, then fetches tasks from the first list.
- * Refreshes every 30 seconds.
+ *
+ * Task lists change rarely, so the list set is polled slowly (5 min); the
+ * per-list aggregate fan-out polls at 60s. Both are gated on `isOpen` so a
+ * collapsed section stops polling entirely (the SWR key stays stable, so
+ * cached data renders instantly on re-open).
  */
-export function useTasks() {
+export function useTasks(isOpen: boolean = true) {
   // Step 1: fetch all task lists
   const {
     data: listData,
@@ -115,7 +119,7 @@ export function useTasks() {
   } = useSWR<TasksResponse>(
     '/api/google/tasks',
     fetcher,
-    { refreshInterval: 30_000, revalidateOnFocus: false }
+    { refreshInterval: isOpen ? 300_000 : 0, revalidateOnFocus: false, dedupingInterval: 30_000 }
   )
 
   const taskLists = listData?.taskLists ?? []
@@ -135,7 +139,7 @@ export function useTasks() {
   } = useSWR<Record<string, TaskItem[]>>(
     allListsKey,
     () => fetchTasksByList(listIds),
-    { refreshInterval: 30_000, revalidateOnFocus: false }
+    { refreshInterval: isOpen ? 60_000 : 0, revalidateOnFocus: false, dedupingInterval: 30_000 }
   )
 
   const isLoading = !listData && !listError
@@ -174,14 +178,15 @@ interface CalendarResponse {
 }
 
 /**
- * Fetch upcoming calendar events. Refreshes every 60 seconds.
+ * Fetch upcoming calendar events. Refreshes every 60 seconds while open;
+ * gated to 0 (no polling) when the section is collapsed.
  */
-export function useCalendar() {
+export function useCalendar(isOpen: boolean = true) {
   // Request up to 100 events covering 30 days from today (server sets timeMin=today, timeMax=+30d)
   const { data, error, isLoading, mutate } = useSWR<CalendarResponse>(
     '/api/google/calendar?maxResults=100',
     fetcher,
-    { refreshInterval: 60_000, revalidateOnFocus: false }
+    { refreshInterval: isOpen ? 60_000 : 0, revalidateOnFocus: false, dedupingInterval: 30_000 }
   )
 
   return {
@@ -216,12 +221,12 @@ interface DriveResponse {
  * Filters: 'recent' (default), 'shared', 'transcripts'.
  * Refreshes every 120 seconds.
  */
-export function useDrive(filter?: string, enabled: boolean = true) {
+export function useDrive(filter?: string, enabled: boolean = true, isOpen: boolean = true) {
   const filterParam = filter || 'recent'
   const { data, error, isLoading, mutate } = useSWR<DriveResponse>(
     enabled ? `/api/google/drive?filter=${filterParam}` : null,
     fetcher,
-    { refreshInterval: 120_000, revalidateOnFocus: false }
+    { refreshInterval: isOpen ? 120_000 : 0, revalidateOnFocus: false, dedupingInterval: 30_000 }
   )
 
   return {

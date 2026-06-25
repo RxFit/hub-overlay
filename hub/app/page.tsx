@@ -70,7 +70,7 @@ const ONBOARDING_SUGGESTIONS = [
 // AnimatedNumber is now imported from @/app/components/AnimatedNumber
 
 /* ── Left Panel: Context Layer ── */
-function LeftPanel({ isOpen, onClose, onInjectChat, panelRef, style, activeProject, workspaceName }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void; panelRef?: React.Ref<HTMLElement>; style?: React.CSSProperties; activeProject?: string; workspaceName?: string }) {
+function LeftPanel({ isOpen, onClose, onInjectChat, panelRef, style, activeProject, workspaceName, kpis, kpiLoading }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void; panelRef?: React.Ref<HTMLElement>; style?: React.CSSProperties; activeProject?: string; workspaceName?: string; kpis?: import('@/types').LiveKPI[]; kpiLoading?: boolean }) {
   const tenant = useTenant()
   return (
     <aside ref={panelRef} className={`panel-left ${isOpen ? 'mobile-open' : ''}`} aria-label="Context Layer" style={style}>
@@ -86,7 +86,7 @@ function LeftPanel({ isOpen, onClose, onInjectChat, panelRef, style, activeProje
       </div>
 
       <div className="panel-content">
-        <KPISection activeProject={activeProject} onInjectChat={onInjectChat} />
+        <KPISection kpis={kpis ?? []} isLoading={!!kpiLoading} onInjectChat={onInjectChat} />
         <CalendarSection onInjectChat={onInjectChat} />
         <TasksSection onInjectChat={onInjectChat} />
         <DocumentsSection onInjectChat={onInjectChat} />
@@ -223,7 +223,7 @@ export default function HubPage() {
   const { data: session } = useSession()
   const router = useRouter()
   const [activeProject, setActiveProject] = useState('all')
-  const { projects, isLoading: kpiLoading } = useKPIData(activeProject)
+  const { projects, kpis, isLoading: kpiLoading } = useKPIData(activeProject)
   const { companies: allCompanies } = useCompanies()
 
   // Resolve the active workspace company for issue creation and deep links
@@ -1119,7 +1119,7 @@ Respond with EXACTLY one of:
       </div>
 
       <div className="panels-container">
-        <LeftPanel isOpen={mobileLeftOpen} onClose={handleClosePanels} onInjectChat={injectRecall} panelRef={leftPanelRef} activeProject={activeProject} workspaceName={projects?.[0]?.companyName} />
+        <LeftPanel isOpen={mobileLeftOpen} onClose={handleClosePanels} onInjectChat={injectRecall} panelRef={leftPanelRef} activeProject={activeProject} workspaceName={projects?.[0]?.companyName} kpis={kpis} kpiLoading={kpiLoading} />
 
         {/* ── Center Panel: AI Chat (inlined for shared state) ── */}
         <main className="panel-center" aria-label="AI Chat">
