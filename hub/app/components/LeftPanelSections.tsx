@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef, ReactNode, useCallback, useMemo, memo, Component } from 'react'
+import { useState, useEffect, useRef, ReactNode, useMemo, memo, Component } from 'react'
 import type { ErrorInfo } from 'react'
 import { useModalA11y } from '@/app/hooks/useModalA11y'
 import { signIn } from 'next-auth/react'
@@ -271,13 +271,15 @@ function TasksSectionBody({ isOpen, onInjectChat, onInjectAction }: { isOpen: bo
     setTogglingIds(new Set())
   }, [resolvedListId])
 
+  const visibleTasks = useMemo(() => {
+    const current = resolvedListId ? (tasksByList[resolvedListId] ?? []) : []
+    return current.filter(t => !hiddenIds.has(t.id))
+  }, [resolvedListId, tasksByList, hiddenIds])
+
   const state = renderSectionState({ isLoading, error, skeletonLines: 4 })
   if (state) {
     return <>{state}</>
   }
-
-  const currentTasks = resolvedListId ? (tasksByList[resolvedListId] ?? []) : []
-  const visibleTasks = currentTasks.filter(t => !hiddenIds.has(t.id))
 
   async function handleToggleTask(task: TaskItem, listId: string) {
     if (togglingIds.has(task.id)) return
@@ -368,14 +370,16 @@ function TasksSectionBody({ isOpen, onInjectChat, onInjectAction }: { isOpen: bo
         )}
       </div>
 
-      {/* FAB: open AI chat to create a task */}
+      {/* Injects a chat prompt — it does NOT create the task inline. Label it
+          honestly so users don't expect an inline form. A real inline-create
+          flow (action:'create' + createTask) is deferred — see plan note. */}
       <button
         className="tasks-fab"
-        onClick={() => onInjectAction(`I want to create a new task in my ${activeListName} list`)}
-        aria-label={`Create task in ${activeListName}`}
-        title={`Create task in ${activeListName}`}
+        onClick={() => onInjectAction(`Add a task to my ${activeListName} list: `)}
+        aria-label={`Ask AI to add a task to ${activeListName}`}
+        title={`Ask AI to add a task to ${activeListName}`}
       >
-        + Task
+        Ask AI to add a task
       </button>
     </>
   )
