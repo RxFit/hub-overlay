@@ -643,8 +643,13 @@ export default function HubPage() {
       } else if (status === 401) {
         content = "Your session expired. Please sign in again to continue."
       } else {
-        // 5xx / network / unknown — generic to the user, details already logged above.
-        content = "Something went wrong on my end. Give it another try in a moment."
+        // 5xx / network / unknown. TEMP DIAGNOSTIC: surface the server-provided
+        // `details` (or the HTTP status) in the bubble so the failure cause is
+        // visible in prod without digging logs. Remove once the issue is resolved.
+        const diag = detail
+          ? `\n\n\`${detail}\``
+          : (status ? `\n\n\`HTTP ${status}\`` : '\n\n`no response (network/timeout)`')
+        content = `Something went wrong on my end. Give it another try in a moment.${diag}`
       }
 
       setMessages(prev => [...prev, {
