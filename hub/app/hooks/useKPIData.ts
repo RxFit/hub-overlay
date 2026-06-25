@@ -22,15 +22,15 @@ interface KPIDataResponse {
  * Fetch aggregated KPI data and Project Health scores from the Hub backend.
  * Uses Paperclip as the primary source of truth for operational metrics.
  */
-export function useKPIData(companyId?: string | null) {
+export function useKPIData(companyId?: string | null, isOpen: boolean = true) {
   const key = companyId && companyId !== 'all'
     ? `/api/kpis?companyId=${encodeURIComponent(companyId)}`
     : '/api/kpis'
-  
+
   const { data, error, isLoading, mutate } = useSWR<KPIDataResponse>(
     key,
     fetcher,
-    { refreshInterval: 60_000, revalidateOnFocus: true }
+    { refreshInterval: isOpen ? 60_000 : 0, revalidateOnFocus: false, dedupingInterval: 30_000 }
   )
 
   return {

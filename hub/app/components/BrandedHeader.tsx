@@ -31,7 +31,14 @@ export function BrandedHeader({
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
-  // Live data — both scoped server-side by role
+  // Live data — both scoped server-side by role.
+  //
+  // Plan 05 / Change 4: the project SELECTOR here needs `Project`-shaped fields
+  // (`id`, `name`, `status`, grouped by `companyName`) that the lifted
+  // `useKPIData().projects` (`ProjectKPI[]`) does not carry, so `useProjects()`
+  // is kept rather than folded into the single KPI subscription. This residual
+  // `/api/projects` ↔ `/api/kpis` overlap is ACCEPTED for now; both share the
+  // `dedupingInterval:30_000` convention to keep redundant fetches collapsed.
   const { companies, isLoading: companiesLoading } = useCompanies()
   const { projects, isLoading: projectsLoading } = useProjects()
 
