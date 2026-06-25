@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth'
 import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
 import { clampInt } from '@/lib/num'
 import { listRecentFiles } from '@/lib/google'
+import { getTenantConfig } from '@/lib/tenant'
 
 export const runtime = 'nodejs'
 
@@ -15,16 +16,27 @@ const VIDEO_EXCLUSIONS = [
   "mimeType != 'video/webm'",
 ].join(' and ')
 
-/** Build the Drive query string based on filter type */
-function buildDriveQuery(filter: string | null, customQ?: string): string | undefined {
+/** Result of building a Drive query.
+ *  - { query }            → run this query
+ *  - { empty: true }      → return an empty file list without calling Drive */
+type DriveQueryPlan = { query?: string; empty?: boolean }
+
+/** Build the Drive query plan based on filter type and the active tenant. */
+function buildDriveQuery(
+  filter: string | null,
+  customQ: string | undefined,
+  transcriptsFolderId: string | undefined,
+): DriveQueryPlan {
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
 
   switch (filter) {
     case 'shared':
-      return `sharedWithMe = true and modifiedTime > '${sevenDaysAgo}' and ${VIDEO_EXCLUSIONS}`
+      return { query: `sharedWithMe = true and modifiedTime > '${sevenDaysAgo}' and ${VIDEO_EXCLUSIONS}` }
 
     case 'transcripts':
-      return `'1PQ47SWRWn-A1dToniwglJy9uqEwZSVwA' in parents`
+      // Per-tenant folder; no hardcoded id. Unconfigured → empty (no cross-tenant leak).
+      if (!transcriptsFolderId) return { empty: true }
+      return { query: `'${transcriptsFolderId}' in parents and ${VIDEO_EXCLUSIONS}` }
 
     case 'recent':
     default: {
@@ -32,7 +44,7 @@ function buildDriveQuery(filter: string | null, customQ?: string): string | unde
       const base = customQ
         ? `${customQ} and ${VIDEO_EXCLUSIONS}`
         : `modifiedTime > '${sevenDaysAgo}' and ${VIDEO_EXCLUSIONS}`
-      return base
+      return { query: base }
     }
   }
 }
@@ -52,12 +64,21 @@ export async function GET(req: NextRequest) {
   const filter = searchParams.get('filter')
   const customQ = searchParams.get('q') ?? undefined
 
-  const query = buildDriveQuery(filter, customQ)
+  // Per-tenant transcripts folder: env override wins, then tenant config. No hardcoded id.
+  const transcriptsFolderId =
+    process.env.DRIVE_TRANSCRIPTS_FOLDER_ID || getTenantConfig().transcriptsFolderId
+
+  const plan = buildDriveQuery(filter, customQ, transcriptsFolderId)
+
+  // Transcripts requested but no folder configured for this tenant → clean empty result.
+  if (plan.empty) {
+    return NextResponse.json({ files: [] })
+  }
 
   try {
     const files = await listRecentFiles(accessToken, {
       maxResults: clampInt(maxResults, 15, 1, 100),
-      query,
+      query: plan.query,
     })
     return NextResponse.json({ files })
   } catch (error) {

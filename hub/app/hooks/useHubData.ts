@@ -216,10 +216,10 @@ interface DriveResponse {
  * Filters: 'recent' (default), 'shared', 'transcripts'.
  * Refreshes every 120 seconds.
  */
-export function useDrive(filter?: string) {
+export function useDrive(filter?: string, enabled: boolean = true) {
   const filterParam = filter || 'recent'
-  const { data, error, isLoading } = useSWR<DriveResponse>(
-    `/api/google/drive?filter=${filterParam}`,
+  const { data, error, isLoading, mutate } = useSWR<DriveResponse>(
+    enabled ? `/api/google/drive?filter=${filterParam}` : null,
     fetcher,
     { refreshInterval: 120_000, revalidateOnFocus: false }
   )
@@ -228,6 +228,7 @@ export function useDrive(filter?: string) {
     files: data?.files ?? [],
     isLoading,
     error,
+    mutate,
   }
 }
 

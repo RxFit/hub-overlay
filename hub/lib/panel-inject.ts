@@ -170,3 +170,28 @@ export function buildDocumentInject(
   }
   return { message, attachment }
 }
+
+export interface ArtifactInput {
+  id: string
+  toolId: string
+  title: string
+}
+
+/**
+ * Build the message + attachment for a tapped tool artifact. The attachment
+ * carries the real artifact id so the chat route resolves THIS artifact even
+ * when two share a toolId + title.
+ */
+export function buildArtifactInject(
+  artifact: ArtifactInput,
+): { message: string; attachment: ChatAttachment } {
+  const message = `Show me the ${artifact.toolId} artifact: ${artifact.title}`
+  const attachment: ChatAttachment = {
+    id: artifact.id,
+    type: 'text',
+    label: artifact.title,
+    // Embed the resolvable id so the chat route can fetch the artifact by id.
+    content: `[artifact:${artifact.id}] toolId=${artifact.toolId} title="${artifact.title}"`,
+  }
+  return { message, attachment }
+}
