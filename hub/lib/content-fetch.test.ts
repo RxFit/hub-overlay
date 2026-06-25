@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { isPrivateAddress } from '@/lib/content-fetch'
+import { describe, it, expect, vi } from 'vitest'
+import { isPrivateAddress, fetchDriveDocContent } from '@/lib/content-fetch'
 
 describe('isPrivateAddress (SSRF guard)', () => {
   it('blocks IPv4 loopback and private ranges', () => {
@@ -41,5 +41,22 @@ describe('isPrivateAddress (SSRF guard)', () => {
 
   it('allows a public IPv6 address', () => {
     expect(isPrivateAddress('2606:4700:4700::1111')).toBe(false)
+  })
+})
+
+describe('fetchDriveDocContent (F4 — abort timeout)', () => {
+  it('passes an AbortSignal to the Drive export fetch (F4)', async () => {
+    const fetchSpy = vi.fn((_input: RequestInfo | URL, _init?: RequestInit) =>
+      Promise.resolve(new Response('doc text', {
+        status: 200, headers: { 'content-type': 'text/plain' },
+      }))
+    )
+    vi.stubGlobal('fetch', fetchSpy)
+
+    await fetchDriveDocContent('tok', 'fileId', 'application/vnd.google-apps.document')
+
+    const init = fetchSpy.mock.calls[0][1]
+    expect(init?.signal).toBeInstanceOf(AbortSignal)
+    vi.unstubAllGlobals()
   })
 })

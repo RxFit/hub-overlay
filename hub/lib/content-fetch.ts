@@ -184,6 +184,7 @@ export async function fetchDriveDocContent(
         `${DRIVE_EXPORT_BASE}/${fileId}/export?mimeType=${encodeURIComponent(exportMime)}`,
         {
           headers: { Authorization: `Bearer ${accessToken}` },
+          signal: AbortSignal.timeout(10_000),
         }
       )
       if (!res.ok) {
@@ -197,6 +198,7 @@ export async function fetchDriveDocContent(
         `${DRIVE_EXPORT_BASE}/${fileId}?alt=media`,
         {
           headers: { Authorization: `Bearer ${accessToken}` },
+          signal: AbortSignal.timeout(10_000),
         }
       )
       if (!res.ok) {

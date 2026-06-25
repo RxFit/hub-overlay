@@ -155,7 +155,7 @@ async function runSearchPipeline(query: string, effectiveUseCase: string): Promi
   )
 }
 
-export async function POST(req: NextRequest) {
+async function handleChat(req: NextRequest): Promise<Response> {
   // Auth check
   const session = await getServerSession(authOptions)
   if (!session?.user) {
@@ -361,9 +361,14 @@ export async function POST(req: NextRequest) {
           // Datastore is env-configurable (P0-4); should become tenant-derived
           // with the per-tenant work (P0-3) rather than a single shared store.
           if (lastUserMsg) {
-            const vertexResults = await searchSemanticBrain(
-              `${lastUserMsg.content} ${att.label}`,
-              process.env.VERTEX_DATA_STORE_ID || 'rxfit-gdrive'
+            const vertexResults = await withTimeout(
+              searchSemanticBrain(
+                `${lastUserMsg.content} ${att.label}`,
+                process.env.VERTEX_DATA_STORE_ID || 'rxfit-gdrive'
+              ),
+              6_000,
+              null,
+              'attachment-vertex',
             )
             if (vertexResults && vertexResults.length > 0) {
               docText = vertexResults
@@ -378,8 +383,16 @@ export async function POST(req: NextRequest) {
             docText = await fetchDriveDocContent(accessToken, att.fileId, att.mimeType)
           }
 
+          if (!docText && !accessToken) {
+            log.warn({ label: att.label, fileId: att.fileId }, 'Document attachment unresolved: no Google access token')
+          }
+
+          const docFallback = !accessToken
+            ? '[Unable to retrieve document content: your Google session has no valid access token (it may be missing or expired). Ask the user to sign out and sign back in to re-grant Google Drive access.]'
+            : '[Unable to retrieve document content]'
+
           resolvedParts.push(
-            `### Attached Document: "${att.label}"\n\n${docText ?? '[Unable to retrieve document content]'}`
+            `### Attached Document: "${att.label}"\n\n${docText ?? docFallback}`
           )
         }
       } catch (err) {
@@ -469,4 +482,17 @@ export async function POST(req: NextRequest) {
       'Connection': 'keep-alive',
     },
   })
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    return await handleChat(req)
+  } catch (err) {
+    const details = err instanceof Error ? err.message : 'Unknown error'
+    log.error({ err }, 'Chat request failed before streaming started')
+    return NextResponse.json(
+      { error: 'Chat request failed', details },
+      { status: 500 },
+    )
+  }
 }
