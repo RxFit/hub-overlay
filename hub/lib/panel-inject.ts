@@ -85,6 +85,36 @@ export function formatRelativeDate(isoString: string): string {
 }
 
 /**
+ * Format a Google Tasks `due` value (date-only, UTC midnight) for display.
+ * Parses the DATE portion in local terms so the day doesn't shift for
+ * negative-offset users, and reports future deltas + overdue — unlike
+ * formatRelativeDate, which is past-only and would say "just now" for a
+ * task due tomorrow.
+ */
+export function formatDueDate(isoString: string): string {
+  try {
+    // Take the YYYY-MM-DD prefix and build a LOCAL midnight date so the
+    // calendar day matches what the user sees, not the UTC instant.
+    const [y, m, d] = isoString.slice(0, 10).split('-').map(Number)
+    if (!y || !m || !d) return isoString
+    const due = new Date(y, m - 1, d)
+
+    const now = new Date()
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    const diffDays = Math.round((due.getTime() - today.getTime()) / 86_400_000)
+
+    if (diffDays === 0) return 'Today'
+    if (diffDays === 1) return 'Tomorrow'
+    if (diffDays === -1) return 'Yesterday (overdue)'
+    if (diffDays < 0) return `${-diffDays}d overdue`
+    if (diffDays < 7) return `in ${diffDays}d`
+    return due.toLocaleDateString([], { month: 'short', day: 'numeric' })
+  } catch {
+    return isoString
+  }
+}
+
+/**
  * Build a context-rich chat message for a tapped task. Carries the task's list,
  * status, due date, and notes inline.
  */
@@ -94,7 +124,7 @@ export function buildTaskInjectMessage(task: TaskInput, listName: string): strin
     `• Title: ${task.title}`,
     `• Status: ${task.status === 'completed' ? 'Completed' : 'Pending'}`,
   ]
-  if (task.due) lines.push(`• Due: ${formatRelativeDate(task.due)}`)
+  if (task.due) lines.push(`• Due: ${formatDueDate(task.due)}`)
   if (task.notes) lines.push(`• Notes: ${clampText(task.notes)}`)
   return lines.join('\n')
 }

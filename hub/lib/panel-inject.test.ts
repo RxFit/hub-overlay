@@ -5,6 +5,7 @@ import {
   buildDocumentInject,
   formatRelativeDate,
   formatShortDate,
+  formatDueDate,
 } from './panel-inject'
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -134,5 +135,47 @@ describe('date formatters are crash-proof on bad input', () => {
     expect(formatRelativeDate(new Date(now - 10_000).toISOString())).toBe('just now')
     expect(formatRelativeDate(new Date(now - 5 * 60_000).toISOString())).toBe('5m ago')
     expect(formatRelativeDate(new Date(now - 3 * 3_600_000).toISOString())).toBe('3h ago')
+  })
+})
+
+describe('formatDueDate (Google Tasks due, date-only UTC midnight)', () => {
+  // Build a UTC-midnight `due` string for a local calendar day offset by `days`.
+  // This mirrors exactly what Google Tasks returns (e.g. 2026-06-25T00:00:00.000Z).
+  function dueForLocalOffset(days: number): string {
+    const now = new Date()
+    const local = new Date(now.getFullYear(), now.getMonth(), now.getDate() + days)
+    const y = local.getFullYear()
+    const m = String(local.getMonth() + 1).padStart(2, '0')
+    const d = String(local.getDate()).padStart(2, '0')
+    return `${y}-${m}-${d}T00:00:00.000Z`
+  }
+
+  it('labels today / tomorrow / future / overdue from a signed day delta', () => {
+    expect(formatDueDate(dueForLocalOffset(0))).toBe('Today')
+    expect(formatDueDate(dueForLocalOffset(1))).toBe('Tomorrow')
+    expect(formatDueDate(dueForLocalOffset(3))).toBe('in 3d')
+    expect(formatDueDate(dueForLocalOffset(-1))).toBe('Yesterday (overdue)')
+    expect(formatDueDate(dueForLocalOffset(-3))).toBe('3d overdue')
+  })
+
+  it('does NOT regress a future UTC-midnight due to "just now" and does not shift the day', () => {
+    const tomorrow = dueForLocalOffset(1)
+    expect(formatDueDate(tomorrow)).toBe('Tomorrow')
+    expect(formatDueDate(tomorrow)).not.toBe('just now')
+    // Today's UTC-midnight value must read "Today", not "Yesterday" (no backward shift).
+    expect(formatDueDate(dueForLocalOffset(0))).toBe('Today')
+  })
+
+  it('falls back to the raw string on garbage and never throws', () => {
+    for (const v of ['', 'not-a-date', '💥', '9'.repeat(1000)]) {
+      expect(() => formatDueDate(v)).not.toThrow()
+      expect(typeof formatDueDate(v)).toBe('string')
+    }
+  })
+
+  it('formatRelativeDate remains past-only for genuinely past instants (unchanged)', () => {
+    const now = Date.now()
+    expect(formatRelativeDate(new Date(now - 10_000).toISOString())).toBe('just now')
+    expect(formatRelativeDate(new Date(now - 5 * 60_000).toISOString())).toBe('5m ago')
   })
 })
