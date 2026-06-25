@@ -463,7 +463,19 @@ export default function HubPage() {
         }),
       })
 
-      if (!res.ok) throw new Error(`API ${res.status}`)
+      if (!res.ok) {
+        // Surface the server's structured error instead of discarding it.
+        let serverDetail = ''
+        try {
+          const errBody = await res.json()
+          serverDetail = errBody?.details || errBody?.error || ''
+        } catch {
+          // non-JSON body (e.g. an opaque framework 500) — leave serverDetail empty
+        }
+        const apiErr = new Error(serverDetail || `API ${res.status}`) as Error & { status?: number }
+        apiErr.status = res.status
+        throw apiErr
+      }
 
       // Stream the response
       const reader = res.body?.getReader()
@@ -528,14 +540,25 @@ export default function HubPage() {
       return // Success — no fallback needed
     } catch (err) {
       const isTimeout = err instanceof DOMException && err.name === 'AbortError'
-      console.error('Chat API Error:', err);
+      const status = (err as { status?: number } | undefined)?.status
+      const detail = err instanceof Error ? err.message : ''
+      console.error('Chat API Error:', { status, detail, err });
       setIsTyping(false);
+
+      let content: string
+      if (isTimeout) {
+        content = "⏱️ That took longer than expected. Try asking again — things usually speed up quickly."
+      } else if (status === 401) {
+        content = "Your session expired. Please sign in again to continue."
+      } else {
+        // 5xx / network / unknown — generic to the user, details already logged above.
+        content = "Something went wrong on my end. Give it another try in a moment."
+      }
+
       setMessages(prev => [...prev, {
         id: crypto.randomUUID(),
         role: 'assistant' as const,
-        content: isTimeout
-          ? "⏱️ That took longer than expected. Try asking again — things usually speed up quickly."
-          : "Something went wrong on my end. Give it another try in a moment.",
+        content,
       }]);
     } finally {
       clearTimeout(timeoutId)
