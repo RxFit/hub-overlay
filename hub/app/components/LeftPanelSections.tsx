@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect, ReactNode, useCallback, memo } from 'react'
+import { useState, useEffect, ReactNode, useCallback, useMemo, memo, Component } from 'react'
+import type { ErrorInfo } from 'react'
 import { signIn } from 'next-auth/react'
 import { useTasks, useCalendar, useDrive } from '@/app/hooks/useHubData'
 import { writeFetch } from '@/app/hooks/useWriteFetch'
@@ -88,6 +89,38 @@ function SectionMessage({
       )}
     </div>
   )
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   ERROR BOUNDARY — contains a render throw to a single section
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+export class SectionErrorBoundary extends Component<
+  { label?: string; children: ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false }
+
+  static getDerivedStateFromError(): { hasError: boolean } {
+    return { hasError: true }
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    // Surface in dev / wire to telemetry later; do not rethrow.
+    console.error('[SectionErrorBoundary]', this.props.label ?? '', error, info)
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <SectionMessage
+          message={`Unable to display ${this.props.label ?? 'this section'} — try refreshing`}
+          type="error"
+        />
+      )
+    }
+    return this.props.children
+  }
 }
 
 /**
@@ -181,9 +214,9 @@ export function CollapsibleSection({
         <span className="rx-comment-label">{protocolNum} //</span>
 
         {/* Title */}
-        <span className="collapsible-header__title">
+        <h3 className="collapsible-header__title" style={{ margin: 0, font: 'inherit' }}>
           {title}
-        </span>
+        </h3>
 
         {/* Line */}
         <span
@@ -194,8 +227,6 @@ export function CollapsibleSection({
 
       <div
         id={`section-${protocolNum}`}
-        role="region"
-        aria-label={title}
         className={`collapsible-body ${isOpen ? 'collapsible-body--open' : 'collapsible-body--closed'}`}
       >
         {body}
@@ -208,7 +239,7 @@ export function CollapsibleSection({
    TASKS SECTION
    ══════════════════════════════════════════════════════════════════════════════ */
 
-export function TasksSection({ onInjectChat }: { onInjectChat: (msg: string) => void }) {
+function TasksSectionImpl({ onInjectChat }: { onInjectChat: (msg: string) => void }) {
   return (
     <CollapsibleSection title="Tasks" protocolNum="03" defaultOpen>
       {(isOpen) => <TasksSectionBody isOpen={isOpen} onInjectChat={onInjectChat} />}
@@ -365,11 +396,12 @@ function TaskRow({
         {isCompleted && '✓'}
       </button>
 
-      {/* Content — click to inject into chat */}
-      <div
+      {/* Content — click/Enter/Space to inject into chat */}
+      <button
+        type="button"
         className="task-content"
         onClick={onInjectChat}
-        style={{ flex: 1, cursor: 'pointer', minWidth: 0 }}
+        style={{ flex: 1, minWidth: 0, cursor: 'pointer', textAlign: 'left', background: 'none', border: 0, padding: 0, font: 'inherit', color: 'inherit' }}
       >
         <div className={`task-title ${isCompleted || isFading ? 'task-title--completed' : 'task-title--pending'}`}>
           {task.title}
@@ -377,7 +409,7 @@ function TaskRow({
         {dueDate && (
           <div className="task-due">Due {dueDate}</div>
         )}
-      </div>
+      </button>
 
       {/* Status dot */}
       <span
@@ -594,7 +626,7 @@ function CalendarEventModal({ defaultDate, onClose, onCreated }: CalendarEventMo
    CALENDAR SECTION
    ══════════════════════════════════════════════════════════════════════════════ */
 
-export function CalendarSection({ onInjectChat }: { onInjectChat: (msg: string) => void }) {
+function CalendarSectionImpl({ onInjectChat }: { onInjectChat: (msg: string) => void }) {
   return (
     <CollapsibleSection title="Calendar" protocolNum="02" defaultOpen>
       {(isOpen) => <CalendarSectionBody isOpen={isOpen} onInjectChat={onInjectChat} />}
@@ -611,39 +643,41 @@ function CalendarSectionBody({ isOpen, onInjectChat }: { isOpen: boolean; onInje
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
 
-  const state = renderSectionState({ isLoading, error, skeletonLines: 3 })
-  if (state) {
-    return <>{state}</>
-  }
-
   // Build the 7 days of the current week
-  const weekDays = getWeekDays(weekStart)
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
+  const weekDays = useMemo(() => getWeekDays(weekStart), [weekStart])
 
   // Determine which days have events
-  const daysWithEvents = new Set<string>()
-  events.forEach((event) => {
-    const eventDate = event.start.dateTime
-      ? new Date(event.start.dateTime)
-      : event.start.date
-        ? new Date(event.start.date + 'T00:00:00')
-        : null
-    if (eventDate) {
-      daysWithEvents.add(eventDate.toDateString())
-    }
-  })
+  const daysWithEvents = useMemo(() => {
+    const set = new Set<string>()
+    events.forEach((event) => {
+      const eventDate = event.start.dateTime
+        ? new Date(event.start.dateTime)
+        : event.start.date
+          ? new Date(event.start.date + 'T00:00:00')
+          : null
+      if (eventDate) set.add(eventDate.toDateString())
+    })
+    return set
+  }, [events])
 
   // Filter events for selected day
   const selectedDateStr = selectedDate.toDateString()
-  const dayEvents = events.filter((event) => {
+  const dayEvents = useMemo(() => events.filter((event) => {
     const eventDate = event.start.dateTime
       ? new Date(event.start.dateTime)
       : event.start.date
         ? new Date(event.start.date + 'T00:00:00')
         : null
     return eventDate ? eventDate.toDateString() === selectedDateStr : false
-  })
+  }), [events, selectedDateStr])
+
+  const state = renderSectionState({ isLoading, error, skeletonLines: 3 })
+  if (state) {
+    return <>{state}</>
+  }
+
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
 
   const dayName = selectedDate.toLocaleDateString([], { weekday: 'long' })
   const selectedDateISO = toLocalISODate(selectedDate)
@@ -909,7 +943,7 @@ const DOC_FILTERS: { key: DocFilter; label: string }[] = [
   { key: 'transcripts', label: 'Transcripts' },
 ]
 
-export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void }) {
+function DocumentsSectionImpl({ onInjectChat }: { onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void }) {
   return (
     <CollapsibleSection title="Documents" protocolNum="04" defaultOpen={false}>
       {(isOpen) => <DocumentsSectionBody isOpen={isOpen} onInjectChat={onInjectChat} />}
@@ -1052,7 +1086,7 @@ const DocumentRow = memo(function DocumentRow(
    KPI SECTION — Live Paperclip + Business KPIs
    ══════════════════════════════════════════════════════════════════════════════ */
 
-export function KPISection({
+function KPISectionImpl({
   kpis: allKpis,
   isLoading,
   onInjectChat,
@@ -1063,7 +1097,7 @@ export function KPISection({
 }) {
   // Mandate: Left Panel = Google ecosystem + business metrics only.
   // Paperclip orchestration metrics belong on the Right Panel.
-  const kpis = allKpis.filter(kpi => kpi.source !== 'paperclip')
+  const kpis = useMemo(() => allKpis.filter(kpi => kpi.source !== 'paperclip'), [allKpis])
 
   const state = renderSectionState({ isLoading, skeletonLines: 4 })
   if (state) {
@@ -1120,6 +1154,17 @@ export function KPISection({
     </CollapsibleSection>
   )
 }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   MEMOIZED SECTION EXPORTS — props (onInjectChat/activeProject) are referentially
+   stable across chat-input keystrokes, so React.memo skips re-render of these
+   sections when only unrelated HubPage state changes.
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+export const TasksSection = memo(TasksSectionImpl)
+export const CalendarSection = memo(CalendarSectionImpl)
+export const DocumentsSection = memo(DocumentsSectionImpl)
+export const KPISection = memo(KPISectionImpl)
 
 /* ══════════════════════════════════════════════════════════════════════════════
    PROJECT HEALTH SECTION — Live Paperclip data

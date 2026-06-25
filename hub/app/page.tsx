@@ -1,10 +1,10 @@
 'use client'
 
-import { useState, useRef, useEffect, useCallback, useMemo, Fragment } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo, memo, Fragment } from 'react'
 import { mutate } from 'swr'
 import { useSession, signIn } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
-import { TasksSection, CalendarSection, DocumentsSection, KPISection, ProjectHealthSection } from '@/app/components/LeftPanelSections'
+import { TasksSection, CalendarSection, DocumentsSection, KPISection, ProjectHealthSection, SectionErrorBoundary } from '@/app/components/LeftPanelSections'
 import { ExecutionFeed } from '@/app/components/RightPanelSections'
 import { InterviewBadge, ActionConfirmCard, SkillBadge } from '@/app/components/ChatEnhancements'
 import { ToolPanel } from '@/app/components/ToolPanel'
@@ -70,30 +70,50 @@ const ONBOARDING_SUGGESTIONS = [
 // AnimatedNumber is now imported from @/app/components/AnimatedNumber
 
 /* ── Left Panel: Context Layer ── */
-function LeftPanel({ isOpen, onClose, onInjectChat, panelRef, style, activeProject, workspaceName, kpis, kpiLoading }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void; panelRef?: React.Ref<HTMLElement>; style?: React.CSSProperties; activeProject?: string; workspaceName?: string; kpis?: import('@/types').LiveKPI[]; kpiLoading?: boolean }) {
+function LeftPanelImpl({ isOpen, onClose, onInjectChat, panelRef, closeBtnRef, isMobileViewport, style, activeProject, workspaceName, kpis, kpiLoading }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void; panelRef?: React.Ref<HTMLElement>; closeBtnRef?: React.Ref<HTMLButtonElement>; isMobileViewport?: boolean; style?: React.CSSProperties; activeProject?: string; workspaceName?: string; kpis?: import('@/types').LiveKPI[]; kpiLoading?: boolean }) {
   const tenant = useTenant()
   return (
-    <aside ref={panelRef} className={`panel-left ${isOpen ? 'mobile-open' : ''}`} aria-label="Context Layer" style={style}>
+    <aside
+      ref={panelRef}
+      className={`panel-left ${isOpen ? 'mobile-open' : ''}`}
+      aria-label="Context Layer"
+      style={style}
+      {...(isOpen && isMobileViewport
+        ? { role: 'dialog' as const, 'aria-modal': true }
+        : {})}
+    >
       <div className="panel-header">
         <h2 className="panel-title">
           <span className="panel-title-display">{workspaceName || tenant?.name || 'Business'}</span>
         </h2>
         {onClose && (
-          <button className="panel-close-btn" onClick={onClose} aria-label="Close Context Layer">
+          <button ref={closeBtnRef} className="panel-close-btn" onClick={onClose} aria-label="Close Context Layer">
             &times;
           </button>
         )}
       </div>
 
       <div className="panel-content">
-        <KPISection kpis={kpis ?? []} isLoading={!!kpiLoading} onInjectChat={onInjectChat} />
-        <CalendarSection onInjectChat={onInjectChat} />
-        <TasksSection onInjectChat={onInjectChat} />
-        <DocumentsSection onInjectChat={onInjectChat} />
+        <SectionErrorBoundary label="KPIs">
+          <KPISection kpis={kpis ?? []} isLoading={!!kpiLoading} onInjectChat={onInjectChat} />
+        </SectionErrorBoundary>
+        <SectionErrorBoundary label="Calendar">
+          <CalendarSection onInjectChat={onInjectChat} />
+        </SectionErrorBoundary>
+        <SectionErrorBoundary label="Tasks">
+          <TasksSection onInjectChat={onInjectChat} />
+        </SectionErrorBoundary>
+        <SectionErrorBoundary label="Documents">
+          <DocumentsSection onInjectChat={onInjectChat} />
+        </SectionErrorBoundary>
       </div>
     </aside>
   )
 }
+
+// Memoized so chat-input keystrokes (unrelated HubPage state) don't re-render the
+// whole left panel; injectRecall is already a stable useCallback.
+const LeftPanel = memo(LeftPanelImpl)
 
 
 
@@ -393,12 +413,12 @@ export default function HubPage() {
     }
   }
 
-  const handleClosePanels = () => {
+  const handleClosePanels = useCallback(() => {
     setMobileLeftOpen(false)
     setMobileRightOpen(false)
     setChatPanelOpen(false)
     setMobileTab('chat')
-  }
+  }, [])
 
   // Swipe gesture state — real-time drag-follow system
   const {
@@ -415,8 +435,72 @@ export default function HubPage() {
     handleMobileTab,
   })
 
+  /* ── Mobile drawer a11y: dialog focus management, scroll-lock, Escape ── */
+  const leftCloseBtnRef = useRef<HTMLButtonElement>(null)
+  const leftOpenerRef = useRef<HTMLElement | null>(null)
+  const [isMobileViewport, setIsMobileViewport] = useState(false)
 
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 640px)')
+    const update = () => setIsMobileViewport(mq.matches)
+    update()
+    mq.addEventListener('change', update)
+    return () => mq.removeEventListener('change', update)
+  }, [])
 
+  // Focus management for the mobile left drawer
+  useEffect(() => {
+    if (!(mobileLeftOpen && isMobileViewport)) return
+    const panel = leftPanelRef.current
+    if (!panel) return
+
+    leftOpenerRef.current = (document.activeElement as HTMLElement) ?? null
+    // Move focus in (next frame so the open transition/visibility has applied)
+    const raf = requestAnimationFrame(() => leftCloseBtnRef.current?.focus())
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab') return
+      const focusable = panel.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )
+      if (focusable.length === 0) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault(); last.focus()
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault(); first.focus()
+      }
+    }
+    panel.addEventListener('keydown', onKeyDown)
+
+    return () => {
+      cancelAnimationFrame(raf)
+      panel.removeEventListener('keydown', onKeyDown)
+      // Restore focus to the opener (e.g. the command nav button)
+      leftOpenerRef.current?.focus?.()
+    }
+  }, [mobileLeftOpen, isMobileViewport, leftPanelRef])
+
+  // Body scroll-lock while any panel is open
+  useEffect(() => {
+    const anyOpen = mobileLeftOpen || mobileRightOpen || chatPanelOpen
+    if (!anyOpen) return
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = prev }
+  }, [mobileLeftOpen, mobileRightOpen, chatPanelOpen])
+
+  // Escape closes any open panel
+  useEffect(() => {
+    const anyOpen = mobileLeftOpen || mobileRightOpen || chatPanelOpen
+    if (!anyOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') handleClosePanels()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [mobileLeftOpen, mobileRightOpen, chatPanelOpen, handleClosePanels])
 
   /* ── Scroll to bottom of chat ── */
   const scrollToBottom = useCallback(() => {
@@ -1119,7 +1203,7 @@ Respond with EXACTLY one of:
       </div>
 
       <div className="panels-container">
-        <LeftPanel isOpen={mobileLeftOpen} onClose={handleClosePanels} onInjectChat={injectRecall} panelRef={leftPanelRef} activeProject={activeProject} workspaceName={projects?.[0]?.companyName} kpis={kpis} kpiLoading={kpiLoading} />
+        <LeftPanel isOpen={mobileLeftOpen} onClose={handleClosePanels} onInjectChat={injectRecall} panelRef={leftPanelRef} closeBtnRef={leftCloseBtnRef} isMobileViewport={isMobileViewport} activeProject={activeProject} workspaceName={projects?.[0]?.companyName} kpis={kpis} kpiLoading={kpiLoading} />
 
         {/* ── Center Panel: AI Chat (inlined for shared state) ── */}
         <main className="panel-center" aria-label="AI Chat">
