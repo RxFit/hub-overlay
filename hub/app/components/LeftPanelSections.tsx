@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, ReactNode, useCallback } from 'react'
+import { useState, useEffect, ReactNode, useCallback, memo } from 'react'
 import { signIn } from 'next-auth/react'
 import { useTasks, useCalendar, useDrive } from '@/app/hooks/useHubData'
 import { writeFetch } from '@/app/hooks/useWriteFetch'
@@ -12,6 +12,7 @@ import {
   buildTaskInjectMessage,
   buildEventInjectMessage,
   buildDocumentInject,
+  buildArtifactInject,
   formatTime,
   formatShortDate,
   formatRelativeDate,
@@ -102,10 +103,12 @@ function renderSectionState({
   isLoading,
   error,
   skeletonLines = 3,
+  onRetry,
 }: {
   isLoading?: boolean
   error?: unknown
   skeletonLines?: number
+  onRetry?: () => void
 }): ReactNode | null {
   if (isLoading) return <SkeletonBlock lines={skeletonLines} />
 
@@ -120,7 +123,13 @@ function renderSectionState({
         />
       )
     }
-    return <SectionMessage message="Something went wrong — try refreshing" type="error" />
+    return (
+      <SectionMessage
+        message="Something went wrong — try refreshing"
+        type="error"
+        action={onRetry ? { label: 'Retry', onClick: onRetry } : undefined}
+      />
+    )
   }
 
   return null
@@ -865,6 +874,18 @@ function CalendarRow({
    DOCUMENTS SECTION
    ══════════════════════════════════════════════════════════════════════════════ */
 
+/* Tool icon mapping for artifact cards (module scope — allocated once). */
+const TOOL_ICONS: Record<string, string> = {
+  'issue-tree': '🌳', 'decision-memo': '📋', 'prioritization': '📊',
+  'data-insights': '📈', 'meeting-prep': '🤝', 'storyline': '📖',
+  'scpr': '🔄', 'mckinsey-critic': '🔍', 'ai-use-case-scorer': '🤖',
+  'deck-pipeline': '📑', 'gamma-deck': '🎨',
+}
+
+function getToolIcon(toolId: string): string {
+  return TOOL_ICONS[toolId] || '⚡'
+}
+
 type DocFilter = 'recent' | 'shared' | 'artifacts' | 'transcripts'
 const DOC_FILTERS: { key: DocFilter; label: string }[] = [
   { key: 'recent', label: 'Recent' },
@@ -875,8 +896,9 @@ const DOC_FILTERS: { key: DocFilter; label: string }[] = [
 
 export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void }) {
   const [activeFilter, setActiveFilter] = useState<DocFilter>('recent')
-  const { files, isLoading, error } = useDrive(activeFilter === 'artifacts' ? 'recent' : activeFilter)
-  
+  const isArtifactsTab = activeFilter === 'artifacts'
+  const { files, isLoading, error, mutate } = useDrive(activeFilter, !isArtifactsTab)
+
   /* Fetch tool artifacts when artifacts tab is active */
   const { data: artifactsData, isLoading: artifactsLoading, error: artifactsError } = useSWR<{ artifacts: ToolArtifactRecord[] }>(
     activeFilter === 'artifacts' ? '/api/tool-artifacts' : null,
@@ -885,25 +907,14 @@ export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string,
   )
 
   const emptyMessages: Record<DocFilter, string> = {
-    recent: 'No recent files',
-    shared: 'No shared files',
+    recent: 'No files modified in the last 7 days',
+    shared: 'No files shared with you in the last 7 days',
     artifacts: 'No saved artifacts — complete a tool session to create one',
     transcripts: 'No transcripts found',
   }
 
   const artifactsState = renderSectionState({ isLoading: artifactsLoading, error: artifactsError, skeletonLines: 3 })
-  const driveState = renderSectionState({ isLoading, error, skeletonLines: 3 })
-
-  /* Tool icon mapping for artifact cards */
-  const getToolIcon = (toolId: string): string => {
-    const icons: Record<string, string> = {
-      'issue-tree': '🌳', 'decision-memo': '📋', 'prioritization': '📊',
-      'data-insights': '📈', 'meeting-prep': '🤝', 'storyline': '📖',
-      'scpr': '🔄', 'mckinsey-critic': '🔍', 'ai-use-case-scorer': '🤖',
-      'deck-pipeline': '📑', 'gamma-deck': '🎨',
-    }
-    return icons[toolId] || '⚡'
-  }
+  const driveState = renderSectionState({ isLoading, error, skeletonLines: 3, onRetry: () => mutate?.() })
 
   return (
     <CollapsibleSection title="Documents" protocolNum="04" defaultOpen={false}>
@@ -934,7 +945,10 @@ export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string,
               <button
                 key={artifact.id}
                 role="listitem"
-                onClick={() => onInjectChat(`Show me the ${artifact.toolId} artifact: ${artifact.title}`)}
+                onClick={() => {
+                  const { message, attachment } = buildArtifactInject(artifact)
+                  onInjectChat(message, [attachment])
+                }}
                 aria-label={`Artifact: ${artifact.title}`}
                 className="section-row"
               >
@@ -944,7 +958,7 @@ export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string,
                 <div className="document-info">
                   <div className="document-name">{artifact.title}</div>
                   <div className="document-modified">
-                    {artifact.toolId} · {new Date(artifact.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                    {artifact.toolId} · {formatShortDate(artifact.createdAt)}
                   </div>
                 </div>
               </button>
@@ -980,7 +994,9 @@ export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string,
   )
 }
 
-function DocumentRow({ file, onClick }: { file: DriveFile; onClick: () => void }) {
+const DocumentRow = memo(function DocumentRow(
+  { file, onClick }: { file: DriveFile; onClick: () => void },
+) {
   const icon = getDriveIcon(file.mimeType)
   const modified = formatRelativeDate(file.modifiedTime)
 
@@ -1007,7 +1023,7 @@ function DocumentRow({ file, onClick }: { file: DriveFile; onClick: () => void }
       </div>
     </button>
   )
-}
+})
 
 /* ══════════════════════════════════════════════════════════════════════════════
    KPI SECTION — Live Paperclip + Business KPIs

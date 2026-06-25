@@ -35,6 +35,9 @@ export interface TenantConfig {
   logoFull: string                 // 'HUB' (text after accent)
   brandColors: TenantBrandColors
   googleWorkspaceId?: string
+  /** Google Drive folder id holding this tenant's meeting transcripts.
+   *  When unset, the Transcripts tab returns an empty list (no cross-tenant leakage). */
+  transcriptsFolderId?: string
   roles: Record<string, RoleConfig>
 }
 
@@ -109,6 +112,7 @@ export const TENANT_CONFIGS: Record<string, TenantConfig> = {
       bgVoid: '#141824',
       bgPrimary: '#1a1f2e',
     },
+    transcriptsFolderId: '1PQ47SWRWn-A1dToniwglJy9uqEwZSVwA',
 
     roles: { superadmin: SUPERADMIN_ROLE, admin: ADMIN_ROLE, staff: STAFF_ROLE, onboarding: ONBOARDING_ROLE },
   },

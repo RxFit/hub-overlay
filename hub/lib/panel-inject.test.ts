@@ -3,6 +3,7 @@ import {
   buildTaskInjectMessage,
   buildEventInjectMessage,
   buildDocumentInject,
+  buildArtifactInject,
   formatRelativeDate,
   formatShortDate,
   formatDueDate,
@@ -118,6 +119,32 @@ describe('buildDocumentInject', () => {
     const { message, attachment } = buildDocumentInject({ id: 'f', name: 'Plan.pdf', mimeType: 'application/pdf' }, false)
     expect(message).toMatch(/Tell me about the document "Plan\.pdf"/)
     expect(attachment.fileId).toBe('f')
+  })
+})
+
+describe('buildArtifactInject', () => {
+  it('carries the real artifact id in the attachment id and content', () => {
+    const { message, attachment } = buildArtifactInject({
+      id: 'artifact-789',
+      toolId: 'decision-memo',
+      title: 'Q3 Pricing Memo',
+    })
+    expect(message).toBe('Show me the decision-memo artifact: Q3 Pricing Memo')
+    expect(attachment).toMatchObject({
+      id: 'artifact-789',
+      type: 'text',
+      label: 'Q3 Pricing Memo',
+    })
+    expect(attachment.content).toContain('artifact-789')
+    expect(attachment.content).toContain('[artifact:artifact-789]')
+  })
+
+  it('disambiguates two artifacts sharing a toolId + title by id', () => {
+    const a = buildArtifactInject({ id: 'a', toolId: 'storyline', title: 'Same Title' })
+    const b = buildArtifactInject({ id: 'b', toolId: 'storyline', title: 'Same Title' })
+    expect(a.message).toBe(b.message)
+    expect(a.attachment.id).not.toBe(b.attachment.id)
+    expect(a.attachment.content).not.toBe(b.attachment.content)
   })
 })
 
