@@ -28,7 +28,9 @@ export function useSwipePanels({
     if (
       target.closest('.chat-suggestions') ||
       target.closest('.chat-input-area') ||
-      target.closest('.quoted-reply-chip')
+      target.closest('.quoted-reply-chip') ||
+      target.closest('.doc-filter-tabs') ||
+      target.closest('.section-row')
     ) {
       touchStartRef.current = null
       return
@@ -105,9 +107,19 @@ export function useSwipePanels({
     }
   }, [mobileLeftOpen, mobileRightOpen])
 
+  // Clear imperative inline backdrop styles so React's rendered values win again
+  // (prevents a mid-drag display/opacity from desyncing after a gesture ends).
+  const resetBackdropToReact = () => {
+    if (backdropRef.current) {
+      backdropRef.current.style.display = ''
+      backdropRef.current.style.opacity = ''
+    }
+  }
+
   const handleTouchEnd = useCallback((e: React.TouchEvent) => {
     if (!touchStartRef.current || !isSwipingRef.current) {
       touchStartRef.current = null
+      resetBackdropToReact()
       return
     }
 
@@ -128,11 +140,10 @@ export function useSwipePanels({
       el.style.transition = ''
       el.style.visibility = ''
     }
-    const panelsStillOpen = mobileLeftOpen || mobileRightOpen
-    if (backdropRef.current) {
-      backdropRef.current.style.display = panelsStillOpen ? 'block' : 'none'
-      backdropRef.current.style.opacity = panelsStillOpen ? '1' : '0'
-    }
+    // Let React's rendered backdrop style (page.tsx) become the source of truth
+    // once the gesture ends; handleClosePanels/handleMobileTab below flip the
+    // open flags that drive the rendered display/opacity.
+    resetBackdropToReact()
 
     const absDx = Math.abs(dx)
     const committed = absDx > SWIPE_COMMIT
