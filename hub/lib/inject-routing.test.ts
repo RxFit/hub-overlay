@@ -10,6 +10,21 @@ describe('panel inject routing', () => {
     expect(shouldRouteThroughSend('recall')).toBe(false)
     expect(shouldRouteThroughSend('deep_dive')).toBe(false)
   })
+
+  // Regression guard for the right-panel wiring fix: read-style right-panel taps
+  // (ProjectHealthSection "Show me the health status for …", ExecutionFeed
+  // "Tell me more about: …") are wired to injectRecall and MUST stay off the
+  // intent-detection path, while only the explicit create-task CTA is wired to
+  // injectExecute. Acceptance criterion #2.
+  it('routes right-panel read-style injects (recall) on the direct path', () => {
+    // injectRecall carries useCase 'recall'
+    expect(shouldRouteThroughSend('recall')).toBe(false)
+  })
+
+  it('routes the right-panel create-task CTA (execute) through doSend', () => {
+    // injectExecute carries useCase 'execute'
+    expect(shouldRouteThroughSend('execute')).toBe(true)
+  })
 })
 
 describe('panel inject attachment cap', () => {

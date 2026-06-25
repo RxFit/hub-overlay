@@ -123,6 +123,7 @@ function RightPanel({
   isOpen,
   onClose,
   onInjectChat,
+  onInjectAction,
   panelRef,
   style,
   projects,
@@ -133,7 +134,10 @@ function RightPanel({
 }: {
   isOpen?: boolean
   onClose?: () => void
+  // Read-style taps (health lookups, "tell me about" feed cards) — direct, intent-free path.
   onInjectChat: (msg: string) => void
+  // Action-style affordances (create-task CTA) — routed through doSend for Interview Mode.
+  onInjectAction: (msg: string) => void
   panelRef?: React.Ref<HTMLElement>
   style?: React.CSSProperties
   projects?: import('@/types').ProjectKPI[]
@@ -192,7 +196,7 @@ function RightPanel({
         <ProjectHealthSection projects={projects} onInjectChat={onInjectChat} userRole={userRole} isLoading={kpiLoading} />
         {/* orgId derives from activeCompany (same projects.find the page used for the
             now-removed activeOrgId prop — both resolved to this exact value). */}
-        <ExecutionFeed onInjectChat={onInjectChat} onCustomizeCSuite={onCustomizeCSuite} orgId={activeCompany?.companyId} />
+        <ExecutionFeed onInjectChat={onInjectChat} onInjectAction={onInjectAction} onCustomizeCSuite={onCustomizeCSuite} orgId={activeCompany?.companyId} />
       </div>
     </aside>
   )
@@ -1512,7 +1516,12 @@ Respond with EXACTLY one of:
           <RightPanel
             isOpen={mobileRightOpen}
             onClose={handleClosePanels}
-            onInjectChat={injectExecute}
+            // Read-style right-panel taps (health lookups, "tell me about" feed
+            // cards) take the direct, intent-free recall path — acceptance #2.
+            onInjectChat={injectRecall}
+            // Only the explicit create-task CTA is action-style: route it through
+            // doSend so detectIntent → role-gate → Interview Mode runs.
+            onInjectAction={injectExecute}
             panelRef={rightPanelRef}
             projects={projects}
             activeProject={activeProject}

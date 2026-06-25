@@ -186,10 +186,14 @@ function DateGroupLabel({ label }: { label: string }) {
 
 export function ExecutionFeed({
   onInjectChat,
+  onInjectAction,
   orgId,
   onCustomizeCSuite,
 }: {
+  // Read-style feed-card taps ("tell me about: …") — direct, intent-free path.
   onInjectChat: (msg: string) => void
+  // Action-style create-task CTA — routed through doSend for Interview Mode.
+  onInjectAction: (msg: string) => void
   orgId?: string
   onCustomizeCSuite: (orgId: string, orgName: string) => void
 }) {
@@ -200,10 +204,12 @@ export function ExecutionFeed({
   // Stall detection — monitors in_progress items
   const { stalledItems } = useStallDetector(items)
 
-  // Handler: Create Task CTA → injects interview mode prompt
+  // Handler: Create Task CTA → action-style inject so Interview Mode activates
+  // (parity with the left-panel "+ Task" affordance). Read-style feed-card taps
+  // continue to use onInjectChat (recall) below.
   const handleCreateTask = useCallback(() => {
-    onInjectChat('I want to create a new automated task, guide me')
-  }, [onInjectChat])
+    onInjectAction('I want to create a new automated task, guide me')
+  }, [onInjectAction])
 
   // Compute counts per filter tab
   const counts = useMemo(() => {
