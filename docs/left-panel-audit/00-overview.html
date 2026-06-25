@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Left Panel Audit — Remediation Plans</title>
+<style>
+body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:920px;margin:2rem auto;padding:0 1rem;line-height:1.55;color:#1a1a1a}
+h1{border-bottom:3px solid #2563eb;padding-bottom:.3rem}
+h2{margin-top:2rem;color:#1e3a8a;border-bottom:1px solid #e5e7eb;padding-bottom:.2rem}
+code{font-family:ui-monospace,Menlo,monospace}
+table{border-collapse:collapse;width:100%;margin-top:1rem}
+th,td{border:1px solid #d1d5db;padding:.5rem .6rem;text-align:left;vertical-align:top;font-size:.92rem}
+th{background:#f3f4f6}
+.badge{display:inline-block;padding:.15rem .55rem;border-radius:999px;color:#fff;font-size:.78rem;font-weight:600;white-space:nowrap}
+.p0{background:#dc2626}.p1{background:#d97706}.p2{background:#2563eb}
+a{color:#2563eb}
+blockquote{border-left:4px solid #9ca3af;margin:1rem 0;padding-left:1rem;color:#4b5563}
+.note{background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;padding:.8rem 1rem;margin:1rem 0}
+</style>
+</head>
+<body>
+<h1>Left Panel Audit — Remediation Plans</h1>
+<p>This directory holds the implementation plans produced from a full audit of the hub's
+<strong>left panel interface</strong> (KPIs, Calendar, Tasks, Documents, and the panel shell), the
+inject&#8594;chat plumbing, the backing API routes/SWR hooks, and the mobile drawer. The audit was triggered
+by a reported P0: clicking a Google Drive document shows <em>&ldquo;Something went wrong on my end.&rdquo;</em></p>
+
+<p>The findings are grouped into <strong>six independently-shippable pieces of work</strong>, each with its own plan
+file detailed enough to start a PR from (problem, line-referenced findings, before/after changes, tests, acceptance
+criteria, sequencing, rollback). They are ordered by priority and intended to land in sequence.</p>
+
+<h2>The pieces</h2>
+<table>
+<thead><tr><th>#</th><th>Plan</th><th>Priority</th><th>What it fixes</th></tr></thead>
+<tbody>
+<tr>
+  <td>1</td>
+  <td><a href="01-document-click-and-chat-error-visibility.html">Document click &amp; chat error visibility</a></td>
+  <td><span class="badge p0">P0</span></td>
+  <td>The reported bug. Wrap <code>/api/chat</code> so unguarded <code>getServerSession</code>/<code>getToken</code> throws return a logged JSON 500 instead of an opaque framework 500; make the client surface server <code>details</code> and distinguish 401/5xx/timeout; cap the document path&rsquo;s extra Vertex call and the un-timed Drive export; clearer missing-token message.</td>
+</tr>
+<tr>
+  <td>2</td>
+  <td><a href="02-error-masking-and-auth-recovery.html">Error masking &amp; auth recovery</a></td>
+  <td><span class="badge p0">P0</span></td>
+  <td>Stop fetch/401 failures rendering as misleading &ldquo;empty / not configured&rdquo; states (KPI section ignores <code>error</code>; KPI/artifacts/tasks fetchers drop HTTP status so reauth never fires); revive the dead <code>useAuthErrorRecovery</code> path with one consistent &ldquo;Sign in again&rdquo; UX; make write mutations check <code>res.ok</code> and handle 401 reauth.</td>
+</tr>
+<tr>
+  <td>3</td>
+  <td><a href="03-calendar-tasks-data-integrity.html">Calendar &amp; Tasks data integrity</a></td>
+  <td><span class="badge p0">P0</span></td>
+  <td>Event <code>location</code> silently dropped on create; <code>dateTime</code> sent with no <code>timeZone</code> (wrong hour); <code>toISOString</code> date off-by-one for Central-time users; future task due dates render &ldquo;just now&rdquo;; missing <code>summary</code> fallback.</td>
+</tr>
+<tr>
+  <td>4</td>
+  <td><a href="04-documents-drive-multitenant.html">Documents / Drive multi-tenant &amp; waste</a></td>
+  <td><span class="badge p1">P1</span></td>
+  <td>Hardcoded transcripts folder ID breaks every other account; Artifacts tab fires a wasted Drive poll; <code>useDrive</code> has no <code>mutate</code>/retry; artifact tap carries no id; &ldquo;Invalid Date&rdquo; on bad <code>createdAt</code>.</td>
+</tr>
+<tr>
+  <td>5</td>
+  <td><a href="05-polling-and-data-layer.html">Polling cost &amp; data-layer consolidation</a></td>
+  <td><span class="badge p1">P1</span></td>
+  <td>Collapsed sections keep polling; Tasks does N+1 every 30s; <code>useKPIData</code> subscribed twice; unread-counts runs a manual fetch loop bypassing SWR; SWR config drift.</td>
+</tr>
+<tr>
+  <td>6</td>
+  <td><a href="06-drawer-resilience-a11y-mobile.html">Drawer resilience, a11y &amp; mobile</a></td>
+  <td><span class="badge p0">P0</span> <span class="badge p1">P1</span></td>
+  <td>No error boundary (one section throw blanks the whole app); mobile drawer has no dialog role / focus trap / Escape / scroll-lock; sections unmemoized; heading &amp; landmark a11y; keyboard-inaccessible task rows.</td>
+</tr>
+</tbody>
+</table>
+
+<h2>Suggested sequencing</h2>
+<p>Land in numeric order. A few cross-dependencies to respect:</p>
+<ul>
+<li><strong>Plan 1 first</strong> &mdash; it restores the reported bug and, critically, makes every future chat failure diagnosable (top-level try/catch + client surfacing of <code>details</code>). Everything else is easier to verify once failures stop being opaque.</li>
+<li><strong>Plans 2 and 5 touch the same KPI data wiring.</strong> Plan 2 adds <code>error</code> handling to <code>KPISection</code>; Plan 5 lifts <code>useKPIData</code> to <code>HubPage</code> and makes <code>KPISection</code> props-driven. If Plan 5 lands after Plan 2, thread the <code>error</code> prop through at that point (called out in both plans&rsquo; sequencing sections).</li>
+<li><strong>Plan 6&rsquo;s error boundary</strong> pairs well with Plan 2 &mdash; together they ensure a section degrades to an inline error rather than a blank app or a misleading empty state.</li>
+</ul>
+
+<div class="note">
+<strong>How these were produced.</strong> Five parallel auditors swept the panel (document-bug root cause, Documents, Calendar+Tasks, KPI+data-layer, and cross-cutting concerns). Each plan was written by a dedicated agent that re-opened the referenced files and corrected line numbers against the live code before writing. Severity tags: <span class="badge p0">P0</span> critical &middot; <span class="badge p1">P1</span> important &middot; <span class="badge p2">P2</span> polish.
+</div>
+
+</body>
+</html>

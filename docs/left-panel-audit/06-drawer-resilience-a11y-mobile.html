@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Left-panel resilience, accessibility &amp; mobile — Implementation Plan</title>
+<style>
+body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:920px;margin:2rem auto;padding:0 1rem;line-height:1.55;color:#1a1a1a}
+h1{border-bottom:3px solid #2563eb;padding-bottom:.3rem}
+h2{margin-top:2rem;color:#1e3a8a;border-bottom:1px solid #e5e7eb;padding-bottom:.2rem}
+h3{margin-top:1.4rem}
+code,pre{font-family:ui-monospace,Menlo,monospace}
+pre{background:#f6f8fa;padding:.8rem;border-radius:6px;overflow:auto;border:1px solid #e5e7eb;font-size:.86rem}
+table{border-collapse:collapse;width:100%}
+th,td{border:1px solid #d1d5db;padding:.4rem .6rem;text-align:left;vertical-align:top;font-size:.9rem}
+th{background:#f3f4f6}
+.badge{display:inline-block;padding:.15rem .6rem;border-radius:999px;color:#fff;font-size:.8rem;font-weight:600}
+.p0{background:#dc2626}.p1{background:#d97706}.p2{background:#2563eb}
+pre.before{background:#fef2f2;border-color:#fecaca}pre.after{background:#f0fdf4;border-color:#bbf7d0}
+blockquote{border-left:4px solid #9ca3af;margin:0;padding-left:1rem;color:#4b5563}
+ul{margin:.4rem 0}
+</style>
+</head>
+<body>
+
+<h1>Left-panel resilience, accessibility &amp; mobile <span class="badge p0">P0</span> <span class="badge p1">P1</span></h1>
+
+<p><strong>Scope:</strong> the Left ("Context Layer") panel and its mobile drawer behaviour. Repo: <code>/home/user/hub-overlay</code>, app under <code>hub/</code>. Primary files: <code>hub/app/page.tsx</code>, <code>hub/app/components/LeftPanelSections.tsx</code>, <code>hub/app/hooks/useSwipePanels.ts</code>.</p>
+
+<h2>Summary</h2>
+<p>The left panel has two structural defects that justify P0 treatment. First, there is <strong>no React Error Boundary anywhere in the app</strong> — <code>LeftPanel</code> renders its four data sections (KPIs, Calendar, Tasks, Documents) as plain siblings, so a single render-time throw in any one of them propagates up to <code>HubPage</code> and blanks the entire application rather than degrading one section. Second, the <strong>mobile drawer is a modal overlay with a backdrop but lacks the accessibility contract the app already applies to its own <code>CalendarEventModal</code></strong>: no <code>role="dialog"</code>/<code>aria-modal</code>, no focus trap, no focus move-in, no focus restoration, no body-scroll-lock, and no Escape-to-close. Several P1/P2 items (memoization, heading semantics, duplicate landmarks, keyboard-operable task rows, swipe-style desync) round out the work.</p>
+
+<p>This plan adds a lightweight class-based <code>ErrorBoundary</code>, brings the drawer up to the modal-dialog bar, locks body scroll while a panel is open, wires Escape-to-close, memoizes the panel and its sections so chat keystrokes stop re-rendering them, and fixes the heading/landmark/keyboard a11y nits and the swipe edge cases.</p>
+
+<h2>Why this matters</h2>
+<ul>
+<li><strong>One bad section should not blank the app.</strong> Today a thrown error in <code>KPISection</code>, <code>CalendarSection</code>, <code>TasksSection</code>, or <code>DocumentsSection</code> takes down <code>HubPage</code> — the user loses chat, the right panel, everything. An error boundary contains the blast radius to the offending section, which already has a graceful <code>SectionMessage type="error"</code> idiom for data-load failures.</li>
+<li><strong>The drawer is less accessible than the app's own modal.</strong> <code>CalendarEventModal</code> (in <code>LeftPanelSections.tsx</code>) correctly sets <code>role="dialog" aria-modal="true"</code>. The mobile left drawer — which is functionally a modal overlay — does none of this. Keyboard and screen-reader users can tab into content behind the backdrop, can't Escape out, and lose their place on close.</li>
+<li><strong>Background scroll bleeds through.</strong> With no <code>body</code> scroll-lock, opening a panel lets the page behind the backdrop scroll, a classic mobile-overlay defect.</li>
+<li><strong>Every chat keystroke re-renders the whole panel.</strong> The inject handler prop (<code>injectRecall</code>) is already a stable <code>useCallback</code>, but the panel and sections are unmemoized, so they re-render on every <code>HubPage</code> state change (e.g. typing in the chat box). Memoizing lets the stable prop actually buy a skipped render.</li>
+</ul>
+
+<h2>Findings</h2>
+<table>
+<thead>
+<tr><th>#</th><th>Audit ref</th><th>Pri</th><th>Issue</th><th>Location (verified)</th></tr>
+</thead>
+<tbody>
+<tr><td>1</td><td>4.1</td><td><span class="badge p0">P0</span></td><td>No Error Boundary anywhere; a render throw in any left-panel section blanks the whole app.</td><td><code>page.tsx</code> <code>LeftPanel</code> lines 73–96; <code>panel-content</code> div lines 88–93. (grep confirms no <code>ErrorBoundary</code>/<code>componentDidCatch</code> in <code>hub/app/</code>.)</td></tr>
+<tr><td>2</td><td>2.3</td><td><span class="badge p0">P0</span></td><td>Mobile drawer is a modal overlay but has no dialog semantics, focus trap, focus move-in, or focus restoration.</td><td><code>page.tsx</code> <code>aside.panel-left</code> line 76; compare <code>CalendarEventModal</code> <code>role="dialog" aria-modal</code> at <code>LeftPanelSections.tsx</code> lines 376–381.</td></tr>
+<tr><td>3</td><td>2.1</td><td><span class="badge p1">P1</span></td><td>No body-scroll-lock while a panel is open (grep: no <code>body.style.overflow</code>).</td><td><code>page.tsx</code> — add effect keyed on <code>mobileLeftOpen||mobileRightOpen||chatPanelOpen</code>.</td></tr>
+<tr><td>4</td><td>2.2</td><td><span class="badge p1">P1</span></td><td>No Escape-to-close for any open panel (grep: no panel Escape handler in <code>page.tsx</code>).</td><td><code>page.tsx</code> — window <code>keydown</code> calling <code>handleClosePanels()</code> (defined lines 396–401).</td></tr>
+<tr><td>5</td><td>5.1</td><td><span class="badge p1">P1</span></td><td><code>LeftPanel</code> and all four sections unmemoized; every chat keystroke re-renders them. The inject prop is already stable.</td><td><code>page.tsx</code> <code>LeftPanel</code> 73–96; <code>injectRecall</code> stable callback lines 949–951.</td></tr>
+<tr><td>6</td><td>3.1 / 3.2</td><td><span class="badge p2">P2</span></td><td>Section titles are buttons/spans not headings (panel has an h2, no h3s); each <code>CollapsibleSection</code> emits both <code>&lt;section aria-label&gt;</code> and an inner <code>role="region"</code> with the same label (duplicate landmark).</td><td><code>LeftPanelSections.tsx</code> <code>CollapsibleSection</code> lines 62–116; <code>&lt;section aria-label&gt;</code> line 76; title span lines 95–97; inner <code>role="region"</code> lines 106–111.</td></tr>
+<tr><td>7</td><td>3.5</td><td><span class="badge p2">P2</span></td><td>Task row <code>div.task-content</code> has <code>onClick</code> to inject but no keyboard handler (mouse-only).</td><td><code>LeftPanelSections.tsx</code> lines 291–302.</td></tr>
+<tr><td>8</td><td>2.4 / 2.5</td><td><span class="badge p2">P2</span></td><td>Backdrop inline style can desync after an interrupted swipe (imperative writes; early-return leaves styles untouched); swipe-start exclusion list does not exclude the panel's own scrollable <code>.panel-content</code>, so a horizontal drag on the doc/task filter tabs can trigger a close-swipe.</td><td><code>useSwipePanels.ts</code> backdrop writes lines 69–71/79–82/90–92/100–103/132–135; early return line 109; exclusion list lines 28–35.</td></tr>
+<tr><td>9</td><td>5.2</td><td><span class="badge p2">P2</span></td><td>Derived lists recomputed every render: <code>CalendarSection</code> <code>weekDays</code>/<code>daysWithEvents</code>/<code>dayEvents</code>; <code>KPISection</code> <code>allKpis.filter</code>.</td><td><code>LeftPanelSections.tsx</code> lines 540–567; line 972.</td></tr>
+</tbody>
+</table>
+
+<h2>Implementation</h2>
+
+<h3>Change 1 — Lightweight class-based ErrorBoundary, wrapping the panel content (Finding 1, P0)</h3>
+<p><strong>File:</strong> <code>hub/app/components/LeftPanelSections.tsx</code> (define + export the boundary here, where the private <code>SectionMessage</code> fallback lives) and <code>hub/app/page.tsx</code> (consume it).</p>
+
+<p>Add a small class component. Place it near the top of <code>LeftPanelSections.tsx</code>, just after the existing <code>SectionMessage</code> definition (line 56). It must be a class because error boundaries require <code>getDerivedStateFromError</code>/<code>componentDidCatch</code>, which have no hooks equivalent. Import <code>Component</code> from React (extend the existing line 3 import).</p>
+
+<pre class="before">// LeftPanelSections.tsx line 3 (before)
+import { useState, useEffect, ReactNode, useCallback } from 'react'</pre>
+
+<pre class="after">// LeftPanelSections.tsx line 3 (after)
+import { useState, useEffect, ReactNode, useCallback, Component } from 'react'
+import type { ErrorInfo } from 'react'</pre>
+
+<pre class="after">// LeftPanelSections.tsx — add immediately after SectionMessage (after line 56)
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   ERROR BOUNDARY — contains a render throw to a single section
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+export class SectionErrorBoundary extends Component&lt;
+  { label?: string; children: ReactNode },
+  { hasError: boolean }
+&gt; {
+  state = { hasError: false }
+
+  static getDerivedStateFromError(): { hasError: boolean } {
+    return { hasError: true }
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    // Surface in dev / wire to telemetry later; do not rethrow.
+    console.error('[SectionErrorBoundary]', this.props.label ?? '', error, info)
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        &lt;SectionMessage
+          message={`Unable to display ${this.props.label ?? 'this section'} — try refreshing`}
+          type="error"
+        /&gt;
+      )
+    }
+    return this.props.children
+  }
+}</pre>
+
+<p>Then wrap each section in <code>page.tsx</code>. Per-section boundaries are preferred over one wrapper so a single failing section still leaves the other three live.</p>
+
+<pre class="before">// page.tsx line 7 (before)
+import { TasksSection, CalendarSection, DocumentsSection, KPISection, ProjectHealthSection } from '@/app/components/LeftPanelSections'</pre>
+
+<pre class="after">// page.tsx line 7 (after)
+import { TasksSection, CalendarSection, DocumentsSection, KPISection, ProjectHealthSection, SectionErrorBoundary } from '@/app/components/LeftPanelSections'</pre>
+
+<pre class="before">// page.tsx lines 88-93 (before)
+      &lt;div className="panel-content"&gt;
+        &lt;KPISection activeProject={activeProject} onInjectChat={onInjectChat} /&gt;
+        &lt;CalendarSection onInjectChat={onInjectChat} /&gt;
+        &lt;TasksSection onInjectChat={onInjectChat} /&gt;
+        &lt;DocumentsSection onInjectChat={onInjectChat} /&gt;
+      &lt;/div&gt;</pre>
+
+<pre class="after">// page.tsx lines 88-93 (after)
+      &lt;div className="panel-content"&gt;
+        &lt;SectionErrorBoundary label="KPIs"&gt;
+          &lt;KPISection activeProject={activeProject} onInjectChat={onInjectChat} /&gt;
+        &lt;/SectionErrorBoundary&gt;
+        &lt;SectionErrorBoundary label="Calendar"&gt;
+          &lt;CalendarSection onInjectChat={onInjectChat} /&gt;
+        &lt;/SectionErrorBoundary&gt;
+        &lt;SectionErrorBoundary label="Tasks"&gt;
+          &lt;TasksSection onInjectChat={onInjectChat} /&gt;
+        &lt;/SectionErrorBoundary&gt;
+        &lt;SectionErrorBoundary label="Documents"&gt;
+          &lt;DocumentsSection onInjectChat={onInjectChat} /&gt;
+        &lt;/SectionErrorBoundary&gt;
+      &lt;/div&gt;</pre>
+
+<p><strong>Rationale:</strong> <code>SectionMessage</code> is module-private in <code>LeftPanelSections.tsx</code> and takes <code>{message, type}</code> props (not children), so the boundary is defined in the same module to reuse it and exported for <code>page.tsx</code>. Per-section wrapping matches the existing graceful error idiom and contains failures to a single section instead of blanking <code>HubPage</code>.</p>
+
+<h3>Change 2 — Drawer modal-dialog semantics, focus trap, move-in &amp; restoration (Finding 2, P0)</h3>
+<p><strong>File:</strong> <code>hub/app/page.tsx</code> (props on <code>aside.panel-left</code>) plus a small focus hook. The desktop layout renders the same <code>aside</code> as a static column, so dialog semantics must apply <em>only</em> in the mobile-open state.</p>
+
+<p>Extend <code>LeftPanel</code> to accept the dialog attributes and a ref to the close button, and to render them conditionally on <code>isOpen</code> (which is <code>mobileLeftOpen</code>, passed at line 1099). The opener to restore focus to is the command nav button at lines 1435–1444.</p>
+
+<pre class="before">// page.tsx line 76 (before)
+    &lt;aside ref={panelRef} className={`panel-left ${isOpen ? 'mobile-open' : ''}`} aria-label="Context Layer" style={style}&gt;
+      &lt;div className="panel-header"&gt;
+        &lt;h2 className="panel-title"&gt;
+          &lt;span className="panel-title-display"&gt;{workspaceName || tenant?.name || 'Business'}&lt;/span&gt;
+        &lt;/h2&gt;
+        {onClose &amp;&amp; (
+          &lt;button className="panel-close-btn" onClick={onClose} aria-label="Close Context Layer"&gt;
+            &amp;times;
+          &lt;/button&gt;
+        )}
+      &lt;/div&gt;</pre>
+
+<pre class="after">// page.tsx line 76 (after) — add closeBtnRef + isMobileViewport props to LeftPanel signature
+    &lt;aside
+      ref={panelRef}
+      className={`panel-left ${isOpen ? 'mobile-open' : ''}`}
+      aria-label="Context Layer"
+      style={style}
+      {...(isOpen &amp;&amp; isMobileViewport
+        ? { role: 'dialog' as const, 'aria-modal': true }
+        : {})}
+    &gt;
+      &lt;div className="panel-header"&gt;
+        &lt;h2 className="panel-title"&gt;
+          &lt;span className="panel-title-display"&gt;{workspaceName || tenant?.name || 'Business'}&lt;/span&gt;
+        &lt;/h2&gt;
+        {onClose &amp;&amp; (
+          &lt;button ref={closeBtnRef} className="panel-close-btn" onClick={onClose} aria-label="Close Context Layer"&gt;
+            &amp;times;
+          &lt;/button&gt;
+        )}
+      &lt;/div&gt;</pre>
+
+<p>In <code>HubPage</code>, add a focus-management effect. Track the opener via a ref captured when the drawer opens, move focus to the close button on open, trap Tab within the <code>aside</code>, and restore focus on close. <code>leftPanelRef</code> already exists (from <code>useSwipePanels</code>, line 405) and is the <code>aside</code>; reuse it. Add a <code>closeBtnRef</code> and a viewport flag.</p>
+
+<pre class="after">// page.tsx — in HubPage, near other refs/state (after line 416)
+const leftCloseBtnRef = useRef&lt;HTMLButtonElement&gt;(null)
+const leftOpenerRef = useRef&lt;HTMLElement | null&gt;(null)
+const [isMobileViewport, setIsMobileViewport] = useState(false)
+
+useEffect(() => {
+  const mq = window.matchMedia('(max-width: 640px)')
+  const update = () => setIsMobileViewport(mq.matches)
+  update()
+  mq.addEventListener('change', update)
+  return () => mq.removeEventListener('change', update)
+}, [])
+
+// Focus management for the mobile left drawer
+useEffect(() => {
+  if (!(mobileLeftOpen &amp;&amp; isMobileViewport)) return
+  const panel = leftPanelRef.current
+  if (!panel) return
+
+  leftOpenerRef.current = (document.activeElement as HTMLElement) ?? null
+  // Move focus in (next frame so the open transition/visibility has applied)
+  const raf = requestAnimationFrame(() => leftCloseBtnRef.current?.focus())
+
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key !== 'Tab') return
+    const focusable = panel.querySelectorAll&lt;HTMLElement&gt;(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )
+    if (focusable.length === 0) return
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    if (e.shiftKey &amp;&amp; document.activeElement === first) {
+      e.preventDefault(); last.focus()
+    } else if (!e.shiftKey &amp;&amp; document.activeElement === last) {
+      e.preventDefault(); first.focus()
+    }
+  }
+  panel.addEventListener('keydown', onKeyDown)
+
+  return () => {
+    cancelAnimationFrame(raf)
+    panel.removeEventListener('keydown', onKeyDown)
+    // Restore focus to the opener (e.g. the command nav button)
+    leftOpenerRef.current?.focus?.()
+  }
+}, [mobileLeftOpen, isMobileViewport, leftPanelRef])</pre>
+
+<p>Pass the new props through where <code>LeftPanel</code> is rendered (line 1099):</p>
+
+<pre class="before">// page.tsx line 1099 (before)
+        &lt;LeftPanel isOpen={mobileLeftOpen} onClose={handleClosePanels} onInjectChat={injectRecall} panelRef={leftPanelRef} activeProject={activeProject} workspaceName={projects?.[0]?.companyName} /&gt;</pre>
+
+<pre class="after">// page.tsx line 1099 (after)
+        &lt;LeftPanel isOpen={mobileLeftOpen} onClose={handleClosePanels} onInjectChat={injectRecall} panelRef={leftPanelRef} closeBtnRef={leftCloseBtnRef} isMobileViewport={isMobileViewport} activeProject={activeProject} workspaceName={projects?.[0]?.companyName} /&gt;</pre>
+
+<p>Update the <code>LeftPanel</code> prop type to include <code>closeBtnRef?: React.Ref&lt;HTMLButtonElement&gt;</code> and <code>isMobileViewport?: boolean</code>.</p>
+
+<p><strong>Rationale:</strong> matches the dialog contract already used by <code>CalendarEventModal</code> (lines 376–381) without imposing dialog semantics on the desktop static-column rendering. The opener is captured from <code>document.activeElement</code> at open time, which correctly restores to whichever control opened the drawer (the command nav button, or a swipe-then-keyboard path).</p>
+
+<h3>Change 3 — Body scroll-lock while any panel is open (Finding 3, P1)</h3>
+<p><strong>File:</strong> <code>hub/app/page.tsx</code>. Add an effect after the focus effect.</p>
+
+<pre class="after">// page.tsx — in HubPage
+useEffect(() => {
+  const anyOpen = mobileLeftOpen || mobileRightOpen || chatPanelOpen
+  if (!anyOpen) return
+  const prev = document.body.style.overflow
+  document.body.style.overflow = 'hidden'
+  return () => { document.body.style.overflow = prev }
+}, [mobileLeftOpen, mobileRightOpen, chatPanelOpen])</pre>
+
+<p><strong>Rationale:</strong> grep confirms no existing <code>body.style.overflow</code> management. Capturing/restoring <code>prev</code> avoids clobbering any other future scroll-lock owner.</p>
+
+<h3>Change 4 — Escape-to-close (Finding 4, P1)</h3>
+<p><strong>File:</strong> <code>hub/app/page.tsx</code>. <code>handleClosePanels</code> already resets all three panel states (lines 396–401).</p>
+
+<pre class="after">// page.tsx — in HubPage
+useEffect(() => {
+  const anyOpen = mobileLeftOpen || mobileRightOpen || chatPanelOpen
+  if (!anyOpen) return
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') handleClosePanels()
+  }
+  window.addEventListener('keydown', onKey)
+  return () => window.removeEventListener('keydown', onKey)
+}, [mobileLeftOpen, mobileRightOpen, chatPanelOpen])</pre>
+
+<p><strong>Rationale:</strong> consistent with Escape handling already present in <code>GoogleChatPanel</code>, <code>SkillsPopover</code>, etc. Guarded on "any open" so the listener only exists when needed. (<code>handleClosePanels</code> is a stable closure over setters; if a lint rule flags the dep, wrap it in <code>useCallback</code> — see Dependencies.)</p>
+
+<h3>Change 5 — Memoize LeftPanel and the four sections (Finding 5, P1)</h3>
+<p><strong>Files:</strong> <code>hub/app/components/LeftPanelSections.tsx</code> (wrap section exports in <code>React.memo</code>) and <code>hub/app/page.tsx</code> (wrap <code>LeftPanel</code>).</p>
+
+<p>The inject prop is already stable (<code>injectRecall</code>, lines 949–951), so <code>React.memo</code> lets the sections skip re-render when only unrelated <code>HubPage</code> state (chat input) changes. Wrap each exported section component. Example for <code>KPISection</code> — apply the same pattern to <code>CalendarSection</code>, <code>TasksSection</code>, <code>DocumentsSection</code>:</p>
+
+<pre class="before">// LeftPanelSections.tsx line 961 (before)
+export function KPISection({
+  activeProject,
+  onInjectChat,
+}: {
+  activeProject?: string
+  onInjectChat: (msg: string) => void
+}) {</pre>
+
+<pre class="after">// LeftPanelSections.tsx (after) — convert to a memoized component
+function KPISectionImpl({
+  activeProject,
+  onInjectChat,
+}: {
+  activeProject?: string
+  onInjectChat: (msg: string) => void
+}) {</pre>
+
+<p>…then add at the end of the file (or directly after each impl) an exported memo wrapper:</p>
+
+<pre class="after">export const KPISection = memo(KPISectionImpl)
+export const CalendarSection = memo(CalendarSectionImpl)
+export const TasksSection = memo(TasksSectionImpl)
+export const DocumentsSection = memo(DocumentsSectionImpl)</pre>
+
+<p>Add <code>memo</code> to the React import (line 3). In <code>page.tsx</code>, wrap <code>LeftPanel</code>:</p>
+
+<pre class="after">// page.tsx — after the LeftPanel function definition (after line 96)
+const LeftPanel = memo(LeftPanelImpl)   // rename function LeftPanel -> function LeftPanelImpl</pre>
+
+<p><strong>Rationale:</strong> the props passed to these components (<code>onInjectChat={injectRecall}</code>, plus <code>activeProject</code>) are referentially stable across chat-input keystrokes, so memoization converts "re-render every keystroke" into "re-render only when a relevant prop or internal state changes." Keep the exported names identical so imports elsewhere are unaffected.</p>
+
+<h3>Change 6 — Heading semantics &amp; remove duplicate landmark (Finding 6, P2)</h3>
+<p><strong>File:</strong> <code>hub/app/components/LeftPanelSections.tsx</code>, <code>CollapsibleSection</code> (lines 62–116).</p>
+
+<p>Wrap the title in an <code>&lt;h3&gt;</code> (the panel header is an <code>h2</code>, so sections are the right next level), and drop the inner <code>role="region"</code> + duplicate <code>aria-label</code> on the body — the outer <code>&lt;section aria-label&gt;</code> already provides the labelled landmark.</p>
+
+<pre class="before">// LeftPanelSections.tsx lines 94-97 (before)
+        {/* Title */}
+        &lt;span className="collapsible-header__title"&gt;
+          {title}
+        &lt;/span&gt;</pre>
+
+<pre class="after">// LeftPanelSections.tsx (after)
+        {/* Title */}
+        &lt;h3 className="collapsible-header__title" style={{ margin: 0, font: 'inherit' }}&gt;
+          {title}
+        &lt;/h3&gt;</pre>
+
+<p>Note: the <code>&lt;h3&gt;</code> sits inside the existing <code>&lt;button&gt;</code> (lines 77–104), which is valid (a button may contain phrasing/heading content for this purpose) and keeps the disclosure control intact. If a stricter validator objects, use <code>&lt;span role="heading" aria-level={3}&gt;</code> instead.</p>
+
+<pre class="before">// LeftPanelSections.tsx lines 106-111 (before)
+      &lt;div
+        id={`section-${protocolNum}`}
+        role="region"
+        aria-label={title}
+        className={`collapsible-body ${isOpen ? 'collapsible-body--open' : 'collapsible-body--closed'}`}
+      &gt;</pre>
+
+<pre class="after">// LeftPanelSections.tsx (after) — keep id (referenced by aria-controls), drop duplicate region landmark
+      &lt;div
+        id={`section-${protocolNum}`}
+        className={`collapsible-body ${isOpen ? 'collapsible-body--open' : 'collapsible-body--closed'}`}
+      &gt;</pre>
+
+<p><strong>Rationale:</strong> screen-reader users gain a proper heading outline (h2 → h3) for the four sections, and the duplicate <code>region</code> landmark (same accessible name as the wrapping <code>section</code>) is removed. The <code>id</code> is retained because the header button's <code>aria-controls={`section-${protocolNum}`}</code> (line 80) points at it.</p>
+
+<h3>Change 7 — Make the task row content keyboard-operable (Finding 7, P2)</h3>
+<p><strong>File:</strong> <code>hub/app/components/LeftPanelSections.tsx</code>, lines 291–302.</p>
+
+<pre class="before">// LeftPanelSections.tsx lines 291-302 (before)
+      {/* Content — click to inject into chat */}
+      &lt;div
+        className="task-content"
+        onClick={onInjectChat}
+        style={{ flex: 1, cursor: 'pointer', minWidth: 0 }}
+      &gt;
+        &lt;div className={`task-title ${isCompleted || isFading ? 'task-title--completed' : 'task-title--pending'}`}&gt;
+          {task.title}
+        &lt;/div&gt;
+        {dueDate &amp;&amp; (
+          &lt;div className="task-due"&gt;Due {dueDate}&lt;/div&gt;
+        )}
+      &lt;/div&gt;</pre>
+
+<pre class="after">// LeftPanelSections.tsx (after) — button is keyboard-operable by default
+      {/* Content — click/Enter/Space to inject into chat */}
+      &lt;button
+        type="button"
+        className="task-content"
+        onClick={onInjectChat}
+        style={{ flex: 1, minWidth: 0, cursor: 'pointer', textAlign: 'left', background: 'none', border: 0, padding: 0, font: 'inherit', color: 'inherit' }}
+      &gt;
+        &lt;div className={`task-title ${isCompleted || isFading ? 'task-title--completed' : 'task-title--pending'}`}&gt;
+          {task.title}
+        &lt;/div&gt;
+        {dueDate &amp;&amp; (
+          &lt;div className="task-due"&gt;Due {dueDate}&lt;/div&gt;
+        )}
+      &lt;/button&gt;</pre>
+
+<p><strong>Rationale:</strong> a <code>&lt;button&gt;</code> is focusable and fires on Enter/Space natively, restoring keyboard parity with the mouse-only <code>onClick</code>. The reset inline styles preserve the existing visual layout. The checkbox button (lines 280–288) already calls <code>e.stopPropagation()</code>, so nesting is not a concern here (the checkbox is a sibling, not a child, of this content button).</p>
+
+<h3>Change 8 — Swipe backdrop reset &amp; exclusion of in-panel scroll rows (Finding 8, P2)</h3>
+<p><strong>File:</strong> <code>hub/app/hooks/useSwipePanels.ts</code>.</p>
+
+<p>(a) Always reset the backdrop's imperative inline styles to React-controlled values on touch-end, including the early-return path. Currently the early return at line 109 leaves any mid-drag inline <code>display</code>/<code>opacity</code> on the backdrop untouched, which can desync from the React-rendered values (lines 1485–1486 of <code>page.tsx</code>).</p>
+
+<pre class="before">// useSwipePanels.ts lines 108-112 (before)
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (!touchStartRef.current || !isSwipingRef.current) {
+      touchStartRef.current = null
+      return
+    }</pre>
+
+<pre class="after">// useSwipePanels.ts (after) — clear imperative backdrop styles so React's values win
+  const resetBackdropToReact = () => {
+    if (backdropRef.current) {
+      backdropRef.current.style.display = ''
+      backdropRef.current.style.opacity = ''
+    }
+  }
+
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (!touchStartRef.current || !isSwipingRef.current) {
+      touchStartRef.current = null
+      resetBackdropToReact()
+      return
+    }</pre>
+
+<p>And in the committed path (lines 132–135) where the backdrop is set imperatively, prefer clearing to React control rather than hard-coding, so the rendered style stays the source of truth once the gesture ends:</p>
+
+<pre class="before">// useSwipePanels.ts lines 131-135 (before)
+    const panelsStillOpen = mobileLeftOpen || mobileRightOpen
+    if (backdropRef.current) {
+      backdropRef.current.style.display = panelsStillOpen ? 'block' : 'none'
+      backdropRef.current.style.opacity = panelsStillOpen ? '1' : '0'
+    }</pre>
+
+<pre class="after">// useSwipePanels.ts (after) — let React's rendered style (page.tsx 1484-1487) take over
+    resetBackdropToReact()</pre>
+
+<p>Note: removing the imperative set means React's backdrop <code>style</code> must reflect the post-gesture state. <code>handleClosePanels</code>/<code>handleMobileTab</code> (called right below) flip <code>mobileLeftOpen</code>/<code>mobileRightOpen</code>, and the backdrop's rendered <code>display</code>/<code>opacity</code> are derived from those flags (lines 1485–1486), so on the next commit React paints the correct values. If a visible one-frame flicker appears in manual testing, keep the explicit set <em>and</em> additionally clear on the early-return path only.</p>
+
+<p>(b) Exclude the panel's own scrollable content from swipe-start so a horizontal drag on the doc/task filter tabs (<code>.doc-filter-tabs</code>, rendered inside <code>.panel-content</code>) does not start a close-swipe.</p>
+
+<pre class="before">// useSwipePanels.ts lines 28-35 (before)
+    if (
+      target.closest('.chat-suggestions') ||
+      target.closest('.chat-input-area') ||
+      target.closest('.quoted-reply-chip')
+    ) {
+      touchStartRef.current = null
+      return
+    }</pre>
+
+<pre class="after">// useSwipePanels.ts (after) — also skip drags that start on in-panel scroll/tab rows
+    if (
+      target.closest('.chat-suggestions') ||
+      target.closest('.chat-input-area') ||
+      target.closest('.quoted-reply-chip') ||
+      target.closest('.doc-filter-tabs') ||
+      target.closest('.section-row')
+    ) {
+      touchStartRef.current = null
+      return
+    }</pre>
+
+<p><strong>Rationale:</strong> the doc/task filter tab strips use <code>role="tablist"</code> with class <code>doc-filter-tabs</code> (lines 210, 850) and are horizontally interactive; <code>section-row</code> covers task/list rows. Excluding them from swipe-start prevents accidental panel closes. An alternative, noted in the audit, is to require an edge-start (e.g. <code>touch.clientX &lt; 24</code> for open) — implement that instead if product prefers edge-only open gestures. Always-resetting the backdrop removes the style-desync class of bugs.</p>
+
+<h3>Change 9 — Memoize derived lists (Finding 9, P2)</h3>
+<p><strong>File:</strong> <code>hub/app/components/LeftPanelSections.tsx</code>.</p>
+
+<p><code>CalendarSection</code> (lines 540–567): wrap <code>weekDays</code>, <code>daysWithEvents</code>, and <code>dayEvents</code> in <code>useMemo</code>. These recompute on every render today.</p>
+
+<pre class="before">// LeftPanelSections.tsx lines 540-567 (before)
+  const weekDays = getWeekDays(weekStart)
+  ...
+  const daysWithEvents = new Set&lt;string&gt;()
+  events.forEach((event) => { ... })
+  ...
+  const dayEvents = events.filter((event) => { ... })</pre>
+
+<pre class="after">// LeftPanelSections.tsx (after)
+  const weekDays = useMemo(() => getWeekDays(weekStart), [weekStart])
+
+  const daysWithEvents = useMemo(() => {
+    const set = new Set&lt;string&gt;()
+    events.forEach((event) => {
+      const eventDate = event.start.dateTime
+        ? new Date(event.start.dateTime)
+        : event.start.date
+          ? new Date(event.start.date + 'T00:00:00')
+          : null
+      if (eventDate) set.add(eventDate.toDateString())
+    })
+    return set
+  }, [events])
+
+  const selectedDateStr = selectedDate.toDateString()
+  const dayEvents = useMemo(() => events.filter((event) => {
+    const eventDate = event.start.dateTime
+      ? new Date(event.start.dateTime)
+      : event.start.date
+        ? new Date(event.start.date + 'T00:00:00')
+        : null
+    return eventDate ? eventDate.toDateString() === selectedDateStr : false
+  }), [events, selectedDateStr])</pre>
+
+<p><code>KPISection</code> (line 972):</p>
+
+<pre class="before">// LeftPanelSections.tsx line 972 (before)
+  const kpis = allKpis.filter(kpi => kpi.source !== 'paperclip')</pre>
+
+<pre class="after">// LeftPanelSections.tsx (after)
+  const kpis = useMemo(() => allKpis.filter(kpi => kpi.source !== 'paperclip'), [allKpis])</pre>
+
+<p>Add <code>useMemo</code> to the React import (line 3). <strong>Rationale:</strong> these derivations are pure functions of <code>events</code>/<code>weekStart</code>/<code>selectedDate</code>/<code>allKpis</code>; memoizing avoids rebuilding sets/arrays (and the <code>Date</code> churn) on unrelated re-renders, which compounds with the memoization in Change 5.</p>
+
+<h2>Files touched</h2>
+<table>
+<thead><tr><th>File</th><th>Changes</th></tr></thead>
+<tbody>
+<tr><td><code>hub/app/components/LeftPanelSections.tsx</code></td><td>Add <code>SectionErrorBoundary</code> (Change 1); heading + drop region landmark (6); task-content → button (7); <code>React.memo</code> on four sections (5); <code>useMemo</code> derived lists (9); import <code>Component</code>, <code>memo</code>, <code>useMemo</code>, <code>ErrorInfo</code>.</td></tr>
+<tr><td><code>hub/app/page.tsx</code></td><td>Import + per-section <code>SectionErrorBoundary</code> wrappers (1); drawer dialog props + focus hook + refs + viewport flag (2); body scroll-lock effect (3); Escape effect (4); <code>memo</code> on <code>LeftPanel</code> (5); thread <code>closeBtnRef</code>/<code>isMobileViewport</code> props (2).</td></tr>
+<tr><td><code>hub/app/hooks/useSwipePanels.ts</code></td><td>Always reset backdrop to React-controlled values on touch-end (8a); extend swipe-start exclusion list (8b).</td></tr>
+</tbody>
+</table>
+
+<h2>Testing</h2>
+<ul>
+<li><strong>Type check:</strong> <code>npx tsc --noEmit</code> (run from <code>hub/</code>). Expect zero errors; watch for prop-type additions on <code>LeftPanel</code> and the renamed <code>*Impl</code> functions.</li>
+<li><strong>Unit tests:</strong> <code>npx vitest run</code> (from <code>hub/</code>). Existing suites for the sections should still pass; the memo/heading changes preserve exported names and visible text.</li>
+<li><strong>Error containment (manual):</strong> temporarily add <code>throw new Error('boom')</code> at the top of one section (e.g. <code>CalendarSectionImpl</code>) and confirm only that section shows "Unable to display Calendar — try refreshing" while KPIs, Tasks, Documents, chat, and the right panel remain live — i.e. the app does <em>not</em> blank. Remove the throw afterward.</li>
+<li><strong>Keyboard-only drawer (manual, mobile viewport ≤640px):</strong> open the left drawer via the command nav button using keyboard; focus should land on the close (×) button; Tab/Shift+Tab should cycle within the drawer only (focus trap); Escape should close it; on close, focus should return to the command nav button. Verify a screen reader announces it as a dialog.</li>
+<li><strong>Scroll-lock (manual):</strong> with a panel open, confirm the background page does not scroll behind the backdrop; confirm scrolling is restored after close.</li>
+<li><strong>Swipe (manual, touch device/emulator):</strong> start a horizontal drag on the doc filter tabs and confirm it does not close the panel; interrupt a swipe mid-drag and confirm the backdrop does not get stuck visible or invisible.</li>
+<li><strong>Desktop regression:</strong> at &gt;640px confirm the left panel renders as a static column with <em>no</em> <code>role="dialog"</code>/<code>aria-modal</code> and no focus trap.</li>
+</ul>
+
+<h2>Acceptance criteria</h2>
+<ul>
+<li>A render-time throw in any one left-panel section is contained to that section (error message shown) and never blanks <code>HubPage</code>.</li>
+<li>The mobile left drawer exposes <code>role="dialog" aria-modal="true"</code> only when open on a mobile viewport; focus moves to the close button on open, is trapped within the drawer, and returns to the opener on close.</li>
+<li>Body scrolling is disabled while any panel (<code>mobileLeftOpen</code> / <code>mobileRightOpen</code> / <code>chatPanelOpen</code>) is open and restored on close.</li>
+<li>Escape closes any open panel.</li>
+<li>Typing in the chat input no longer re-renders the four sections (verify with React DevTools "highlight updates" — sections do not flash on keystroke).</li>
+<li>Each section title is an <code>h3</code> (or role=heading level 3); there is exactly one labelled landmark per section (no duplicate <code>region</code>).</li>
+<li>The task row content is reachable and activatable by keyboard (Tab to it, Enter/Space injects).</li>
+<li>Horizontal drags starting on the filter tabs / section rows do not trigger a close-swipe; the backdrop never desyncs after an interrupted swipe.</li>
+<li>Calendar/KPI derived lists are memoized (no recompute on unrelated renders).</li>
+<li><code>npx tsc --noEmit</code> and <code>npx vitest run</code> pass.</li>
+</ul>
+
+<h2>Dependencies &amp; sequencing</h2>
+<ul>
+<li><strong>Change 1 first</strong> (P0, self-contained): adds <code>SectionErrorBoundary</code> in <code>LeftPanelSections.tsx</code> and consumes it in <code>page.tsx</code>. No dependency on others.</li>
+<li><strong>Change 5 (memo)</strong> renames the section functions to <code>*Impl</code> and re-exports memo wrappers — do this <em>before or together with</em> Changes 6, 7, 9 since those edit the same component bodies. Keep exported names identical so Change 1's imports stay valid.</li>
+<li><strong>Change 2 (drawer a11y)</strong> depends on <code>leftPanelRef</code> (already provided by <code>useSwipePanels</code>) and adds <code>closeBtnRef</code>/<code>isMobileViewport</code>. Changes 3 and 4 are independent effects that can land in the same <code>HubPage</code> edit pass.</li>
+<li><strong>Change 4</strong> references <code>handleClosePanels</code>. It is currently a plain function (lines 396–401), recreated each render; the Escape effect's dependency array lists it. If ESLint <code>exhaustive-deps</code> complains, wrap <code>handleClosePanels</code> in <code>useCallback</code> (its setters are stable) — a small, safe refactor. <code>useSwipePanels</code> already receives <code>handleClosePanels</code>, so wrapping it in <code>useCallback</code> also stabilizes that hook's deps.</li>
+<li><strong>Change 8</strong> (swipe) is isolated to <code>useSwipePanels.ts</code> and can land any time; it pairs conceptually with Change 2 but has no code dependency.</li>
+<li>P2 items (6, 7, 8, 9) may be split into a follow-up PR if the P0/P1 set is shipped first.</li>
+</ul>
+
+<h2>Rollback</h2>
+<ul>
+<li>All changes are additive or local substitutions in three files; revert is a clean <code>git revert</code> of the commit(s).</li>
+<li><strong>If the error boundary misbehaves</strong> (e.g. swallows an error you need to see), remove the four <code>&lt;SectionErrorBoundary&gt;</code> wrappers in <code>page.tsx</code> lines 88–93 and the import — the sections fall back to raw rendering. The class itself is inert when unused.</li>
+<li><strong>If the focus trap interferes</strong> on desktop, the dialog props are already gated on <code>isOpen &amp;&amp; isMobileViewport</code>; disabling the focus effect (guard returns early) leaves the visual drawer unchanged.</li>
+<li><strong>If the swipe backdrop reset causes flicker</strong>, restore the explicit imperative set at lines 132–135 (keep only the early-return reset from 8a).</li>
+<li><strong>If memoization causes a stale section</strong>, drop the <code>memo()</code> wrapper for that one component (revert <code>export const X = memo(XImpl)</code> back to <code>export function X</code>); the others are unaffected.</li>
+<li>No data, schema, or API changes; no migration needed.</li>
+</ul>
+
+</body>
+</html>

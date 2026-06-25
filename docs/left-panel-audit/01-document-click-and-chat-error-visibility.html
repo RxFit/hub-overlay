@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Restore Google-document click + make chat failures diagnosable (P0)</title>
+<style>
+body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:920px;margin:2rem auto;padding:0 1rem;line-height:1.55;color:#1a1a1a}
+h1{border-bottom:3px solid #2563eb;padding-bottom:.3rem}
+h2{margin-top:2rem;color:#1e3a8a;border-bottom:1px solid #e5e7eb;padding-bottom:.2rem}
+h3{margin-top:1.4rem}
+code,pre{font-family:ui-monospace,Menlo,monospace}
+pre{background:#f6f8fa;padding:.8rem;border-radius:6px;overflow:auto;border:1px solid #e5e7eb;font-size:.86rem}
+table{border-collapse:collapse;width:100%}
+th,td{border:1px solid #d1d5db;padding:.4rem .6rem;text-align:left;vertical-align:top;font-size:.9rem}
+th{background:#f3f4f6}
+.badge{display:inline-block;padding:.15rem .6rem;border-radius:999px;color:#fff;font-size:.8rem;font-weight:600}
+.p0{background:#dc2626}.p1{background:#d97706}.p2{background:#2563eb}
+pre.before{background:#fef2f2;border-color:#fecaca}pre.after{background:#f0fdf4;border-color:#bbf7d0}
+blockquote{border-left:4px solid #9ca3af;margin:0;padding-left:1rem;color:#4b5563}
+ul{margin:.4rem 0}
+</style>
+</head>
+<body>
+
+<h1>Restore Google-document click + make chat failures diagnosable <span class="badge p0">P0</span></h1>
+
+<p><strong>Summary.</strong> Clicking a Google Drive document in the left panel currently surfaces the opaque message
+<em>"Something went wrong on my end."</em> in chat. The root cause is two compounding gaps: (1) the chat API route
+(<code>hub/app/api/chat/route.ts</code>) never wraps its handler body in a <code>try/catch</code> that returns a JSON
+<code>Response</code>, so any throw from <code>getServerSession</code> / <code>getToken</code> (secret rotation, corrupt
+cookie, JWT decode failure) becomes an opaque Next.js framework 500 with no JSON body and no structured log; and (2) the
+client (<code>hub/app/page.tsx</code> <code>sendToApi</code>) discards the server's JSON error/details on
+<code>!res.ok</code> and collapses every non-abort failure into the same generic string, so the operator sees nothing
+diagnosable and the user gets a dead end. This plan wraps the route in a Response-returning try/catch, surfaces the
+server's real <code>details</code>/<code>error</code> on the client (with a 401 vs 5xx branch), and removes two
+document-path latency/hang hazards (an unbounded extra Vertex call and two Drive <code>fetch</code> calls with no abort
+timeout). It also pins down two non-crashing checks (OAuth Drive scope; Vertex graceful-null behavior) so a coding agent
+can execute end to end without further context.</p>
+
+<h2>Why this matters</h2>
+<ul>
+<li><strong>It is the actively-reported P0 bug.</strong> Drive-document attachments are the primary "left panel"
+interaction and they currently fail visibly with a non-actionable message.</li>
+<li><strong>It is currently undebuggable.</strong> When auth/JWT throws before streaming begins, Next.js returns a
+framework 500 with <em>no JSON body</em> and the route logs <em>nothing</em> structured — there is no
+<code>log.error</code> on that path. Operators staring at Cloud Run logs see only a generic stack, not a Hub-scoped
+error event.</li>
+<li><strong>The client hides the one useful signal.</strong> The server <em>does</em> emit JSON errors for the cases it
+handles (401 Unauthorized, 400 Invalid JSON / Messages array). The client throws those away at
+<code>if (!res.ok) throw new Error(`API ${res.status}`)</code> and never reads the body, so a recoverable
+"session expired, sign in again" is indistinguishable from a true 500.</li>
+<li><strong>Latency/hang risk on exactly this path.</strong> The document branch issues an <em>extra</em>, sequential
+<code>searchSemanticBrain(...)</code> after the main search pipeline already resolved. It is not wrapped in
+<code>withTimeout</code>, and its internal service-account token-exchange <code>fetch</code> has no abort timeout, so a
+slow Vertex/token endpoint can push the request toward the client's 45s abort — which then renders as the timeout
+message, masking the real cause.</li>
+</ul>
+
+<h2>Findings</h2>
+<table>
+<thead>
+<tr><th>ID</th><th>Severity</th><th>Location (file:line)</th><th>Root cause</th></tr>
+</thead>
+<tbody>
+<tr>
+<td>F1</td><td><span class="badge p0">P0</span></td>
+<td><code>hub/app/api/chat/route.ts</code> : 158&ndash;472 (handler), throws at 160 &amp; 193</td>
+<td>POST handler body is not wrapped in a <code>try/catch</code> that returns a <code>Response</code>.
+<code>await getServerSession(authOptions)</code> (L160) and <code>await getToken({ req })</code> (L193) are unguarded;
+a throw becomes an opaque framework 500 with no JSON body and no <code>log.error</code>.</td>
+</tr>
+<tr>
+<td>F2</td><td><span class="badge p0">P0</span></td>
+<td><code>hub/app/page.tsx</code> : 466 (throw) &amp; 529&ndash;539 (catch)</td>
+<td>On <code>!res.ok</code> the client throws <code>new Error(`API ${res.status}`)</code>, discarding the server's JSON
+<code>error</code>/<code>details</code>. The catch collapses every non-<code>AbortError</code> to "Something went wrong
+on my end." No 401-vs-5xx branch.</td>
+</tr>
+<tr>
+<td>F3</td><td><span class="badge p1">P1</span></td>
+<td><code>hub/app/api/chat/route.ts</code> : 364&ndash;367</td>
+<td>The document branch makes an <em>extra, sequential</em> <code>searchSemanticBrain(...)</code> after
+<code>await searchPromise</code>. It is <strong>not</strong> wrapped in <code>withTimeout</code>; it relies only on
+<code>searchSemanticBrain</code>'s internal per-fetch <code>AbortSignal.timeout(10_000)</code> (and the token-exchange
+<code>fetch</code> in <code>vertex.ts</code> has <em>no</em> timeout), so this can hang the document path.</td>
+</tr>
+<tr>
+<td>F4</td><td><span class="badge p1">P1</span></td>
+<td><code>hub/lib/content-fetch.ts</code> : 183 &amp; 196 (inside <code>fetchDriveDocContent</code>, L170)</td>
+<td>The Drive export <code>fetch</code> (L183) and the <code>alt=media</code> download <code>fetch</code> (L196) have
+<strong>no</strong> <code>AbortSignal.timeout</code>, unlike the URL fetcher (L114&ndash;115). A slow Drive response can
+hang the request.</td>
+</tr>
+<tr>
+<td>F5</td><td><span class="badge p2">P2</span></td>
+<td><code>hub/app/api/chat/route.ts</code> : 377&ndash;383</td>
+<td>When <code>att.type==='document'</code> but <code>accessToken</code> is falsy, the code pushes the generic
+<code>[Unable to retrieve document content]</code>, hiding the real cause (missing/expired Google token).</td>
+</tr>
+<tr>
+<td>F6</td><td><span class="badge p2">P2</span></td>
+<td><code>hub/lib/auth.ts</code> : 14&ndash;35 (<code>GOOGLE_SCOPES</code>)</td>
+<td><strong>Check (currently passing).</strong> <code>drive.readonly</code> IS present (L20). Verify it is not removed; if
+ever absent, every Drive export 403s.</td>
+</tr>
+<tr>
+<td>F7</td><td>&mdash; (note)</td>
+<td><code>hub/lib/vertex.ts</code> : 144&ndash;213 (<code>searchSemanticBrain</code>), 112&ndash;135 (<code>buildSearchBody</code>)</td>
+<td><strong>Not a crash.</strong> <code>searchSemanticBrain</code> already returns <code>null</code> on every error path
+and <code>buildSearchBody</code> already uses <code>dataStoreSpecs</code>. A Vertex 400 only degrades document content;
+it does <em>not</em> 500 the route. No code change here — context only.</td>
+</tr>
+</tbody>
+</table>
+
+<h2>Implementation</h2>
+
+<h3>F1 &mdash; Wrap the POST handler in a Response-returning try/catch</h3>
+<p><strong>File:</strong> <code>hub/app/api/chat/route.ts</code></p>
+<p>The cleanest diff is to extract the existing handler body into an inner async function
+(<code>handleChat</code>) and call it inside a single <code>try/catch</code>. The inner function returns the existing
+<code>new Response(stream, …)</code> (or the early-return JSON responses), and the catch logs a structured error and
+returns JSON 500. This guards both <code>getServerSession</code> (L160) and <code>getToken</code> (L193), plus any other
+synchronous throw before streaming starts. Note: errors that occur <em>inside</em> the stream's <code>start()</code> are
+already handled by the existing <code>try/catch</code> at L424&ndash;461 (they emit an SSE <code>error</code> event), so
+this wrapper specifically covers the pre-stream phase.</p>
+
+<p>Current handler signature and the two unguarded awaits:</p>
+<pre class="before">export async function POST(req: NextRequest) {
+  // Auth check
+  const session = await getServerSession(authOptions)
+  if (!session?.user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  let body: { messages: ChatMessage[]; useCase?: string; attachments?: ChatAttachment[]; activeSkill?: string }
+  try {
+    body = await req.json()
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
+  }
+
+  // ... ~300 lines ... including:
+  const googleToken = await getToken({ req })
+  // ...
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    },
+  })
+}</pre>
+
+<p>Refactor: rename the existing <code>export async function POST(req: NextRequest)</code> to a private
+<code>async function handleChat(req: NextRequest): Promise&lt;Response&gt;</code> (keep the entire body verbatim — including
+all early <code>NextResponse.json</code> returns and the final <code>new Response(stream, …)</code>), then add a thin
+exported <code>POST</code> wrapper:</p>
+<pre class="after">async function handleChat(req: NextRequest): Promise&lt;Response&gt; {
+  // Auth check
+  const session = await getServerSession(authOptions)
+  if (!session?.user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  // ... ENTIRE existing handler body, UNCHANGED ...
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    },
+  })
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    return await handleChat(req)
+  } catch (err) {
+    const details = err instanceof Error ? err.message : 'Unknown error'
+    log.error({ err }, 'Chat request failed before streaming started')
+    return NextResponse.json(
+      { error: 'Chat request failed', details },
+      { status: 500 },
+    )
+  }
+}</pre>
+<p><strong>Rationale.</strong> Any throw from NextAuth session resolution or JWT decode (the exact failure mode behind the
+opaque 500) now produces a structured <code>log.error</code> event in Cloud Run and a JSON body the client can read.
+Extracting the body rather than indenting ~300 lines keeps the diff reviewable. <code>log</code> is already imported
+(<code>const log = createLogger('chat')</code>, L20) and <code>NextResponse</code> is already imported (L1).</p>
+
+<h3>F2 &mdash; Surface the server's real error on the client; branch on status</h3>
+<p><strong>File:</strong> <code>hub/app/page.tsx</code></p>
+<p>Replace the body-discarding throw (L466) and the all-or-nothing catch (L529&ndash;539). Read the JSON error body on
+<code>!res.ok</code>, attach <code>status</code> to the thrown <code>Error</code>, and branch in the catch: <code>401</code>
+&rarr; "session expired, sign in again"; <code>5xx</code> &rarr; generic message but keep logging the server details. Keep
+the existing <code>AbortError</code> (timeout) branch exactly.</p>
+
+<pre class="before">      if (!res.ok) throw new Error(`API ${res.status}`)</pre>
+<pre class="after">      if (!res.ok) {
+        // Surface the server's structured error instead of discarding it.
+        let serverDetail = ''
+        try {
+          const errBody = await res.json()
+          serverDetail = errBody?.details || errBody?.error || ''
+        } catch {
+          // non-JSON body (e.g. an opaque framework 500) — leave serverDetail empty
+        }
+        const apiErr = new Error(serverDetail || `API ${res.status}`) as Error & { status?: number }
+        apiErr.status = res.status
+        throw apiErr
+      }</pre>
+
+<p>And the catch block:</p>
+<pre class="before">    } catch (err) {
+      const isTimeout = err instanceof DOMException && err.name === 'AbortError'
+      console.error('Chat API Error:', err);
+      setIsTyping(false);
+      setMessages(prev => [...prev, {
+        id: crypto.randomUUID(),
+        role: 'assistant' as const,
+        content: isTimeout
+          ? "⏱️ That took longer than expected. Try asking again — things usually speed up quickly."
+          : "Something went wrong on my end. Give it another try in a moment.",
+      }]);
+    } finally {
+      clearTimeout(timeoutId)
+    }</pre>
+<pre class="after">    } catch (err) {
+      const isTimeout = err instanceof DOMException && err.name === 'AbortError'
+      const status = (err as { status?: number } | undefined)?.status
+      const detail = err instanceof Error ? err.message : ''
+      console.error('Chat API Error:', { status, detail, err });
+      setIsTyping(false);
+
+      let content: string
+      if (isTimeout) {
+        content = "⏱️ That took longer than expected. Try asking again — things usually speed up quickly."
+      } else if (status === 401) {
+        content = "Your session expired. Please sign in again to continue."
+      } else {
+        // 5xx / network / unknown — generic to the user, details already logged above.
+        content = "Something went wrong on my end. Give it another try in a moment."
+      }
+
+      setMessages(prev => [...prev, {
+        id: crypto.randomUUID(),
+        role: 'assistant' as const,
+        content,
+      }]);
+    } finally {
+      clearTimeout(timeoutId)
+    }</pre>
+<p><strong>Rationale.</strong> A 401 (expired/missing session — common after secret rotation or a stale tab) now tells the
+user to re-auth instead of looking like a server crash. Genuine 5xx still shows a friendly generic message, but the real
+server <code>details</code> are now in the browser console for support. The <code>AbortError</code>/45s-timeout path is
+preserved verbatim. The thrown <code>Error</code> carries <code>status</code> so the catch can branch without re-reading
+the response.</p>
+
+<h3>F3 &mdash; Bound the extra document-path Vertex call with withTimeout</h3>
+<p><strong>File:</strong> <code>hub/app/api/chat/route.ts</code></p>
+<p>The document branch issues a second, sequential <code>searchSemanticBrain(...)</code> after the main search pipeline
+has already resolved (<code>await searchPromise</code> at L325). It has no <code>withTimeout</code> guard. Wrap it so a
+slow Vertex/token endpoint degrades gracefully to <code>null</code> (Drive API fallback then runs) instead of blocking
+toward the client's 45s abort. <code>withTimeout</code> is already imported (L16).</p>
+<pre class="before">          if (lastUserMsg) {
+            const vertexResults = await searchSemanticBrain(
+              `${lastUserMsg.content} ${att.label}`,
+              process.env.VERTEX_DATA_STORE_ID || 'rxfit-gdrive'
+            )
+            if (vertexResults &amp;&amp; vertexResults.length > 0) {</pre>
+<pre class="after">          if (lastUserMsg) {
+            const vertexResults = await withTimeout(
+              searchSemanticBrain(
+                `${lastUserMsg.content} ${att.label}`,
+                process.env.VERTEX_DATA_STORE_ID || 'rxfit-gdrive'
+              ),
+              6_000,
+              null,
+              'attachment-vertex',
+            )
+            if (vertexResults &amp;&amp; vertexResults.length > 0) {</pre>
+<p><strong>Rationale.</strong> 6s is below the internal 10s per-fetch timeout and well below the client's 45s abort,
+guaranteeing the document path moves on to the Drive fallback (and ultimately to streaming) even if Vertex hangs.
+<code>searchSemanticBrain</code> already returns <code>VertexSearchResult[] | null</code>, so <code>null</code> is a valid
+fallback and the existing <code>if (vertexResults &amp;&amp; vertexResults.length > 0)</code> guard handles it unchanged.</p>
+
+<h3>F4 &mdash; Add abort timeouts to both Drive fetches</h3>
+<p><strong>File:</strong> <code>hub/lib/content-fetch.ts</code></p>
+<p>Inside <code>fetchDriveDocContent</code> (L170), neither Drive <code>fetch</code> has an abort signal. Add
+<code>signal: AbortSignal.timeout(10_000)</code> to both, matching the 10s used by the URL fetcher (L115) and by
+<code>searchSemanticBrain</code> (vertex.ts L167).</p>
+<pre class="before">      const res = await fetch(
+        `${DRIVE_EXPORT_BASE}/${fileId}/export?mimeType=${encodeURIComponent(exportMime)}`,
+        {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        }
+      )</pre>
+<pre class="after">      const res = await fetch(
+        `${DRIVE_EXPORT_BASE}/${fileId}/export?mimeType=${encodeURIComponent(exportMime)}`,
+        {
+          headers: { Authorization: `Bearer ${accessToken}` },
+          signal: AbortSignal.timeout(10_000),
+        }
+      )</pre>
+<p>And the non-Google download:</p>
+<pre class="before">      const res = await fetch(
+        `${DRIVE_EXPORT_BASE}/${fileId}?alt=media`,
+        {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        }
+      )</pre>
+<pre class="after">      const res = await fetch(
+        `${DRIVE_EXPORT_BASE}/${fileId}?alt=media`,
+        {
+          headers: { Authorization: `Bearer ${accessToken}` },
+          signal: AbortSignal.timeout(10_000),
+        }
+      )</pre>
+<p><strong>Rationale.</strong> A hung Drive call would otherwise block the document path indefinitely (the route's
+attachment loop has no surrounding timeout). On abort, <code>AbortSignal.timeout</code> throws, which is already caught by
+the function's outer <code>try/catch</code> (L175/L219) and returned as
+<code>[Failed to fetch document: …]</code> — graceful degradation, not a hang.</p>
+
+<h3>F5 &mdash; Reveal a missing/expired Google token in the document fallback</h3>
+<p><strong>File:</strong> <code>hub/app/api/chat/route.ts</code></p>
+<p>When the document branch reaches the <code>resolvedParts.push(...)</code> but neither Vertex nor Drive produced text,
+the cause is frequently a falsy <code>accessToken</code> (no/expired Google session). The current generic message hides
+that. Compute a clearer note and add a server log when the token is the reason.</p>
+<pre class="before">          // Fallback: direct Drive API export
+          if (!docText &amp;&amp; accessToken) {
+            docText = await fetchDriveDocContent(accessToken, att.fileId, att.mimeType)
+          }
+
+          resolvedParts.push(
+            `### Attached Document: "${att.label}"\n\n${docText ?? '[Unable to retrieve document content]'}`
+          )</pre>
+<pre class="after">          // Fallback: direct Drive API export
+          if (!docText &amp;&amp; accessToken) {
+            docText = await fetchDriveDocContent(accessToken, att.fileId, att.mimeType)
+          }
+
+          if (!docText &amp;&amp; !accessToken) {
+            log.warn({ label: att.label, fileId: att.fileId }, 'Document attachment unresolved: no Google access token')
+          }
+
+          const docFallback = !accessToken
+            ? '[Unable to retrieve document content: your Google session has no valid access token (it may be missing or expired). Ask the user to sign out and sign back in to re-grant Google Drive access.]'
+            : '[Unable to retrieve document content]'
+
+          resolvedParts.push(
+            `### Attached Document: "${att.label}"\n\n${docText ?? docFallback}`
+          )</pre>
+<p><strong>Rationale.</strong> The model now receives an accurate, actionable explanation (re-auth) instead of a vague
+failure, and the operator gets a <code>log.warn</code> pinpointing the missing token. This is the most common real cause
+of a failed Drive-document click after a token expiry.</p>
+
+<h3>F6 &mdash; Verify the Google Drive OAuth scope (check, fix only if absent)</h3>
+<p><strong>File:</strong> <code>hub/lib/auth.ts</code></p>
+<p>Confirm <code>GOOGLE_SCOPES</code> (L14&ndash;35) still contains a Drive read scope. As of this audit it does
+(<code>'https://www.googleapis.com/auth/drive.readonly'</code> at L20).</p>
+<pre class="before">const GOOGLE_SCOPES = [
+  'openid',
+  'email',
+  'profile',
+  'https://www.googleapis.com/auth/tasks',
+  'https://www.googleapis.com/auth/calendar',
+  'https://www.googleapis.com/auth/drive.readonly',   // ← required for Drive export
+  // ... gmail / chat / analytics scopes ...
+].join(' ')</pre>
+<p>If (and only if) the <code>drive.readonly</code> entry is ever missing, add it back into the array, then force a
+re-consent (the provider already sets <code>prompt: 'consent'</code> at L135). No change needed today.</p>
+<p><strong>Rationale.</strong> Without this scope every Drive <code>export</code> / <code>alt=media</code> call returns 403
+and document attachments fail at the source — independent of all the error-handling work above.</p>
+
+<h3>F7 &mdash; Note: Vertex degrades, it does not 500 (no change)</h3>
+<p><strong>File:</strong> <code>hub/lib/vertex.ts</code> (context only)</p>
+<p><code>searchSemanticBrain</code> (L144&ndash;213) returns <code>null</code> on every failure (no service account L149&ndash;152,
+token exchange failure L80&ndash;83, non-OK search L170&ndash;174, any thrown error L209&ndash;212).
+<code>buildSearchBody</code> (L112&ndash;135) already uses <code>dataStoreSpecs</code> with a fully-qualified datastore
+path. A Vertex 400 therefore only degrades document content (the Drive fallback then runs); it never throws into the route.
+No code change — recorded so a coding agent does not "fix" a non-bug.</p>
+
+<h2>Files touched</h2>
+<table>
+<thead><tr><th>File</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td><code>hub/app/api/chat/route.ts</code></td><td>F1 (extract body to <code>handleChat</code> + try/catch <code>POST</code> wrapper), F3 (wrap extra Vertex call in <code>withTimeout</code>), F5 (token-aware document fallback + <code>log.warn</code>).</td></tr>
+<tr><td><code>hub/app/page.tsx</code></td><td>F2 (read JSON error body on <code>!res.ok</code>, attach <code>status</code>, branch catch on 401/5xx, keep timeout branch).</td></tr>
+<tr><td><code>hub/lib/content-fetch.ts</code></td><td>F4 (add <code>AbortSignal.timeout(10_000)</code> to both Drive fetches).</td></tr>
+<tr><td><code>hub/lib/auth.ts</code></td><td>F6 — verification only; edit only if <code>drive.readonly</code> is absent.</td></tr>
+<tr><td><code>hub/lib/vertex.ts</code></td><td>F7 — no change (context note).</td></tr>
+<tr><td><code>hub/tests/chat-route.test.ts</code> (new)</td><td>Unit test: route returns JSON 500 with <code>details</code> when a dependency throws.</td></tr>
+<tr><td><code>hub/lib/content-fetch.test.ts</code></td><td>Add a case asserting the Drive fetch passes an abort <code>signal</code>.</td></tr>
+</tbody>
+</table>
+
+<h2>Testing</h2>
+
+<h3>Automated — vitest unit tests to add</h3>
+<p>Vitest config (<code>hub/vitest.config.ts</code>) includes <code>lib/**/*.test.ts</code> and
+<code>tests/**/*.test.ts</code>, runs in the <code>node</code> environment, and aliases <code>@</code> &rarr;
+<code>hub/</code>. Run all tests from inside <code>hub/</code>.</p>
+
+<p><strong>1. Route returns a JSON 500 when a dependency throws (F1).</strong> Create
+<code>hub/tests/chat-route.test.ts</code>. Mock <code>next-auth</code> so <code>getServerSession</code> throws, then assert
+the POST wrapper returns status 500 with a JSON body containing <code>error</code> and <code>details</code> (it must NOT
+reject). Mock the logger to keep output clean.</p>
+<pre>import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// getServerSession throws → exercises the F1 try/catch wrapper.
+vi.mock('next-auth', () => ({
+  getServerSession: vi.fn(async () => { throw new Error('JWTDecodeError: secret rotated') }),
+}))
+vi.mock('next-auth/jwt', () => ({ getToken: vi.fn(async () => null) }))
+vi.mock('@/lib/auth', () => ({ authOptions: {} }))
+// Keep logs quiet but assert error was logged.
+const errorSpy = vi.fn()
+vi.mock('@/lib/logger', () => ({
+  createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: errorSpy, debug: vi.fn() }),
+}))
+
+import { POST } from '@/app/api/chat/route'
+import { NextRequest } from 'next/server'
+
+describe('POST /api/chat — pre-stream error handling (F1)', () => {
+  beforeEach(() => errorSpy.mockClear())
+
+  it('returns a JSON 500 (not an opaque framework error) when auth throws', async () => {
+    const req = new NextRequest('http://localhost/api/chat', {
+      method: 'POST',
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
+      headers: { 'Content-Type': 'application/json' },
+    })
+
+    const res = await POST(req)          // must resolve, never reject
+    expect(res.status).toBe(500)
+
+    const json = await res.json()
+    expect(json.error).toBe('Chat request failed')
+    expect(typeof json.details).toBe('string')
+    expect(json.details).toContain('JWTDecodeError')
+
+    expect(errorSpy).toHaveBeenCalled()  // structured log emitted
+  })
+})</pre>
+<blockquote>If importing the route pulls in heavy transitive modules that are awkward to mock in the <code>node</code> env,
+prefer extracting <code>handleChat</code> as a named export and testing the thin <code>POST</code> wrapper around a
+stubbed <code>handleChat</code> that throws. Either approach proves the same invariant: a pre-stream throw yields JSON
+500 + a log, never an unhandled rejection.</blockquote>
+
+<p><strong>2. Drive fetch carries an abort signal (F4).</strong> Add to
+<code>hub/lib/content-fetch.test.ts</code>. Stub global <code>fetch</code>, call
+<code>fetchDriveDocContent('tok','fileId','application/vnd.google-apps.document')</code>, and assert the second arg to
+<code>fetch</code> includes a <code>signal</code> that is an <code>AbortSignal</code>.</p>
+<pre>import { fetchDriveDocContent } from '@/lib/content-fetch'
+
+it('passes an AbortSignal to the Drive export fetch (F4)', async () => {
+  const fetchSpy = vi.fn(async () => new Response('doc text', {
+    status: 200, headers: { 'content-type': 'text/plain' },
+  }))
+  vi.stubGlobal('fetch', fetchSpy)
+
+  await fetchDriveDocContent('tok', 'fileId', 'application/vnd.google-apps.document')
+
+  const [, init] = fetchSpy.mock.calls[0]
+  expect(init.signal).toBeInstanceOf(AbortSignal)
+  vi.unstubAllGlobals()
+})</pre>
+
+<p><strong>3. Client surfaces server details (F2).</strong> If <code>page.tsx</code> has no test harness, assert the
+contract at the unit level instead: a small test that, given a mock <code>Response</code> with
+<code>{ ok:false, status:401, json:()=>({error:'Unauthorized'}) }</code>, the error-construction logic produces an
+<code>Error</code> whose <code>status===401</code>. Where feasible, extract the <code>!res.ok</code>-to-Error mapping into a
+tiny pure helper so it is directly testable; otherwise cover F2 via the manual steps below.</p>
+
+<h3>Automated — commands (run from <code>hub/</code>)</h3>
+<pre>cd hub
+npx tsc --noEmit          # type-check: the handleChat extraction, status-typed Error, and signal additions must compile
+npx vitest run            # full suite incl. the new chat-route + content-fetch cases
+npx vitest run tests/chat-route.test.ts lib/content-fetch.test.ts   # focused</pre>
+
+<h3>Manual verification (the actual reported bug)</h3>
+<ol>
+<li>Deploy the branch (or run <code>npm run dev</code> in <code>hub/</code>) and open the app with a fresh, valid Google
+sign-in.</li>
+<li>Open the left panel Documents list and <strong>click a Google Drive document</strong> to attach it, then send a
+message that references it (e.g. "summarize this doc").</li>
+<li><strong>Expected:</strong> a streamed 200 SSE response with the document content summarized. Confirm in DevTools &rarr;
+Network that <code>POST /api/chat</code> is <code>200</code> with <code>Content-Type: text/event-stream</code> and
+<code>data:</code> frames. No "Something went wrong on my end." bubble.</li>
+<li>Watch Cloud Run logs (<code>gcloud run services logs read &lt;service&gt; --limit=100</code>, or the console).
+Confirm the new structured events appear when relevant: the F1 <code>log.error</code> with
+<code>"Chat request failed before streaming started"</code> only on genuine pre-stream throws, and the F5
+<code>log.warn</code> <code>"Document attachment unresolved: no Google access token"</code> only when the token is
+missing.</li>
+<li><strong>401 path (F2):</strong> simulate an expired session (clear the session cookie or rotate
+<code>NEXTAUTH_SECRET</code> on the running instance, then click a doc without re-auth). Confirm the chat bubble now reads
+<em>"Your session expired. Please sign in again…"</em> instead of the generic message, and the browser console logs
+<code>{ status: 401, detail: 'Unauthorized', … }</code>.</li>
+<li><strong>5xx path (F1+F2):</strong> force a pre-stream throw (e.g. temporarily set an invalid
+<code>NEXTAUTH_SECRET</code> so JWT decode throws). Confirm the route returns JSON
+<code>{ error:'Chat request failed', details:'…' }</code> with status 500, the Cloud Run log shows the F1 error event,
+and the client shows the generic 5xx bubble while the console carries the server <code>details</code>.</li>
+<li><strong>Latency/hang (F3+F4):</strong> with Vertex/Drive reachable, confirm a Drive-doc click streams within a few
+seconds (well under the 45s client abort), proving the bounded calls no longer stall the document path.</li>
+</ol>
+
+<h2>Acceptance criteria</h2>
+<ul>
+<li>☐ Clicking a Drive document in the left panel and sending a message returns a streamed <code>200</code> SSE response
+with usable document context (no "Something went wrong on my end.").</li>
+<li>☐ <code>POST /api/chat</code> never returns an opaque framework 500: any pre-stream throw yields
+<code>{ error:'Chat request failed', details }</code> with status 500 and a structured <code>log.error</code> in Cloud
+Run.</li>
+<li>☐ A 401 from the route renders the user-facing "session expired, sign in again" message; a 5xx renders the generic
+message while the server <code>details</code> are logged to the browser console.</li>
+<li>☐ The <code>AbortError</code>/45s client-timeout branch still shows the existing "took longer than expected" message,
+unchanged.</li>
+<li>☐ The extra document-path <code>searchSemanticBrain</code> call is wrapped in
+<code>withTimeout(..., 6_000, null, 'attachment-vertex')</code> and falls back to the Drive export on timeout.</li>
+<li>☐ Both Drive fetches in <code>fetchDriveDocContent</code> pass <code>AbortSignal.timeout(10_000)</code>.</li>
+<li>☐ A document attachment with no access token produces the token-aware fallback note and a
+<code>log.warn</code>, not the generic <code>[Unable to retrieve document content]</code>.</li>
+<li>☐ <code>auth.ts</code> still includes <code>drive.readonly</code> (verified; edited only if it was missing).</li>
+<li>☐ <code>npx tsc --noEmit</code> passes; <code>npx vitest run</code> passes including the new F1 and F4 tests.</li>
+</ul>
+
+<h2>Dependencies &amp; sequencing</h2>
+<ol>
+<li><strong>F1 first.</strong> Wrapping the route in a Response-returning try/catch is the foundation — without a JSON
+error body, F2's client-side <code>details</code> surfacing has nothing to read on the 500 path.</li>
+<li><strong>F2 second.</strong> Client surfacing builds directly on F1's JSON contract; verify the 401 branch (already
+emitted by the existing L161&ndash;163 guard) and the new 5xx branch together.</li>
+<li><strong>F3 + F4 + F5 in parallel.</strong> Independent latency/robustness fixes on the document path; no ordering
+constraint among them. F3 and F5 both edit <code>route.ts</code> — apply together to avoid a second pass.</li>
+<li><strong>F6 anytime.</strong> Verification step; only becomes an edit if the scope is missing.</li>
+<li><strong>F7 never edited.</strong> Context note.</li>
+</ol>
+<p>No new npm dependencies. <code>withTimeout</code> (<code>@/lib/timeout</code>) and <code>log</code>
+(<code>createLogger</code>) and <code>NextResponse</code> are already imported in the touched files.
+<code>AbortSignal.timeout</code> is available in the Node 18+/Next.js <code>nodejs</code> runtime this route already
+declares (<code>export const runtime = 'nodejs'</code>, route.ts L22) and is already used in <code>vertex.ts</code>.</p>
+
+<h2>Rollback</h2>
+<ul>
+<li>All changes are localized and additive; revert per file via <code>git revert</code> / <code>git checkout</code> of
+the touched paths.</li>
+<li><strong>F1</strong> is the highest-leverage and lowest-risk change (it only adds an outer wrapper); reverting it
+restores the prior opaque-500 behavior but breaks nothing else. The extracted <code>handleChat</code> body is byte-for-byte
+the previous handler, so a revert is a clean rename back to <code>POST</code>.</li>
+<li><strong>F2</strong> revert restores the single generic message; the server still emits JSON errors (harmless if
+unread).</li>
+<li><strong>F3/F4</strong> reverts remove the timeouts and reintroduce the hang risk only under slow upstreams — no
+correctness change.</li>
+<li><strong>F5</strong> revert restores the generic fallback string; no behavioral risk.</li>
+<li>If the new tests prove flaky in CI (e.g. module-mocking friction), they can be skipped independently of the source
+changes — the source fixes do not depend on the tests.</li>
+</ul>
+
+</body>
+</html>

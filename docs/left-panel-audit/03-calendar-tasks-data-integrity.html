@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calendar &amp; Tasks Data Integrity — Implementation Plan</title>
+<style>
+body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:920px;margin:2rem auto;padding:0 1rem;line-height:1.55;color:#1a1a1a}
+h1{border-bottom:3px solid #2563eb;padding-bottom:.3rem}
+h2{margin-top:2rem;color:#1e3a8a;border-bottom:1px solid #e5e7eb;padding-bottom:.2rem}
+h3{margin-top:1.4rem}
+code,pre{font-family:ui-monospace,Menlo,monospace}
+pre{background:#f6f8fa;padding:.8rem;border-radius:6px;overflow:auto;border:1px solid #e5e7eb;font-size:.86rem}
+table{border-collapse:collapse;width:100%}
+th,td{border:1px solid #d1d5db;padding:.4rem .6rem;text-align:left;vertical-align:top;font-size:.9rem}
+th{background:#f3f4f6}
+.badge{display:inline-block;padding:.15rem .6rem;border-radius:999px;color:#fff;font-size:.8rem;font-weight:600}
+.p0{background:#dc2626}.p1{background:#d97706}.p2{background:#2563eb}
+pre.before{background:#fef2f2;border-color:#fecaca}pre.after{background:#f0fdf4;border-color:#bbf7d0}
+blockquote{border-left:4px solid #9ca3af;margin:0;padding-left:1rem;color:#4b5563}
+ul{margin:.4rem 0}
+</style>
+</head>
+<body>
+
+<h1>Calendar &amp; Tasks Data Integrity <span class="badge p0">P0</span></h1>
+
+<p><strong>Piece:</strong> Calendar &amp; Tasks data integrity. Newly created calendar events silently lose the user-entered <code>location</code> and land at the <em>wrong hour</em> (the modal sends naive local datetime strings with no time zone, so Google interprets them against the calendar's default zone). Independently, task due dates render nonsensically — a task due <em>tomorrow</em> shows "just now" because the formatter only ever computes elapsed past time. A date off-by-one bug compounds both for the user's Central (negative UTC offset) time zone.</p>
+
+<p><strong>Repo:</strong> <code>/home/user/hub-overlay</code> (app under <code>hub/</code>). All paths below are absolute.</p>
+
+<h2>Why this matters</h2>
+<ul>
+<li><strong>Wrong-time events are a data-corruption bug, not a cosmetic one.</strong> A user in Austin (US Central) creating a 9:00&nbsp;AM event sends the string <code>2026-06-24T09:00:00</code> with no offset. Google's <code>events.insert</code> treats a zone-less <code>dateTime</code> as the calendar's default time zone. If that default differs from the user's local zone (common — calendars are often left on a server/account default), the event lands at the wrong hour. The user has no signal that anything went wrong until they miss the meeting.</li>
+<li><strong>Location is collected, validated, and then dropped.</strong> The modal has a Location input; the request body includes it; the Zod schema explicitly permits it — but <code>createCalendarEvent</code> never copies it into the Google payload. Every event created through the panel loses its address / Meet link. Silent data loss is worse than a visible failure.</li>
+<li><strong>Due dates that say "just now" destroy trust in the panel.</strong> A future due date routed through a past-only "X ago" formatter collapses to "just now", making the task list look broken and actively misleading.</li>
+<li><strong>The user is in Austin (Central, UTC−5/−6).</strong> Every off-by-one and zone bug here is guaranteed to reproduce for this user, not just a theoretical edge case.</li>
+</ul>
+
+<h2>Findings</h2>
+
+<table>
+<thead>
+<tr><th>ID</th><th>Pri</th><th>Symptom</th><th>Location (verified)</th><th>Root cause</th></tr>
+</thead>
+<tbody>
+<tr>
+<td>C-P0-1</td><td><span class="badge p0">P0</span></td>
+<td>Event <code>location</code> silently dropped on create</td>
+<td><code>hub/lib/google.ts</code> 205–224 (param 207–214, body 219–224)</td>
+<td>Param type omits <code>location</code>; body never sets it, though the modal collects it (<code>LeftPanelSections.tsx</code> 451–462 / sent 353) and the schema permits it (<code>zod-schemas.ts</code> 228)</td>
+</tr>
+<tr>
+<td>C-P0-2</td><td><span class="badge p0">P0</span></td>
+<td>Timed events land at the wrong hour</td>
+<td><code>hub/lib/google.ts</code> 219–224; <code>LeftPanelSections.tsx</code> 341–342</td>
+<td>Modal builds zone-less <code>`${date}T${startTime}:00`</code>; <code>createCalendarEvent</code> sends <code>start:{dateTime}</code> with no <code>timeZone</code>; Google resolves against the calendar default zone</td>
+</tr>
+<tr>
+<td>C-P1-4</td><td><span class="badge p1">P1</span></td>
+<td>Default / selected date off by one for negative-offset users</td>
+<td><code>LeftPanelSections.tsx</code> 570 (<code>selectedDateISO</code>), 324 (modal default)</td>
+<td><code>new Date(...).toISOString().split('T')[0]</code> converts local midnight to UTC, which is the <em>previous</em> calendar day in Central time</td>
+</tr>
+<tr>
+<td>T-P1-3</td><td><span class="badge p1">P1</span></td>
+<td>Future due date shows "just now"</td>
+<td><code>LeftPanelSections.tsx</code> 270; <code>panel-inject.ts</code> 97 (via <code>formatRelativeDate</code>, defined 68–85)</td>
+<td><code>formatRelativeDate</code> computes <code>now − d</code> only; a future date yields a negative diff &lt; 1 min → "just now"</td>
+</tr>
+<tr>
+<td>T-P2-1</td><td><span class="badge p2">P2</span></td>
+<td>Due day shifts by one for Central users</td>
+<td><code>LeftPanelSections.tsx</code> 270; <code>panel-inject.ts</code> 91–99</td>
+<td>Google Tasks <code>due</code> is a date-only value at UTC midnight; passing it to <code>new Date()</code> and formatting in local time shifts the day backward</td>
+</tr>
+<tr>
+<td>C-P2-1</td><td><span class="badge p2">P2</span></td>
+<td><code>summary</code> rendered without fallback though Google may omit it</td>
+<td><code>LeftPanelSections.tsx</code> 677, 780, 784; type at <code>useHubData.ts</code> 145 (mirrored <code>google.ts</code> 141)</td>
+<td>Type declares <code>summary: string</code> (non-optional), but Google can return an event with no summary; the UI renders/aria-labels it raw, yielding empty text</td>
+</tr>
+</tbody>
+</table>
+
+<h2>Implementation</h2>
+
+<h3>1. C-P0-1 + C-P0-2 — Add <code>location</code> and <code>timeZone</code> to <code>createCalendarEvent</code></h3>
+<p><strong>File:</strong> <code>/home/user/hub-overlay/hub/lib/google.ts</code> (lines 205–238)</p>
+
+<pre class="before">export async function createCalendarEvent(
+  accessToken: string,
+  event: {
+    summary: string
+    description?: string
+    start: string   // ISO datetime or date
+    end: string     // ISO datetime or date
+    attendees?: string[]  // email addresses
+    calendarId?: string
+  }
+): Promise&lt;GoogleCalendarEvent&gt; {
+  const calId = encodeURIComponent(event.calendarId ?? 'primary')
+  const isAllDay = event.start.length === 10  // "2026-05-30" vs "2026-05-30T10:00:00"
+
+  const body: Record&lt;string, unknown&gt; = {
+    summary: event.summary,
+    description: event.description,
+    start: isAllDay ? { date: event.start } : { dateTime: event.start },
+    end: isAllDay ? { date: event.end } : { dateTime: event.end },
+  }
+
+  if (event.attendees?.length) {
+    body.attendees = event.attendees.map(email =&gt; ({ email }))
+  }</pre>
+
+<pre class="after">export async function createCalendarEvent(
+  accessToken: string,
+  event: {
+    summary: string
+    description?: string
+    start: string   // ISO datetime or date
+    end: string     // ISO datetime or date
+    attendees?: string[]  // email addresses
+    location?: string
+    timeZone?: string  // IANA tz, e.g. "America/Chicago"; required for correct timed events
+    calendarId?: string
+  }
+): Promise&lt;GoogleCalendarEvent&gt; {
+  const calId = encodeURIComponent(event.calendarId ?? 'primary')
+  const isAllDay = event.start.length === 10  // "2026-05-30" vs "2026-05-30T10:00:00"
+
+  // For timed events, attach the caller's IANA time zone so Google anchors the
+  // naive local datetime to the right offset instead of the calendar default.
+  const startField = isAllDay
+    ? { date: event.start }
+    : { dateTime: event.start, ...(event.timeZone ? { timeZone: event.timeZone } : {}) }
+  const endField = isAllDay
+    ? { date: event.end }
+    : { dateTime: event.end, ...(event.timeZone ? { timeZone: event.timeZone } : {}) }
+
+  const body: Record&lt;string, unknown&gt; = {
+    summary: event.summary,
+    description: event.description,
+    start: startField,
+    end: endField,
+  }
+
+  if (event.location) body.location = event.location
+
+  if (event.attendees?.length) {
+    body.attendees = event.attendees.map(email =&gt; ({ email }))
+  }</pre>
+
+<p><strong>Rationale:</strong> <code>location</code> is now copied into the Google payload, ending the silent data loss. <code>timeZone</code> is attached per RFC&nbsp;3339 only to timed events; all-day events stay as <code>{ date }</code> with no zone (Google rejects a <code>timeZone</code> on a <code>date</code> field). When <code>timeZone</code> is absent the behaviour is unchanged, so the change is backward-compatible for any other caller.</p>
+
+<h3>2. C-P0-2 — Permit <code>timeZone</code> in the create schema</h3>
+<p><strong>File:</strong> <code>/home/user/hub-overlay/hub/lib/zod-schemas.ts</code> (lines 222–230)</p>
+<p>The route at <code>hub/app/api/google/calendar/route.ts:95</code> passes <code>parsed.data</code> straight into <code>createCalendarEvent</code>. Zod strips unknown keys, so <code>timeZone</code> must be in the schema or it is dropped before reaching <code>google.ts</code>.</p>
+
+<pre class="before">export const GoogleCalendarCreateSchema = z.object({
+  summary: z.string().trim().min(1).max(1024),
+  description: z.string().max(8192).optional(),
+  start: z.string().min(1).max(64),
+  end: z.string().min(1).max(64),
+  attendees: z.array(z.string().email().max(320)).max(100).optional(),
+  location: z.string().max(1024).optional(),
+  calendarId: z.string().max(1024).optional(),
+})</pre>
+
+<pre class="after">export const GoogleCalendarCreateSchema = z.object({
+  summary: z.string().trim().min(1).max(1024),
+  description: z.string().max(8192).optional(),
+  start: z.string().min(1).max(64),
+  end: z.string().min(1).max(64),
+  attendees: z.array(z.string().email().max(320)).max(100).optional(),
+  location: z.string().max(1024).optional(),
+  // IANA time-zone name (e.g. "America/Chicago"). Bounded so a pathological
+  // value can't reach Google. Optional: all-day events omit it.
+  timeZone: z.string().max(64).optional(),
+  calendarId: z.string().max(1024).optional(),
+})</pre>
+
+<p><strong>Rationale:</strong> No route change is required — <code>route.ts</code> already forwards the full parsed object. Adding the field to the schema is the only thing standing between the client and <code>createCalendarEvent</code>. The 64-char bound matches the longest realistic IANA name with margin.</p>
+
+<h3>3. C-P0-2 + C-P1-4 — Modal: send <code>timeZone</code>, default the date from local parts</h3>
+<p><strong>File:</strong> <code>/home/user/hub-overlay/hub/app/components/LeftPanelSections.tsx</code></p>
+
+<p><strong>3a. Add a local-date helper</strong> near the other formatting helpers (e.g. just above <code>CalendarEventModal</code>, around line 316). This is the single source of truth for "today's calendar date in the user's local zone":</p>
+
+<pre class="after">/** Local calendar date as YYYY-MM-DD, WITHOUT the UTC shift that
+ *  new Date().toISOString() introduces for negative-offset users. */
+function toLocalISODate(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}</pre>
+
+<p><strong>3b. Modal default date</strong> — line 324:</p>
+<pre class="before">  const today = defaultDate || new Date().toISOString().split('T')[0]</pre>
+<pre class="after">  const today = defaultDate || toLocalISODate(new Date())</pre>
+
+<p><strong>3c. Thread the user's time zone through the create request</strong> — <code>handleSave</code>, lines 341–354:</p>
+<pre class="before">      const start = `${date}T${startTime}:00`
+      const end = `${date}T${endTime}:00`
+      const emailList = attendees.split(',').map(s =&gt; s.trim()).filter(Boolean)
+      const res = await fetch('/api/google/calendar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          summary: title.trim(),
+          description: description.trim() || undefined,
+          start,
+          end,
+          attendees: emailList.length ? emailList : undefined,
+          location: location.trim() || undefined,
+        }),
+      })</pre>
+<pre class="after">      const start = `${date}T${startTime}:00`
+      const end = `${date}T${endTime}:00`
+      // Anchor the naive local datetime to the user's actual zone so Google
+      // doesn't reinterpret it against the calendar default (wrong-hour bug).
+      const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+      const emailList = attendees.split(',').map(s =&gt; s.trim()).filter(Boolean)
+      const res = await fetch('/api/google/calendar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          summary: title.trim(),
+          description: description.trim() || undefined,
+          start,
+          end,
+          attendees: emailList.length ? emailList : undefined,
+          location: location.trim() || undefined,
+          timeZone: timeZone || undefined,
+        }),
+      })</pre>
+
+<p><strong>3d. <code>selectedDateISO</code></strong> — line 570:</p>
+<pre class="before">  const selectedDateISO = selectedDate.toISOString().split('T')[0]</pre>
+<pre class="after">  const selectedDateISO = toLocalISODate(selectedDate)</pre>
+
+<p><strong>Rationale:</strong> <code>Intl.DateTimeFormat().resolvedOptions().timeZone</code> returns the browser's IANA zone (e.g. <code>America/Chicago</code> for the user). Combined with change&nbsp;#1, the event now lands at the correct local hour regardless of the calendar's default zone. <code>toLocalISODate</code> removes the UTC round-trip so a Central user clicking a day no longer gets the previous day's date prefilled. The helper is reused for both the modal default and the selected-day passthrough, keeping the two in sync.</p>
+
+<h3>4. T-P1-3 + T-P2-1 — A due-date formatter that handles future and overdue</h3>
+<p><strong>File:</strong> <code>/home/user/hub-overlay/hub/lib/panel-inject.ts</code></p>
+
+<p>Google Tasks <code>due</code> is a date-only timestamp at UTC midnight (e.g. <code>2026-06-25T00:00:00.000Z</code>). Two bugs stack: (a) <code>formatRelativeDate</code> is past-only, so a future due date returns "just now"; (b) formatting that UTC-midnight value in local time shifts the day backward for Central users. Add a dedicated <code>formatDueDate</code> that parses the <em>date portion</em> in local terms and computes a signed day delta.</p>
+
+<p><strong>4a. Add the formatter</strong> (place it next to <code>formatShortDate</code> / <code>formatRelativeDate</code>, after line 85):</p>
+
+<pre class="after">/**
+ * Format a Google Tasks `due` value (date-only, UTC midnight) for display.
+ * Parses the DATE portion in local terms so the day doesn't shift for
+ * negative-offset users, and reports future deltas + overdue — unlike
+ * formatRelativeDate, which is past-only and would say "just now" for a
+ * task due tomorrow.
+ */
+export function formatDueDate(isoString: string): string {
+  try {
+    // Take the YYYY-MM-DD prefix and build a LOCAL midnight date so the
+    // calendar day matches what the user sees, not the UTC instant.
+    const [y, m, d] = isoString.slice(0, 10).split('-').map(Number)
+    if (!y || !m || !d) return isoString
+    const due = new Date(y, m - 1, d)
+
+    const now = new Date()
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    const diffDays = Math.round((due.getTime() - today.getTime()) / 86_400_000)
+
+    if (diffDays === 0) return 'Today'
+    if (diffDays === 1) return 'Tomorrow'
+    if (diffDays === -1) return 'Yesterday (overdue)'
+    if (diffDays &lt; 0) return `${-diffDays}d overdue`
+    if (diffDays &lt; 7) return `in ${diffDays}d`
+    return due.toLocaleDateString([], { month: 'short', day: 'numeric' })
+  } catch {
+    return isoString
+  }
+}</pre>
+
+<p><strong>4b. Use it in the task row</strong> — <code>LeftPanelSections.tsx</code> line 270 (and add <code>formatDueDate</code> to the import block at lines 9–16):</p>
+<pre class="before">  const dueDate = task.due ? formatRelativeDate(task.due) : null</pre>
+<pre class="after">  const dueDate = task.due ? formatDueDate(task.due) : null</pre>
+
+<p><strong>4c. Use it in the inject builder</strong> — <code>panel-inject.ts</code> line 97:</p>
+<pre class="before">  if (task.due) lines.push(`• Due: ${formatRelativeDate(task.due)}`)</pre>
+<pre class="after">  if (task.due) lines.push(`• Due: ${formatDueDate(task.due)}`)</pre>
+
+<p><strong>Rationale:</strong> Parsing the date prefix into a <em>local</em> <code>new Date(y, m-1, d)</code> avoids the UTC-midnight day shift (fixes T-P2-1), and the signed <code>diffDays</code> gives correct future / today / tomorrow / overdue wording (fixes T-P1-3). <code>formatRelativeDate</code> is left intact for genuinely-past values like Drive <code>modifiedTime</code> (used at <code>LeftPanelSections.tsx:930</code>), which it handles correctly.</p>
+
+<h3>5. C-P2-1 — Make <code>summary</code> optional and render a fallback</h3>
+<p><strong>Files:</strong> <code>/home/user/hub-overlay/hub/app/hooks/useHubData.ts</code> and <code>/home/user/hub-overlay/hub/app/components/LeftPanelSections.tsx</code></p>
+
+<p><strong>5a. Type fix</strong> — <code>useHubData.ts</code> line 145 (inside <code>interface CalendarEvent</code>):</p>
+<pre class="before">  summary: string</pre>
+<pre class="after">  summary?: string</pre>
+
+<p><strong>5b. Render fallback</strong> — the three raw usages in <code>LeftPanelSections.tsx</code>:</p>
+<p>Visible summary (line 784):</p>
+<pre class="before">          &lt;div className="calendar-summary"&gt;{event.summary}&lt;/div&gt;</pre>
+<pre class="after">          &lt;div className="calendar-summary"&gt;{event.summary || '(untitled)'}&lt;/div&gt;</pre>
+
+<p>Main-button aria-label (line 780):</p>
+<pre class="before">        aria-label={`Event: ${event.summary} at ${startTime}`}</pre>
+<pre class="after">        aria-label={`Event: ${event.summary || '(untitled)'} at ${startTime}`}</pre>
+
+<p>Delete-button aria-label (line 795) and the delete-confirm payload (line 677) read the same field; apply the same fallback so the confirm dialog and the 🗑 label never show an empty name:</p>
+<pre class="before">  // line 677 — inside setDeleteConfirm({ ... })
+                    summary: event.summary,
+  // line 795
+        aria-label={`Delete event: ${event.summary}`}</pre>
+<pre class="after">  // line 677 — inside setDeleteConfirm({ ... })
+                    summary: event.summary || '(untitled)',
+  // line 795
+        aria-label={`Delete event: ${event.summary || '(untitled)'}`}</pre>
+
+<p><strong>Rationale:</strong> The type claimed <code>summary</code> was always present, so no consumer guarded it; Google legitimately omits it for some events, producing blank rows and empty aria-labels (an accessibility defect). Making it optional forces the call sites to acknowledge the absence; the inject builder at <code>panel-inject.ts:114</code> already guards with <code>event.summary || '(untitled)'</code>, so this aligns the UI with the builder. (Note: the redundant <code>(event as any).location</code> casts at lines 785–786 are unnecessary because <code>CalendarEvent</code> already declares <code>location?: string</code> — optionally simplify to <code>event.location</code>, but this is not required for the fix.)</p>
+
+<h2>Files touched</h2>
+<table>
+<thead><tr><th>File</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td><code>/home/user/hub-overlay/hub/lib/google.ts</code></td><td>Add <code>location?</code> + <code>timeZone?</code> to <code>createCalendarEvent</code> param; set <code>body.location</code>; attach <code>timeZone</code> to timed <code>start</code>/<code>end</code></td></tr>
+<tr><td><code>/home/user/hub-overlay/hub/lib/zod-schemas.ts</code></td><td>Add <code>timeZone</code> to <code>GoogleCalendarCreateSchema</code></td></tr>
+<tr><td><code>/home/user/hub-overlay/hub/lib/panel-inject.ts</code></td><td>Add <code>formatDueDate</code>; switch <code>buildTaskInjectMessage</code> to it</td></tr>
+<tr><td><code>/home/user/hub-overlay/hub/app/components/LeftPanelSections.tsx</code></td><td>Add <code>toLocalISODate</code>; fix modal default + <code>selectedDateISO</code>; send <code>timeZone</code>; use <code>formatDueDate</code>; <code>summary</code> fallbacks; import <code>formatDueDate</code></td></tr>
+<tr><td><code>/home/user/hub-overlay/hub/app/hooks/useHubData.ts</code></td><td><code>summary: string</code> → <code>summary?: string</code></td></tr>
+<tr><td><code>/home/user/hub-overlay/hub/lib/panel-inject.test.ts</code> <em>(or new test file)</em></td><td>Add unit tests for <code>formatDueDate</code></td></tr>
+<tr><td><code>/home/user/hub-overlay/hub/lib/google-write-schemas.test.ts</code> &amp; a <code>createCalendarEvent</code> body test</td><td>Cover <code>timeZone</code> in schema; cover body construction (location + timeZone)</td></tr>
+</tbody>
+</table>
+
+<h2>Testing</h2>
+
+<h3>Unit tests</h3>
+<ul>
+<li><strong><code>formatDueDate</code></strong> (add to <code>hub/lib/panel-inject.test.ts</code>): given a due value for today → <code>"Today"</code>; tomorrow → <code>"Tomorrow"</code>; +3 days → <code>"in 3d"</code>; yesterday → <code>"Yesterday (overdue)"</code>; −3 days → <code>"3d overdue"</code>. Critically, assert that a date-only UTC-midnight string (e.g. <code>`${YYYY-MM-DD}T00:00:00.000Z`</code> for tomorrow's local date) does <em>not</em> regress to "just now" and does not shift to the wrong day. Also assert <code>formatRelativeDate</code> still returns "just now" / "Nm ago" for genuinely past instants (unchanged behaviour).</li>
+<li><strong><code>GoogleCalendarCreateSchema</code></strong> (add to <code>hub/lib/google-write-schemas.test.ts</code>): a payload including <code>timeZone: 'America/Chicago'</code> parses successfully and the field survives in <code>parsed.data</code>; an over-length <code>timeZone</code> (&gt;64 chars) is rejected.</li>
+<li><strong><code>createCalendarEvent</code> body construction</strong> (new test, e.g. <code>hub/lib/google.test.ts</code>): stub the fetch layer and capture the JSON body. Assert that for a timed event the body contains <code>start.dateTime</code> + <code>start.timeZone</code> and (when supplied) top-level <code>location</code>; for an all-day event (10-char <code>start</code>) the body uses <code>start.date</code> with <strong>no</strong> <code>timeZone</code> key; and that <code>location</code> is omitted when not provided.</li>
+</ul>
+
+<h3>Automated gates</h3>
+<pre>cd /home/user/hub-overlay/hub
+npx tsc --noEmit
+npx vitest run</pre>
+<p><code>tsc --noEmit</code> is load-bearing here: making <code>summary</code> optional (change&nbsp;5a) will surface any unguarded <code>event.summary</code> usage as a type error — fix each by applying the <code>|| '(untitled)'</code> fallback.</p>
+
+<h3>Manual verification</h3>
+<ul>
+<li>Create an event with a <strong>Location</strong> at <strong>9:00&nbsp;AM</strong> while in <strong>US Central</strong>. Open it in Google Calendar and confirm: (a) the location/address is present, and (b) the event shows at 9:00&nbsp;AM local — not shifted by the calendar-default offset.</li>
+<li>Create an <strong>all-day</strong> event and confirm it remains all-day (no spurious time / no zone error from Google).</li>
+<li>Click a calendar day in the panel and open the create modal — confirm the prefilled date matches the clicked day (no off-by-one).</li>
+<li>Tap a task <strong>due tomorrow</strong> and confirm the row reads <strong>"Due Tomorrow"</strong> (not "Due just now"), and the chat-injected message reads <code>• Due: Tomorrow</code>.</li>
+<li>Confirm an <strong>overdue</strong> task reads "Nd overdue" / "Yesterday (overdue)".</li>
+</ul>
+
+<h2>Acceptance criteria</h2>
+<ul>
+<li>Events created via the panel persist their <code>location</code> in Google Calendar.</li>
+<li>Timed events land at the user's intended local hour regardless of the calendar's default time zone, because the request carries an IANA <code>timeZone</code>.</li>
+<li>All-day events still post as <code>{ date }</code> with no <code>timeZone</code> and are accepted by Google.</li>
+<li>The create modal's default date and the selected-day date are the user's <em>local</em> calendar date (no UTC off-by-one for negative-offset users).</li>
+<li>A future task due date renders meaningfully (Today / Tomorrow / in&nbsp;Nd / month-day) and never "just now"; overdue tasks are labelled as overdue.</li>
+<li>Task due-day labels do not shift by a day for Central-time users.</li>
+<li><code>event.summary</code> is typed optional and every render/aria-label shows <code>(untitled)</code> when absent.</li>
+<li><code>npx tsc --noEmit</code> and <code>npx vitest run</code> both pass.</li>
+</ul>
+
+<h2>Dependencies &amp; sequencing</h2>
+<ol>
+<li><strong>Change&nbsp;1 (<code>google.ts</code>)</strong> first — establishes the new param contract that the route and tests depend on.</li>
+<li><strong>Change&nbsp;2 (<code>zod-schemas.ts</code>)</strong> next — without it, Zod strips <code>timeZone</code> from the request before it reaches change&nbsp;1, so the wrong-hour fix is silently inert. These two must ship together. No route edit is needed (<code>route.ts:95</code> forwards <code>parsed.data</code> as-is).</li>
+<li><strong>Change&nbsp;3 (modal)</strong> after 1–2 — the client must send <code>timeZone</code> for the end-to-end fix; sending it before the schema accepts it is harmless (stripped) but pointless.</li>
+<li><strong>Change&nbsp;4 (<code>formatDueDate</code>)</strong> is independent of the calendar fixes and can land in parallel; the <code>panel-inject.ts</code> helper must exist before the <code>LeftPanelSections.tsx</code> import/usage edits compile.</li>
+<li><strong>Change&nbsp;5 (<code>summary?</code>)</strong> is independent but should land with the others so the single <code>tsc</code> pass catches all newly-surfaced optional-access sites at once.</li>
+<li>Run <code>tsc --noEmit</code> only after the type change (5a) and all consumer edits are in place, so the compiler validates the full set.</li>
+</ol>
+<p>No new packages, env vars, migrations, or API-scope changes. <code>Intl.DateTimeFormat().resolvedOptions().timeZone</code> is universally available in supported browsers; the <code>|| undefined</code> guard degrades gracefully to prior behaviour if it ever returns empty.</p>
+
+<h2>Rollback</h2>
+<ul>
+<li>Each change is a self-contained, additive edit; revert per-file via git with no data migration required.</li>
+<li>The schema field and the <code>createCalendarEvent</code> params are optional, so reverting the client (change&nbsp;3) while keeping the server changes is safe — the server simply receives no <code>timeZone</code>/<code>location</code> and behaves as before.</li>
+<li>Reverting change&nbsp;4 restores <code>formatRelativeDate</code> for due dates (re-introducing the "just now" bug) but breaks nothing else; <code>formatDueDate</code> is purely additive and unused elsewhere.</li>
+<li>Reverting change&nbsp;5a (back to <code>summary: string</code>) is safe only if the corresponding fallback edits (5b) are also reverted; otherwise the fallbacks remain harmless dead-defaults. Prefer reverting 5a + 5b together.</li>
+<li>No persisted state is altered by these changes, so rollback cannot corrupt existing events or tasks; previously-created (wrong-time / location-less) events are not retroactively modified and would need manual correction in Google Calendar.</li>
+</ul>
+
+</body>
+</html>

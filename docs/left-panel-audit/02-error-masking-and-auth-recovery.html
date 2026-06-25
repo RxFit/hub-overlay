@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Left Panel Audit · 02 — Stop empty-on-error masking + unify auth recovery</title>
+<style>
+body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:920px;margin:2rem auto;padding:0 1rem;line-height:1.55;color:#1a1a1a}
+h1{border-bottom:3px solid #2563eb;padding-bottom:.3rem}
+h2{margin-top:2rem;color:#1e3a8a;border-bottom:1px solid #e5e7eb;padding-bottom:.2rem}
+h3{margin-top:1.4rem}
+code,pre{font-family:ui-monospace,Menlo,monospace}
+pre{background:#f6f8fa;padding:.8rem;border-radius:6px;overflow:auto;border:1px solid #e5e7eb;font-size:.86rem}
+table{border-collapse:collapse;width:100%}
+th,td{border:1px solid #d1d5db;padding:.4rem .6rem;text-align:left;vertical-align:top;font-size:.9rem}
+th{background:#f3f4f6}
+.badge{display:inline-block;padding:.15rem .6rem;border-radius:999px;color:#fff;font-size:.8rem;font-weight:600}
+.p0{background:#dc2626}.p1{background:#d97706}.p2{background:#2563eb}
+pre.before{background:#fef2f2;border-color:#fecaca}pre.after{background:#f0fdf4;border-color:#bbf7d0}
+blockquote{border-left:4px solid #9ca3af;margin:0;padding-left:1rem;color:#4b5563}
+ul{margin:.4rem 0}
+</style>
+</head>
+<body>
+
+<h1>Stop &ldquo;empty-on-error&rdquo; masking + unify auth recovery <span class="badge p0">P0</span></h1>
+
+<p>
+Across the Left Panel, fetch and auth failures render as misleading
+<em>&ldquo;empty / not-configured&rdquo;</em> states, and the documented 401&rarr;reauth path is
+non-functional. This plan eliminates the masking, makes every section&rsquo;s error and
+auth-error states honest and consistent, fixes the fetchers that silently drop the HTTP
+status (so a 401 can actually be detected), and replaces the dead
+<code>useAuthErrorRecovery</code> hook with a single, accessible, actionable reauth UX
+(a real <em>&ldquo;Sign in again&rdquo;</em> button). It also hardens the write mutations
+(toggle task, delete event, create event) so they stop reporting success on failure and
+route 401 responses into the same reauth flow.
+</p>
+
+<p>
+All line numbers and snippets below were verified against the working tree on
+2026-06-24. Paths are relative to the repo root <code>/home/user/hub-overlay</code>;
+the Next.js app lives under <code>hub/</code>.
+</p>
+
+<h2>Why this matters</h2>
+<ul>
+<li>
+<strong>Silent data loss looks like &ldquo;nothing here&rdquo;.</strong> When the KPI or
+Documents-artifacts fetch fails (network, 500, or an expired Google/Paperclip session),
+the user sees <em>&ldquo;No business KPIs configured&rdquo;</em> or an empty artifacts tab.
+They conclude the feature is unconfigured or empty and stop using it &mdash; the worst
+possible failure mode for a dashboard.
+</li>
+<li>
+<strong>The self-healing auth path is wired to a switch that is never thrown.</strong>
+The route layer already maps Google auth failures to <code>401 { reauth: true }</code>
+(<code>hub/lib/google-session.ts</code>), and <code>useHubData.ts</code>&rsquo;s fetcher
+tags those errors with <code>.status = 401</code>. But <code>useKPIData.ts</code> and the
+Documents-artifacts fetcher throw plain <code>Error</code>s with <em>no</em>
+<code>.status</code>, so the section-level <code>(error as any).status === 401</code>
+checks can never match. KPI 401s are indistinguishable from &ldquo;empty&rdquo;.
+</li>
+<li>
+<strong>Reauth is dead code.</strong> <code>useAuthErrorRecovery</code> (which auto-calls
+<code>signIn('google')</code> on a 401) has <strong>zero call sites</strong> &mdash;
+verified by grep, it is only <em>defined</em>, never imported. The sections that do detect
+a 401 render a static <em>&ldquo;Session expired &mdash; please sign in again&rdquo;</em>
+string with no button, so the user has no way to actually re-authenticate from the panel.
+</li>
+<li>
+<strong>Writes lie about success.</strong> <code>handleToggleTask</code>,
+<code>handleDeleteConfirm</code>, and the calendar create-modal <code>handleSave</code>
+either ignore <code>res.ok</code> entirely or (for create) check it but never handle the
+<code>401 { reauth: true }</code> contract. A toggle/delete against an expired session
+resolves &ldquo;successfully&rdquo;, the optimistic UI sticks, and the change is silently
+lost on the next refresh.
+</li>
+<li>
+<strong>The same 401 string is copy-pasted in three places</strong> with subtly different
+logic. Extracting one shared state renderer removes the drift and guarantees every section
+behaves identically.
+</li>
+</ul>
+
+<h2>Findings</h2>
+<table>
+<thead>
+<tr><th>ID</th><th>Severity</th><th>Location</th><th>Root cause</th></tr>
+</thead>
+<tbody>
+<tr>
+<td>F1</td><td><span class="badge p0">P0</span></td>
+<td><code>hub/app/components/LeftPanelSections.tsx</code> &middot; <code>KPISection</code> (lines 961&ndash;1027; destructure at 968, empty branch 982&ndash;988)</td>
+<td>Destructures only <code>{ kpis, isLoading }</code> from <code>useKPIData</code> and ignores <code>error</code>. Any fetch/401 falls through to <code>kpis.length === 0</code> &rarr; renders <em>&ldquo;No business KPIs configured&rdquo;</em>. No auth/error branches exist (Tasks has them at 153&ndash;168; Calendar at 523&ndash;538).</td>
+</tr>
+<tr>
+<td>F2</td><td><span class="badge p0">P0</span></td>
+<td><code>hub/app/hooks/useKPIData.ts</code> &middot; <code>fetcher</code> (lines 4&ndash;11)</td>
+<td>On <code>!res.ok</code> throws <code>new Error(...)</code> with <strong>no</strong> <code>.status</code> property. Every section detects auth via <code>(error as any).status === 401</code>, so KPI 401s can never trigger reauth. Contrast the <code>useHubData.ts</code> fetcher (32&ndash;49) which sets <code>(err as any).status</code>.</td>
+</tr>
+<tr>
+<td>F3</td><td><span class="badge p0">P0</span></td>
+<td><code>hub/app/components/LeftPanelSections.tsx</code> &middot; artifacts <code>useSWR</code> fetcher (line 823, within block 821&ndash;825)</td>
+<td>Fetcher is <code>(url: string) =&gt; fetch(url).then(r =&gt; r.json())</code> &mdash; never checks <code>r.ok</code>. A 401/500 error body parses as <code>data</code>; <code>!artifactsData?.artifacts?.length</code> is true &rarr; shows the empty state instead of an error.</td>
+</tr>
+<tr>
+<td>F4</td><td><span class="badge p0">P0</span></td>
+<td><code>hub/app/hooks/useHubData.ts</code> &middot; tasks per-list aggregate fetcher (lines 109&ndash;123; swallow at 115)</td>
+<td><code>if (!res.ok) return { id, tasks: [] }</code> swallows per-list 401/5xx. <code>tasksError</code> is never set from the aggregate step, so a partial/total auth failure renders as &ldquo;no pending tasks&rdquo; rather than an error/reauth state.</td>
+</tr>
+<tr>
+<td>F5</td><td><span class="badge p0">P0</span></td>
+<td><code>hub/app/hooks/useHubData.ts</code> &middot; <code>useAuthErrorRecovery</code> (lines 13&ndash;28)</td>
+<td>Auto-calls <code>signIn('google')</code> on a 401, but has <strong>zero call sites</strong> (grep: defined once, imported nowhere). Sections instead show a static, non-actionable <em>&ldquo;Session expired&rdquo;</em> message &mdash; no button, no recovery.</td>
+</tr>
+<tr>
+<td>F6</td><td><span class="badge p0">P0</span></td>
+<td><code>hub/app/components/LeftPanelSections.tsx</code> &middot; <code>handleToggleTask</code> (173&ndash;202), <code>handleDeleteConfirm</code> (572&ndash;586), <code>CalendarEventModal.handleSave</code> (335&ndash;365)</td>
+<td>Toggle &amp; delete never check <code>res.ok</code> (only a network <code>throw</code> is caught), so an HTTP 401/500 resolves as success. Create checks <code>res.ok</code> but ignores the <code>401 { reauth: true }</code> contract from <code>google-session.ts</code> (43&ndash;53). All three report success on failure / never trigger reauth.</td>
+</tr>
+<tr>
+<td>F7</td><td><span class="badge p1">P1</span></td>
+<td><code>hub/app/components/LeftPanelSections.tsx</code> &middot; repeated state branches (e.g. 145&ndash;168, 515&ndash;538, 898&ndash;905)</td>
+<td>The <code>isLoading</code> / <code>status === 401</code> / generic-<code>error</code> ladder is duplicated per section with copy-paste drift. No shared renderer; new sections (KPI) simply forgot it.</td>
+</tr>
+</tbody>
+</table>
+
+<h2>Implementation</h2>
+
+<p>
+Implement F2, F3, F4 (fetchers tag status) and the F5 reauth control <em>first</em>, then
+the F7 shared renderer, then re-point every section at it (F1 included), then F6 (writes).
+Sequencing rationale is in <a href="#deps">Dependencies &amp; sequencing</a>.
+</p>
+
+<h3>Change 1 &mdash; F2: KPI fetcher must attach <code>.status</code></h3>
+<p><strong>File:</strong> <code>hub/app/hooks/useKPIData.ts</code> (lines 4&ndash;11)</p>
+<pre class="before">async function fetcher(url: string) {
+  const res = await fetch(url)
+  if (!res.ok) {
+    const errorData = await res.json().catch(() =&gt; ({}))
+    throw new Error(errorData.error || `API error ${res.status}`)
+  }
+  return res.json()
+}</pre>
+<pre class="after">async function fetcher(url: string) {
+  const res = await fetch(url)
+  if (!res.ok) {
+    const errorData = await res.json().catch(() =&gt; ({}))
+    const err = new Error(errorData.error || `API error ${res.status}`)
+    ;(err as any).status = res.status
+    throw err
+  }
+  return res.json()
+}</pre>
+<p><strong>Rationale:</strong> Mirrors the <code>useHubData.ts</code> fetcher (32&ndash;49) so a
+KPI 401 carries <code>error.status === 401</code> and can be distinguished from a generic
+error and from &ldquo;empty&rdquo;. This is the keystone fix &mdash; F1 cannot work without it.</p>
+
+<h3>Change 2 &mdash; F3: Documents artifacts fetcher must throw on <code>!r.ok</code></h3>
+<p><strong>File:</strong> <code>hub/app/components/LeftPanelSections.tsx</code> (lines 821&ndash;825)</p>
+<pre class="before">const { data: artifactsData, isLoading: artifactsLoading, error: artifactsError } = useSWR&lt;{ artifacts: ToolArtifactRecord[] }&gt;(
+  activeFilter === 'artifacts' ? '/api/tool-artifacts' : null,
+  (url: string) =&gt; fetch(url).then(r =&gt; r.json()),
+  { revalidateOnFocus: false }
+)</pre>
+<pre class="after">const { data: artifactsData, isLoading: artifactsLoading, error: artifactsError } = useSWR&lt;{ artifacts: ToolArtifactRecord[] }&gt;(
+  activeFilter === 'artifacts' ? '/api/tool-artifacts' : null,
+  async (url: string) =&gt; {
+    const r = await fetch(url)
+    if (!r.ok) {
+      const body = await r.json().catch(() =&gt; ({}))
+      const err = new Error(body.error || `API error ${r.status}`)
+      ;(err as any).status = r.status
+      throw err
+    }
+    return r.json()
+  },
+  { revalidateOnFocus: false }
+)</pre>
+<p><strong>Rationale:</strong> A failed artifacts request now produces a real
+<code>artifactsError</code> with a <code>.status</code>, so the artifacts branch can show an
+auth/error message instead of the empty state. See Change 6 for the matching render update.</p>
+
+<h3>Change 3 &mdash; F4: Tasks per-list aggregate must propagate 401</h3>
+<p><strong>File:</strong> <code>hub/app/hooks/useHubData.ts</code> (lines 109&ndash;123)</p>
+<pre class="before">    async () =&gt; {
+      const results = await Promise.all(
+        listIds.map(async (id) =&gt; {
+          const res = await fetch(
+            `/api/google/tasks?taskListId=${encodeURIComponent(id)}&amp;showCompleted=false&amp;maxResults=20`
+          )
+          if (!res.ok) return { id, tasks: [] }
+          const data: TasksResponse = await res.json()
+          return { id, tasks: data.tasks ?? [] }
+        })
+      )
+      const map: Record&lt;string, TaskItem[]&gt; = {}
+      for (const { id, tasks } of results) map[id] = tasks
+      return map
+    },</pre>
+<pre class="after">    async () =&gt; {
+      const results = await Promise.all(
+        listIds.map(async (id) =&gt; {
+          const res = await fetch(
+            `/api/google/tasks?taskListId=${encodeURIComponent(id)}&amp;showCompleted=false&amp;maxResults=20`
+          )
+          if (res.status === 401) {
+            const err = new Error('Unauthorized — Google token may have expired')
+            ;(err as any).status = 401
+            throw err
+          }
+          // Non-auth failures: skip this list rather than failing the whole panel.
+          if (!res.ok) return { id, tasks: [] }
+          const data: TasksResponse = await res.json()
+          return { id, tasks: data.tasks ?? [] }
+        })
+      )
+      const map: Record&lt;string, TaskItem[]&gt; = {}
+      for (const { id, tasks } of results) map[id] = tasks
+      return map
+    },</pre>
+<p><strong>Rationale:</strong> A 401 on any list now rejects the aggregate fetcher, so
+<code>tasksError.status === 401</code> is set and <code>error = listError || tasksError</code>
+(line 128) flows into the existing Tasks auth branch (153&ndash;160). We deliberately keep
+the &ldquo;skip the list&rdquo; behavior for genuine non-auth per-list failures so one bad
+list does not blank the whole section; only auth failures escalate.</p>
+
+<h3>Change 4 &mdash; F5: Replace the dead hook with an actionable reauth control</h3>
+<p>
+<strong>Decision:</strong> Adopt a single reauth UX everywhere &mdash; an accessible
+<em>&ldquo;Sign in again&rdquo;</em> button rendered inside the auth-error message. This is
+preferred over the silent auto-redirect in <code>useAuthErrorRecovery</code> because it is
+explicit, accessible (focusable, announced), and does not yank the user mid-task. We extend
+<code>SectionMessage</code> to accept an optional action; the shared renderer (Change 5)
+wires it up so all sections are consistent.
+</p>
+<p><strong>File:</strong> <code>hub/app/components/LeftPanelSections.tsx</code> &mdash; add the import (top of file, near lines 1&ndash;17) and extend <code>SectionMessage</code> (47&ndash;56).</p>
+<pre class="before">'use client'
+
+import { useState, useEffect, ReactNode, useCallback } from 'react'
+import { useTasks, useCalendar, useDrive } from '@/app/hooks/useHubData'
+// ... existing imports ...
+import useSWR from 'swr'</pre>
+<pre class="after">'use client'
+
+import { useState, useEffect, ReactNode, useCallback } from 'react'
+import { signIn } from 'next-auth/react'
+import { useTasks, useCalendar, useDrive } from '@/app/hooks/useHubData'
+// ... existing imports ...
+import useSWR from 'swr'</pre>
+
+<pre class="before">function SectionMessage({ message, type = 'info' }: { message: string; type?: 'info' | 'error' | 'empty' }) {
+  return (
+    &lt;div
+      role={type === 'error' ? 'alert' : 'status'}
+      className={`section-message section-message--${type}`}
+    &gt;
+      {message}
+    &lt;/div&gt;
+  )
+}</pre>
+<pre class="after">function SectionMessage({
+  message,
+  type = 'info',
+  action,
+}: {
+  message: string
+  type?: 'info' | 'error' | 'empty'
+  action?: { label: string; onClick: () =&gt; void }
+}) {
+  return (
+    &lt;div
+      role={type === 'error' ? 'alert' : 'status'}
+      className={`section-message section-message--${type}`}
+    &gt;
+      &lt;span&gt;{message}&lt;/span&gt;
+      {action && (
+        &lt;button
+          type="button"
+          className="section-message__action"
+          onClick={action.onClick}
+        &gt;
+          {action.label}
+        &lt;/button&gt;
+      )}
+    &lt;/div&gt;
+  )
+}</pre>
+<p><strong>Rationale:</strong> One control, used by the shared renderer below, so every
+section presents the same &ldquo;Sign in again&rdquo; affordance. <code>signIn('google')</code>
+is the same call <code>useAuthErrorRecovery</code> made, now triggered by an explicit,
+accessible button. <code>useAuthErrorRecovery</code> is left in place but stays unused; an
+optional follow-up (see Rollback / F5 note) may delete it once the button UX is confirmed,
+or wire it as an additional auto-redirect fallback. Do <strong>not</strong> do both silent
+auto-redirect and the button at once &mdash; pick the button.</p>
+
+<h3>Change 5 &mdash; F7: Extract a shared <code>renderSectionState</code> helper</h3>
+<p><strong>File:</strong> <code>hub/app/components/LeftPanelSections.tsx</code> &mdash; add once, just after <code>SectionMessage</code> (after line 56).</p>
+<pre class="after">/**
+ * Shared loading / auth-error / error renderer for Left Panel sections.
+ * Returns the element to render, or null when there is no blocking state
+ * (i.e. the section should render its real content).
+ *
+ *   const state = renderSectionState({ isLoading, error, skeletonLines: 4 })
+ *   if (state) return &lt;CollapsibleSection ...&gt;{state}&lt;/CollapsibleSection&gt;
+ */
+function renderSectionState({
+  isLoading,
+  error,
+  skeletonLines = 3,
+}: {
+  isLoading?: boolean
+  error?: unknown
+  skeletonLines?: number
+}): ReactNode | null {
+  if (isLoading) return &lt;SkeletonBlock lines={skeletonLines} /&gt;
+
+  if (error) {
+    const isAuthError = (error as any)?.status === 401
+    if (isAuthError) {
+      return (
+        &lt;SectionMessage
+          message="Session expired — please sign in again"
+          type="error"
+          action={{ label: 'Sign in again', onClick: () =&gt; signIn('google') }}
+        /&gt;
+      )
+    }
+    return &lt;SectionMessage message="Something went wrong — try refreshing" type="error" /&gt;
+  }
+
+  return null
+}</pre>
+<p><strong>Rationale:</strong> Single source of truth for the skeleton / 401 / generic-error
+ladder. The 401 branch always carries the reauth button. Generic-error copy is centralized
+(individual sections may still override by not using the helper, but the goal is uniformity).
+Sections keep ownership of their <em>empty</em> state (which is content-specific) and only
+delegate the loading/error states.</p>
+
+<h3>Change 6 &mdash; F1 + apply the helper across sections</h3>
+<p>
+Re-point each section at <code>renderSectionState</code>. The most important is
+<code>KPISection</code> (F1), which currently has <em>no</em> error handling at all.
+</p>
+
+<p><strong>6a. <code>KPISection</code></strong> &middot; <code>hub/app/components/LeftPanelSections.tsx</code> (968 destructure; 974&ndash;988 branches)</p>
+<pre class="before">  const { kpis: allKpis, isLoading } = useKPIData(activeProject)
+
+  // Mandate: Left Panel = Google ecosystem + business metrics only.
+  // Paperclip orchestration metrics belong on the Right Panel.
+  const kpis = allKpis.filter(kpi =&gt; kpi.source !== 'paperclip')
+
+  if (isLoading) {
+    return (
+      &lt;CollapsibleSection title="KPIs" protocolNum="01" defaultOpen&gt;
+        &lt;SkeletonBlock lines={4} /&gt;
+      &lt;/CollapsibleSection&gt;
+    )
+  }
+
+  if (kpis.length === 0) {
+    return (
+      &lt;CollapsibleSection title="KPIs" protocolNum="01" defaultOpen&gt;
+        &lt;SectionMessage message="No business KPIs configured — configure KPIs in Settings" type="empty" /&gt;
+      &lt;/CollapsibleSection&gt;
+    )
+  }</pre>
+<pre class="after">  const { kpis: allKpis, isLoading, error } = useKPIData(activeProject)
+
+  // Mandate: Left Panel = Google ecosystem + business metrics only.
+  // Paperclip orchestration metrics belong on the Right Panel.
+  const kpis = allKpis.filter(kpi =&gt; kpi.source !== 'paperclip')
+
+  const state = renderSectionState({ isLoading, error, skeletonLines: 4 })
+  if (state) {
+    return (
+      &lt;CollapsibleSection title="KPIs" protocolNum="01" defaultOpen&gt;
+        {state}
+      &lt;/CollapsibleSection&gt;
+    )
+  }
+
+  if (kpis.length === 0) {
+    return (
+      &lt;CollapsibleSection title="KPIs" protocolNum="01" defaultOpen&gt;
+        &lt;SectionMessage message="No business KPIs configured — configure KPIs in Settings" type="empty" /&gt;
+      &lt;/CollapsibleSection&gt;
+    )
+  }</pre>
+<p><strong>Note:</strong> <code>useKPIData</code> already returns <code>error: error || data?.error</code>
+(line 38). After Change 1, a 401 fetch sets <code>error.status === 401</code>; a server-sent
+<code>data.error</code> string (no status) falls into the generic-error branch. Both now render
+honestly instead of the empty state. The empty state is reached <em>only</em> when the fetch
+genuinely succeeded with zero business KPIs.</p>
+
+<p><strong>6b. <code>TasksSection</code></strong> (145&ndash;168) and <strong><code>CalendarSection</code></strong> (515&ndash;538):
+replace the three hand-rolled branches with the helper. Example for Tasks:</p>
+<pre class="before">  if (isLoading) {
+    return (
+      &lt;CollapsibleSection title="Tasks" protocolNum="03" defaultOpen&gt;
+        &lt;SkeletonBlock lines={4} /&gt;
+      &lt;/CollapsibleSection&gt;
+    )
+  }
+
+  const isAuthError = error && (error as any)?.status === 401
+  if (isAuthError) {
+    return (
+      &lt;CollapsibleSection title="Tasks" protocolNum="03" defaultOpen&gt;
+        &lt;SectionMessage message="Session expired — please sign in again" type="error" /&gt;
+      &lt;/CollapsibleSection&gt;
+    )
+  }
+
+  if (error) {
+    return (
+      &lt;CollapsibleSection title="Tasks" protocolNum="03" defaultOpen&gt;
+        &lt;SectionMessage message="Unable to load tasks — try refreshing" type="error" /&gt;
+      &lt;/CollapsibleSection&gt;
+    )
+  }</pre>
+<pre class="after">  const state = renderSectionState({ isLoading, error, skeletonLines: 4 })
+  if (state) {
+    return (
+      &lt;CollapsibleSection title="Tasks" protocolNum="03" defaultOpen&gt;
+        {state}
+      &lt;/CollapsibleSection&gt;
+    )
+  }</pre>
+<p>
+Apply the identical transformation to <code>CalendarSection</code> (title
+<code>"Calendar"</code>, <code>protocolNum="02"</code>, <code>skeletonLines: 3</code>),
+removing its 515&ndash;538 ladder. The previous bespoke copy (&ldquo;Unable to load
+tasks/calendar&hellip;&rdquo;) is replaced by the centralized generic-error string; if
+section-specific copy is required, keep a thin local <code>error</code> branch <em>after</em>
+the helper&rsquo;s 401 handling rather than re-implementing the 401 check.
+</p>
+
+<p><strong>6c. <code>DocumentsSection</code></strong> (Drive branch 898&ndash;905, artifacts branch 865&ndash;871):
+the Drive branch keeps its tab-aware empty messages but should route loading/auth/error
+through the helper; the artifacts branch (now that F3 produces a real
+<code>artifactsError</code> with <code>.status</code>) must show auth/error before empty.</p>
+<pre class="before">      {activeFilter === 'artifacts' ? (
+        artifactsLoading ? (
+          &lt;SkeletonBlock lines={3} /&gt;
+        ) : artifactsError ? (
+          &lt;SectionMessage message="Unable to load artifacts" type="error" /&gt;
+        ) : !artifactsData?.artifacts?.length ? (
+          &lt;SectionMessage message={emptyMessages.artifacts} type="empty" /&gt;
+        ) : (</pre>
+<pre class="after">      {activeFilter === 'artifacts' ? (
+        renderSectionState({ isLoading: artifactsLoading, error: artifactsError, skeletonLines: 3 })
+          ? renderSectionState({ isLoading: artifactsLoading, error: artifactsError, skeletonLines: 3 })
+        : !artifactsData?.artifacts?.length ? (
+          &lt;SectionMessage message={emptyMessages.artifacts} type="empty" /&gt;
+        ) : (</pre>
+<p><strong>Implementation note:</strong> compute the helper result once into a local
+(<code>const artifactsState = renderSectionState({ isLoading: artifactsLoading, error: artifactsError, skeletonLines: 3 })</code>)
+before the JSX rather than calling it twice as shown for brevity above; the double-call form
+is only to keep the diff readable. The Drive branch (898&ndash;905) gets the same treatment:
+delegate loading/auth/error to <code>renderSectionState({ isLoading, error })</code> and keep
+<code>files.length === 0 ? emptyMessages[activeFilter]</code> as the trailing empty case.</p>
+<p><strong>Rationale:</strong> After F3, an artifacts 401 now carries <code>.status</code>, so
+the artifacts tab shows the reauth button instead of &ldquo;No saved artifacts&rdquo;. Every
+Documents tab is now consistent with the rest of the panel.</p>
+
+<h3>Change 7 &mdash; F6: A shared <code>writeFetch</code> helper + hardened mutations</h3>
+<p>
+<strong>File:</strong> add <code>hub/app/hooks/useWriteFetch.ts</code> (or co-locate in an
+existing client util). It wraps <code>fetch</code> for write requests, detects the
+<code>401 { reauth: true }</code> contract from <code>hub/lib/google-session.ts</code>
+(43&ndash;53), routes to reauth, and throws a status-tagged error otherwise.
+</p>
+<pre class="after">'use client'
+import { signIn } from 'next-auth/react'
+
+/**
+ * Fetch wrapper for write mutations (POST/DELETE/PUT).
+ * - On 401 { reauth: true } (or any 401), triggers Google re-auth and throws.
+ * - On any other !res.ok, throws an Error carrying `.status`.
+ * - On success, returns the parsed JSON (or {} if no body).
+ * Routes that fail Google auth return 401 { reauth: true } via
+ * lib/google-session.ts → googleApiErrorResponse / resolveGoogleAuth.
+ */
+export async function writeFetch&lt;T = any&gt;(input: RequestInfo, init?: RequestInit): Promise&lt;T&gt; {
+  const res = await fetch(input, init)
+  if (res.status === 401) {
+    const body = await res.json().catch(() =&gt; ({}))
+    // Honor the explicit reauth contract; default to reauth on any 401.
+    if (body?.reauth !== false) signIn('google')
+    const err = new Error(body?.error || 'Session expired — please sign in again')
+    ;(err as any).status = 401
+    throw err
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() =&gt; ({}))
+    const err = new Error(body?.error || `Request failed (${res.status})`)
+    ;(err as any).status = res.status
+    throw err
+  }
+  return res.json().catch(() =&gt; ({} as T))
+}</pre>
+
+<p><strong>7a. <code>handleToggleTask</code></strong> &middot; <code>LeftPanelSections.tsx</code> (188&ndash;201)</p>
+<pre class="before">    setTogglingIds(prev =&gt; new Set(prev).add(task.id))
+    try {
+      await fetch('/api/google/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: newAction, taskListId: listId, taskId: task.id }),
+      })
+      mutate?.()
+    } catch {
+      // Rollback on error
+      setFadingIds(prev =&gt; { const s = new Set(prev); s.delete(task.id); return s })
+      setHiddenIds(prev =&gt; { const s = new Set(prev); s.delete(task.id); return s })
+    } finally {
+      setTogglingIds(prev =&gt; { const s = new Set(prev); s.delete(task.id); return s })
+    }</pre>
+<pre class="after">    setTogglingIds(prev =&gt; new Set(prev).add(task.id))
+    try {
+      await writeFetch('/api/google/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: newAction, taskListId: listId, taskId: task.id }),
+      })
+      mutate?.()
+    } catch {
+      // Rollback optimistic UI on ANY failure (HTTP error or network).
+      // writeFetch already routed a 401 into signIn('google').
+      setFadingIds(prev =&gt; { const s = new Set(prev); s.delete(task.id); return s })
+      setHiddenIds(prev =&gt; { const s = new Set(prev); s.delete(task.id); return s })
+    } finally {
+      setTogglingIds(prev =&gt; { const s = new Set(prev); s.delete(task.id); return s })
+    }</pre>
+<p><strong>Rationale:</strong> Previously a 401/500 resolved as success and the task stayed
+optimistically hidden. <code>writeFetch</code> throws on <code>!res.ok</code>, so the existing
+<code>catch</code> now correctly rolls back, and a 401 also kicks off reauth.</p>
+
+<p><strong>7b. <code>handleDeleteConfirm</code></strong> &middot; <code>LeftPanelSections.tsx</code> (572&ndash;586)</p>
+<pre class="before">  async function handleDeleteConfirm() {
+    if (!deleteConfirm) return
+    setDeleting(true)
+    try {
+      await fetch('/api/google/calendar', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ eventId: deleteConfirm.id, calendarId: deleteConfirm.calendarId }),
+      })
+      mutate?.()
+    } catch { /* non-fatal */ } finally {
+      setDeleting(false)
+      setDeleteConfirm(null)
+    }
+  }</pre>
+<pre class="after">  const [deleteError, setDeleteError] = useState&lt;string | null&gt;(null)
+
+  async function handleDeleteConfirm() {
+    if (!deleteConfirm) return
+    setDeleting(true)
+    setDeleteError(null)
+    try {
+      await writeFetch('/api/google/calendar', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ eventId: deleteConfirm.id, calendarId: deleteConfirm.calendarId }),
+      })
+      mutate?.()
+      setDeleteConfirm(null)
+    } catch (err) {
+      // Keep the dialog open and surface the failure; 401 already triggered reauth.
+      setDeleteError(err instanceof Error ? err.message : 'Failed to delete event')
+    } finally {
+      setDeleting(false)
+    }
+  }</pre>
+<p>
+Render <code>deleteError</code> inside the delete dialog (next to the actions, ~line 711):
+<code>{deleteError && (&lt;div className="cal-event-form__error" role="alert"&gt;{deleteError}&lt;/div&gt;)}</code>.
+Declare <code>deleteError</code> alongside the other Calendar state hooks (near 509&ndash;513)
+rather than inside the function body if your lint rules require it &mdash; the snippet shows it
+inline only for locality.
+</p>
+<p><strong>Rationale:</strong> The dialog no longer closes on a failed delete; the user sees
+why and can retry, and a 401 triggers reauth. Previously the catch was a silent
+<code>/* non-fatal */</code> and the dialog always closed as if it succeeded.</p>
+
+<p><strong>7c. <code>CalendarEventModal.handleSave</code></strong> &middot; <code>LeftPanelSections.tsx</code> (344&ndash;365)</p>
+<pre class="before">      const res = await fetch('/api/google/calendar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ /* ...event payload... */ }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to create event')
+      onCreated()
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create event')
+    } finally {
+      setSaving(false)
+    }</pre>
+<pre class="after">      await writeFetch('/api/google/calendar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ /* ...event payload... */ }),
+      })
+      onCreated()
+      onClose()
+    } catch (err) {
+      // writeFetch routed a 401 into signIn('google'); show the message either way.
+      setError(err instanceof Error ? err.message : 'Failed to create event')
+    } finally {
+      setSaving(false)
+    }</pre>
+<p><strong>Rationale:</strong> Create already checked <code>res.ok</code> but ignored the
+<code>reauth</code> contract; routing through <code>writeFetch</code> makes its 401 behavior
+identical to toggle and delete, and the existing in-modal <code>error</code> banner
+(477&ndash;479) surfaces the message.</p>
+
+<h3>Optional CSS</h3>
+<p>
+Add a minimal style for <code>.section-message__action</code> (a small inline button) in the
+Left Panel stylesheet so the reauth button matches the panel&rsquo;s look. Functionality does
+not depend on it; the button is a real, focusable <code>&lt;button&gt;</code> regardless.
+</p>
+
+<h2>Files touched</h2>
+<table>
+<thead><tr><th>File</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td><code>hub/app/hooks/useKPIData.ts</code></td><td>F2 &mdash; fetcher attaches <code>.status</code> (Change 1).</td></tr>
+<tr><td><code>hub/app/hooks/useHubData.ts</code></td><td>F4 &mdash; per-list aggregate fetcher throws status-tagged 401 (Change 3). Optionally remove unused <code>useAuthErrorRecovery</code> (F5 follow-up).</td></tr>
+<tr><td><code>hub/app/components/LeftPanelSections.tsx</code></td><td>F1, F3, F5, F6, F7 &mdash; artifacts fetcher (Change 2); <code>signIn</code> import + <code>SectionMessage</code> action prop (Change 4); <code>renderSectionState</code> helper (Change 5); re-point KPI/Tasks/Calendar/Documents sections (Change 6); harden the three mutations via <code>writeFetch</code> (Change 7).</td></tr>
+<tr><td><code>hub/app/hooks/useWriteFetch.ts</code> <em>(new)</em></td><td>F6 &mdash; shared <code>writeFetch</code> helper.</td></tr>
+<tr><td><code>hub/lib/__fetchers__</code> tests <em>(new, see Testing)</em></td><td>Unit coverage for status-tagging fetchers.</td></tr>
+<tr><td>Left Panel stylesheet <em>(optional)</em></td><td><code>.section-message__action</code> styling.</td></tr>
+</tbody>
+</table>
+
+<h2>Testing</h2>
+<p>
+The repo uses Vitest. <strong>Important:</strong> <code>hub/vitest.config.ts</code> sets
+<code>include: ['lib/**/*.test.ts', 'tests/**/*.test.ts']</code> and
+<code>environment: 'node'</code>. Pure-fetcher unit tests must therefore live under
+<code>hub/lib/</code> or <code>hub/tests/</code> (not next to the <code>.tsx</code> files) and
+must run in a node environment. To unit-test the fetchers, extract each into an exported pure
+function (e.g. export the KPI/artifacts fetchers) so they can be imported without React, or
+add a focused test file that exercises them via a mocked <code>global.fetch</code>.
+</p>
+<h3>Unit tests</h3>
+<ul>
+<li>
+<strong>Fetchers tag status.</strong> For the KPI fetcher (F2), the artifacts fetcher (F3),
+the tasks aggregate fetcher (F4), and <code>writeFetch</code> (F6): mock
+<code>global.fetch</code> to return <code>{ ok: false, status: 401 }</code> and assert the
+thrown error has <code>.status === 401</code>; repeat with 500 and assert
+<code>.status === 500</code>; assert a 200 returns parsed JSON.
+</li>
+<li>
+<strong>Sections render error vs empty.</strong> If a jsdom/React-testing setup is added
+(a separate Vitest project/config with <code>environment: 'jsdom'</code> and a
+<code>tests/</code> include, since the current config is node-only), assert:
+<code>KPISection</code> with <code>error.status === 401</code> renders the
+&ldquo;Session expired&rdquo; message <em>and</em> a &ldquo;Sign in again&rdquo; button (role
+button), not &ldquo;No business KPIs configured&rdquo;; with a generic error renders the
+generic error; with <code>kpis: []</code> and no error renders the empty message. Mirror for
+the Documents artifacts tab.
+</li>
+<li>
+<strong><code>writeFetch</code> reauth.</strong> Assert that a 401 response causes
+<code>signIn('google')</code> to be called (mock <code>next-auth/react</code>) and the promise
+rejects with a status-tagged error; a 200 resolves with the body and does <em>not</em> call
+<code>signIn</code>.
+</li>
+</ul>
+<h3>Type + suite</h3>
+<pre>cd hub
+npx tsc --noEmit      # no type regressions (error now destructured, new props typed)
+npx vitest run        # all fetcher unit tests pass</pre>
+<h3>Manual</h3>
+<ul>
+<li>
+Simulate a 401 by expiring/revoking the Google session (or force
+<code>token.error = 'RefreshAccessTokenError'</code> so <code>resolveGoogleAuth</code> returns
+401 <code>{ reauth: true }</code>). Confirm <strong>each</strong> section &mdash; KPIs, Tasks,
+Calendar, Documents (Recent <em>and</em> Artifacts) &mdash; shows the &ldquo;Session
+expired&rdquo; message with a working &ldquo;Sign in again&rdquo; button, <em>not</em> an
+empty/&ldquo;not configured&rdquo; state.
+</li>
+<li>
+With a valid session but zero data, confirm the empty states still render (regression: do not
+turn empty into error).
+</li>
+<li>
+Toggle a task / delete an event / create an event against an expired session: confirm the
+optimistic UI rolls back (or the dialog stays open with an error), and reauth is triggered.
+With a valid session, confirm all three still succeed.
+</li>
+</ul>
+
+<h2>Acceptance criteria</h2>
+<ul>
+<li>A KPI fetch 401 renders &ldquo;Session expired&rdquo; + a &ldquo;Sign in again&rdquo; button; a generic KPI error renders a generic error; the &ldquo;No business KPIs configured&rdquo; empty state appears <em>only</em> on a successful empty response. (F1, F2)</li>
+<li>The KPI fetcher, the Documents-artifacts fetcher, and the Tasks per-list aggregate fetcher all throw errors carrying <code>.status</code>, and a 401 from any of them reaches the section&rsquo;s auth branch. (F2, F3, F4)</li>
+<li>The Documents Artifacts tab shows an auth/error state on failure instead of &ldquo;No saved artifacts&rdquo;. (F3)</li>
+<li>Every Left Panel section uses the same reauth UX (a real &ldquo;Sign in again&rdquo; button calling <code>signIn('google')</code>); no section relies on the dead <code>useAuthErrorRecovery</code>; no duplicated <code>(error as any).status === 401</code> ladders remain (all go through <code>renderSectionState</code>). (F5, F7)</li>
+<li>Toggle-task, delete-event, and create-event all check <code>res.ok</code>, surface failures to the user, roll back optimistic UI, and route 401 <code>{ reauth: true }</code> into reauth via <code>writeFetch</code>. None report success on failure. (F6)</li>
+<li><code>npx tsc --noEmit</code> is clean and <code>npx vitest run</code> passes, including new fetcher unit tests asserting status-tagging. </li>
+</ul>
+
+<h2 id="deps">Dependencies &amp; sequencing</h2>
+<ol>
+<li><strong>F2, F3, F4 first</strong> (fetchers tag <code>.status</code>). These are prerequisites: without a tagged status, the section-level 401 detection in Change 6 is inert.</li>
+<li><strong>F5 control + F7 helper next</strong> (Changes 4 and 5). The <code>SectionMessage</code> action prop and <code>renderSectionState</code> must exist before sections can call them.</li>
+<li><strong>F1 + section re-pointing</strong> (Change 6). Depends on 1 and 2.</li>
+<li><strong>F6 last</strong> (Change 7). Independent of the read-path work but shares the <code>signIn('google')</code> reauth decision from F5; land it after the reauth UX is settled so both paths agree.</li>
+<li>External contract already in place: <code>hub/lib/google-session.ts</code> (43&ndash;53, 65&ndash;78) returns <code>401 { reauth: true }</code> on Google auth failure &mdash; <strong>no route changes required</strong> by this plan; the client just needs to honor it.</li>
+</ol>
+
+<h2>Rollback</h2>
+<ul>
+<li>All changes are client-side (plus one new helper file) and isolated to <code>useKPIData.ts</code>, <code>useHubData.ts</code>, <code>LeftPanelSections.tsx</code>, and <code>useWriteFetch.ts</code>. No API routes, schema, or server behavior change &mdash; revert the commit to restore prior behavior with zero migration.</li>
+<li>Changes are additive and independently revertible per finding: e.g. the <code>writeFetch</code> mutations (F6) can be reverted to raw <code>fetch</code> without touching the read-path fetchers, and vice-versa.</li>
+<li><strong>F5 note:</strong> <code>useAuthErrorRecovery</code> is intentionally left in place (unused) so removing it is a separate, low-risk follow-up. If the button UX needs to be backed out, delete the <code>action</code> prop usage in <code>renderSectionState</code> and the sections fall back to a static message identical to today&rsquo;s behavior.</li>
+<li><strong>Risk:</strong> if the unit-test setup for <code>.tsx</code> components proves heavy (the current Vitest config is node-only), ship the fetcher unit tests (which fit the existing config) and cover the component states manually + via the type checker, deferring jsdom wiring to a follow-up. This does not block the fix.</li>
+</ul>
+
+</body>
+</html>

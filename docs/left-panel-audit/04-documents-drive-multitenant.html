@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Documents / Drive: multi-tenant correctness + eliminate waste</title>
+<style>
+body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:920px;margin:2rem auto;padding:0 1rem;line-height:1.55;color:#1a1a1a}
+h1{border-bottom:3px solid #2563eb;padding-bottom:.3rem}
+h2{margin-top:2rem;color:#1e3a8a;border-bottom:1px solid #e5e7eb;padding-bottom:.2rem}
+h3{margin-top:1.4rem}
+code,pre{font-family:ui-monospace,Menlo,monospace}
+pre{background:#f6f8fa;padding:.8rem;border-radius:6px;overflow:auto;border:1px solid #e5e7eb;font-size:.86rem}
+table{border-collapse:collapse;width:100%}
+th,td{border:1px solid #d1d5db;padding:.4rem .6rem;text-align:left;vertical-align:top;font-size:.9rem}
+th{background:#f3f4f6}
+.badge{display:inline-block;padding:.15rem .6rem;border-radius:999px;color:#fff;font-size:.8rem;font-weight:600}
+.p0{background:#dc2626}.p1{background:#d97706}.p2{background:#2563eb}
+pre.before{background:#fef2f2;border-color:#fecaca}pre.after{background:#f0fdf4;border-color:#bbf7d0}
+blockquote{border-left:4px solid #9ca3af;margin:0;padding-left:1rem;color:#4b5563}
+ul{margin:.4rem 0}
+</style>
+</head>
+<body>
+
+<h1>Documents / Drive: multi-tenant correctness + eliminate waste <span class="badge p1">P1</span></h1>
+
+<p><strong>Scope:</strong> the Documents section of the left panel — its API route
+(<code>hub/app/api/google/drive/route.ts</code>), its SWR hook
+(<code>hub/app/hooks/useHubData.ts</code> → <code>useDrive</code>), and its renderer
+(<code>hub/app/components/LeftPanelSections.tsx</code> → <code>DocumentsSection</code> /
+<code>DocumentRow</code>).</p>
+
+<p><strong>Summary:</strong> The Documents feature has one multi-tenant correctness bug and a
+cluster of waste / robustness issues. The Transcripts filter hardcodes a single Google Drive
+folder id, so it only works for the one account that owns that folder — every other tenant and
+user gets that owner's transcripts (a cross-tenant data exposure) or nothing. Separately, the
+Artifacts tab still fetches and 120s-polls Drive "recent" files it never renders; the Drive hook
+exposes no <code>mutate</code> so its error UI has no retry; tapped artifacts inject only
+<code>toolId + title</code> (dropping the real <code>artifact.id</code> that is right there as the
+React key); an unguarded <code>new Date(...).toLocaleDateString()</code> can print "Invalid Date";
+the empty-state copy doesn't match the 7-day query window; and per-render icon maps plus an
+unmemoized row recompute on every poll. This plan fixes all of them without touching unrelated
+sections.</p>
+
+<h2>Why this matters</h2>
+<ul>
+<li><strong>Cross-tenant data exposure (P1-5).</strong> The codebase is explicitly multi-tenant
+(<code>getTenantId()</code> is the single source of truth, used across artifacts, KPIs, memory,
+events) and Drive auth is per-user OAuth. Hardcoding one folder id means the Transcripts tab is
+either broken (the folder isn't visible to this user's token → empty/error) or, worse, surfaces
+another tenant's meeting transcripts. This is the only correctness/security defect in the group and
+is the reason the piece is P1.</li>
+<li><strong>Silent background waste (P1-2).</strong> On the Artifacts tab the Drive hook keeps a
+120s poll alive against <code>/api/google/drive?filter=recent</code> whose results are never
+rendered — needless Google Drive API quota burn and a request that shows up in every session's
+Network tab.</li>
+<li><strong>No recovery path (P1-3).</strong> <code>useDrive</code> sets
+<code>revalidateOnFocus:false</code> and returns no <code>mutate</code>, so a transient Drive
+failure is terminal until a full reload. The error copy literally says "try refreshing" but the UI
+gives the user no button to do so.</li>
+<li><strong>Ambiguous artifact resolution (P1-4).</strong> Injecting only
+<code>toolId + title</code> makes two artifacts with the same tool and title indistinguishable. The
+unique <code>artifact.id</code> is already in hand (it's the list key) and the document path already
+demonstrates the structured-attachment pattern via <code>buildDocumentInject</code>.</li>
+<li><strong>Polish / correctness-at-the-edges (P1-7, P2-8/9/10).</strong> "Invalid Date" on
+malformed timestamps, copy that contradicts the actual query window, and avoidable per-poll
+re-computation are all cheap to fix while we're in the file.</li>
+</ul>
+
+<h2>Findings</h2>
+<table>
+<thead>
+<tr><th>ID</th><th>Pri</th><th>Location (verified)</th><th>Problem</th><th>Fix</th></tr>
+</thead>
+<tbody>
+<tr>
+<td>P1-5</td><td><span class="badge p1">P1</span></td>
+<td><code>app/api/google/drive/route.ts</code> line 27</td>
+<td>Hardcoded transcripts folder id <code>'1PQ47SWRWn-A1dToniwglJy9uqEwZSVwA'</code> in a
+multi-tenant, per-user-OAuth route.</td>
+<td>Resolve folder per tenant (tenant config / env); graceful empty result when unconfigured.</td>
+</tr>
+<tr>
+<td>P1-2</td><td><span class="badge p1">P1</span></td>
+<td><code>LeftPanelSections.tsx</code> line 818</td>
+<td><code>useDrive(activeFilter === 'artifacts' ? 'recent' : activeFilter)</code> still fetches &amp;
+120s-polls on the Artifacts tab; results never rendered.</td>
+<td>Make <code>useDrive</code> conditional (null SWR key via <code>enabled</code> flag); disable on
+the artifacts tab.</td>
+</tr>
+<tr>
+<td>P1-3</td><td><span class="badge p1">P1</span></td>
+<td><code>useHubData.ts</code> lines 205–218</td>
+<td><code>useDrive</code> returns no <code>mutate</code> and <code>revalidateOnFocus:false</code>;
+no retry path for a stale/failed fetch.</td>
+<td>Return <code>mutate</code>; render a retry button in the Drive error <code>SectionMessage</code>.</td>
+</tr>
+<tr>
+<td>P1-4</td><td><span class="badge p1">P1</span></td>
+<td><code>LeftPanelSections.tsx</code> line 878 (key at line 876)</td>
+<td>Artifact tap injects <code>`Show me the ${artifact.toolId} artifact: ${artifact.title}`</code>;
+discards <code>artifact.id</code>. Ambiguous for duplicate toolId+title.</td>
+<td>Build a structured attachment carrying <code>artifact.id</code> (analogous to
+<code>buildDocumentInject</code>); pass as 2nd arg so the route can resolve by id.</td>
+</tr>
+<tr>
+<td>P1-7</td><td><span class="badge p1">P1</span></td>
+<td><code>LeftPanelSections.tsx</code> line 888</td>
+<td><code>new Date(artifact.createdAt).toLocaleDateString(...)</code> unguarded → "Invalid Date" on
+null/malformed.</td>
+<td>Use the try/catch-guarded <code>formatShortDate</code> (already imported).</td>
+</tr>
+<tr>
+<td>P2-10</td><td><span class="badge p2">P2</span></td>
+<td><code>drive/route.ts</code> lines 20–34 / copy lines 829–834</td>
+<td>Queries hardcode <code>modifiedTime &gt; sevenDaysAgo</code> but empty copy says "No recent /
+shared files".</td>
+<td>Reword copy to reflect the 7-day window.</td>
+</tr>
+<tr>
+<td>P2-8 / P2-9</td><td><span class="badge p2">P2</span></td>
+<td><code>LeftPanelSections.tsx</code> lines 837–845 (icons) &amp; 908–919 / 928–955 (rows)</td>
+<td>Inline <code>getToolIcon</code>/<code>icons</code> map reallocated every render;
+<code>DocumentRow</code> unmemoized → recompute on every 120s poll.</td>
+<td>Hoist <code>TOOL_ICONS</code>/<code>getToolIcon</code> to module scope (like
+<code>getDriveIcon</code>); wrap <code>DocumentRow</code> in <code>React.memo</code>.</td>
+</tr>
+</tbody>
+</table>
+
+<h2>Implementation</h2>
+
+<h3>1 — Resolve the Transcripts folder per tenant (P1-5)</h3>
+<p><strong>File:</strong> <code>hub/app/api/google/drive/route.ts</code> (lines 18–66) and
+<code>hub/lib/tenant.ts</code> (config interface, lines 29–39 + tenant maps lines 97–133).</p>
+
+<p>The route is server-only and already inside a request scope, so it may call
+<code>getTenantId()</code>/<code>getTenantConfig()</code> directly. Add an optional
+<code>transcriptsFolderId</code> to <code>TenantConfig</code>, resolved with an env override and a
+graceful empty result when unconfigured. <strong>Important:</strong> when no folder is configured we
+must return an empty file list — NOT fall back to the hardcoded id, and NOT run an unscoped query
+(which would leak unrelated files into "Transcripts").</p>
+
+<p>Step 1a — extend the tenant config interface (<code>hub/lib/tenant.ts</code>, after
+<code>googleWorkspaceId?: string</code> at line 37):</p>
+<pre class="before">  googleWorkspaceId?: string
+  roles: Record&lt;string, RoleConfig&gt;</pre>
+<pre class="after">  googleWorkspaceId?: string
+  /** Google Drive folder id holding this tenant's meeting transcripts.
+   *  When unset, the Transcripts tab returns an empty list (no cross-tenant leakage). */
+  transcriptsFolderId?: string
+  roles: Record&lt;string, RoleConfig&gt;</pre>
+<p>(Optionally set <code>transcriptsFolderId: '1PQ47SWRWn-A1dToniwglJy9uqEwZSVwA'</code> on the
+<code>rxfit</code> tenant config at lines 98–114 to preserve current behavior for that one tenant.
+Leave <code>rosepop</code> unset.)</p>
+
+<p>Step 1b — make <code>buildDriveQuery</code> tenant-aware and signal "unconfigured" distinctly
+from "no query". <code>buildDriveQuery</code> currently returns <code>string | undefined</code>;
+<code>undefined</code> already means "no filter → default recent query" downstream, so we need a
+separate sentinel for "transcripts requested but no folder → return nothing". Use a small result
+object instead of overloading <code>undefined</code>.</p>
+<pre class="before">/** Build the Drive query string based on filter type */
+function buildDriveQuery(filter: string | null, customQ?: string): string | undefined {
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+
+  switch (filter) {
+    case 'shared':
+      return `sharedWithMe = true and modifiedTime &gt; '${sevenDaysAgo}' and ${VIDEO_EXCLUSIONS}`
+
+    case 'transcripts':
+      return `'1PQ47SWRWn-A1dToniwglJy9uqEwZSVwA' in parents`
+
+    case 'recent':
+    default: {
+      // Default "recent" query: files I modified, excluding videos
+      const base = customQ
+        ? `${customQ} and ${VIDEO_EXCLUSIONS}`
+        : `modifiedTime &gt; '${sevenDaysAgo}' and ${VIDEO_EXCLUSIONS}`
+      return base
+    }
+  }
+}</pre>
+<pre class="after">/** Result of building a Drive query.
+ *  - { query }            → run this query
+ *  - { empty: true }      → return an empty file list without calling Drive */
+type DriveQueryPlan = { query?: string; empty?: boolean }
+
+/** Build the Drive query plan based on filter type and the active tenant. */
+function buildDriveQuery(
+  filter: string | null,
+  customQ: string | undefined,
+  transcriptsFolderId: string | undefined,
+): DriveQueryPlan {
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+
+  switch (filter) {
+    case 'shared':
+      return { query: `sharedWithMe = true and modifiedTime &gt; '${sevenDaysAgo}' and ${VIDEO_EXCLUSIONS}` }
+
+    case 'transcripts':
+      // Per-tenant folder; no hardcoded id. Unconfigured → empty (no cross-tenant leak).
+      if (!transcriptsFolderId) return { empty: true }
+      return { query: `'${transcriptsFolderId}' in parents and ${VIDEO_EXCLUSIONS}` }
+
+    case 'recent':
+    default: {
+      // Default "recent" query: files I modified, excluding videos
+      const base = customQ
+        ? `${customQ} and ${VIDEO_EXCLUSIONS}`
+        : `modifiedTime &gt; '${sevenDaysAgo}' and ${VIDEO_EXCLUSIONS}`
+      return { query: base }
+    }
+  }
+}</pre>
+
+<p>Step 1c — resolve the folder in <code>GET</code> and short-circuit on <code>empty</code>
+(<code>route.ts</code> lines 50–65). Add the imports at the top of the file (after line 6):</p>
+<pre class="after">import { getTenantConfig } from '@/lib/tenant'</pre>
+<pre class="before">  const { searchParams } = new URL(req.url)
+  const maxResults = searchParams.get('maxResults')
+  const filter = searchParams.get('filter')
+  const customQ = searchParams.get('q') ?? undefined
+
+  const query = buildDriveQuery(filter, customQ)
+
+  try {
+    const files = await listRecentFiles(accessToken, {
+      maxResults: clampInt(maxResults, 15, 1, 100),
+      query,
+    })
+    return NextResponse.json({ files })
+  } catch (error) {
+    return googleApiErrorResponse(error)
+  }
+}</pre>
+<pre class="after">  const { searchParams } = new URL(req.url)
+  const maxResults = searchParams.get('maxResults')
+  const filter = searchParams.get('filter')
+  const customQ = searchParams.get('q') ?? undefined
+
+  // Per-tenant transcripts folder: env override wins, then tenant config. No hardcoded id.
+  const transcriptsFolderId =
+    process.env.DRIVE_TRANSCRIPTS_FOLDER_ID || getTenantConfig().transcriptsFolderId
+
+  const plan = buildDriveQuery(filter, customQ, transcriptsFolderId)
+
+  // Transcripts requested but no folder configured for this tenant → clean empty result.
+  if (plan.empty) {
+    return NextResponse.json({ files: [] })
+  }
+
+  try {
+    const files = await listRecentFiles(accessToken, {
+      maxResults: clampInt(maxResults, 15, 1, 100),
+      query: plan.query,
+    })
+    return NextResponse.json({ files })
+  } catch (error) {
+    return googleApiErrorResponse(error)
+  }
+}</pre>
+<p><strong>Rationale:</strong> Removes the only hardcoded cross-tenant identifier in the route.
+<code>getTenantConfig()</code> reads <code>getTenantId()</code> internally, so the route stays
+consistent with the rest of the multi-tenant code. The <code>{ empty: true }</code> sentinel makes
+"unconfigured" return <code>[]</code> rather than silently widening the query — no other tenant's
+files can appear under Transcripts.</p>
+
+<h3>2 — Stop fetching Drive on the Artifacts tab (P1-2)</h3>
+<p><strong>Files:</strong> <code>hub/app/hooks/useHubData.ts</code> (lines 205–218) and
+<code>hub/app/components/LeftPanelSections.tsx</code> (line 818).</p>
+
+<p>Add an <code>enabled</code> flag to <code>useDrive</code>. When disabled, pass a <code>null</code>
+SWR key so SWR neither fetches nor polls. (This change also adds <code>mutate</code> for finding 3 —
+shown together to avoid a conflicting second edit.)</p>
+<pre class="before">export function useDrive(filter?: string) {
+  const filterParam = filter || 'recent'
+  const { data, error, isLoading } = useSWR&lt;DriveResponse&gt;(
+    `/api/google/drive?filter=${filterParam}`,
+    fetcher,
+    { refreshInterval: 120_000, revalidateOnFocus: false }
+  )
+
+  return {
+    files: data?.files ?? [],
+    isLoading,
+    error,
+  }
+}</pre>
+<pre class="after">export function useDrive(filter?: string, enabled: boolean = true) {
+  const filterParam = filter || 'recent'
+  const { data, error, isLoading, mutate } = useSWR&lt;DriveResponse&gt;(
+    enabled ? `/api/google/drive?filter=${filterParam}` : null,
+    fetcher,
+    { refreshInterval: 120_000, revalidateOnFocus: false }
+  )
+
+  return {
+    files: data?.files ?? [],
+    isLoading,
+    error,
+    mutate,
+  }
+}</pre>
+<p>Call site (<code>LeftPanelSections.tsx</code> line 818):</p>
+<pre class="before">  const { files, isLoading, error } = useDrive(activeFilter === 'artifacts' ? 'recent' : activeFilter)</pre>
+<pre class="after">  const isArtifactsTab = activeFilter === 'artifacts'
+  const { files, isLoading, error, mutate } = useDrive(activeFilter, !isArtifactsTab)</pre>
+<p><strong>Rationale:</strong> A <code>null</code> SWR key is the idiomatic way to disable a hook —
+no request and no <code>refreshInterval</code> timer while the Artifacts tab is active. Passing
+<code>activeFilter</code> directly (instead of mapping <code>'artifacts' → 'recent'</code>) is now
+safe because the hook never fires for <code>'artifacts'</code>.</p>
+
+<h3>3 — Add a retry control to the Drive error state (P1-3)</h3>
+<p><strong>File:</strong> <code>hub/app/components/LeftPanelSections.tsx</code> (error branch around
+lines 900–905; <code>SectionMessage</code> defined at lines 47–56).</p>
+
+<p><code>mutate</code> is now returned from <code>useDrive</code> (change 2). <code>SectionMessage</code>
+takes only <code>message</code>/<code>type</code> today, so extend it with an optional action rather
+than forking a new component.</p>
+<pre class="before">function SectionMessage({ message, type = 'info' }: { message: string; type?: 'info' | 'error' | 'empty' }) {
+  return (
+    &lt;div
+      role={type === 'error' ? 'alert' : 'status'}
+      className={`section-message section-message--${type}`}
+    &gt;
+      {message}
+    &lt;/div&gt;
+  )
+}</pre>
+<pre class="after">function SectionMessage({
+  message,
+  type = 'info',
+  onRetry,
+}: {
+  message: string
+  type?: 'info' | 'error' | 'empty'
+  onRetry?: () =&gt; void
+}) {
+  return (
+    &lt;div
+      role={type === 'error' ? 'alert' : 'status'}
+      className={`section-message section-message--${type}`}
+    &gt;
+      {message}
+      {onRetry && (
+        &lt;button type="button" className="section-message-retry" onClick={onRetry}&gt;
+          Retry
+        &lt;/button&gt;
+      )}
+    &lt;/div&gt;
+  )
+}</pre>
+<p>Wire it into the Drive error branch (lines 902–903):</p>
+<pre class="before">          ) : error ? (
+            &lt;SectionMessage message="Unable to load files — try refreshing or check your connection" type="error" /&gt;</pre>
+<pre class="after">          ) : error ? (
+            &lt;SectionMessage
+              message="Unable to load files — try refreshing or check your connection"
+              type="error"
+              onRetry={() =&gt; mutate?.()}
+            /&gt;</pre>
+<p><strong>Rationale:</strong> Makes the "try refreshing" copy actionable. <code>mutate?.()</code>
+re-runs the SWR fetch in place; the optional-call guard tolerates the disabled (artifacts-tab) case
+where <code>mutate</code> may be the no-op/undefined path. Other <code>SectionMessage</code> callers
+are unaffected because <code>onRetry</code> is optional.</p>
+
+<h3>4 — Carry the artifact id into chat (P1-4)</h3>
+<p><strong>Files:</strong> <code>hub/lib/panel-inject.ts</code> (add a builder near
+<code>buildDocumentInject</code>, lines 127–142) and
+<code>hub/app/components/LeftPanelSections.tsx</code> (artifact tap, lines 874–891).</p>
+
+<p>Build a structured attachment carrying <code>artifact.id</code>, analogous to
+<code>buildDocumentInject</code>. The existing <code>ChatAttachment</code> type
+(<code>hub/types/index.ts</code> lines 291–299) supports <code>type: 'document' | 'url' | 'text'</code>;
+use <code>type:&nbsp;'text'</code> with the artifact id embedded so resolution is unambiguous and no
+new attachment kind/type is required. Add to <code>panel-inject.ts</code>:</p>
+<pre class="after">export interface ArtifactInput {
+  id: string
+  toolId: string
+  title: string
+}
+
+/**
+ * Build the message + attachment for a tapped tool artifact. The attachment
+ * carries the real artifact id so the chat route resolves THIS artifact even
+ * when two share a toolId + title.
+ */
+export function buildArtifactInject(
+  artifact: ArtifactInput,
+): { message: string; attachment: ChatAttachment } {
+  const message = `Show me the ${artifact.toolId} artifact: ${artifact.title}`
+  const attachment: ChatAttachment = {
+    id: artifact.id,
+    type: 'text',
+    label: artifact.title,
+    // Embed the resolvable id so the chat route can fetch the artifact by id.
+    content: `[artifact:${artifact.id}] toolId=${artifact.toolId} title="${artifact.title}"`,
+  }
+  return { message, attachment }
+}</pre>
+<p>Tap handler (<code>LeftPanelSections.tsx</code> line 878). Import
+<code>buildArtifactInject</code> alongside the other builders (lines 9–16):</p>
+<pre class="before">              &lt;button
+                key={artifact.id}
+                role="listitem"
+                onClick={() =&gt; onInjectChat(`Show me the ${artifact.toolId} artifact: ${artifact.title}`)}
+                aria-label={`Artifact: ${artifact.title}`}
+                className="section-row"
+              &gt;</pre>
+<pre class="after">              &lt;button
+                key={artifact.id}
+                role="listitem"
+                onClick={() =&gt; {
+                  const { message, attachment } = buildArtifactInject(artifact)
+                  onInjectChat(message, [attachment])
+                }}
+                aria-label={`Artifact: ${artifact.title}`}
+                className="section-row"
+              &gt;</pre>
+<p><strong>Rationale &amp; caveat:</strong> The unique <code>artifact.id</code> now travels with the
+tap. The chat route's attachment resolver
+(<code>hub/app/api/chat/route.ts</code> lines 335–391) currently handles
+<code>type === 'text' | 'url' | 'document'</code> only — a <code>'text'</code> attachment is passed
+through as-is, so the id reaches the model in context but the route does not yet
+<em>look the artifact up by id from the DB</em>. Two equally valid finishes:
+<strong>(a)</strong> keep this as a pure client/type change (the id is now unambiguous in the
+prompt), or <strong>(b)</strong> add an artifacts branch to the chat resolver that detects the
+<code>[artifact:&lt;id&gt;]</code> marker (or a dedicated attachment shape) and calls
+<code>getToolArtifact(id)</code> with the same tenant-ownership check used at
+<code>tool-artifacts/route.ts</code> lines 108–111. Option (a) is the minimal in-scope fix for the
+ambiguity bug; do (b) only if full id-based content resolution is required by acceptance.</p>
+
+<h3>5 — Guard the artifact date (P1-7)</h3>
+<p><strong>File:</strong> <code>hub/app/components/LeftPanelSections.tsx</code> (line 888).
+<code>formatShortDate</code> is already imported (line 14).</p>
+<pre class="before">                  &lt;div className="document-modified"&gt;
+                    {artifact.toolId} · {new Date(artifact.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                  &lt;/div&gt;</pre>
+<pre class="after">                  &lt;div className="document-modified"&gt;
+                    {artifact.toolId} · {formatShortDate(artifact.createdAt)}
+                  &lt;/div&gt;</pre>
+<p><strong>Rationale:</strong> <code>formatShortDate</code> (<code>panel-inject.ts</code> lines
+51–66) is try/catch-guarded and returns the raw string on a bad date instead of "Invalid Date". It
+also yields the friendlier "Today"/"Tomorrow" labels used elsewhere in the panel.</p>
+
+<h3>6 — Match the empty-state copy to the 7-day window (P2-10)</h3>
+<p><strong>File:</strong> <code>hub/app/components/LeftPanelSections.tsx</code> (lines 829–834).</p>
+<pre class="before">  const emptyMessages: Record&lt;DocFilter, string&gt; = {
+    recent: 'No recent files',
+    shared: 'No shared files',
+    artifacts: 'No saved artifacts — complete a tool session to create one',
+    transcripts: 'No transcripts found',
+  }</pre>
+<pre class="after">  const emptyMessages: Record&lt;DocFilter, string&gt; = {
+    recent: 'No files modified in the last 7 days',
+    shared: 'No files shared with you in the last 7 days',
+    artifacts: 'No saved artifacts — complete a tool session to create one',
+    transcripts: 'No transcripts found',
+  }</pre>
+<p><strong>Rationale:</strong> The <code>recent</code> and <code>shared</code> queries both filter
+<code>modifiedTime &gt; sevenDaysAgo</code> (<code>drive/route.ts</code> lines 24 &amp; 34), so the
+old copy overstated coverage. <code>transcripts</code> is folder-scoped (not time-windowed), so its
+copy is left as-is.</p>
+
+<h3>7 — Hoist the tool-icon map and memoize the row (P2-8 / P2-9)</h3>
+<p><strong>File:</strong> <code>hub/app/components/LeftPanelSections.tsx</code> (icon map lines
+837–845; <code>DocumentRow</code> lines 928–955). Mirror the existing module-scope
+<code>getDriveIcon</code> (line 1129).</p>
+
+<p>Step 7a — hoist <code>TOOL_ICONS</code> + <code>getToolIcon</code> to module scope (e.g. just
+above <code>DocumentsSection</code> at line 816) and delete the inline definition at lines 836–845:</p>
+<pre class="before">  /* Tool icon mapping for artifact cards */
+  const getToolIcon = (toolId: string): string =&gt; {
+    const icons: Record&lt;string, string&gt; = {
+      'issue-tree': '🌳', 'decision-memo': '📋', 'prioritization': '📊',
+      'data-insights': '📈', 'meeting-prep': '🤝', 'storyline': '📖',
+      'scpr': '🔄', 'mckinsey-critic': '🔍', 'ai-use-case-scorer': '🤖',
+      'deck-pipeline': '📑', 'gamma-deck': '🎨',
+    }
+    return icons[toolId] || '⚡'
+  }</pre>
+<pre class="after">/* Tool icon mapping for artifact cards (module scope — allocated once). */
+const TOOL_ICONS: Record&lt;string, string&gt; = {
+  'issue-tree': '🌳', 'decision-memo': '📋', 'prioritization': '📊',
+  'data-insights': '📈', 'meeting-prep': '🤝', 'storyline': '📖',
+  'scpr': '🔄', 'mckinsey-critic': '🔍', 'ai-use-case-scorer': '🤖',
+  'deck-pipeline': '📑', 'gamma-deck': '🎨',
+}
+
+function getToolIcon(toolId: string): string {
+  return TOOL_ICONS[toolId] || '⚡'
+}</pre>
+<p>(The call site at line 883, <code>{getToolIcon(artifact.toolId)}</code>, is unchanged — it now
+binds to the module-scope function.)</p>
+
+<p>Step 7b — wrap <code>DocumentRow</code> in <code>React.memo</code> (lines 928–955). Add
+<code>memo</code> to the React import at line 3:</p>
+<pre class="before">import { useState, useEffect, ReactNode, useCallback } from 'react'</pre>
+<pre class="after">import { useState, useEffect, ReactNode, useCallback, memo } from 'react'</pre>
+<pre class="before">function DocumentRow({ file, onClick }: { file: DriveFile; onClick: () =&gt; void }) {
+  const icon = getDriveIcon(file.mimeType)
+  const modified = formatRelativeDate(file.modifiedTime)
+
+  return (
+    /* …unchanged… */
+  )
+}</pre>
+<pre class="after">const DocumentRow = memo(function DocumentRow(
+  { file, onClick }: { file: DriveFile; onClick: () =&gt; void },
+) {
+  const icon = getDriveIcon(file.mimeType)
+  const modified = formatRelativeDate(file.modifiedTime)
+
+  return (
+    /* …unchanged… */
+  )
+})</pre>
+<p><strong>Rationale:</strong> <code>TOOL_ICONS</code> is constant; allocating it on every render of
+<code>DocumentsSection</code> (which re-renders on each 120s poll) is pure waste, and
+<code>getToolIcon</code> hoisted to module scope matches <code>getDriveIcon</code>'s existing
+pattern. <code>React.memo</code> on <code>DocumentRow</code> skips re-render of unchanged rows when
+the parent re-renders from a poll. Note the <code>onClick</code> arrow at lines 912–917 is currently
+re-created each render, which would defeat <code>memo</code>; if strict skip behavior is desired,
+the caller's <code>onClick</code> should be stabilized (e.g. move the <code>buildDocumentInject</code>
+call into a <code>useCallback</code> keyed by <code>file.id</code>) — optional, low-value, and not
+required to land the rest.</p>
+
+<h2>Files touched</h2>
+<table>
+<thead><tr><th>File</th><th>Changes</th></tr></thead>
+<tbody>
+<tr><td><code>hub/app/api/google/drive/route.ts</code></td><td>Per-tenant transcripts folder; remove hardcoded id; <code>DriveQueryPlan</code> + empty short-circuit; import <code>getTenantConfig</code> (P1-5, P2-10 query side).</td></tr>
+<tr><td><code>hub/lib/tenant.ts</code></td><td>Add optional <code>transcriptsFolderId</code> to <code>TenantConfig</code> (and optionally seed <code>rxfit</code>) (P1-5).</td></tr>
+<tr><td><code>hub/app/hooks/useHubData.ts</code></td><td><code>useDrive(filter, enabled)</code>: null key when disabled; return <code>mutate</code> (P1-2, P1-3).</td></tr>
+<tr><td><code>hub/lib/panel-inject.ts</code></td><td>Add <code>ArtifactInput</code> + <code>buildArtifactInject</code> (P1-4).</td></tr>
+<tr><td><code>hub/app/components/LeftPanelSections.tsx</code></td><td>Disable Drive on artifacts tab; retry button + <code>SectionMessage.onRetry</code>; structured artifact inject; <code>formatShortDate</code> for artifact date; reworded empty copy; hoisted <code>TOOL_ICONS</code>/<code>getToolIcon</code>; <code>memo</code> on <code>DocumentRow</code>; <code>memo</code> import (P1-2, P1-3, P1-4, P1-7, P2-8, P2-9, P2-10).</td></tr>
+<tr><td><code>hub/app/api/chat/route.ts</code> <em>(optional, finding 4 option b)</em></td><td>Resolve <code>[artifact:&lt;id&gt;]</code> attachments via <code>getToolArtifact(id)</code> with tenant-ownership check. Only if full id-based resolution is required.</td></tr>
+</tbody>
+</table>
+
+<h2>Testing</h2>
+<p>From <code>hub/</code>:</p>
+<ul>
+<li><strong>Types:</strong> <code>npx tsc --noEmit</code> — must pass clean (catches the
+<code>buildDriveQuery</code> signature change, the new <code>useDrive</code> arg, the
+<code>SectionMessage.onRetry</code> prop, and the <code>ChatAttachment</code> shape in
+<code>buildArtifactInject</code>).</li>
+<li><strong>Unit:</strong> <code>npx vitest run</code> — existing <code>panel-inject</code> tests
+should stay green; add a case asserting <code>buildArtifactInject({id,toolId,title})</code> returns
+an attachment whose <code>id</code>/<code>content</code> contains the artifact id.</li>
+<li><strong>Manual — no wasted Drive request:</strong> open the panel, expand Documents, click the
+<em>Artifacts</em> tab. In DevTools → Network, confirm <strong>no</strong> request to
+<code>/api/google/drive?filter=...</code> is issued and none fires on the 120s interval while that
+tab is active. Switch back to Recent/Shared/Transcripts and confirm the Drive request resumes.</li>
+<li><strong>Manual — transcripts multi-tenant:</strong> with
+<code>DRIVE_TRANSCRIPTS_FOLDER_ID</code> set (or the tenant config populated), confirm the
+Transcripts tab lists that folder's files for a second account that can see the folder. With it
+unset, confirm the tab returns a clean empty list ("No transcripts found") and issues no error and
+no leakage of unrelated files.</li>
+<li><strong>Manual — robustness:</strong> force a Drive 500 (e.g. block the endpoint) and confirm
+the error message renders a working <strong>Retry</strong> button that re-fetches. Confirm a
+malformed <code>createdAt</code> on an artifact no longer renders "Invalid Date".</li>
+</ul>
+
+<h2>Acceptance criteria</h2>
+<ul>
+<li>No hardcoded Drive folder id remains in <code>drive/route.ts</code>; the transcripts folder is
+resolved from env/tenant config, and an unconfigured tenant returns <code>{ files: [] }</code> with
+no Drive call and no cross-tenant files.</li>
+<li>The Artifacts tab issues zero requests to <code>/api/google/drive</code> (initial and on the
+poll interval).</li>
+<li><code>useDrive</code> returns <code>mutate</code>; the Drive error state shows a Retry control
+that re-runs the fetch.</li>
+<li>Tapping an artifact passes a structured attachment carrying <code>artifact.id</code> as the
+second argument to <code>onInjectChat</code>; the id is no longer discarded.</li>
+<li>Artifact date rendering uses <code>formatShortDate</code> and never prints "Invalid Date".</li>
+<li>Empty-state copy for Recent/Shared reflects the 7-day window.</li>
+<li><code>TOOL_ICONS</code>/<code>getToolIcon</code> live at module scope and
+<code>DocumentRow</code> is <code>React.memo</code>-wrapped; no behavior change to rendered rows.</li>
+<li><code>npx tsc --noEmit</code> and <code>npx vitest run</code> both pass.</li>
+</ul>
+
+<h2>Dependencies &amp; sequencing</h2>
+<ul>
+<li><strong>Change 2 (useDrive signature) before changes 3 and the line-818 call site</strong> — the
+<code>mutate</code> return and <code>enabled</code> arg are both introduced in change 2; do them in
+one edit to avoid a half-typed hook.</li>
+<li><strong>Change 1b/1c depend on 1a</strong> (the <code>transcriptsFolderId</code> config field
+must exist before <code>getTenantConfig().transcriptsFolderId</code> typechecks).</li>
+<li><strong>Change 4's optional route work (option b) depends on the client/type change (option a)</strong>
+and on the existing <code>getToolArtifact</code> + tenant-ownership pattern already in
+<code>tool-artifacts/route.ts</code>.</li>
+<li>Changes 5, 6, 7 are independent and can land in any order.</li>
+<li>Provision <code>DRIVE_TRANSCRIPTS_FOLDER_ID</code> (or populate tenant configs) in deploy env
+<em>before</em> or alongside shipping change 1, so Transcripts isn't silently empty in production for
+the previously-working tenant.</li>
+</ul>
+
+<h2>Rollback</h2>
+<ul>
+<li>All changes are additive/local to the Documents feature; revert per-file with no schema or data
+migration. There is no DB change.</li>
+<li><strong>Fastest partial rollback for P1-5:</strong> if the per-tenant folder isn't yet
+provisioned and Transcripts must keep working for the original tenant, set
+<code>DRIVE_TRANSCRIPTS_FOLDER_ID=1PQ47SWRWn-A1dToniwglJy9uqEwZSVwA</code> (single-tenant deploy) or
+seed <code>transcriptsFolderId</code> on the <code>rxfit</code> config — no code revert needed.</li>
+<li>Changes 2–7 can each be reverted independently; reverting change 2 (the <code>useDrive</code>
+signature) requires also reverting the line-818 call site and the change-3 retry wiring, since they
+consume the new return/args.</li>
+<li>The optional chat-route resolution (finding 4 option b) is isolated to a new branch in the
+attachment loop and can be removed without affecting the client-side fix.</li>
+</ul>
+
+</body>
+</html>
