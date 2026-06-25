@@ -31,6 +31,9 @@ export interface DriveFileInput {
   id: string
   name: string
   mimeType: string
+  /** Present on the real DriveFile the row passes in; the message builder
+   *  doesn't read it, but the type should mirror the shape it receives. */
+  modifiedTime?: string
 }
 
 /** Collapse whitespace and bound a free-text field so a pathological note/description

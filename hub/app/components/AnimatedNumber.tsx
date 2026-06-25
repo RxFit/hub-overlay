@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 /**
  * Animated number display component.
@@ -11,13 +11,26 @@ export function AnimatedNumber({ value, delay = 0 }: { value: string; delay?: nu
   const [visible, setVisible] = useState(false)
   const [displayed, setDisplayed] = useState('0')
 
+  // Play the staggered fade-in ONCE, on first appearance only — not on every
+  // poll that hands us a fresh-but-equal `value` string.
+  const hasAppeared = useRef(false)
+  // The value we last animated TO. A 60s poll that returns the same number
+  // leaves this unchanged, so the count-up below short-circuits and the KPI
+  // grid stays still instead of re-counting on every tick.
+  const lastAnimatedValue = useRef<string | null>(null)
+
   useEffect(() => {
-    const t = setTimeout(() => setVisible(true), delay)
+    if (hasAppeared.current) { setVisible(true); return }
+    const t = setTimeout(() => { hasAppeared.current = true; setVisible(true) }, delay)
     return () => clearTimeout(t)
   }, [delay])
 
   useEffect(() => {
     if (!visible) return
+    // Only animate on first mount or a genuine value change.
+    if (lastAnimatedValue.current === value) return
+    lastAnimatedValue.current = value
+
     const numMatch = value.match(/^(\$?)(\d[\d,]*)(.*)$/)
     if (!numMatch) { setDisplayed(value); return }
     const prefix = numMatch[1]

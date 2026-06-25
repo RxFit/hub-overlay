@@ -1039,7 +1039,7 @@ Respond with EXACTLY one of:
    *  - other      → read-style inject ('recall' / 'deep_dive'): keep the direct
    *                 sendToApi path (no intent detection on informational lookups).
    */
-  const handleChatInject = useCallback((message: string, useCase: string = 'deep_dive', injectAttachments?: ChatAttachment[]) => {
+  const handleChatInject = useCallback((message: string, useCase: string, injectAttachments?: ChatAttachment[]) => {
     setMobileLeftOpen(false)
     setMobileRightOpen(false)
     setMobileTab('chat')
