@@ -70,8 +70,28 @@ criteria, sequencing, rollback). They are ordered by priority and intended to la
   <td><span class="badge p0">P0</span> <span class="badge p1">P1</span></td>
   <td>No error boundary (one section throw blanks the whole app); mobile drawer has no dialog role / focus trap / Escape / scroll-lock; sections unmemoized; heading &amp; landmark a11y; keyboard-inaccessible task rows.</td>
 </tr>
+<tr>
+  <td>7</td>
+  <td><a href="07-inject-path-unification.html">Inject-path unification</a></td>
+  <td><span class="badge p1">P1</span></td>
+  <td>Panel taps call <code>sendToApi</code> directly, bypassing <code>doSend</code> &mdash; so a &ldquo;create task/event&rdquo; tap never triggers Interview Mode like typed text does. Also: <code>onInjectChat</code> signature drift across sections, and the 5-attachment cap not enforced on the inject path.</td>
+</tr>
+<tr>
+  <td>8</td>
+  <td><a href="08-accessibility-completion.html">Accessibility completion</a></td>
+  <td><span class="badge p2">P2</span></td>
+  <td>The parts piece 6 didn&rsquo;t cover: create/delete <strong>modal</strong> focus-trap/Escape/restore, ARIA tab &amp; listbox keyboard patterns (Documents/Tasks tabs, Calendar week strip), KPI-card redundant <code>aria-label</code>s, and <code>listitem</code>-role-on-button.</td>
+</tr>
+<tr>
+  <td>9</td>
+  <td><a href="09-performance-and-cleanup.html">Performance &amp; cleanup</a></td>
+  <td><span class="badge p2">P2</span></td>
+  <td><code>AnimatedNumber</code> re-animating on every poll; memoize the leftover Tasks list; dead-code removal (unused imports, dead <code>useCase</code> default, <code>DriveFileInput.modifiedTime</code>); relabel the over-promising &ldquo;+ Task&rdquo; FAB.</td>
+</tr>
 </tbody>
 </table>
+
+<p><strong>Status.</strong> Pieces <strong>1&ndash;6 are implemented and merged to master</strong> (PRs #14&ndash;#19). Pieces <strong>7&ndash;9</strong> are the follow-up polish round (the inject-path architecture fix plus the P2 accessibility/performance items the first six didn&rsquo;t cover); plans 8 and 9 were verified against the post-merge master and exclude anything 1&ndash;6 already fixed.</p>
 
 <h2>Suggested sequencing</h2>
 <p>Land in numeric order. A few cross-dependencies to respect:</p>

@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Left-Panel Audit 08 — Accessibility completion: modals, tabs, and KPI cards</title>
+<style>
+body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:920px;margin:2rem auto;padding:0 1rem;line-height:1.55;color:#1a1a1a}
+h1{border-bottom:3px solid #2563eb;padding-bottom:.3rem}
+h2{margin-top:2rem;color:#1e3a8a;border-bottom:1px solid #e5e7eb;padding-bottom:.2rem}
+h3{margin-top:1.4rem}
+code,pre{font-family:ui-monospace,Menlo,monospace}
+pre{background:#f6f8fa;padding:.8rem;border-radius:6px;overflow:auto;border:1px solid #e5e7eb;font-size:.86rem}
+table{border-collapse:collapse;width:100%}
+th,td{border:1px solid #d1d5db;padding:.4rem .6rem;text-align:left;vertical-align:top;font-size:.9rem}
+th{background:#f3f4f6}
+.badge{display:inline-block;padding:.15rem .6rem;border-radius:999px;color:#fff;font-size:.8rem;font-weight:600}
+.p0{background:#dc2626}.p1{background:#d97706}.p2{background:#2563eb}
+pre.before{background:#fef2f2;border-color:#fecaca}pre.after{background:#f0fdf4;border-color:#bbf7d0}
+blockquote{border-left:4px solid #9ca3af;margin:0;padding-left:1rem;color:#4b5563}
+ul{margin:.4rem 0}
+</style>
+</head>
+<body>
+
+<h1>Left-Panel Audit 08 — Accessibility completion: modals, tabs, and KPI cards <span class="badge p2">P2</span></h1>
+
+<p><strong>Target file (all changes):</strong> <code>hub/app/components/LeftPanelSections.tsx</code><br>
+<strong>New file:</strong> <code>hub/app/hooks/useModalA11y.ts</code><br>
+<strong>Repo:</strong> <code>/home/user/hub-overlay</code> (app under <code>hub/</code>)</p>
+
+<h2>Summary</h2>
+<p>Plan 06 (PR&nbsp;#19) hardened the <em>mobile drawer shell</em> — it turned the left-panel <code>&lt;aside&gt;</code> into a viewport-conditional dialog with a Tab focus trap, Escape-to-close, focus move-in, focus restoration, and body scroll-lock (all in <code>hub/app/page.tsx</code>). It did <strong>not</strong> touch the in-panel widgets. This piece closes the remaining ARIA gaps inside the left panel itself:</p>
+<ul>
+<li><strong>Two modals</strong> — the calendar <em>create</em> modal (<code>CalendarEventModal</code>) and the <em>delete-confirm</em> <code>alertdialog</code> — declare <code>role="dialog"</code>/<code>aria-modal</code> but have no Escape handler, no focus trap, and no focus restoration. We add a small shared hook (<code>useModalA11y</code>) and apply it to both.</li>
+<li><strong>Three faux-ARIA widget patterns</strong> — Tasks list tabs, Documents filter tabs, and the calendar week strip <code>listbox</code> — claim composite-widget roles (<code>tablist</code>/<code>tab</code>, <code>listbox</code>/<code>option</code>) but ship none of the required keyboard model (arrow-key roving focus, <code>aria-controls</code>→panel). We add a tiny roving-tabindex helper and wire arrow keys, and connect the tab strips to their panels.</li>
+<li><strong>KPI cards</strong> nest three competing accessible names (button label + trend <code>div</code> label + <code>AnimatedNumber</code>'s own label). We make the inner content decorative so the button's single label is announced.</li>
+<li><strong>Two buttons mis-typed as <code>role="listitem"</code></strong> (the artifact button and <code>DocumentRow</code>), which overrides the implicit <code>button</code> role. We wrap each button in a <code>&lt;div role="listitem"&gt;</code> instead.</li>
+</ul>
+<p>No source behavior changes beyond accessibility; no API or data-layer edits. <strong>This document only writes the plan — do not modify source while authoring it.</strong></p>
+
+<h2>Why this matters</h2>
+<ul>
+<li><strong>Keyboard users get trapped or lost.</strong> A dialog with <code>aria-modal="true"</code> tells assistive tech "everything else is inert," yet Tab currently walks out of the modal into the page behind it, and there is no way to dismiss with Escape. On close, focus is dropped to <code>&lt;body&gt;</code>, forcing the user to Tab from the top of the document. This is a WCAG 2.1 <strong>2.1.2 (No Keyboard Trap)</strong> / <strong>2.4.3 (Focus Order)</strong> failure.</li>
+<li><strong>Composite-widget roles promise a keyboard contract we don't honor.</strong> <code>role="tablist"</code> and <code>role="listbox"</code> make screen readers announce "tab list" / "list box" and lead users to expect arrow-key navigation between options with a single Tab stop. We instead render N independent Tab stops and no arrow handling — confusing and a <strong>4.1.2 (Name, Role, Value)</strong> mismatch.</li>
+<li><strong>Redundant nested labels create noisy, duplicated announcements.</strong> A KPI card currently announces its label/value/trend up to three times (button label, then the trend div's label, then the animated number's label) because each carries its own <code>aria-label</code>.</li>
+<li><strong>Role overrides silently break semantics.</strong> <code>&lt;button role="listitem"&gt;</code> discards the button role; the element is announced as a static list item, so screen-reader users may not realize it is actionable.</li>
+</ul>
+
+<h2>Findings</h2>
+<p>All findings below were re-verified against current <code>master</code> (HEAD = <code>f8ae3ad</code>, "Left-panel 06"). Line numbers are corrected to the post-PR-#19 file (1280 lines total).</p>
+
+<table>
+<thead><tr><th>#</th><th>Finding</th><th>Location (current)</th><th>Status</th></tr></thead>
+<tbody>
+<tr>
+<td>1a</td>
+<td><code>CalendarEventModal</code> sets <code>role="dialog"</code> + <code>aria-modal="true"</code> but no Escape, no Tab trap, no focus restoration. Only the title input has <code>autoFocus</code>.</td>
+<td>Component 442–623; dialog div 498–503; backdrop 492–496; close button 506</td>
+<td>STILL PRESENT</td>
+</tr>
+<tr>
+<td>1b</td>
+<td>Delete-confirm <code>role="alertdialog"</code> + <code>aria-modal="true"</code> — no Escape, no Tab trap, no focus restoration, no initial focus.</td>
+<td>Block 814–847; dialog div 817; close/cancel buttons 820, 831</td>
+<td>STILL PRESENT</td>
+</tr>
+<tr>
+<td>2a</td>
+<td>Documents filter tabs: <code>role="tablist"</code> / <code>role="tab"</code> with no <code>aria-controls</code>, no <code>role="tabpanel"</code>, no arrow-key roving tabindex.</td>
+<td>Tablist 979–991; panel content 993–1049</td>
+<td>STILL PRESENT</td>
+</tr>
+<tr>
+<td>2b</td>
+<td>Tasks list tabs: same <code>tablist</code>/<code>tab</code> pattern, same missing keyboard model.</td>
+<td>Tablist 318–333 (rendered only when <code>taskLists.length &gt; 1</code>); list 336–351</td>
+<td>STILL PRESENT</td>
+</tr>
+<tr>
+<td>2c</td>
+<td>Calendar week strip: <code>role="listbox"</code> / <code>role="option"</code> with no arrow-key navigation, no roving tabindex.</td>
+<td>Listbox 748–778</td>
+<td>STILL PRESENT</td>
+</tr>
+<tr>
+<td>3</td>
+<td>KPI cards: redundant nested labels — button <code>aria-label</code> (1136) + trend div <code>aria-label</code> (1146) + <code>AnimatedNumber</code>'s own <code>aria-label</code> (<code>AnimatedNumber.tsx</code>:45).</td>
+<td>Card button 1131–1150; trend div 1144–1149; value 1141–1143</td>
+<td>STILL PRESENT</td>
+</tr>
+<tr>
+<td>4a</td>
+<td>Artifact button uses <code>&lt;button role="listitem"&gt;</code>, overriding the button role.</td>
+<td>1002–1021 (<code>role="listitem"</code> at 1004)</td>
+<td>STILL PRESENT</td>
+</tr>
+<tr>
+<td>4b</td>
+<td><code>DocumentRow</code> uses <code>&lt;button role="listitem"&gt;</code>, overriding the button role.</td>
+<td>1054–1083 (<code>role="listitem"</code> at 1062)</td>
+<td>STILL PRESENT</td>
+</tr>
+</tbody>
+</table>
+
+<h3>Already fixed by plans 01–06 — do NOT re-plan</h3>
+<ul>
+<li><strong>Mobile drawer focus trap / Escape / scroll-lock / focus restoration</strong> — done in <code>hub/app/page.tsx</code> (PR&nbsp;#19, ~lines 438–491). The drawer becomes <code>role="dialog"</code> only on the mobile viewport (page.tsx:81–83). We do not touch it.</li>
+<li><strong>Heading hierarchy &amp; landmark deduplication</strong> — done. <code>CollapsibleSection</code> headers now use an <code>&lt;h3&gt;</code> inside the toggle button (LeftPanelSections.tsx:217) and a single <code>&lt;section aria-label&gt;</code> landmark per section (198). No further work here.</li>
+<li><strong>task-content as a real <code>&lt;button&gt;</code></strong> — done. <code>TaskRow</code> already renders the content as <code>&lt;button type="button" className="task-content"&gt;</code> (LeftPanelSections.tsx:400–412) inside a <code>&lt;div role="listitem"&gt;</code> (383). <em>This is the correct pattern</em> — finding 4 does NOT apply to <code>TaskRow</code> or to <code>CalendarRow</code> (890), both of which already wrap a real button in a <code>div role="listitem"</code>. Only the artifact button and <code>DocumentRow</code> still mis-type the button.</li>
+<li><strong>Error boundary &amp; memoized sections</strong> — done (PR&nbsp;#19). Sections are exported via <code>memo(...)</code> at 1164–1167; unrelated.</li>
+</ul>
+
+<h2>Implementation</h2>
+
+<h3>Change A — Shared modal-a11y hook</h3>
+<p><strong>File:</strong> new <code>hub/app/hooks/useModalA11y.ts</code></p>
+<p>Create one hook that both modals consume. It mirrors the drawer pattern already proven in <code>page.tsx</code> (focusable-selector query, first/last wrap, <code>document.activeElement</code> capture/restore), packaged for an always-mounted-on-open modal. The hook takes a ref to the dialog element and an <code>onClose</code> callback; it (1) captures the trigger element on mount, (2) moves focus into the dialog on the next animation frame, (3) handles Escape to close, (4) traps Tab within the dialog, and (5) restores focus to the trigger on unmount.</p>
+<pre class="after">// hub/app/hooks/useModalA11y.ts
+'use client'
+
+import { useEffect, RefObject } from 'react'
+
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), ' +
+  'textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+
+/**
+ * Accessibility behavior for an always-rendered-when-open modal dialog:
+ *  - captures the trigger element and restores focus to it on close/unmount
+ *  - moves focus into the dialog on open (first focusable, or the dialog itself)
+ *  - Escape closes
+ *  - Tab is trapped within the dialog (wraps first <-> last)
+ *
+ * Mount this hook in a component that is only rendered while the dialog is open
+ * (both call sites already gate rendering behind `showCreateModal` / `deleteConfirm`).
+ */
+export function useModalA11y(
+  dialogRef: RefObject<HTMLElement | null>,
+  onClose: () => void,
+) {
+  useEffect(() => {
+    const dialog = dialogRef.current
+    if (!dialog) return
+
+    const trigger = (document.activeElement as HTMLElement) ?? null
+
+    // Move focus in on the next frame (after the open transition applies).
+    const raf = requestAnimationFrame(() => {
+      const focusable = dialog.querySelectorAll<HTMLElement>(FOCUSABLE)
+      ;(focusable[0] ?? dialog).focus()
+    })
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        onClose()
+        return
+      }
+      if (e.key !== 'Tab') return
+      const focusable = dialog.querySelectorAll<HTMLElement>(FOCUSABLE)
+      if (focusable.length === 0) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault(); last.focus()
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault(); first.focus()
+      }
+    }
+
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      cancelAnimationFrame(raf)
+      document.removeEventListener('keydown', onKeyDown)
+      // Restore focus to the element that opened the dialog.
+      trigger?.focus()
+    }
+  // onClose is stable per render of the gated component; including it is safe.
+  }, [dialogRef, onClose])
+}
+</pre>
+<p><strong>Rationale:</strong> One hook, two call sites, identical guarantees. Listening on <code>document</code> (not the dialog) for <code>keydown</code> means Escape works even when focus has not yet entered the dialog. The cleanup runs on unmount — which is exactly when each modal closes, because both call sites conditionally render the modal. We make the dialog itself focusable as a fallback target (see Change B) so focus always lands inside.</p>
+
+<h3>Change B — Apply the hook to <code>CalendarEventModal</code></h3>
+<p><strong>File:</strong> <code>hub/app/components/LeftPanelSections.tsx</code> (component 442–623)</p>
+<p>Import the hook and <code>useRef</code> (note: <code>useRef</code> is not currently imported — the top-level import on line 3 is <code>useState, useEffect, ReactNode, useCallback, useMemo, memo, Component</code>). Add <code>useRef</code> to that import and a new import line for the hook. Then add a ref + hook call inside the component, attach the ref and <code>tabIndex={-1}</code> to the dialog div, and remove the now-redundant <code>autoFocus</code> (the hook handles initial focus).</p>
+
+<p>Import edits (line 3 and after the existing imports near line 21):</p>
+<pre class="before">import { useState, useEffect, ReactNode, useCallback, useMemo, memo, Component } from 'react'</pre>
+<pre class="after">import { useState, useEffect, useRef, ReactNode, useCallback, useMemo, memo, Component } from 'react'
+// ... (keep existing imports) ...
+import { useModalA11y } from '@/app/hooks/useModalA11y'</pre>
+
+<p>Inside <code>CalendarEventModal</code>, add the ref + hook (just after the <code>useState</code> block, before <code>handleSave</code> at ~454):</p>
+<pre class="after">  const dialogRef = useRef&lt;HTMLDivElement&gt;(null)
+  useModalA11y(dialogRef, onClose)</pre>
+
+<p>Attach the ref and make the dialog a focus fallback (498–503):</p>
+<pre class="before">      &lt;div
+        className="cal-event-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Create calendar event"
+      &gt;</pre>
+<pre class="after">      &lt;div
+        ref={dialogRef}
+        tabIndex={-1}
+        className="cal-event-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Create calendar event"
+      &gt;</pre>
+
+<p>Drop the <code>autoFocus</code> on the title input (521) so the hook is the single source of initial focus (the hook will focus the first focusable element, which is the close button; if you prefer the title field to receive focus, keep <code>autoFocus</code> and the hook's <code>focusable[0]</code> will be overridden by the browser's autofocus — either is acceptable, but remove it to keep one mechanism):</p>
+<pre class="before">              placeholder="Event title"
+              required
+              autoFocus
+            /&gt;</pre>
+<pre class="after">              placeholder="Event title"
+              required
+            /&gt;</pre>
+<p><strong>Rationale:</strong> The modal now has a complete dialog contract: focus enters on open, Tab cannot escape, Escape closes (calling the same <code>onClose</code> the backdrop uses), and focus returns to the "+ Event" button (the trigger at 709–715) on close. <code>tabIndex={-1}</code> guarantees a valid focus target even if the dialog were ever empty.</p>
+
+<h3>Change C — Apply the hook to the delete-confirm dialog</h3>
+<p><strong>File:</strong> <code>hub/app/components/LeftPanelSections.tsx</code> (block 814–847, inside <code>CalendarSectionBody</code>)</p>
+<p>The delete dialog is inline JSX inside <code>CalendarSectionBody</code>, not its own component, so its hook must live in that body component but only run while <code>deleteConfirm</code> is set. Simplest, cleanest approach: extract the dialog into a small <code>DeleteConfirmDialog</code> child component (rendered only when <code>deleteConfirm</code> is truthy) so the hook's mount/unmount maps to open/close. This avoids conditionally calling a hook (a rules-of-hooks violation).</p>
+
+<p>Add the component near <code>CalendarRow</code> (after 920):</p>
+<pre class="after">function DeleteConfirmDialog({
+  summary,
+  error,
+  deleting,
+  onCancel,
+  onConfirm,
+}: {
+  summary: string
+  error: string | null
+  deleting: boolean
+  onCancel: () =&gt; void
+  onConfirm: () =&gt; void
+}) {
+  const dialogRef = useRef&lt;HTMLDivElement&gt;(null)
+  useModalA11y(dialogRef, onCancel)
+
+  return (
+    &lt;&gt;
+      &lt;div className="cal-event-modal-backdrop" onClick={onCancel} aria-hidden="true" /&gt;
+      &lt;div
+        ref={dialogRef}
+        tabIndex={-1}
+        className="cal-event-modal cal-delete-dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-label="Confirm event deletion"
+      &gt;
+        &lt;div className="cal-event-modal__header"&gt;
+          &lt;h3 className="cal-event-modal__title"&gt;Delete Event?&lt;/h3&gt;
+          &lt;button className="cal-event-modal__close" onClick={onCancel} aria-label="Cancel"&gt;✕&lt;/button&gt;
+        &lt;/div&gt;
+        &lt;div style={{ padding: '16px 20px' }}&gt;
+          &lt;p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0 0 16px' }}&gt;
+            Are you sure you want to delete &lt;strong style={{ color: 'var(--text-primary)' }}&gt;&amp;quot;{summary}&amp;quot;&lt;/strong&gt;? This cannot be undone.
+          &lt;/p&gt;
+          {error &amp;&amp; (
+            &lt;div className="cal-event-form__error" role="alert"&gt;{error}&lt;/div&gt;
+          )}
+          &lt;div className="cal-event-form__actions"&gt;
+            &lt;button className="cal-event-form__btn cal-event-form__btn--cancel" onClick={onCancel}&gt;
+              Cancel
+            &lt;/button&gt;
+            &lt;button
+              className="cal-event-form__btn cal-event-form__btn--delete"
+              onClick={onConfirm}
+              disabled={deleting}
+            &gt;
+              {deleting ? 'Deleting…' : 'Delete Event'}
+            &lt;/button&gt;
+          &lt;/div&gt;
+        &lt;/div&gt;
+      &lt;/div&gt;
+    &lt;/&gt;
+  )
+}</pre>
+
+<p>Replace the inline block (814–847) with the component:</p>
+<pre class="before">      {/* Delete Confirm Dialog */}
+      {deleteConfirm &amp;&amp; (
+        &lt;&gt;
+          &lt;div className="cal-event-modal-backdrop" onClick={() =&gt; setDeleteConfirm(null)} aria-hidden="true" /&gt;
+          &lt;div className="cal-event-modal cal-delete-dialog" role="alertdialog" aria-modal="true" aria-label="Confirm event deletion"&gt;
+            ... (header, body, actions) ...
+          &lt;/div&gt;
+        &lt;/&gt;
+      )}</pre>
+<pre class="after">      {/* Delete Confirm Dialog */}
+      {deleteConfirm &amp;&amp; (
+        &lt;DeleteConfirmDialog
+          summary={deleteConfirm.summary}
+          error={deleteError}
+          deleting={deleting}
+          onCancel={() =&gt; setDeleteConfirm(null)}
+          onConfirm={handleDeleteConfirm}
+        /&gt;
+      )}</pre>
+<p><strong>Rationale:</strong> Extraction is required so the hook mounts/unmounts with the dialog's open state (you cannot legally call <code>useModalA11y</code> behind an <code>if (deleteConfirm)</code> inside <code>CalendarSectionBody</code>). All existing behavior (backdrop close, <code>handleDeleteConfirm</code>, error display, disabled-while-deleting) is preserved via props. On close, focus returns to the trash button that opened it (913).</p>
+
+<h3>Change D — Roving-tabindex + arrow-key helper</h3>
+<p><strong>File:</strong> <code>hub/app/components/LeftPanelSections.tsx</code></p>
+<p>Add one small module-scope helper used by all three composite widgets. It implements Left/Right/Home/End roving focus over sibling option/tab buttons within a container, moving DOM focus and (optionally) invoking a select callback. Place it in the utilities region near the bottom (after 1267) or just above the first consumer — module scope, allocated once.</p>
+<pre class="after">/**
+ * Roving keyboard navigation for a horizontal composite widget (tablist / listbox).
+ * Wire to the container's onKeyDown. `selectors` targets the option elements.
+ * Moves focus with ArrowLeft/Right + Home/End and calls onSelect with the new index.
+ */
+function handleRovingKeydown(
+  e: React.KeyboardEvent&lt;HTMLElement&gt;,
+  optionSelector: string,
+  onSelect: (index: number) =&gt; void,
+) {
+  const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End']
+  if (!keys.includes(e.key)) return
+  const container = e.currentTarget
+  const options = Array.from(container.querySelectorAll&lt;HTMLElement&gt;(optionSelector))
+  if (options.length === 0) return
+  const current = options.indexOf(document.activeElement as HTMLElement)
+  let next = current
+  if (e.key === 'ArrowRight') next = current &lt; 0 ? 0 : (current + 1) % options.length
+  else if (e.key === 'ArrowLeft') next = current &lt;= 0 ? options.length - 1 : current - 1
+  else if (e.key === 'Home') next = 0
+  else if (e.key === 'End') next = options.length - 1
+  e.preventDefault()
+  options[next]?.focus()
+  onSelect(next)
+}</pre>
+<p><strong>Rationale:</strong> One implementation satisfies the APG keyboard model for both <code>tablist</code> (automatic activation: focusing a tab selects it) and <code>listbox</code> (selection follows focus). Roving tabindex (one option at <code>tabIndex={0}</code>, the rest <code>-1</code>) is set per-widget below so the whole strip is a single Tab stop.</p>
+
+<h3>Change E — Documents filter tabs: aria-controls + tabpanel + roving</h3>
+<p><strong>File:</strong> <code>hub/app/components/LeftPanelSections.tsx</code> (tablist 979–991, panel content 993–1049)</p>
+<p>Give each tab an <code>id</code> and <code>aria-controls</code>, add roving <code>tabIndex</code> and the arrow handler on the container, and wrap the panel content in a single <code>role="tabpanel"</code> labeled by the active tab.</p>
+<pre class="before">      {/* Filter tabs */}
+      &lt;div className="doc-filter-tabs" role="tablist" aria-label="Document filters"&gt;
+        {DOC_FILTERS.map((f) =&gt; (
+          &lt;button
+            key={f.key}
+            role="tab"
+            aria-selected={activeFilter === f.key}
+            className={`feed-filter-btn${activeFilter === f.key ? ' active' : ''}`}
+            onClick={() =&gt; setActiveFilter(f.key)}
+          &gt;
+            {f.label}
+          &lt;/button&gt;
+        ))}
+      &lt;/div&gt;</pre>
+<pre class="after">      {/* Filter tabs */}
+      &lt;div
+        className="doc-filter-tabs"
+        role="tablist"
+        aria-label="Document filters"
+        onKeyDown={(e) =&gt;
+          handleRovingKeydown(e, '[role="tab"]', (i) =&gt; setActiveFilter(DOC_FILTERS[i].key))
+        }
+      &gt;
+        {DOC_FILTERS.map((f) =&gt; (
+          &lt;button
+            key={f.key}
+            id={`doc-tab-${f.key}`}
+            role="tab"
+            aria-selected={activeFilter === f.key}
+            aria-controls="doc-tabpanel"
+            tabIndex={activeFilter === f.key ? 0 : -1}
+            className={`feed-filter-btn${activeFilter === f.key ? ' active' : ''}`}
+            onClick={() =&gt; setActiveFilter(f.key)}
+          &gt;
+            {f.label}
+          &lt;/button&gt;
+        ))}
+      &lt;/div&gt;</pre>
+<p>Wrap the existing conditional panel content (everything between 993 and 1049) in a tabpanel. Add the opening tag immediately before the <code>{activeFilter === 'artifacts' ? (</code> expression and close it after the matching <code>)}</code>:</p>
+<pre class="after">      &lt;div
+        id="doc-tabpanel"
+        role="tabpanel"
+        aria-labelledby={`doc-tab-${activeFilter}`}
+        tabIndex={0}
+      &gt;
+        {activeFilter === 'artifacts' ? (
+          /* ...existing artifacts branch... */
+        ) : (
+          /* ...existing Drive branch... */
+        )}
+      &lt;/div&gt;</pre>
+<p><strong>Rationale:</strong> The tablist is now a single Tab stop; arrows move between tabs and activate them; the panel is programmatically associated (<code>aria-controls</code>↔<code>aria-labelledby</code>) and itself focusable so keyboard users can read it after switching. A single shared <code>doc-tabpanel</code> id is correct here because only one panel is mounted at a time (the others are not rendered).</p>
+
+<h3>Change F — Tasks list tabs: aria-controls + tabpanel + roving</h3>
+<p><strong>File:</strong> <code>hub/app/components/LeftPanelSections.tsx</code> (tablist 318–333, list 336–351, in <code>TasksSectionBody</code>)</p>
+<p>Same treatment. The tablist only renders when <code>taskLists.length &gt; 1</code>; the task list (or empty message) is the panel.</p>
+<pre class="before">        &lt;div className="doc-filter-tabs" role="tablist" aria-label="Task lists" style={{ marginBottom: '6px' }}&gt;
+          {taskLists.map(list =&gt; (
+            &lt;button
+              key={list.id}
+              role="tab"
+              aria-selected={resolvedListId === list.id}
+              className={`feed-filter-btn${resolvedListId === list.id ? ' active' : ''}`}
+              onClick={() =&gt; setActiveListId(list.id)}
+              title={list.title}
+            &gt;
+              {list.title.length &gt; 9 ? list.title.slice(0, 8) + '…' : list.title}
+            &lt;/button&gt;
+          ))}
+        &lt;/div&gt;</pre>
+<pre class="after">        &lt;div
+          className="doc-filter-tabs"
+          role="tablist"
+          aria-label="Task lists"
+          style={{ marginBottom: '6px' }}
+          onKeyDown={(e) =&gt;
+            handleRovingKeydown(e, '[role="tab"]', (i) =&gt; setActiveListId(taskLists[i].id))
+          }
+        &gt;
+          {taskLists.map(list =&gt; (
+            &lt;button
+              key={list.id}
+              id={`task-tab-${list.id}`}
+              role="tab"
+              aria-selected={resolvedListId === list.id}
+              aria-controls="task-tabpanel"
+              tabIndex={resolvedListId === list.id ? 0 : -1}
+              className={`feed-filter-btn${resolvedListId === list.id ? ' active' : ''}`}
+              onClick={() =&gt; setActiveListId(list.id)}
+              title={list.title}
+            &gt;
+              {list.title.length &gt; 9 ? list.title.slice(0, 8) + '…' : list.title}
+            &lt;/button&gt;
+          ))}
+        &lt;/div&gt;</pre>
+<p>Wrap the panel (the <code>visibleTasks.length === 0 ? &lt;SectionMessage…/&gt; : &lt;div role="list"…&gt;</code> block, 336–351) so the tabpanel is associated with the active tab:</p>
+<pre class="after">      &lt;div
+        id="task-tabpanel"
+        role="tabpanel"
+        aria-labelledby={resolvedListId ? `task-tab-${resolvedListId}` : undefined}
+      &gt;
+        {visibleTasks.length === 0 ? (
+          &lt;SectionMessage message={`No pending tasks in ${activeListName}`} type="empty" /&gt;
+        ) : (
+          &lt;div role="list" aria-label={`${activeListName} tasks`}&gt;
+            {/* ...TaskRow map unchanged... */}
+          &lt;/div&gt;
+        )}
+      &lt;/div&gt;</pre>
+<p><strong>Note:</strong> the inner <code>&lt;div role="list"&gt;</code> stays — a tabpanel containing a list is valid. Do not nest a list directly as the tabpanel's only semantics; keep both wrappers. <strong>Rationale:</strong> identical to Change E. When only one task list exists the tablist is absent, so <code>aria-labelledby</code> is conditionally omitted to avoid a dangling id reference.</p>
+
+<h3>Change G — Calendar week strip: roving arrow navigation</h3>
+<p><strong>File:</strong> <code>hub/app/components/LeftPanelSections.tsx</code> (listbox 748–778)</p>
+<p>Add the arrow handler to the listbox container and roving <code>tabIndex</code> to each option. Selection follows focus via <code>setSelectedDate</code>.</p>
+<pre class="before">        {/* Week strip */}
+        &lt;div className="calendar-week-strip" role="listbox" aria-label="Week days"&gt;
+          {weekDays.map((day) =&gt; {
+            ...
+            return (
+              &lt;button
+                key={dayStr}
+                role="option"
+                aria-selected={isSelected}
+                aria-label={`${day.toLocaleDateString(...)}${hasEvents ? ', has events' : ''}`}
+                className={classNames}
+                onClick={() =&gt; setSelectedDate(new Date(day))}
+              &gt;
+                ...
+              &lt;/button&gt;
+            )
+          })}
+        &lt;/div&gt;</pre>
+<pre class="after">        {/* Week strip */}
+        &lt;div
+          className="calendar-week-strip"
+          role="listbox"
+          aria-label="Week days"
+          onKeyDown={(e) =&gt;
+            handleRovingKeydown(e, '[role="option"]', (i) =&gt; setSelectedDate(new Date(weekDays[i])))
+          }
+        &gt;
+          {weekDays.map((day) =&gt; {
+            ...
+            return (
+              &lt;button
+                key={dayStr}
+                role="option"
+                aria-selected={isSelected}
+                tabIndex={isSelected ? 0 : -1}
+                aria-label={`${day.toLocaleDateString(...)}${hasEvents ? ', has events' : ''}`}
+                className={classNames}
+                onClick={() =&gt; setSelectedDate(new Date(day))}
+              &gt;
+                ...
+              &lt;/button&gt;
+            )
+          })}
+        &lt;/div&gt;</pre>
+<p><strong>Rationale:</strong> The strip becomes a single Tab stop with Left/Right/Home/End moving the selection — the keyboard model a <code>listbox</code> announces. <code>tabIndex</code> follows <code>isSelected</code>; on first render the selected day (today) is the tab stop. If <code>setSelectedDate</code> changes the selected option, the new option carries <code>tabIndex={0}</code> and already has DOM focus from the handler, keeping focus and roving in sync.</p>
+
+<h3>Change H — KPI cards: collapse to a single accessible name</h3>
+<p><strong>File:</strong> <code>hub/app/components/LeftPanelSections.tsx</code> (card 1131–1150)</p>
+<p>The button's <code>aria-label</code> already announces label + value + trend. Make the inner content decorative so it is not announced again: remove the trend div's <code>aria-label</code> and add <code>aria-hidden="true"</code> to both the value wrapper (which contains the self-labeling <code>AnimatedNumber</code>) and the trend div.</p>
+<pre class="before">              &lt;div className="kpi-value"&gt;
+                &lt;AnimatedNumber value={String(kpi.value)} delay={i * 120} /&gt;
+              &lt;/div&gt;
+              &lt;div
+                className={`kpi-trend ${trendClass}`}
+                aria-label={`Trend: ${kpi.trendDirection} ${kpi.trend}`}
+              &gt;
+                &lt;span aria-hidden="true" className="rx-star"&gt;✦&lt;/span&gt; {kpi.trend}
+              &lt;/div&gt;</pre>
+<pre class="after">              &lt;div className="kpi-value" aria-hidden="true"&gt;
+                &lt;AnimatedNumber value={String(kpi.value)} delay={i * 120} /&gt;
+              &lt;/div&gt;
+              &lt;div
+                className={`kpi-trend ${trendClass}`}
+                aria-hidden="true"
+              &gt;
+                &lt;span className="rx-star"&gt;✦&lt;/span&gt; {kpi.trend}
+              &lt;/div&gt;</pre>
+<p>Leave the <code>kpi-label</code> div (1138–1140) visible/unhidden — it is plain text inside the button and contributes to neither a competing label nor a duplicate (the button's <code>aria-label</code> overrides subtree text for the accessible name, but keeping the label visible aids low-vision users; it is not double-announced because <code>aria-label</code> on the button replaces the computed name from contents). <strong>Rationale:</strong> One button = one accessible name. Hiding the value/trend subtrees removes the redundant <code>AnimatedNumber</code> label and the trend label from the accessibility tree, so a screen reader announces the button's single curated string instead of three overlapping ones. Visuals are unchanged (<code>aria-hidden</code> has no visual effect).</p>
+
+<h3>Change I — Fix <code>role="listitem"</code> on the artifact button</h3>
+<p><strong>File:</strong> <code>hub/app/components/LeftPanelSections.tsx</code> (1002–1021)</p>
+<pre class="before">            {artifactsData.artifacts.map((artifact) =&gt; (
+              &lt;button
+                key={artifact.id}
+                role="listitem"
+                onClick={() =&gt; { ... }}
+                aria-label={`Artifact: ${artifact.title}`}
+                className="section-row"
+              &gt;
+                ...
+              &lt;/button&gt;
+            ))}</pre>
+<pre class="after">            {artifactsData.artifacts.map((artifact) =&gt; (
+              &lt;div role="listitem" key={artifact.id}&gt;
+                &lt;button
+                  onClick={() =&gt; { ... }}
+                  aria-label={`Artifact: ${artifact.title}`}
+                  className="section-row"
+                &gt;
+                  ...
+                &lt;/button&gt;
+              &lt;/div&gt;
+            ))}</pre>
+<p><strong>Rationale:</strong> Mirrors the already-correct <code>TaskRow</code>/<code>CalendarRow</code> pattern — a <code>div role="listitem"</code> wrapping a real button. The parent <code>&lt;div role="list"&gt;</code> (1000) now has a valid listitem child, and the button keeps its button role/affordance. Move <code>key</code> to the wrapper div. The <code>section-row</code> class stays on the button; if the surrounding fl/grid layout depended on the button being the direct list child, verify the row still lays out (the class is on the button, and the wrapper is a default-display block, so the visual grid is preserved by <code>section-row</code> on the button — no CSS change expected).</p>
+
+<h3>Change J — Fix <code>role="listitem"</code> on <code>DocumentRow</code></h3>
+<p><strong>File:</strong> <code>hub/app/components/LeftPanelSections.tsx</code> (1054–1083)</p>
+<pre class="before">const DocumentRow = memo(function DocumentRow(
+  { file, onClick }: { file: DriveFile; onClick: () =&gt; void },
+) {
+  ...
+  return (
+    &lt;button
+      role="listitem"
+      onClick={onClick}
+      aria-label={`Document: ${file.name}, modified ${modified}`}
+      className="section-row"
+    &gt;
+      ...
+    &lt;/button&gt;
+  )
+})</pre>
+<pre class="after">const DocumentRow = memo(function DocumentRow(
+  { file, onClick }: { file: DriveFile; onClick: () =&gt; void },
+) {
+  ...
+  return (
+    &lt;div role="listitem"&gt;
+      &lt;button
+        onClick={onClick}
+        aria-label={`Document: ${file.name}, modified ${modified}`}
+        className="section-row"
+      &gt;
+        ...
+      &lt;/button&gt;
+    &lt;/div&gt;
+  )
+})</pre>
+<p><strong>Rationale:</strong> Same fix. <code>DocumentRow</code> already carries its own <code>key</code> from the call site (1036), so no key change is needed inside the component. The button retains its role and the parent list (<code>&lt;div role="list"&gt;</code>, 1033) gets a valid listitem child.</p>
+
+<h2>Files touched</h2>
+<table>
+<thead><tr><th>File</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td><code>hub/app/hooks/useModalA11y.ts</code></td><td>NEW — shared modal a11y hook (Escape, focus trap, focus move-in, focus restore).</td></tr>
+<tr><td><code>hub/app/components/LeftPanelSections.tsx</code></td><td>Import <code>useRef</code> + <code>useModalA11y</code>; add <code>handleRovingKeydown</code> helper; apply hook to <code>CalendarEventModal</code>; extract + apply hook to <code>DeleteConfirmDialog</code>; add roving/aria-controls/tabpanel to Documents tabs, Tasks tabs, and the week strip; collapse KPI card labels; wrap artifact button &amp; <code>DocumentRow</code> button in <code>div role="listitem"</code>.</td></tr>
+</tbody>
+</table>
+<p>No CSS, API route, or data-layer files change. <code>hub/app/page.tsx</code> is <strong>not</strong> touched (its drawer a11y is already complete from PR&nbsp;#19).</p>
+
+<h2>Testing</h2>
+<h3>Automated</h3>
+<pre>cd hub
+npx tsc --noEmit          # type-check: new hook + ref types, KeyboardEvent generics
+npx vitest run            # full unit suite — must stay green</pre>
+<p>Existing tests in <code>lib/panel-inject</code> are unaffected (no inject-builder changes). If any component test renders these widgets, confirm no new act() warnings from the focus <code>requestAnimationFrame</code>; the hook cleans up via <code>cancelAnimationFrame</code>.</p>
+
+<h3>Manual keyboard-only checks (no mouse)</h3>
+<ul>
+<li><strong>Create modal trap + Escape + restore:</strong> Tab to the "+ Event" button and press Enter. Focus should land inside the modal. Tab repeatedly — focus must cycle within the modal (Title → … → Cancel → Save → back to Title) and never reach the page behind. Shift+Tab wraps backward. Press <strong>Escape</strong> — modal closes and focus returns to the "+ Event" button.</li>
+<li><strong>Delete dialog:</strong> Tab to an event's trash button, activate it. Focus enters the alertdialog; Tab is trapped; Escape closes and returns focus to the trash button. Confirm Delete still works and that an error keeps the dialog open.</li>
+<li><strong>Documents filter tabs:</strong> Tab once to reach the tablist (a single stop). Press Right/Left arrows — the active tab moves and content switches; Home/End jump to first/last. Tab again moves into the tabpanel, not to the next tab.</li>
+<li><strong>Tasks list tabs:</strong> (requires &gt;1 task list) same arrow-key behavior.</li>
+<li><strong>Week strip:</strong> Tab to the strip (single stop on the selected/today cell). Left/Right/Home/End move the selected day and update the day-detail list below.</li>
+<li><strong>KPI cards (screen reader):</strong> With VoiceOver/NVDA, focus a KPI card — it announces exactly one string (e.g. "Revenue: 42, trend +5%, button"), not the number or trend a second time.</li>
+<li><strong>List semantics (screen reader):</strong> Artifact rows and document rows announce as "button" within a "list", not as static list items.</li>
+</ul>
+
+<h2>Acceptance criteria</h2>
+<ul>
+<li><code>npx tsc --noEmit</code> and <code>npx vitest run</code> both pass.</li>
+<li>Both modals (create + delete): focus enters on open, Tab is trapped, Escape closes, focus returns to the triggering control on close.</li>
+<li>All three composite widgets (Documents tabs, Tasks tabs, week strip) are a single Tab stop with working Arrow/Home/End roving focus; tab strips expose <code>aria-controls</code>→a <code>role="tabpanel"</code> labeled by the active tab.</li>
+<li>Each KPI card exposes exactly one accessible name (the button's <code>aria-label</code>); the value and trend subtrees are <code>aria-hidden</code>.</li>
+<li>No element uses <code>&lt;button role="listitem"&gt;</code>; the artifact button and <code>DocumentRow</code> are wrapped in <code>&lt;div role="listitem"&gt;</code>. Parent <code>role="list"</code> containers have only listitem children.</li>
+<li>No visual regression in the left panel; no changes to <code>page.tsx</code> drawer behavior.</li>
+</ul>
+
+<h2>Dependencies &amp; sequencing</h2>
+<ul>
+<li><strong>Depends on PR&nbsp;#19 (plan 06):</strong> builds on the same focus-management vocabulary (focusable selector, activeElement capture/restore) and assumes the drawer dialog work is done. Land after #19 (already merged).</li>
+<li><strong>No data dependency</strong> on plans 01–05; purely presentational/ARIA. Can ship independently of any further data-layer work.</li>
+<li><strong>Internal order:</strong> create the hook (Change A) and helper (Change D) first, then the consumers (B/C, E–G), then the standalone fixes (H–J). Changes H–J are independent and can be cherry-picked if the modal/tab work needs more review.</li>
+<li><strong>No new dependencies</strong> added to <code>package.json</code> — the hook is hand-rolled to match the existing in-repo pattern rather than pulling a focus-trap library.</li>
+</ul>
+
+<h2>Rollback</h2>
+<ul>
+<li>All changes are additive ARIA/keyboard wiring plus one new file. To roll back entirely: delete <code>hub/app/hooks/useModalA11y.ts</code> and <code>git revert</code> the single commit touching <code>LeftPanelSections.tsx</code>.</li>
+<li>Partial rollback is safe because changes are independent: e.g. reverting only the KPI change (H) or only the listitem fixes (I/J) leaves the modal and tab work intact, and vice versa.</li>
+<li>No schema, API, or persisted-state changes — rollback carries zero data risk and requires no migration.</li>
+</ul>
+
+</body>
+</html>
