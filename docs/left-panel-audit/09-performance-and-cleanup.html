@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Left-Panel Audit 09 — Performance polish &amp; cleanup</title>
+<style>
+body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:920px;margin:2rem auto;padding:0 1rem;line-height:1.55;color:#1a1a1a}
+h1{border-bottom:3px solid #2563eb;padding-bottom:.3rem}
+h2{margin-top:2rem;color:#1e3a8a;border-bottom:1px solid #e5e7eb;padding-bottom:.2rem}
+h3{margin-top:1.4rem}
+code,pre{font-family:ui-monospace,Menlo,monospace}
+pre{background:#f6f8fa;padding:.8rem;border-radius:6px;overflow:auto;border:1px solid #e5e7eb;font-size:.86rem}
+table{border-collapse:collapse;width:100%}
+th,td{border:1px solid #d1d5db;padding:.4rem .6rem;text-align:left;vertical-align:top;font-size:.9rem}
+th{background:#f3f4f6}
+.badge{display:inline-block;padding:.15rem .6rem;border-radius:999px;color:#fff;font-size:.8rem;font-weight:600}
+.p0{background:#dc2626}.p1{background:#d97706}.p2{background:#2563eb}
+pre.before{background:#fef2f2;border-color:#fecaca}pre.after{background:#f0fdf4;border-color:#bbf7d0}
+blockquote{border-left:4px solid #9ca3af;margin:0;padding-left:1rem;color:#4b5563}
+ul{margin:.4rem 0}
+</style>
+</head>
+<body>
+
+<h1>Left-Panel Audit 09 — Performance polish &amp; cleanup <span class="badge p2">P2</span></h1>
+
+<p><strong>Summary.</strong> A focused cleanup pass over the left-panel render path and its
+supporting libraries. It removes the last avoidable render churn (KPI numbers
+re-animating on every poll tick, one unmemoized derived list in the Tasks
+section), deletes dead imports / dead default arguments / a structural type gap,
+and corrects one UI affordance that over-promises (the Tasks <code>+ Task</code>
+button is styled like an inline creator but only injects a chat message). All
+items are low-risk and self-contained. No data-fetching behavior, no API
+contracts, and no styling tokens change.</p>
+
+<p>This plan was written against <strong>current master</strong> (HEAD =
+<code>f8ae3ad</code>, "Left-panel 06"). Each finding below was re-verified on the
+merged code from PRs #14–#19 (plans 01–06); items those PRs already fixed are
+marked <em>Already fixed</em> and are <strong>not</strong> re-implemented here.</p>
+
+<h2>Why this matters</h2>
+<ul>
+<li><strong>Perceived jank &amp; wasted CPU.</strong> KPI numbers run a 900&nbsp;ms
+<code>requestAnimationFrame</code> count-up. Because the effect keys on the
+<code>value</code> string identity, every 60&nbsp;s data poll re-fires the count-up
+(and re-runs the staggered fade-in) even when the underlying number is
+unchanged. The user sees the whole KPI grid "flicker and recount" on a silent
+refresh. Plan 06 memoized the four sections, which cuts <em>structural</em>
+re-renders, but the effect still re-runs whenever a new <code>value</code> string
+of equal content arrives — the guard has to live inside the component.</li>
+<li><strong>Render efficiency.</strong> The Tasks section recomputes its filtered
+task list on every render via a bare <code>.filter()</code>. It is cheap per call
+but it is the only section that wasn't tidied in plan 06; bringing it in line
+keeps the pattern consistent and avoids needless allocation while toggling tasks
+optimistically.</li>
+<li><strong>Maintainability.</strong> Dead imports, a dead default argument, and a
+structural input type that doesn't mirror the real shape are small individually,
+but they mislead the next reader and quietly defeat <code>noUnusedLocals</code> /
+review signal. Cleaning them now is nearly free.</li>
+<li><strong>Honest affordances.</strong> A button labeled <code>+ Task</code> with a
+"Create task in…" tooltip sets the expectation of inline creation, but it only
+drops a chat message. Relabeling it to "Ask AI to add a task" makes the behavior
+truthful with zero functional risk. Building a real inline-create form is a
+larger product decision and is explicitly deferred.</li>
+</ul>
+
+<h2>Findings</h2>
+
+<table>
+<thead>
+<tr><th>#</th><th>Finding</th><th>Location (current master)</th><th>Status</th></tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>KPI count-up re-fires on every poll because the animation effect keys on the
+<code>value</code> string identity; the <code>delay</code> stagger also re-runs on
+each appearance. Numbers re-animate on a silent 60&nbsp;s refresh.</td>
+<td><code>hub/app/components/AnimatedNumber.tsx</code> lines 11–40 (two
+<code>useEffect</code>s)</td>
+<td><strong>Confirmed — fix here.</strong> Plan 06's section memoization reduces
+re-renders but does not stop value-identity churn; the effect-level guard is
+still required.</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Calendar fan-out (<code>listUpcomingEvents</code> aggregated across calendars
+via <code>Promise.all</code>) allegedly had no per-call timeout, so one slow
+calendar could stall panel load.</td>
+<td><code>hub/lib/google.ts</code> — <code>googleFetch</code> (line 10),
+<code>listUpcomingEvents</code> (line 174); route fan-out in
+<code>hub/app/api/google/calendar/route.ts</code> lines 42–48</td>
+<td><strong>Already fixed — no action.</strong> <code>googleFetch</code> sets a
+default <code>signal: AbortSignal.timeout(10_000)</code> at line 18, which covers
+<em>every</em> read path including <code>listUpcomingEvents</code>. Added by commit
+<code>48b9edb</code> ("Audit P2: timeouts on Google calls"), which predates the
+left-panel plans. The route already wraps each per-calendar call in
+<code>.catch(() =&gt; [])</code> (line 46), so a slow/failed calendar degrades
+gracefully.</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Remaining unmemoized derived list in a section not covered by plan 06.</td>
+<td><code>hub/app/components/LeftPanelSections.tsx</code> lines 278–279
+(<code>currentTasks</code> / <code>visibleTasks</code> in
+<code>TasksSectionBody</code>)</td>
+<td><strong>Confirmed — fix here.</strong> Calendar (<code>weekDays</code>,
+<code>daysWithEvents</code>, <code>dayEvents</code> — lines 647/650/665) and KPI
+(<code>kpis</code> filter — line 1100) are already memoized. Only the Tasks
+filtered list is bare.</td>
+</tr>
+<tr>
+<td>4a</td>
+<td>Unused <code>useCallback</code> import.</td>
+<td><code>LeftPanelSections.tsx</code> line 3</td>
+<td><strong>Confirmed — fix here.</strong> <code>useCallback</code> appears only on
+the import line; no call site in the file.</td>
+</tr>
+<tr>
+<td>4b</td>
+<td><code>formatShortDate</code> import — flagged as "possibly now unused".</td>
+<td><code>LeftPanelSections.tsx</code> line 17 (import); used at line 1018</td>
+<td><strong>Not dead — keep.</strong> Still used to render the artifacts-tab
+subtitle (line 1018) and is re-exported transitively via
+<code>buildEventInjectMessage</code>. Do <em>not</em> remove.</td>
+</tr>
+<tr>
+<td>4c</td>
+<td>Dead default argument <code>useCase = 'deep_dive'</code> on
+<code>handleChatInject</code>.</td>
+<td><code>hub/app/page.tsx</code> line 1027; callers lines 1056–1058</td>
+<td><strong>Confirmed — fix here.</strong> All three call sites
+(<code>injectRecall</code> → <code>'recall'</code>, <code>injectExecute</code> →
+<code>'execute'</code>, <code>injectDeepDive</code> → <code>'deep_dive'</code>) pass an
+explicit <code>useCase</code>. The default is never exercised.</td>
+</tr>
+<tr>
+<td>4d</td>
+<td><code>DriveFileInput</code> missing <code>modifiedTime?</code> though the Drive
+row renders it.</td>
+<td><code>hub/lib/panel-inject.ts</code> lines 30–34</td>
+<td><strong>Confirmed — fix here (type-only).</strong> The real
+<code>DriveFile</code> (<code>useHubData.ts</code> line 204) and the API
+<code>GoogleDriveFile</code> (<code>google.ts</code> line 284) both carry
+<code>modifiedTime: string</code>, and <code>DocumentRow</code> reads it
+(<code>LeftPanelSections.tsx</code> line 1058). The structural input type passed to
+<code>buildDocumentInject</code> should mirror that field so the type honestly
+describes the shape it receives. <code>buildDocumentInject</code> itself does not
+consume the field, so this is a non-behavioral type-completeness fix.</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Tasks <code>+ Task</code> affordance over-promises: it is labeled / tooltipped
+like an inline creator but only injects a chat message, while a real
+<code>action:'create'</code> path + <code>createTask</code> helper exist.</td>
+<td><code>LeftPanelSections.tsx</code> lines 353–361 (the
+<code>tasks-fab</code> button); real path: <code>createTask</code> in
+<code>google.ts</code> line 86 + the tasks API route</td>
+<td><strong>Confirmed — relabel here only.</strong> Building a full inline-create
+form is <em>deferred</em> as a separate product decision (see Deferred note).</td>
+</tr>
+</tbody>
+</table>
+
+<h2>Implementation</h2>
+
+<h3>Change 1 — Guard the KPI count-up so it only runs on first mount or a real value change</h3>
+<p><strong>File:</strong> <code>hub/app/components/AnimatedNumber.tsx</code></p>
+
+<p>Add a <code>useRef</code> import and two refs: one to track whether the stagger
+has already played (so the fade-in runs once on first appearance only), and one
+to track the last value we actually animated to (so the count-up only fires when
+the displayed numeric value genuinely changes). On a poll that returns the same
+value, both effects become no-ops and the rendered number stays put.</p>
+
+<pre class="before">// lines 3 / 10–40 (current)
+import { useState, useEffect } from 'react'
+
+export function AnimatedNumber({ value, delay = 0 }: { value: string; delay?: number }) {
+  const [visible, setVisible] = useState(false)
+  const [displayed, setDisplayed] = useState('0')
+
+  useEffect(() =&gt; {
+    const t = setTimeout(() =&gt; setVisible(true), delay)
+    return () =&gt; clearTimeout(t)
+  }, [delay])
+
+  useEffect(() =&gt; {
+    if (!visible) return
+    const numMatch = value.match(/^(\$?)(\d[\d,]*)(.*)$/)
+    if (!numMatch) { setDisplayed(value); return }
+    const prefix = numMatch[1]
+    const rawNum = parseInt(numMatch[2].replace(/,/g, ''), 10)
+    const suffix = numMatch[3]
+    if (isNaN(rawNum) || rawNum === 0) { setDisplayed(value); return }
+    const duration = 900
+    const startTime = performance.now()
+    const tick = (now: number) =&gt; {
+      const elapsed = now - startTime
+      const progress = Math.min(elapsed / duration, 1)
+      const eased = 1 - Math.pow(1 - progress, 3)
+      const current = Math.round(eased * rawNum)
+      const formatted = prefix + current.toLocaleString() + suffix
+      setDisplayed(formatted)
+      if (progress &lt; 1) requestAnimationFrame(tick)
+      else setDisplayed(value)
+    }
+    requestAnimationFrame(tick)
+  }, [visible, value])</pre>
+
+<pre class="after">// after
+import { useState, useEffect, useRef } from 'react'
+
+export function AnimatedNumber({ value, delay = 0 }: { value: string; delay?: number }) {
+  const [visible, setVisible] = useState(false)
+  const [displayed, setDisplayed] = useState('0')
+
+  // Play the staggered fade-in ONCE, on first appearance only — not on every
+  // poll that hands us a fresh-but-equal `value` string.
+  const hasAppeared = useRef(false)
+  // The value we last animated TO. A 60s poll that returns the same number
+  // leaves this unchanged, so the count-up below short-circuits and the KPI
+  // grid stays still instead of re-counting on every tick.
+  const lastAnimatedValue = useRef&lt;string | null&gt;(null)
+
+  useEffect(() =&gt; {
+    if (hasAppeared.current) { setVisible(true); return }
+    const t = setTimeout(() =&gt; { hasAppeared.current = true; setVisible(true) }, delay)
+    return () =&gt; clearTimeout(t)
+  }, [delay])
+
+  useEffect(() =&gt; {
+    if (!visible) return
+    // Only animate on first mount or a genuine value change.
+    if (lastAnimatedValue.current === value) return
+    lastAnimatedValue.current = value
+
+    const numMatch = value.match(/^(\$?)(\d[\d,]*)(.*)$/)
+    if (!numMatch) { setDisplayed(value); return }
+    const prefix = numMatch[1]
+    const rawNum = parseInt(numMatch[2].replace(/,/g, ''), 10)
+    const suffix = numMatch[3]
+    if (isNaN(rawNum) || rawNum === 0) { setDisplayed(value); return }
+    const duration = 900
+    const startTime = performance.now()
+    const tick = (now: number) =&gt; {
+      const elapsed = now - startTime
+      const progress = Math.min(elapsed / duration, 1)
+      const eased = 1 - Math.pow(1 - progress, 3)
+      const current = Math.round(eased * rawNum)
+      const formatted = prefix + current.toLocaleString() + suffix
+      setDisplayed(formatted)
+      if (progress &lt; 1) requestAnimationFrame(tick)
+      else setDisplayed(value)
+    }
+    requestAnimationFrame(tick)
+  }, [visible, value])</pre>
+
+<p><strong>Rationale.</strong> Refs are mutated synchronously and don't trigger
+re-renders, so the guards add no churn of their own. <code>hasAppeared</code>
+makes the <code>delay</code> stagger a one-time entrance; once it has played, a
+later re-render (e.g. the component staying mounted across a poll) sets
+<code>visible</code> immediately without re-staggering. <code>lastAnimatedValue</code>
+makes the count-up idempotent for equal values: the first time a number arrives
+it animates; an identical poll result is a no-op; a real change re-animates from
+the current display. Note the initial value of <code>lastAnimatedValue</code> is
+<code>null</code>, so the very first non-empty value always animates.</p>
+
+<h3>Change 2 — Memoize the Tasks filtered list</h3>
+<p><strong>File:</strong> <code>hub/app/components/LeftPanelSections.tsx</code>
+(<code>TasksSectionBody</code>, lines 278–279). <code>useMemo</code> is already
+imported (line 3).</p>
+
+<p>Wrap the two derived values in a single <code>useMemo</code> keyed on the inputs
+that actually feed them. Because <code>renderSectionState</code> returns early
+above this point (line 273–276), the memo must sit <em>after</em> that guard is
+fine — hooks here run before the early return only if placed above it. To keep
+hook order stable, compute the memo unconditionally near the other hooks at the
+top of the body and reference it after the guard.</p>
+
+<pre class="before">// lines 273–279 (current) — bare recompute every render
+  const state = renderSectionState({ isLoading, error, skeletonLines: 4 })
+  if (state) {
+    return &lt;&gt;{state}&lt;/&gt;
+  }
+
+  const currentTasks = resolvedListId ? (tasksByList[resolvedListId] ?? []) : []
+  const visibleTasks = currentTasks.filter(t =&gt; !hiddenIds.has(t.id))</pre>
+
+<pre class="after">// after — memoized, hook placed ABOVE the early return to keep hook order stable
+  // (insert near the other hooks, before `const state = renderSectionState(...)`)
+  const visibleTasks = useMemo(() =&gt; {
+    const current = resolvedListId ? (tasksByList[resolvedListId] ?? []) : []
+    return current.filter(t =&gt; !hiddenIds.has(t.id))
+  }, [resolvedListId, tasksByList, hiddenIds])
+
+  const state = renderSectionState({ isLoading, error, skeletonLines: 4 })
+  if (state) {
+    return &lt;&gt;{state}&lt;/&gt;
+  }
+  // `currentTasks` was only used to derive visibleTasks — drop the intermediate.</pre>
+
+<p><strong>Rationale.</strong> The list only changes when the active list, the
+fetched data, or the optimistic <code>hiddenIds</code> set changes — exactly the
+memo deps. Crucially the <code>useMemo</code> must be placed <em>above</em> the
+<code>renderSectionState</code> early return so it isn't conditionally executed
+(React's rules-of-hooks). The standalone <code>currentTasks</code> binding is
+folded into the memo body since it had no other consumer.</p>
+
+<h3>Change 3 — Remove the unused <code>useCallback</code> import</h3>
+<p><strong>File:</strong> <code>hub/app/components/LeftPanelSections.tsx</code> line 3.</p>
+
+<pre class="before">import { useState, useEffect, ReactNode, useCallback, useMemo, memo, Component } from 'react'</pre>
+<pre class="after">import { useState, useEffect, ReactNode, useMemo, memo, Component } from 'react'</pre>
+
+<p><strong>Rationale.</strong> <code>useCallback</code> has no call site in this file
+(verified by grep — only the import line matches). Keep <code>useMemo</code> (used
+in Calendar/KPI and now Tasks) and <code>memo</code> (section exports). Do
+<strong>not</strong> touch <code>formatShortDate</code> on line 17 — it is still used
+(artifacts subtitle, line 1018).</p>
+
+<h3>Change 4 — Drop the dead <code>useCase</code> default on <code>handleChatInject</code></h3>
+<p><strong>File:</strong> <code>hub/app/page.tsx</code> line 1027.</p>
+
+<pre class="before">  const handleChatInject = useCallback((message: string, useCase: string = 'deep_dive', injectAttachments?: ChatAttachment[]) =&gt; {</pre>
+<pre class="after">  const handleChatInject = useCallback((message: string, useCase: string, injectAttachments?: ChatAttachment[]) =&gt; {</pre>
+
+<p><strong>Rationale.</strong> The three wrappers that call it
+(<code>injectRecall</code>, <code>injectExecute</code>, <code>injectDeepDive</code> on
+lines 1056–1058) each pass an explicit <code>useCase</code>, so the default is
+unreachable. Making the parameter required documents the real contract and lets
+TypeScript flag any future caller that forgets to specify intent. No call site
+changes are needed — all current callers already comply.</p>
+
+<h3>Change 5 — Add <code>modifiedTime?</code> to <code>DriveFileInput</code></h3>
+<p><strong>File:</strong> <code>hub/lib/panel-inject.ts</code> lines 30–34.</p>
+
+<pre class="before">export interface DriveFileInput {
+  id: string
+  name: string
+  mimeType: string
+}</pre>
+<pre class="after">export interface DriveFileInput {
+  id: string
+  name: string
+  mimeType: string
+  /** Present on the real DriveFile the row passes in; the message builder
+   *  doesn't read it, but the type should mirror the shape it receives. */
+  modifiedTime?: string
+}</pre>
+
+<p><strong>Rationale.</strong> Type-only completeness. <code>buildDocumentInject</code>
+receives a real <code>DriveFile</code> (which always has <code>modifiedTime</code>)
+and the row renders that field; the structural input type should not silently
+omit it. Marked optional so existing callers and the panel-inject unit tests
+remain valid without edits. No runtime behavior changes.</p>
+
+<h3>Change 6 — Relabel the Tasks <code>+ Task</code> affordance to match its real behavior</h3>
+<p><strong>File:</strong> <code>hub/app/components/LeftPanelSections.tsx</code> lines 353–361.</p>
+
+<pre class="before">      {/* FAB: open AI chat to create a task */}
+      &lt;button
+        className="tasks-fab"
+        onClick={() =&gt; onInjectChat(`I want to create a new task in my ${activeListName} list`)}
+        aria-label={`Create task in ${activeListName}`}
+        title={`Create task in ${activeListName}`}
+      &gt;
+        + Task
+      &lt;/button&gt;</pre>
+
+<pre class="after">      {/* Injects a chat prompt — it does NOT create the task inline. Label it
+          honestly so users don't expect an inline form. A real inline-create
+          flow (action:'create' + createTask) is deferred — see plan note. */}
+      &lt;button
+        className="tasks-fab"
+        onClick={() =&gt; onInjectChat(`Add a task to my ${activeListName} list: `)}
+        aria-label={`Ask AI to add a task to ${activeListName}`}
+        title={`Ask AI to add a task to ${activeListName}`}
+      &gt;
+        Ask AI to add a task
+      &lt;/button&gt;</pre>
+
+<p><strong>Rationale.</strong> The button only injects a chat message; "+ Task"
+plus a "Create task in…" tooltip reads like an inline creator. The new label,
+<code>aria-label</code>, and tooltip all say "Ask AI to add a task", which is what
+actually happens. The injected prompt is also reworded to a fill-in-the-blank
+lead-in so the chat naturally continues the user's intent. Keep the
+<code>tasks-fab</code> class so styling is untouched — only copy changes. If the
+wider button text breaks the FAB's fixed-width layout, prefer a CSS tweak to the
+existing <code>tasks-fab</code> rule over shortening the label; the honest label
+is the priority.</p>
+
+<blockquote>
+<p><strong>Deferred (product decision, do NOT auto-build):</strong> a true inline
+"create task" form wired to the existing <code>action:'create'</code> tasks API
+path and the <code>createTask</code> helper in <code>hub/lib/google.ts</code>.
+That is a net-new UI surface (input, validation, optimistic insert, error
+rollback) and a UX decision about where creation lives (panel vs. chat). It is
+out of scope for this performance/cleanup pass and should be tracked as its own
+ticket.</p>
+</blockquote>
+
+<h2>Files touched</h2>
+<table>
+<thead><tr><th>File</th><th>Change(s)</th></tr></thead>
+<tbody>
+<tr><td><code>hub/app/components/AnimatedNumber.tsx</code></td><td>Change 1 — ref-guarded count-up + one-time stagger; add <code>useRef</code> import.</td></tr>
+<tr><td><code>hub/app/components/LeftPanelSections.tsx</code></td><td>Change 2 (memoize <code>visibleTasks</code>), Change 3 (drop <code>useCallback</code> import), Change 6 (relabel Tasks FAB).</td></tr>
+<tr><td><code>hub/app/page.tsx</code></td><td>Change 4 — remove dead <code>useCase='deep_dive'</code> default.</td></tr>
+<tr><td><code>hub/lib/panel-inject.ts</code></td><td>Change 5 — add <code>modifiedTime?</code> to <code>DriveFileInput</code>.</td></tr>
+</tbody>
+</table>
+<p><strong>Not touched (already fixed / not dead):</strong>
+<code>hub/lib/google.ts</code> (calendar timeout already present, finding #2);
+<code>formatShortDate</code> import in <code>LeftPanelSections.tsx</code> (still in
+use, finding 4b).</p>
+
+<h2>Testing</h2>
+<ul>
+<li><strong>Types:</strong> <code>cd hub &amp;&amp; npx tsc --noEmit</code> — must pass
+clean. Confirms the removed <code>useCallback</code> import, the now-required
+<code>useCase</code> parameter, and the new optional <code>modifiedTime?</code>
+field all type-check (and that no caller relied on the dropped default).</li>
+<li><strong>Unit tests:</strong> <code>cd hub &amp;&amp; npx vitest run</code> — must
+stay green. Of note, <code>hub/lib/panel-inject.test.ts</code> exercises
+<code>buildDocumentInject</code>; adding an optional field must not break it.
+<code>hub/lib/google.test.ts</code> covers the Google client (timeout path
+unchanged).</li>
+<li><strong>Manual — the key regression:</strong> sign in, open the left panel,
+let the KPI grid finish its initial count-up. Wait for a poll tick (~60&nbsp;s) or
+force a revalidation. <strong>Confirm the KPI numbers do NOT re-animate / recount
+when their value is unchanged</strong>, and confirm the fade-in stagger does not
+replay. Then trigger a genuine KPI value change (or mock one) and confirm it
+<em>does</em> animate from the old number to the new.</li>
+<li><strong>Manual — Tasks FAB:</strong> open Tasks, click the affordance, confirm
+the label reads "Ask AI to add a task" and clicking injects the
+"Add a task to my … list:" prompt into chat (no inline form appears).</li>
+<li><strong>Manual — Tasks list:</strong> toggle a task complete/uncomplete and
+confirm the optimistic fade/hide still works (verifies the memoized
+<code>visibleTasks</code> recomputes on <code>hiddenIds</code> change).</li>
+</ul>
+
+<h2>Acceptance criteria</h2>
+<ul>
+<li>KPI numbers animate on first appearance and on a real value change only; a
+poll that returns identical values produces no recount and no re-stagger.</li>
+<li>The Tasks visible-task list is computed via <code>useMemo</code> with deps
+<code>[resolvedListId, tasksByList, hiddenIds]</code>, placed above the
+<code>renderSectionState</code> early return; optimistic toggle behavior is
+unchanged.</li>
+<li><code>useCallback</code> is no longer imported in
+<code>LeftPanelSections.tsx</code>; <code>formatShortDate</code> remains imported and
+used.</li>
+<li><code>handleChatInject</code>'s <code>useCase</code> parameter is required; all
+three wrappers still compile and pass explicit values.</li>
+<li><code>DriveFileInput</code> declares <code>modifiedTime?: string</code>; no
+runtime behavior changes and panel-inject tests pass.</li>
+<li>The Tasks affordance's text, <code>aria-label</code>, and <code>title</code> all
+describe asking the AI to add a task; the <code>tasks-fab</code> class and all
+styling are unchanged.</li>
+<li><code>npx tsc --noEmit</code> and <code>npx vitest run</code> both pass.</li>
+<li>No change to <code>hub/lib/google.ts</code> or any API route (finding #2 was
+already resolved).</li>
+</ul>
+
+<h2>Dependencies &amp; sequencing</h2>
+<ul>
+<li><strong>Prereqs:</strong> none beyond merged PRs #14–#19 (plans 01–06), which
+are on master. This plan assumes plan 06's section memoization is present
+(it is) — Change 1's effect guard complements it rather than depending on it.</li>
+<li><strong>Independence:</strong> the six changes are mutually independent and
+touch four separate files. They can land as one small PR or be split; no
+ordering constraint between them.</li>
+<li><strong>No conflicts expected</strong> with later plans; this is the cleanup
+tail of the audit. The deferred inline-create-task work is a separate future
+ticket and is not blocked by anything here.</li>
+</ul>
+
+<h2>Rollback</h2>
+<ul>
+<li>Each change is a small, isolated diff; revert per-file or per-hunk.</li>
+<li><strong>Change 1 (highest behavioral surface):</strong> if the ref guard ever
+suppresses a legitimate animation (e.g. a value that should re-animate is treated
+as equal), revert <code>AnimatedNumber.tsx</code> to restore the always-animate
+behavior — the only regression is cosmetic recounting, never wrong numbers.</li>
+<li>Changes 3–5 are dead-code / type-only and carry effectively no runtime risk;
+reverting any one is a one-line undo.</li>
+<li>Change 6 is copy-only (plus the injected-prompt string); revert restores the
+"+ Task" label. No data or styling depends on it.</li>
+<li>The whole plan is additive-or-removing-dead-weight: a full revert returns the
+left panel to current master with no migration.</li>
+</ul>
+
+</body>
+</html>

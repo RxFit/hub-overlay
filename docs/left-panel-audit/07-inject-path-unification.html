@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Left-panel 07 — Unify the panel → chat inject path</title>
+<style>
+body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:920px;margin:2rem auto;padding:0 1rem;line-height:1.55;color:#1a1a1a}
+h1{border-bottom:3px solid #2563eb;padding-bottom:.3rem}
+h2{margin-top:2rem;color:#1e3a8a;border-bottom:1px solid #e5e7eb;padding-bottom:.2rem}
+h3{margin-top:1.4rem}
+code,pre{font-family:ui-monospace,Menlo,monospace}
+pre{background:#f6f8fa;padding:.8rem;border-radius:6px;overflow:auto;border:1px solid #e5e7eb;font-size:.86rem}
+table{border-collapse:collapse;width:100%}
+th,td{border:1px solid #d1d5db;padding:.4rem .6rem;text-align:left;vertical-align:top;font-size:.9rem}
+th{background:#f3f4f6}
+.badge{display:inline-block;padding:.15rem .6rem;border-radius:999px;color:#fff;font-size:.8rem;font-weight:600}
+.p0{background:#dc2626}.p1{background:#d97706}.p2{background:#2563eb}
+pre.before{background:#fef2f2;border-color:#fecaca}pre.after{background:#f0fdf4;border-color:#bbf7d0}
+blockquote{border-left:4px solid #9ca3af;margin:0;padding-left:1rem;color:#4b5563}
+ul{margin:.4rem 0}
+</style>
+</head>
+<body>
+
+<h1>Left-panel 07 — Unify the panel → chat inject path <span class="badge p1">P1</span></h1>
+
+<p><strong>Summary.</strong> The left panel's "tap-to-inject" path (<code>handleChatInject</code>) calls
+<code>sendToApi(...)</code> directly, bypassing <code>doSend</code> — the path that every typed/suggestion
+message takes. As a result, panel-injected messages never run <code>detectIntent</code>, role-gating,
+interview-advance, or quoted-reply prefixing. The most visible symptom: tapping the Tasks
+<em>"+ Task"</em> affordance injects <code>"I want to create a new task in my … list"</code>, but Interview Mode
+<strong>never activates</strong> — even though typing that exact sentence would activate it. This piece
+routes <em>action-style</em> injects through the shared <code>doSend</code> core while keeping <em>read-style</em>
+("tell me about…") injects on the direct, intent-free path, then cleans up three related defects on the
+inject path (signature drift, an un-capped attachment count, and a misleading wire payload).</p>
+
+<p style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:.6rem .8rem">
+<strong>Verification note (against current <code>master</code>, tip <code>f8ae3ad</code>, after PRs #14–#19 / plans 01–06).</strong>
+All four findings were re-confirmed present on master. <strong>None</strong> were already fixed by
+plans 01–06. Line numbers in the original brief had drifted substantially (the file grew via plans 01,
+02, 05, 06); every line reference below is the <em>corrected</em>, current value. The one cross-cutting
+interaction with prior work: plan&nbsp;01 rewrote <code>sendToApi</code>'s error handling (the structured
+<code>!res.ok</code> branch and the streamed <code>parsed.error</code> append), which moved the wire-payload
+block — accounted for in finding&nbsp;4 below. Plan&nbsp;06's StrictMode "pure updater / deferred
+side-effects" refactor of <code>doSend</code> is the structure we extend in finding&nbsp;1.</p>
+
+<h2>Why this matters</h2>
+<ul>
+<li><strong>Feature parity is silently broken.</strong> Two visually identical user actions (tap the
+"+ Task" chip vs. type the same words) take divergent code paths and produce different products.
+The chip never enters Interview Mode, so the user gets a free-text chat answer instead of the
+guided create-task flow with its confirm card and write-boundary gate.</li>
+<li><strong>Security/consistency surface.</strong> The direct inject path skips
+<code>hasPermission(userRole, intent)</code> role-gating that <code>doSend</code> applies. Today that only
+matters for action prompts, but any future panel affordance that injects a privileged action would
+bypass the gate by construction.</li>
+<li><strong>Attachment cap is enforced in two of three places.</strong> The 5-attachment cap exists
+server-side and in the manual add path, but the inject path forwards an unbounded array. A panel that
+injects &gt;5 attachments would send them all to the client buffer and rely solely on the server slice —
+defense-in-depth is broken.</li>
+<li><strong>Type drift hides bugs.</strong> Three of four left-panel section props are typed
+<code>(msg: string) =&gt; void</code> while they actually receive a handler that accepts attachments. The
+compiler can't catch a section that forgets to forward attachments.</li>
+</ul>
+
+<h2>Findings</h2>
+
+<table>
+<thead><tr><th>ID</th><th>Sev</th><th>Location (current master)</th><th>Root cause</th><th>Already fixed by 01–06?</th></tr></thead>
+<tbody>
+<tr>
+<td><strong>F1</strong></td><td><span class="badge p1">P1</span></td>
+<td><code>hub/app/page.tsx</code> — <code>handleChatInject</code> <strong>lines 1027–1051</strong> (brief said ~920–944); shared core <code>doSend</code> <strong>line 652</strong> (brief said ~545). Symptom prompt: <code>hub/app/components/LeftPanelSections.tsx</code> <strong>line 356</strong> (brief said ~247).</td>
+<td><code>handleChatInject</code> appends a user message and calls <code>sendToApi(...)</code> directly (line 1050), skipping <code>doSend</code>'s intent detection, role-gating, interview advance, and quoted-reply prefix. Action-style injects never reach Interview Mode.</td>
+<td>No. Confirmed present.</td>
+</tr>
+<tr>
+<td><strong>F2</strong></td><td><span class="badge p2">P2</span></td>
+<td><code>LeftPanelSections.tsx</code> — <code>TasksSection</code> <strong>242, 250</strong>; <code>CalendarSection</code> <strong>629, 637</strong>; <code>KPISection</code> <strong>1092, 1096</strong> (brief said ~963); <code>DocumentsSection</code> <strong>946, 954</strong>. (<code>ProjectHealthSection</code> <strong>1181, 1186</strong> also drifts — included for completeness.)</td>
+<td>Three section props typed <code>(msg: string) =&gt; void</code> but all four receive the same <code>injectRecall = (msg, atts?) =&gt; …</code> (page.tsx line 1056). The container <code>LeftPanel</code> prop (page.tsx line 73) is already correctly typed <code>(msg, attachments?)</code>; the leaf sections lag.</td>
+<td>No. Confirmed present.</td>
+</tr>
+<tr>
+<td><strong>F3</strong></td><td><span class="badge p2">P2</span></td>
+<td>Server cap <code>hub/app/api/chat/route.ts</code> <strong>line 335</strong> (<code>attachments.slice(0, 5)</code>); manual cap <code>page.tsx</code> <code>handleAddAttachment</code> <strong>lines 346–349</strong> (brief said ~327); missing on inject path <code>page.tsx</code> <strong>lines 1038 &amp; 1050</strong> (brief said ~931).</td>
+<td>The 5-attachment cap is enforced server-side and in <code>handleAddAttachment</code>, but <code>handleChatInject</code> forwards <code>injectAttachments</code> uncapped into both the appended <code>ChatMsg</code> and the <code>sendToApi</code> call.</td>
+<td>No. Confirmed present.</td>
+</tr>
+<tr>
+<td><strong>F4</strong></td><td><span class="badge p2">P2</span></td>
+<td><code>page.tsx</code> — <code>sendToApi</code> <strong>line 525</strong> (brief said ~441); timestamp rewrite <strong>line 542</strong> (brief said ~458); wire payload block <strong>lines 537–547</strong>.</td>
+<td><code>sendToApi</code> maps every message to a wire object that (a) overwrites each <code>timestamp</code> with <code>new Date().toISOString()</code> and (b) omits per-message <code>attachments</code> entirely (only the top-level <code>attachments</code> field is sent). Harmless today — the route reads only <code>role</code>/<code>content</code> + top-level <code>attachments</code> — but misleading.</td>
+<td>No (but adjacent to plan 01). Plan 01 rewrote the error handling around this block; the payload mapping itself is unchanged and still present.</td>
+</tr>
+</tbody>
+</table>
+
+<h2>Implementation</h2>
+
+<h3>Intended behavior (read this before coding)</h3>
+<p>The four panel inject helpers in <code>page.tsx</code> are (lines 1056–1058):</p>
+<pre>const injectRecall   = useCallback((msg, atts?) =&gt; handleChatInject(msg, 'recall', atts), [handleChatInject])   // left panel  → all 4 sections
+const injectExecute  = useCallback((msg)       =&gt; handleChatInject(msg, 'execute'), [handleChatInject])          // right panel (RightPanel)
+const injectDeepDive = useCallback((msg)       =&gt; handleChatInject(msg, 'deep_dive'), [handleChatInject])        // ToolPanel</pre>
+<p>Wiring (verified): <code>LeftPanel</code> receives <code>injectRecall</code> (line 1206) and fans it out to KPI/Calendar/Tasks/Documents sections (lines 98–107). <code>RightPanel</code> receives <code>injectExecute</code> (line 1490); <code>ToolPanel</code> receives <code>injectDeepDive</code> (line 1472).</p>
+
+<p>The inject strings fall into two semantic classes (see <code>hub/lib/panel-inject.ts</code>):</p>
+<table>
+<thead><tr><th>Class</th><th>Examples (current strings)</th><th>useCase</th><th>Desired routing</th></tr></thead>
+<tbody>
+<tr>
+<td><strong>Read-style ("recall")</strong></td>
+<td><code>"Tell me about this task from my … list: …"</code> (<code>buildTaskInjectMessage</code>, line 121); <code>"Tell me about this calendar event: …"</code> (<code>buildEventInjectMessage</code>, line 136); <code>"Tell me about the document …"</code> / <code>"Summarize the meeting transcript …"</code> (<code>buildDocumentInject</code>, line 157); <code>"Tell me more about KPI: …"</code> (LeftPanelSections line 1135); <code>"Show me the health status for …"</code> (line 1229)</td>
+<td><code>recall</code></td>
+<td><strong>Stay on the direct path</strong> (no intent detection). These are informational lookups; running them through <code>detectIntent</code> would be wasteful and could mis-fire an interview on a read.</td>
+</tr>
+<tr>
+<td><strong>Action-style</strong></td>
+<td><code>"I want to create a new task in my … list"</code> (LeftPanelSections line 356); any right-panel <code>injectExecute</code> create/launch prompts</td>
+<td><code>execute</code></td>
+<td><strong>Route through <code>doSend</code></strong> so <code>detectIntent</code> → role-gate → Interview Mode runs, identical to typing the sentence.</td>
+</tr>
+</tbody>
+</table>
+
+<p><strong>Decision rule (explicit):</strong> route an inject through <code>doSend</code> when <code>useCase === 'execute'</code>;
+otherwise (<code>'recall'</code> and <code>'deep_dive'</code>) keep the existing direct <code>sendToApi</code> behavior.
+This is precise, requires no string sniffing, and matches the existing semantic split: the only inject
+helper carrying <code>'execute'</code> today is the action class (right panel), and the Tasks "+ Task"
+create prompt must be re-pointed from <code>injectRecall</code> to <code>injectExecute</code> (see Change&nbsp;1b).</p>
+
+<h3>Change 1a — Route <code>execute</code> injects through <code>doSend</code></h3>
+<p><strong>File:</strong> <code>hub/app/page.tsx</code> — <code>handleChatInject</code> (lines 1027–1051).</p>
+<p><strong>Rationale.</strong> <code>doSend</code> already encapsulates the full send pipeline (quoted-reply prefix,
+the StrictMode-safe pure-updater append, intent detection / role-gating / interview branching, and the
+deferred <code>sendToApi</code>). Rather than duplicating that tail, delegate to it for action injects. Because
+<code>doSend</code> hardcodes <code>useCase='deep_dive'</code> in its <code>sendToApi</code> calls (lines 728, 731, 995),
+an <code>execute</code> inject that <em>does not</em> match an intent will fall through to a normal
+<code>deep_dive</code> chat send — acceptable, and identical to what a user typing the same words gets today.
+The mobile-drawer-closing side effects unique to injects stay in <code>handleChatInject</code>.</p>
+
+<pre class="before">/* ── Handle context injection from panels ── */
+const handleChatInject = useCallback((message: string, useCase: string = 'deep_dive', injectAttachments?: ChatAttachment[]) =&gt; {
+  setMobileLeftOpen(false)
+  setMobileRightOpen(false)
+  setMobileTab('chat')
+  const userMsg = {
+    id: crypto.randomUUID(),
+    role: 'user' as const,
+    content: message,
+    timestamp: new Date().toISOString(),
+    attachments: injectAttachments &amp;&amp; injectAttachments.length &gt; 0 ? injectAttachments : undefined,
+  }
+  let updatedMessages: ChatMsg[] = []
+  setMessages(prev =&gt; {
+    updatedMessages = [...prev, userMsg]
+    return updatedMessages
+  })
+  sendToApi(message, updatedMessages, useCase, injectAttachments)
+}, [sendToApi])</pre>
+
+<pre class="after">/* ── Handle context injection from panels ──
+ * Two routing modes:
+ *  - 'execute'  → action-style inject: delegate to doSend so detectIntent,
+ *                 role-gating, and Interview Mode run exactly as if the user
+ *                 had typed the sentence (parity with handleSend).
+ *  - other      → read-style inject ('recall' / 'deep_dive'): keep the direct
+ *                 sendToApi path (no intent detection on informational lookups).
+ */
+const handleChatInject = useCallback((message: string, useCase: string = 'deep_dive', injectAttachments?: ChatAttachment[]) =&gt; {
+  setMobileLeftOpen(false)
+  setMobileRightOpen(false)
+  setMobileTab('chat')
+
+  // Defense-in-depth: mirror the 5-attachment cap enforced in handleAddAttachment
+  // and server-side (route.ts). The inject path previously forwarded these uncapped.
+  const cappedAttachments = injectAttachments &amp;&amp; injectAttachments.length &gt; 0
+    ? injectAttachments.slice(0, 5)
+    : undefined
+
+  // Action-style injects go through the shared send core for full parity.
+  if (useCase === 'execute') {
+    doSend(message, cappedAttachments)
+    return
+  }
+
+  // Read-style injects: direct, intent-free send (unchanged behavior).
+  const userMsg: ChatMsg = {
+    id: crypto.randomUUID(),
+    role: 'user' as const,
+    content: message,
+    timestamp: new Date().toISOString(),
+    attachments: cappedAttachments,
+  }
+  let updatedMessages: ChatMsg[] = []
+  setMessages(prev =&gt; {
+    updatedMessages = [...prev, userMsg]
+    return updatedMessages
+  })
+  sendToApi(message, updatedMessages, useCase, cappedAttachments)
+}, [sendToApi, doSend])</pre>
+
+<blockquote><strong>Ordering note for the coding agent.</strong> <code>doSend</code> is declared (line 652)
+<em>before</em> <code>handleChatInject</code> (line 1027), so referencing it is safe. Add <code>doSend</code> to the
+dependency array (shown above). Both are <code>useCallback</code>s; <code>doSend</code>'s identity is stable except
+when its own deps change, which is correct.</blockquote>
+
+<h3>Change 1b — Re-point the Tasks "+ Task" create prompt to the action path</h3>
+<p><strong>File:</strong> <code>hub/app/components/LeftPanelSections.tsx</code> (line 356) and <code>hub/app/page.tsx</code> wiring.</p>
+<p><strong>Rationale.</strong> The "+ Task" affordance currently rides <code>injectRecall</code> (<code>useCase='recall'</code>)
+because the whole left panel is wired to one handler. With the decision rule from Change&nbsp;1a, an inject
+only enters Interview Mode when its useCase is <code>'execute'</code>. There are two viable approaches; pick
+<strong>Approach A</strong> (minimal, surgical):</p>
+
+<p><strong>Approach A — give the create affordance its own execute handler.</strong> Thread a second,
+optional prop (e.g. <code>onInjectAction</code>) into <code>TasksSection</code> for the create button only, wired to
+<code>injectExecute</code> in <code>page.tsx</code>, while the per-row "tell me about" taps keep <code>onInjectChat</code>
+(recall). This keeps read vs. action explicit at the call site and avoids string sniffing.</p>
+
+<pre class="before">// LeftPanelSections.tsx ~line 356 (create affordance)
+onClick={() =&gt; onInjectChat(`I want to create a new task in my ${activeListName} list`)}</pre>
+<pre class="after">// Create affordance now uses the action-routing handler.
+onClick={() =&gt; onInjectAction(`I want to create a new task in my ${activeListName} list`)}</pre>
+
+<p>Add the prop to <code>TasksSectionImpl</code> / <code>TasksSectionBody</code> signatures (lines 242, 250) and
+forward it through the <code>{(isOpen) =&gt; …}</code> render-prop. In <code>page.tsx</code>, pass
+<code>onInjectAction={injectExecute}</code> to <code>&lt;TasksSection&gt;</code> (the call site near line 104). Leave the
+other sections untouched — none of them currently inject actions.</p>
+
+<p><strong>Approach B (alternative, document only if chosen).</strong> Keep a single handler but make
+<code>injectRecall</code>'s consumers tag the create string and have <code>handleChatInject</code> upgrade known
+create-prompts to <code>execute</code>. Rejected as default: it reintroduces string-matching coupling between
+the panel copy and the router. Record the choice in the PR description.</p>
+
+<h3>Change 2 — Standardize the four section <code>onInjectChat</code> signatures</h3>
+<p><strong>File:</strong> <code>hub/app/components/LeftPanelSections.tsx</code>.</p>
+<p><strong>Rationale.</strong> All four sections receive the attachment-aware <code>injectRecall</code>. Typing three
+of them as <code>(msg: string) =&gt; void</code> is a latent footgun: a section that needs to forward attachments
+(as <code>DocumentsSection</code> already does, lines 1007, 1042) would compile even if it dropped them. Align
+all four leaf props to the container's contract. <code>ChatAttachment</code> is already imported at line 9.</p>
+
+<table>
+<thead><tr><th>Symbol</th><th>Lines</th><th>Before</th><th>After</th></tr></thead>
+<tbody>
+<tr><td><code>TasksSectionImpl</code></td><td>242</td><td><code>onInjectChat: (msg: string) =&gt; void</code></td><td><code>onInjectChat: (msg: string, attachments?: ChatAttachment[]) =&gt; void</code></td></tr>
+<tr><td><code>TasksSectionBody</code></td><td>250</td><td>same</td><td>same</td></tr>
+<tr><td><code>CalendarSectionImpl</code></td><td>629</td><td>same</td><td>same</td></tr>
+<tr><td><code>CalendarSectionBody</code></td><td>637</td><td>same</td><td>same</td></tr>
+<tr><td><code>KPISectionImpl</code></td><td>1092 / 1096</td><td>same</td><td>same</td></tr>
+<tr><td><code>ProjectHealthSection</code></td><td>1181 / 1186</td><td>same</td><td>same (recommended, for completeness)</td></tr>
+</tbody>
+</table>
+
+<p><code>DocumentsSection</code> (lines 946, 954) is already correct — no change. Example edit for one site:</p>
+<pre class="before">function TasksSectionImpl({ onInjectChat }: { onInjectChat: (msg: string) =&gt; void }) {</pre>
+<pre class="after">function TasksSectionImpl({ onInjectChat }: { onInjectChat: (msg: string, attachments?: ChatAttachment[]) =&gt; void }) {</pre>
+<blockquote>If Change&nbsp;1b (Approach A) adds <code>onInjectAction</code> to <code>TasksSection</code>, type it
+identically: <code>onInjectAction: (msg: string, attachments?: ChatAttachment[]) =&gt; void</code>.</blockquote>
+
+<h3>Change 3 — Cap attachments on the inject path</h3>
+<p><strong>File:</strong> <code>hub/app/page.tsx</code>. <strong>Already folded into Change&nbsp;1a</strong> via
+<code>cappedAttachments = injectAttachments.slice(0, 5)</code>, which feeds both the <code>execute</code> branch
+(<code>doSend(message, cappedAttachments)</code>) and the direct branch (the appended <code>ChatMsg</code> and the
+<code>sendToApi</code> call). This restores parity with <code>handleAddAttachment</code> (lines 346–349) and the
+server slice (route.ts line 335). No separate edit required; verify the slice is present after applying
+Change&nbsp;1a.</p>
+
+<h3>Change 4 — Carry real timestamps; remove the dead per-message <code>attachments</code> field</h3>
+<p><strong>File:</strong> <code>hub/app/page.tsx</code> — <code>sendToApi</code> wire payload (lines 537–547).</p>
+<p><strong>Rationale.</strong> The mapper overwrites each message's <code>timestamp</code> with "now," collapsing
+real send times, and never carries per-message <code>attachments</code> (only the top-level field is sent). The
+server reads only <code>role</code>/<code>content</code> + top-level <code>attachments</code>, so this is currently
+harmless — but the rewritten timestamp is actively misleading and the implied per-message attachment
+support is dead. Carry the real timestamp (falling back to now only when absent) and drop the misleading
+intent by adding a short comment that per-message attachments are intentionally not on the wire.</p>
+
+<pre class="before">body: JSON.stringify({
+  messages: allMessages.map(m =&gt; ({
+    id: m.id,
+    role: m.role,
+    content: m.content,
+    timestamp: new Date().toISOString(),
+  })),
+  useCase,
+  attachments: msgAttachments &amp;&amp; msgAttachments.length &gt; 0 ? msgAttachments : undefined,
+  activeSkill: activeSkill?.id || undefined,
+}),</pre>
+<pre class="after">body: JSON.stringify({
+  // Per-message `attachments` are intentionally NOT sent: the chat route reads
+  // only role/content from history plus the top-level `attachments` below.
+  // Carry the message's real timestamp; fall back to now only if it's missing.
+  messages: allMessages.map(m =&gt; ({
+    id: m.id,
+    role: m.role,
+    content: m.content,
+    timestamp: m.timestamp ?? new Date().toISOString(),
+  })),
+  useCase,
+  attachments: msgAttachments &amp;&amp; msgAttachments.length &gt; 0 ? msgAttachments : undefined,
+  activeSkill: activeSkill?.id || undefined,
+}),</pre>
+<blockquote>Do not touch the error-handling block immediately below (the <code>!res.ok</code> structured-error
+parse and the streamed <code>parsed.error</code> append) — that is plan 01's code and is unrelated.</blockquote>
+
+<h2>Files touched</h2>
+<table>
+<thead><tr><th>File</th><th>Change(s)</th></tr></thead>
+<tbody>
+<tr><td><code>hub/app/page.tsx</code></td><td>F1 (Change 1a — route <code>execute</code> through <code>doSend</code>), F3 (Change 3 — cap, folded into 1a), F4 (Change 4 — timestamp + dead-field comment), plus the <code>&lt;TasksSection onInjectAction={injectExecute}&gt;</code> wiring from Change 1b.</td></tr>
+<tr><td><code>hub/app/components/LeftPanelSections.tsx</code></td><td>F1 (Change 1b — re-point the "+ Task" create prompt to <code>onInjectAction</code> and thread the prop through <code>TasksSection</code>), F2 (Change 2 — standardize four/​five section prop signatures).</td></tr>
+<tr><td><code>hub/lib/__tests__/</code> or co-located <code>*.test.ts</code> (new)</td><td>Unit tests for the routing decision and the attachment cap — see Testing.</td></tr>
+</tbody>
+</table>
+<p><em>No server files change.</em> <code>route.ts</code> and <code>panel-inject.ts</code> are inspected for context only.</p>
+
+<h2>Testing</h2>
+
+<h3>Automated — <code>npx vitest run</code></h3>
+<p>The send pipeline lives inside a React component, so prefer extracting the pure routing decision into a
+testable helper, or test it at the component boundary. Two complementary suites:</p>
+
+<p><strong>(a) Routing-decision unit test.</strong> Factor the rule "<code>useCase === 'execute'</code> ⇒ goes
+through <code>doSend</code>" into a tiny pure predicate (e.g. <code>shouldRouteThroughSend(useCase)</code>) or assert
+it at the component level by mocking <code>doSend</code> / <code>sendToApi</code>. Example shape:</p>
+<pre>import { describe, it, expect } from 'vitest'
+import { shouldRouteThroughSend } from '@/app/lib/inject-routing' // small extracted helper
+
+describe('panel inject routing', () =&gt; {
+  it('routes execute injects through the shared send core', () =&gt; {
+    expect(shouldRouteThroughSend('execute')).toBe(true)
+  })
+  it('keeps recall and deep_dive on the direct path', () =&gt; {
+    expect(shouldRouteThroughSend('recall')).toBe(false)
+    expect(shouldRouteThroughSend('deep_dive')).toBe(false)
+  })
+})</pre>
+
+<p><strong>(b) Attachment-cap unit test.</strong> Assert the inject path caps at 5 regardless of input length:</p>
+<pre>it('caps inject attachments at 5', () =&gt; {
+  const atts = Array.from({ length: 9 }, (_, i) =&gt; ({ id: String(i), type: 'document', label: `f${i}` }))
+  expect(atts.slice(0, 5)).toHaveLength(5)   // mirror the production slice
+})</pre>
+
+<p><strong>(c) Intent reachability (integration-flavored, optional).</strong> If you mock
+<code>/api/chat/detect-intent</code> to return <code>{ intent: 'create_task' }</code>, a component-level test can
+assert that dispatching the "+ Task" inject results in an Interview-Mode intro message in <code>messages</code>.
+The existing <code>hub/lib/interview.test.ts</code> already covers <code>detectIntent</code>'s downstream
+(<code>startInterview('create_task')</code> → spec at 2 questions) — reuse those fixtures.</p>
+
+<h3>Type check</h3>
+<pre>cd hub &amp;&amp; npx tsc --noEmit</pre>
+<p>Expect zero errors. After Change 2, any section that silently dropped attachments would now surface as a
+type error — that's the point. Confirm <code>handleChatInject</code>'s new <code>doSend</code> dependency does not
+trip the exhaustive-deps lint.</p>
+
+<h3>Full suite</h3>
+<pre>cd hub &amp;&amp; npx vitest run</pre>
+
+<h3>Manual</h3>
+<ul>
+<li><strong>Primary acceptance test.</strong> Open the left panel → Tasks → tap the <em>"+ Task"</em>
+affordance. Confirm the chat enters <strong>Interview Mode</strong> (the "✦ Interview Mode Activated" intro
+with "Question 1 of N") — identical to typing <code>"I want to create a new task in my … list"</code>.</li>
+<li><strong>Regression — read injects unchanged.</strong> Tap a task row, a calendar event, a KPI, a
+document, and a project-health row. Each should produce a normal informational chat reply with no
+interview, no confirm card. Document taps must still carry their Drive attachment chip.</li>
+<li><strong>Role gate.</strong> As an <code>onboarding</code> role (no <code>create_task</code> permission, per
+<code>interview.ts</code> line 23 / <code>interview.test.ts</code> line 20), tap "+ Task" and confirm the
+"🔒 Permission Denied" message appears (now that the inject runs <code>hasPermission</code>).</li>
+<li><strong>Attachment cap.</strong> If a panel can inject &gt;5 attachments, confirm only 5 reach the wire
+(Network tab → request body <code>attachments</code> length ≤ 5).</li>
+</ul>
+
+<h2>Acceptance criteria</h2>
+<ul>
+<li>Tapping the Tasks "+ Task" affordance activates Interview Mode (intent detection + role-gate + interview branching), matching the typed-input path.</li>
+<li>Read-style injects ("tell me about…", "summarize…", "show me the health status…", KPI lookups) keep the direct, intent-free path and behave exactly as before, including Drive attachment chips.</li>
+<li>The inject path caps attachments at 5, matching <code>handleAddAttachment</code> and the server slice.</li>
+<li>All four (or five) left-panel section <code>onInjectChat</code> props are typed <code>(msg: string, attachments?: ChatAttachment[]) =&gt; void</code>.</li>
+<li><code>sendToApi</code> carries each message's real timestamp (falling back to now only when absent); the dead per-message <code>attachments</code> field is removed or explicitly documented.</li>
+<li><code>npx tsc --noEmit</code> passes; <code>npx vitest run</code> passes, including new routing/cap tests.</li>
+</ul>
+
+<h2>Dependencies &amp; sequencing</h2>
+<ul>
+<li><strong>Depends on plan 06's <code>doSend</code> structure</strong> (the StrictMode pure-updater / deferred
+side-effects refactor). This piece extends, not rewrites, that structure — apply on top of master tip
+<code>f8ae3ad</code>.</li>
+<li><strong>Touches plan 01's neighborhood</strong> in <code>sendToApi</code> (Change 4). Keep edits confined to
+the wire-payload <code>.map</code>; do not modify the error-handling branches plan 01 introduced.</li>
+<li><strong>Internal ordering.</strong> Apply Change 1a (router) before Change 1b (re-point "+ Task"), since
+1b relies on <code>injectExecute</code> reaching <code>doSend</code>. Change 2 (signatures) and Change 4 (payload)
+are independent and can land in any order.</li>
+<li><strong>Suggested PR title:</strong> "Left-panel 07: Unify panel → chat inject path".</li>
+</ul>
+
+<h2>Rollback</h2>
+<ul>
+<li>Each change is self-contained and revertable in isolation. To fully revert, restore
+<code>handleChatInject</code> to its direct <code>sendToApi</code> form, re-point the "+ Task" <code>onClick</code> to
+<code>onInjectChat</code>, and drop the <code>onInjectAction</code> prop.</li>
+<li>Change 2 (signatures) and Change 4 (payload) are no-op-at-runtime and can be reverted independently
+without affecting behavior.</li>
+<li><strong>Lowest-risk partial ship:</strong> if intent-routing needs more bake time, ship Changes 2, 3,
+and 4 (type safety, attachment cap, payload honesty) first and hold Change 1a/1b behind review — they are
+the only behavior-changing edits.</li>
+<li>No data migrations, no server changes, no schema impact — rollback is a pure code revert.</li>
+</ul>
+
+</body>
+</html>
