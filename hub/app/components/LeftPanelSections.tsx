@@ -1,7 +1,9 @@
 'use client'
 
 import { useState, useEffect, ReactNode, useCallback } from 'react'
+import { signIn } from 'next-auth/react'
 import { useTasks, useCalendar, useDrive } from '@/app/hooks/useHubData'
+import { writeFetch } from '@/app/hooks/useWriteFetch'
 import type { TaskItem, CalendarEvent, DriveFile } from '@/app/hooks/useHubData'
 import { useKPIData } from '@/app/hooks/useKPIData'
 import type { LiveKPI, ProjectKPI, ToolArtifactRecord, ChatAttachment } from '@/types'
@@ -15,6 +17,21 @@ import {
   formatRelativeDate,
 } from '@/lib/panel-inject'
 import useSWR from 'swr'
+
+/**
+ * SWR fetcher for the Documents Artifacts tab. Throws a status-tagged error on
+ * !res.ok so a 401/500 surfaces as an auth/error state instead of "empty".
+ */
+export async function artifactsFetcher(url: string) {
+  const r = await fetch(url)
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}))
+    const err = new Error(body.error || `API error ${r.status}`)
+    ;(err as any).status = r.status
+    throw err
+  }
+  return r.json()
+}
 
 /* ══════════════════════════════════════════════════════════════════════════════
    SKELETON — shared loading placeholder
@@ -44,15 +61,68 @@ function SkeletonBlock({ lines = 3 }: { lines?: number }) {
    ERROR MESSAGE — shared error/empty fallback
    ══════════════════════════════════════════════════════════════════════════════ */
 
-function SectionMessage({ message, type = 'info' }: { message: string; type?: 'info' | 'error' | 'empty' }) {
+function SectionMessage({
+  message,
+  type = 'info',
+  action,
+}: {
+  message: string
+  type?: 'info' | 'error' | 'empty'
+  action?: { label: string; onClick: () => void }
+}) {
   return (
     <div
       role={type === 'error' ? 'alert' : 'status'}
       className={`section-message section-message--${type}`}
     >
-      {message}
+      <span>{message}</span>
+      {action && (
+        <button
+          type="button"
+          className="section-message__action"
+          onClick={action.onClick}
+        >
+          {action.label}
+        </button>
+      )}
     </div>
   )
+}
+
+/**
+ * Shared loading / auth-error / error renderer for Left Panel sections.
+ * Returns the element to render, or null when there is no blocking state
+ * (i.e. the section should render its real content).
+ *
+ *   const state = renderSectionState({ isLoading, error, skeletonLines: 4 })
+ *   if (state) return <CollapsibleSection ...>{state}</CollapsibleSection>
+ */
+function renderSectionState({
+  isLoading,
+  error,
+  skeletonLines = 3,
+}: {
+  isLoading?: boolean
+  error?: unknown
+  skeletonLines?: number
+}): ReactNode | null {
+  if (isLoading) return <SkeletonBlock lines={skeletonLines} />
+
+  if (error) {
+    const isAuthError = (error as any)?.status === 401
+    if (isAuthError) {
+      return (
+        <SectionMessage
+          message="Session expired — please sign in again"
+          type="error"
+          action={{ label: 'Sign in again', onClick: () => signIn('google') }}
+        />
+      )
+    }
+    return <SectionMessage message="Something went wrong — try refreshing" type="error" />
+  }
+
+  return null
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
@@ -142,27 +212,11 @@ export function TasksSection({ onInjectChat }: { onInjectChat: (msg: string) => 
     setTogglingIds(new Set())
   }, [resolvedListId])
 
-  if (isLoading) {
+  const state = renderSectionState({ isLoading, error, skeletonLines: 4 })
+  if (state) {
     return (
       <CollapsibleSection title="Tasks" protocolNum="03" defaultOpen>
-        <SkeletonBlock lines={4} />
-      </CollapsibleSection>
-    )
-  }
-
-  const isAuthError = error && (error as any)?.status === 401
-  if (isAuthError) {
-    return (
-      <CollapsibleSection title="Tasks" protocolNum="03" defaultOpen>
-        <SectionMessage message="Session expired — please sign in again" type="error" />
-      </CollapsibleSection>
-    )
-  }
-
-  if (error) {
-    return (
-      <CollapsibleSection title="Tasks" protocolNum="03" defaultOpen>
-        <SectionMessage message="Unable to load tasks — try refreshing" type="error" />
+        {state}
       </CollapsibleSection>
     )
   }
@@ -186,14 +240,15 @@ export function TasksSection({ onInjectChat }: { onInjectChat: (msg: string) => 
 
     setTogglingIds(prev => new Set(prev).add(task.id))
     try {
-      await fetch('/api/google/tasks', {
+      await writeFetch('/api/google/tasks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: newAction, taskListId: listId, taskId: task.id }),
       })
       mutate?.()
     } catch {
-      // Rollback on error
+      // Rollback optimistic UI on ANY failure (HTTP error or network).
+      // writeFetch already routed a 401 into signIn('google').
       setFadingIds(prev => { const s = new Set(prev); s.delete(task.id); return s })
       setHiddenIds(prev => { const s = new Set(prev); s.delete(task.id); return s })
     } finally {
@@ -341,7 +396,7 @@ function CalendarEventModal({ defaultDate, onClose, onCreated }: CalendarEventMo
       const start = `${date}T${startTime}:00`
       const end = `${date}T${endTime}:00`
       const emailList = attendees.split(',').map(s => s.trim()).filter(Boolean)
-      const res = await fetch('/api/google/calendar', {
+      await writeFetch('/api/google/calendar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -353,11 +408,10 @@ function CalendarEventModal({ defaultDate, onClose, onCreated }: CalendarEventMo
           location: location.trim() || undefined,
         }),
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Failed to create event')
       onCreated()
       onClose()
     } catch (err) {
+      // writeFetch routed a 401 into signIn('google'); show the message either way.
       setError(err instanceof Error ? err.message : 'Failed to create event')
     } finally {
       setSaving(false)
@@ -511,28 +565,13 @@ export function CalendarSection({ onInjectChat }: { onInjectChat: (msg: string) 
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; summary: string; calendarId?: string } | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
-  if (isLoading) {
+  const state = renderSectionState({ isLoading, error, skeletonLines: 3 })
+  if (state) {
     return (
       <CollapsibleSection title="Calendar" protocolNum="02" defaultOpen>
-        <SkeletonBlock lines={3} />
-      </CollapsibleSection>
-    )
-  }
-
-  const isAuthError = error && (error as any)?.status === 401
-  if (isAuthError) {
-    return (
-      <CollapsibleSection title="Calendar" protocolNum="02" defaultOpen>
-        <SectionMessage message="Session expired — please sign in again" type="error" />
-      </CollapsibleSection>
-    )
-  }
-
-  if (error) {
-    return (
-      <CollapsibleSection title="Calendar" protocolNum="02" defaultOpen>
-        <SectionMessage message="Unable to load calendar — try refreshing" type="error" />
+        {state}
       </CollapsibleSection>
     )
   }
@@ -572,16 +611,20 @@ export function CalendarSection({ onInjectChat }: { onInjectChat: (msg: string) 
   async function handleDeleteConfirm() {
     if (!deleteConfirm) return
     setDeleting(true)
+    setDeleteError(null)
     try {
-      await fetch('/api/google/calendar', {
+      await writeFetch('/api/google/calendar', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ eventId: deleteConfirm.id, calendarId: deleteConfirm.calendarId }),
       })
       mutate?.()
-    } catch { /* non-fatal */ } finally {
-      setDeleting(false)
       setDeleteConfirm(null)
+    } catch (err) {
+      // Keep the dialog open and surface the failure; 401 already triggered reauth.
+      setDeleteError(err instanceof Error ? err.message : 'Failed to delete event')
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -708,6 +751,9 @@ export function CalendarSection({ onInjectChat }: { onInjectChat: (msg: string) 
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0 0 16px' }}>
                 Are you sure you want to delete <strong style={{ color: 'var(--text-primary)' }}>&quot;{deleteConfirm.summary}&quot;</strong>? This cannot be undone.
               </p>
+              {deleteError && (
+                <div className="cal-event-form__error" role="alert">{deleteError}</div>
+              )}
               <div className="cal-event-form__actions">
                 <button
                   className="cal-event-form__btn cal-event-form__btn--cancel"
@@ -820,11 +866,9 @@ export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string,
   /* Fetch tool artifacts when artifacts tab is active */
   const { data: artifactsData, isLoading: artifactsLoading, error: artifactsError } = useSWR<{ artifacts: ToolArtifactRecord[] }>(
     activeFilter === 'artifacts' ? '/api/tool-artifacts' : null,
-    (url: string) => fetch(url).then(r => r.json()),
+    artifactsFetcher,
     { revalidateOnFocus: false }
   )
-
-  const isAuthError = error && (error as any)?.status === 401
 
   const emptyMessages: Record<DocFilter, string> = {
     recent: 'No recent files',
@@ -832,6 +876,9 @@ export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string,
     artifacts: 'No saved artifacts — complete a tool session to create one',
     transcripts: 'No transcripts found',
   }
+
+  const artifactsState = renderSectionState({ isLoading: artifactsLoading, error: artifactsError, skeletonLines: 3 })
+  const driveState = renderSectionState({ isLoading, error, skeletonLines: 3 })
 
   /* Tool icon mapping for artifact cards */
   const getToolIcon = (toolId: string): string => {
@@ -863,10 +910,8 @@ export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string,
 
       {/* Artifacts tab content */}
       {activeFilter === 'artifacts' ? (
-        artifactsLoading ? (
-          <SkeletonBlock lines={3} />
-        ) : artifactsError ? (
-          <SectionMessage message="Unable to load artifacts" type="error" />
+        artifactsState ? (
+          artifactsState
         ) : !artifactsData?.artifacts?.length ? (
           <SectionMessage message={emptyMessages.artifacts} type="empty" />
         ) : (
@@ -895,12 +940,8 @@ export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string,
       ) : (
         /* Existing Drive file content */
         <>
-          {isLoading ? (
-            <SkeletonBlock lines={3} />
-          ) : isAuthError ? (
-            <SectionMessage message="Session expired — please sign in again" type="error" />
-          ) : error ? (
-            <SectionMessage message="Unable to load files — try refreshing or check your connection" type="error" />
+          {driveState ? (
+            driveState
           ) : files.length === 0 ? (
             <SectionMessage message={emptyMessages[activeFilter]} type="empty" />
           ) : (
@@ -965,16 +1006,17 @@ export function KPISection({
   activeProject?: string
   onInjectChat: (msg: string) => void
 }) {
-  const { kpis: allKpis, isLoading } = useKPIData(activeProject)
+  const { kpis: allKpis, isLoading, error } = useKPIData(activeProject)
 
   // Mandate: Left Panel = Google ecosystem + business metrics only.
   // Paperclip orchestration metrics belong on the Right Panel.
   const kpis = allKpis.filter(kpi => kpi.source !== 'paperclip')
 
-  if (isLoading) {
+  const state = renderSectionState({ isLoading, error, skeletonLines: 4 })
+  if (state) {
     return (
       <CollapsibleSection title="KPIs" protocolNum="01" defaultOpen>
-        <SkeletonBlock lines={4} />
+        {state}
       </CollapsibleSection>
     )
   }

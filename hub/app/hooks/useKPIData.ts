@@ -1,11 +1,13 @@
 import useSWR from 'swr'
 import type { LiveKPI, ProjectKPI } from '@/types'
 
-async function fetcher(url: string) {
+export async function fetcher(url: string) {
   const res = await fetch(url)
   if (!res.ok) {
     const errorData = await res.json().catch(() => ({}))
-    throw new Error(errorData.error || `API error ${res.status}`)
+    const err = new Error(errorData.error || `API error ${res.status}`)
+    ;(err as any).status = res.status
+    throw err
   }
   return res.json()
 }

@@ -52,6 +52,34 @@ async function fetcher<T>(url: string): Promise<T> {
    Google Tasks
    ══════════════════════════════════════════ */
 
+/**
+ * Aggregate fetcher for the per-list tasks step.
+ * A 401 on any list rejects the whole fetcher with a status-tagged error so the
+ * Tasks section can route into its auth branch. Non-auth per-list failures are
+ * skipped so one bad list does not blank the entire section.
+ */
+export async function fetchTasksByList(listIds: string[]): Promise<Record<string, TaskItem[]>> {
+  const results = await Promise.all(
+    listIds.map(async (id) => {
+      const res = await fetch(
+        `/api/google/tasks?taskListId=${encodeURIComponent(id)}&showCompleted=false&maxResults=20`
+      )
+      if (res.status === 401) {
+        const err = new Error('Unauthorized — Google token may have expired')
+        ;(err as any).status = 401
+        throw err
+      }
+      // Non-auth failures: skip this list rather than failing the whole panel.
+      if (!res.ok) return { id, tasks: [] }
+      const data: TasksResponse = await res.json()
+      return { id, tasks: data.tasks ?? [] }
+    })
+  )
+  const map: Record<string, TaskItem[]> = {}
+  for (const { id, tasks } of results) map[id] = tasks
+  return map
+}
+
 interface TaskItem {
   id: string
   title: string
@@ -106,21 +134,7 @@ export function useTasks() {
     mutate: mutateTasks,
   } = useSWR<Record<string, TaskItem[]>>(
     allListsKey,
-    async () => {
-      const results = await Promise.all(
-        listIds.map(async (id) => {
-          const res = await fetch(
-            `/api/google/tasks?taskListId=${encodeURIComponent(id)}&showCompleted=false&maxResults=20`
-          )
-          if (!res.ok) return { id, tasks: [] }
-          const data: TasksResponse = await res.json()
-          return { id, tasks: data.tasks ?? [] }
-        })
-      )
-      const map: Record<string, TaskItem[]> = {}
-      for (const { id, tasks } of results) map[id] = tasks
-      return map
-    },
+    () => fetchTasksByList(listIds),
     { refreshInterval: 30_000, revalidateOnFocus: false }
   )
 
