@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Graceful AI-failure messaging — Implementation Plan (P2)</title>
+<style>
+body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:920px;margin:2rem auto;padding:0 1rem;line-height:1.55;color:#1a1a1a}
+h1{border-bottom:3px solid #2563eb;padding-bottom:.3rem}
+h2{margin-top:2rem;color:#1e3a8a;border-bottom:1px solid #e5e7eb;padding-bottom:.2rem}
+h3{margin-top:1.4rem}
+code,pre{font-family:ui-monospace,Menlo,monospace}
+pre{background:#f6f8fa;padding:.8rem;border-radius:6px;overflow:auto;border:1px solid #e5e7eb;font-size:.86rem}
+table{border-collapse:collapse;width:100%}
+th,td{border:1px solid #d1d5db;padding:.4rem .6rem;text-align:left;vertical-align:top;font-size:.9rem}
+th{background:#f3f4f6}
+.badge{display:inline-block;padding:.15rem .6rem;border-radius:999px;color:#fff;font-size:.8rem;font-weight:600}
+.p0{background:#dc2626}.p1{background:#d97706}.p2{background:#2563eb}
+pre.before{background:#fef2f2;border-color:#fecaca}pre.after{background:#f0fdf4;border-color:#bbf7d0}
+blockquote{border-left:4px solid #9ca3af;margin:0;padding-left:1rem;color:#4b5563}
+ul{margin:.4rem 0}
+</style>
+</head>
+<body>
+
+<h1>Graceful AI-failure messaging &nbsp;<span class="badge p2">P2</span></h1>
+
+<h2>Summary</h2>
+<p>
+When the AI model layer fails &mdash; an invalid provider key, a provider rate-limit, or the
+&ldquo;all models in cooldown&rdquo; state &mdash; the chat currently leaks the raw provider error
+straight into the conversation bubble. Users see strings like:
+</p>
+<pre class="before">&#9888; [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:streamGenerateContent: [400 Bad Request] API key not valid. Please pass a valid API key.</pre>
+<pre class="before">&#9888; All models are in cooldown</pre>
+<p>
+These messages are non-actionable for an end user and expose internal endpoints, model ids,
+and provider mechanics. This piece maps model-layer failures to a small set of clean,
+calm, actionable user-facing messages, while preserving the <em>real</em> error in the
+server logs (Cloud Run) for operators.
+</p>
+
+<blockquote>
+<strong>Scope caveat &mdash; this is UX / resilience ONLY.</strong> It does <strong>not</strong> restore
+AI answers. Restoring answers requires valid provider API keys (Anthropic as the primary
+provider, Gemini as the fallback), which is an environment / Secret-Manager concern that
+lives <em>outside this repo</em>. This change just makes failures <em>legible</em>: instead of
+a wall of provider internals, the user gets a short, honest, retry-friendly message and the
+operator still gets the full stack in the logs.
+</blockquote>
+
+<h2>Why this matters</h2>
+<ul>
+<li><strong>User trust &amp; clarity.</strong> A raw <code>400 Bad Request ... API key not valid</code>
+reads like a bug the user caused. A calm &ldquo;temporarily unavailable, try again shortly&rdquo;
+is honest and non-alarming.</li>
+<li><strong>Information disclosure.</strong> The current path leaks the provider, the model id
+(<code>gemini-2.5-pro</code>), the API endpoint, and the failure category to anyone in the chat.
+None of that is actionable or appropriate for an end user.</li>
+<li><strong>Operability.</strong> Today the raw message goes to the <em>client</em> but is not
+guaranteed in structured server logs at the stream-catch boundary. After this change the raw
+error is always logged server-side via the existing <code>createLogger('chat')</code> logger,
+so on-call can see exactly which provider/key failed.</li>
+<li><strong>Cheap and orthogonal.</strong> No new dependencies, no schema changes; it is
+independent of the actual key fix and can ship before or after it.</li>
+</ul>
+
+<h2>Findings</h2>
+<p>Verified against current <code>master</code> on 2026-06-26. Line numbers below reflect the
+actual code at time of writing.</p>
+<table>
+<thead><tr><th>ID</th><th>Location (file:line)</th><th>Current behavior</th></tr></thead>
+<tbody>
+<tr>
+<td>F1</td>
+<td><code>hub/lib/gemini.ts:298</code> &amp; <code>:307</code></td>
+<td>Classifiers already exist and are exported.
+<code>isRateLimitError(err: unknown): boolean</code> (line 298) matches
+<code>429</code> / <code>rate limit</code> / <code>resource_exhausted</code> / <code>quota</code> / <code>overloaded</code>.
+<code>isAuthOrKeyError(err: unknown): boolean</code> (line 307) matches
+<code>401</code>/<code>403</code> / <code>api key</code> / <code>api_key</code> / <code>permission</code> /
+<code>unauthenticated</code> / <code>unauthorized</code> / <code>invalid key</code> / <code>billing</code>.</td>
+</tr>
+<tr>
+<td>F2</td>
+<td><code>hub/lib/gemini.ts:465</code></td>
+<td>In <code>streamGeminiWithFallback</code>, when the last model is in cooldown the rotation throws
+<code>new Error('All models are in cooldown')</code>. Otherwise the raw provider error is
+propagated out of <code>streamChat</code> unchanged.</td>
+</tr>
+<tr>
+<td>F3</td>
+<td><code>hub/app/api/chat/route.ts:469&ndash;471</code></td>
+<td>The streaming <code>ReadableStream</code> <code>start(controller)</code> <code>catch</code> block
+computes <code>const message = err instanceof Error ? err.message : 'Unknown error'</code> (line 470)
+and enqueues the <strong>raw</strong> message to the client:
+<code>controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: message })}\n\n`))</code>
+(line 471). No server-side log at this boundary.</td>
+</tr>
+<tr>
+<td>F4</td>
+<td><code>hub/app/page.tsx:619&ndash;628</code></td>
+<td>On a server <code>error</code> SSE event, the client <strong>appends</strong> it to the existing bubble
+as <code>`&#9888; ${parsed.error}`</code> (line 625), preserving any partial text already streamed.
+Because the client just renders whatever string the server sends, fixing the message at the
+server is sufficient &mdash; no client change is required.</td>
+</tr>
+<tr>
+<td>F5</td>
+<td><code>hub/app/api/chat/route.ts:20</code></td>
+<td>A structured logger already exists in scope: <code>const log = createLogger('chat')</code>
+(imported from <code>@/lib/logger</code> at line 5). It exposes <code>log.error({ err }, msg)</code>,
+already used elsewhere in the file (e.g. line 492 <code>log.error({ err }, 'Chat request failed before streaming started')</code>).</td>
+</tr>
+<tr>
+<td>F6</td>
+<td><code>hub/lib/gemini.ts:361&ndash;375</code></td>
+<td><code>recordModelFailure(model, isRateLimit)</code> sets a cooldown of <code>30_000</code>ms for
+rate-limits and <code>300_000</code>ms (5 min) for everything else; <code>isModelInCooldown</code>
+reads it. Auth/key failures currently get the same 5-min retryable cooldown as any other
+non-rate-limit error. The Gemini fast-fail re-throw on auth lives at line 523
+(<code>if (isAuthOrKeyError(err)) throw err</code>).</td>
+</tr>
+</tbody>
+</table>
+
+<h2>Implementation</h2>
+
+<h3>Change 1 &mdash; Add <code>friendlyModelError()</code> helper in <code>hub/lib/gemini.ts</code></h3>
+<p><strong>File:</strong> <code>hub/lib/gemini.ts</code> &mdash; add an exported function next to the
+existing classifiers (immediately after <code>isAuthOrKeyError</code>, i.e. after line 317).</p>
+<p><strong>Precedence (decided):</strong> check auth/key first, then rate-limit, then fall back to a
+generic retry. The <code>'cooldown'</code> string is handled by routing it to the
+<em>rate-limit / busy</em> message by default (a cooldown is fundamentally &ldquo;try again later&rdquo;).
+We do <strong>not</strong> try to distinguish &ldquo;cooldown caused by a key failure&rdquo; from the
+opaque <code>'All models are in cooldown'</code> string, because that string carries no auth signal &mdash;
+attributing it to a config problem would be a guess. Auth attribution stays driven by
+<code>isAuthOrKeyError</code> matching the real provider error text, which <em>does</em> reach this
+helper on the common single-provider-key-bad path (Gemini re-throws the auth error at line 523,
+and the Claude chain&rsquo;s auth break still lets the Gemini auth error surface).</p>
+
+<p><em>Before</em> (lines 307&ndash;317, unchanged &mdash; shown for anchor):</p>
+<pre class="before">export function isAuthOrKeyError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase()
+  return /(^|\D)(401|403)(\D|$)/.test(msg)
+    || msg.includes('api key')
+    || msg.includes('api_key')
+    || msg.includes('permission')
+    || msg.includes('unauthenticated')
+    || msg.includes('unauthorized')
+    || msg.includes('invalid key')
+    || msg.includes('billing')
+}</pre>
+
+<p><em>After</em> &mdash; insert the following directly below that function:</p>
+<pre class="after">/**
+ * Maps a raw model-layer failure to a calm, actionable, non-leaky message for
+ * the end user. The RAW error is logged server-side by the caller (route.ts);
+ * this string is the ONLY thing that should ever reach the chat bubble.
+ *
+ * Precedence: auth/config &gt; rate-limit/busy &gt; generic retry.
+ * Never interpolates err.message, so provider internals (endpoints, model ids,
+ * "API key not valid", stack frames) can never leak through.
+ */
+export function friendlyModelError(err: unknown): string {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase()
+
+  // Auth / key / billing / permission: a shared-credential problem the user
+  // can't fix. Frame it as a provider-config issue and point at an admin.
+  if (isAuthOrKeyError(err)) {
+    return 'The AI service is temporarily unavailable (provider configuration). '
+      + 'Please try again shortly — if it persists, contact an administrator.'
+  }
+
+  // Rate limits, overload, quota, or the "all models in cooldown" backoff state:
+  // transient. Tell the user to retry in a moment.
+  if (isRateLimitError(err) || msg.includes('cooldown')) {
+    return 'The AI is busy right now. Please try again in a moment.'
+  }
+
+  // Anything else (timeouts, 5xx, malformed-stream, unknown): generic retry.
+  return "The AI couldn't complete that response. Please try again."
+}</pre>
+<p><strong>Rationale.</strong> A pure, side-effect-free mapping function is trivially unit-testable and
+has a single responsibility. It reuses the two existing classifiers verbatim so the matching
+logic stays in one place. It never reads <code>err.message</code> into its output, which is the
+property that guarantees no provider string leaks.</p>
+
+<h3>Change 2 &mdash; Log raw error &amp; emit friendly text in <code>route.ts</code> stream catch</h3>
+<p><strong>File:</strong> <code>hub/app/api/chat/route.ts</code> &mdash; the <code>catch (err)</code> at lines 469&ndash;471.</p>
+<p>First, add <code>friendlyModelError</code> to the existing import from <code>@/lib/gemini</code> (line 6).</p>
+
+<p><em>Before</em> (line 6):</p>
+<pre class="before">import { streamChat, buildSystemPrompt } from '@/lib/gemini'</pre>
+<p><em>After</em>:</p>
+<pre class="after">import { streamChat, buildSystemPrompt, friendlyModelError } from '@/lib/gemini'</pre>
+
+<p><em>Before</em> (lines 468&ndash;474):</p>
+<pre class="before">        controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error'
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: message })}\n\n`))
+      } finally {
+        controller.close()
+      }</pre>
+
+<p><em>After</em>:</p>
+<pre class="after">        controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+      } catch (err) {
+        // Keep the REAL provider error in Cloud Run logs for operators...
+        log.error({ err }, 'Chat stream failed')
+        // ...but only ever send a clean, non-leaky message to the user.
+        const message = friendlyModelError(err)
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: message })}\n\n`))
+      } finally {
+        controller.close()
+      }</pre>
+<p><strong>Rationale.</strong> <code>log</code> (<code>createLogger('chat')</code>) is already in scope at this
+point in the handler (F5), so no new wiring is needed. Logging <code>{ err }</code> preserves the
+full provider message/stack for diagnosis; the client only ever receives
+<code>friendlyModelError(err)</code>. The client side (F4) already renders whatever string arrives as
+<code>&#9888; &lt;message&gt;</code> and appends it to any partial text, so swapping the source string is the
+entire user-visible fix &mdash; <strong>no change to <code>page.tsx</code> is required.</strong></p>
+
+<h3>Change 3 &mdash; (Secondary, recommended) longer skip for auth-failed models in <code>gemini.ts</code></h3>
+<p><strong>File:</strong> <code>hub/lib/gemini.ts</code> &mdash; the Gemini fallback failure handler around lines 512&ndash;528.</p>
+<p>Goal: a permanently-bad fallback key should not be re-attempted on <em>every single request</em>.
+Today, a non-rate-limit failure (which includes auth) records a 5-minute cooldown via
+<code>recordModelFailure(modelName, false)</code> (line 514), and then auth fast-fails by re-throwing
+(line 523). That re-throw behavior is correct and must be preserved. The refinement is purely
+to lengthen the <em>cooldown bookkeeping</em> for an auth-failed model so it stops dominating the
+&ldquo;all models in cooldown&rdquo; churn, without altering control flow.</p>
+
+<p><em>Before</em> (lines 512&ndash;529):</p>
+<pre class="before">    } catch (err) {
+      const isRateLimit = isRateLimitError(err)
+      recordModelFailure(modelName, isRateLimit)
+
+      // Mid-stream failure after emitting text: rotating restarts the answer and
+      // duplicates it on the wire. Propagate instead.
+      if (emittedAny) throw err
+
+      // Auth/key/permission/billing errors share the credential across every
+      // model — the next model can't succeed, so fail fast instead of burning
+      // the 2 s fallback delay.
+      if (isAuthOrKeyError(err)) throw err
+
+      if (isLastAttempt) {
+        throw err // All approved models exhausted
+      }
+      console.warn(`[gemini] ${modelName} failed (${isRateLimit ? 'rate_limit' : 'error'}), falling back to ${modelsToTry[i + 1]}:`, err)
+    }</pre>
+
+<p><em>After</em> &mdash; add an <code>auth</code> argument to <code>recordModelFailure</code> and pass it; control flow is untouched:</p>
+<pre class="after">    } catch (err) {
+      const isRateLimit = isRateLimitError(err)
+      const isAuth = isAuthOrKeyError(err)
+      // Auth-failed models get a longer "unavailable" skip (see recordModelFailure):
+      // a permanently-bad key shouldn't be re-attempted every request.
+      recordModelFailure(modelName, isRateLimit, isAuth)
+
+      // Mid-stream failure after emitting text: rotating restarts the answer and
+      // duplicates it on the wire. Propagate instead.
+      if (emittedAny) throw err
+
+      // Auth/key/permission/billing errors share the credential across every
+      // model — the next model can't succeed, so fail fast instead of burning
+      // the 2 s fallback delay.
+      if (isAuth) throw err
+
+      if (isLastAttempt) {
+        throw err // All approved models exhausted
+      }
+      console.warn(`[gemini] ${modelName} failed (${isRateLimit ? 'rate_limit' : 'error'}), falling back to ${modelsToTry[i + 1]}:`, err)
+    }</pre>
+
+<p>And update <code>recordModelFailure</code> (lines 361&ndash;365) to accept the optional flag. The default
+preserves today&rsquo;s exact behavior (third argument absent &rArr; unchanged), which keeps the
+existing Claude call site at line 412 and all current tests green.</p>
+
+<p><em>Before</em> (lines 361&ndash;365):</p>
+<pre class="before">function recordModelFailure(model: string, isRateLimit: boolean): void {
+  // W-2 FIX: Rate limits get shorter cooldown (30s), real failures get 5 min
+  const cooldownMs = isRateLimit ? 30_000 : 300_000
+  _modelCooldowns.set(model, { failedAt: Date.now(), cooldownMs })
+}</pre>
+
+<p><em>After</em>:</p>
+<pre class="after">function recordModelFailure(model: string, isRateLimit: boolean, isAuth: boolean = false): void {
+  // W-2 FIX: Rate limits get shorter cooldown (30s), real failures get 5 min.
+  // Auth/key failures are not transient — a bad/absent credential won't heal in
+  // 5 min, so give it a much longer skip (30 min) to stop hammering a dead key
+  // on every request and to keep it out of the rotation's churn.
+  const cooldownMs = isAuth ? 1_800_000 : isRateLimit ? 30_000 : 300_000
+  _modelCooldowns.set(model, { failedAt: Date.now(), cooldownMs })
+}</pre>
+<p><strong>Rationale &amp; safety notes.</strong></p>
+<ul>
+<li>The <code>isAuth</code> parameter is <strong>optional with a <code>false</code> default</strong>, so the existing
+Claude-chain call <code>recordModelFailure(claudeModel, isRateLimit)</code> (line 412) compiles and
+behaves identically. No other call sites change.</li>
+<li>The Gemini auth <strong>re-throw / fast-fail is preserved</strong> &mdash; <code>if (isAuth) throw err</code>
+is the same control flow as before (we only renamed the inline <code>isAuthOrKeyError(err)</code> call
+into the <code>isAuth</code> local). This change is bookkeeping-only.</li>
+<li>This is genuinely optional. If the reviewer prefers a smaller diff, ship Changes 1&ndash;2 alone;
+the user-facing messaging fix does not depend on Change 3.</li>
+<li>Because <code>recordModelFailure</code> / <code>isModelInCooldown</code> / <code>_modelCooldowns</code> are
+module-private and tests exercise behavior (not the cooldown constant directly), no existing test
+asserts the literal <code>300_000</code> value &mdash; verify with <code>npx vitest run</code> after the change.</li>
+</ul>
+
+<h3>Change 4 &mdash; Unit tests for <code>friendlyModelError</code></h3>
+<p><strong>File:</strong> <code>hub/lib/gemini.test.ts</code> &mdash; extend the import (line 3) and append a new
+<code>describe</code> block at the end of the file (currently 288 lines).</p>
+
+<p><em>Before</em> (line 3):</p>
+<pre class="before">import { withIdleWatchdog, isRateLimitError, isAuthOrKeyError } from './gemini'</pre>
+<p><em>After</em>:</p>
+<pre class="after">import { withIdleWatchdog, isRateLimitError, isAuthOrKeyError, friendlyModelError } from './gemini'</pre>
+
+<p>Append this block after the existing <code>describe('error classification', ...)</code> block:</p>
+<pre class="after">describe('friendlyModelError — user-facing message mapping', () => {
+  it('maps auth/key/config failures to the config message', () => {
+    const authMsg = 'The AI service is temporarily unavailable (provider configuration). '
+      + 'Please try again shortly — if it persists, contact an administrator.'
+    for (const m of [
+      '[GoogleGenerativeAI Error]: [400 Bad Request] API key not valid. Please pass a valid API key.',
+      'HTTP 401 Unauthorized',
+      'status 403',
+      'permission denied',
+      'billing disabled',
+    ]) {
+      expect(friendlyModelError(new Error(m))).toBe(authMsg)
+    }
+  })
+
+  it('maps rate-limit / busy / cooldown failures to the busy message', () => {
+    const busyMsg = 'The AI is busy right now. Please try again in a moment.'
+    for (const m of ['HTTP 429', 'model overloaded', 'quota exceeded', 'All models are in cooldown']) {
+      expect(friendlyModelError(new Error(m))).toBe(busyMsg)
+    }
+  })
+
+  it('maps unknown/generic failures to the retry message', () => {
+    const retryMsg = "The AI couldn't complete that response. Please try again."
+    for (const m of ['Gemini stream timeout (gemini-2.5-pro)', '500 internal error', 'something exploded']) {
+      expect(friendlyModelError(new Error(m))).toBe(retryMsg)
+    }
+    // Non-Error inputs are handled too.
+    expect(friendlyModelError('boom')).toBe(retryMsg)
+    expect(friendlyModelError(undefined)).toBe(retryMsg)
+  })
+
+  it('auth takes precedence over rate-limit when both could match', () => {
+    // A message containing both an auth and a rate-limit signal resolves to config.
+    const out = friendlyModelError(new Error('401 unauthorized — also rate limit'))
+    expect(out).toContain('provider configuration')
+  })
+
+  it('never leaks raw provider internals into the output', () => {
+    const leaky = '[GoogleGenerativeAI Error]: Error fetching from '
+      + 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:streamGenerateContent: '
+      + '[400 Bad Request] API key not valid. Please pass a valid API key.'
+    const out = friendlyModelError(new Error(leaky))
+    for (const needle of [
+      'GoogleGenerativeAI', 'generativelanguage', 'gemini-2.5-pro',
+      'streamGenerateContent', '400', 'API key not valid', 'https',
+    ]) {
+      expect(out).not.toContain(needle)
+    }
+  })
+})</pre>
+<p><strong>Rationale.</strong> The leak-prevention test is the load-bearing one: it asserts that none of
+the raw provider tokens from the real-world error survive into the mapped string. The precedence
+test pins the documented auth-over-rate-limit ordering so a future refactor can&rsquo;t silently flip it.</p>
+
+<h2>Files touched</h2>
+<table>
+<thead><tr><th>File</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td><code>hub/lib/gemini.ts</code></td><td>Add exported <code>friendlyModelError()</code> (Change 1); optional auth-aware cooldown in <code>recordModelFailure</code> + its Gemini call site (Change 3).</td></tr>
+<tr><td><code>hub/app/api/chat/route.ts</code></td><td>Import <code>friendlyModelError</code>; in the stream <code>catch</code> log the raw <code>err</code> and enqueue the friendly message (Change 2).</td></tr>
+<tr><td><code>hub/lib/gemini.test.ts</code></td><td>Extend import; add <code>friendlyModelError</code> test block (Change 4).</td></tr>
+</tbody>
+</table>
+<p><strong>Not touched:</strong> <code>hub/app/page.tsx</code> &mdash; the client already renders the server&rsquo;s
+<code>error</code> string verbatim as <code>&#9888; &lt;message&gt;</code> (F4), so fixing the source string is sufficient.</p>
+
+<h2>Testing</h2>
+<p>From the <code>hub/</code> directory:</p>
+<pre>cd hub
+npx tsc --noEmit        # type-check — confirms the new export + import + optional arg compile
+npx vitest run          # runs the full suite incl. the new friendlyModelError tests
+npx vitest run lib/gemini.test.ts   # focused run while iterating</pre>
+<p><strong>Manual verification.</strong></p>
+<ul>
+<li>Locally set a deliberately bad provider key (e.g. <code>GEMINI_API_KEY=bad</code> and an invalid
+Anthropic key) and send a chat message.</li>
+<li><strong>Expected in the UI:</strong> the bubble shows
+&ldquo;&#9888; The AI service is temporarily unavailable (provider configuration). Please try again
+shortly &mdash; if it persists, contact an administrator.&rdquo; &mdash; <em>not</em> the raw
+<code>API key not valid</code> string.</li>
+<li><strong>Expected in the server logs:</strong> a <code>log.error</code> entry tagged
+<code>'Chat stream failed'</code> carrying the full raw provider error (endpoint, model id, status).</li>
+<li>Force a rate-limit-style failure (or rely on the cooldown path) and confirm the bubble shows
+&ldquo;The AI is busy right now. Please try again in a moment.&rdquo;</li>
+</ul>
+
+<h2>Acceptance criteria</h2>
+<ul>
+<li>No raw provider string (<code>GoogleGenerativeAI</code>, endpoint URLs, <code>gemini-2.5-pro</code>,
+<code>API key not valid</code>, HTTP status codes, stack frames) ever reaches the chat bubble.</li>
+<li>Auth/key/billing/permission failures &rarr; the &ldquo;provider configuration&hellip; contact an
+administrator&rdquo; message.</li>
+<li>Rate-limit / overload / quota / <code>cooldown</code> failures &rarr; the &ldquo;AI is busy&hellip;
+try again in a moment&rdquo; message.</li>
+<li>All other failures &rarr; the generic &ldquo;couldn&rsquo;t complete that response&hellip; try again&rdquo;
+message.</li>
+<li>The raw error is always written to the server logs at the stream-catch boundary via
+<code>log.error({ err }, 'Chat stream failed')</code>.</li>
+<li>Partial-text preservation is unaffected: if a model streamed tokens then failed, the friendly
+message is appended below the partial text (existing client behavior, F4).</li>
+<li><code>npx tsc --noEmit</code> passes; <code>npx vitest run</code> is green, including the new tests and
+all pre-existing rotation/cooldown/auth tests.</li>
+<li>(Change 3, if included) the Gemini auth fast-fail re-throw still fires; existing tests still pass.</li>
+</ul>
+
+<h2>Dependencies &amp; sequencing</h2>
+<ul>
+<li><strong>Independent of the environment key fix.</strong> This piece is orthogonal to provisioning
+valid Anthropic/Gemini keys in Secret Manager. It can ship before, after, or instead of that work
+&mdash; it changes only how failures <em>read</em>, not whether the AI answers.</li>
+<li>Internal order: Change 1 (helper) must land before Change 2 (which imports it) and Change 4
+(which tests it). Change 3 is optional and independent of 1/2/4.</li>
+<li>No new packages, no migrations, no config changes, no client deploy coupling.</li>
+</ul>
+
+<h2>Rollback</h2>
+<ul>
+<li>Low risk and trivially reversible. Revert the commit, or individually:
+restore the two lines in the <code>route.ts</code> <code>catch</code> block (raw <code>err.message</code> +
+drop the <code>log.error</code>), and remove <code>friendlyModelError</code> and its import/tests.</li>
+<li>Change 3 can be rolled back on its own by dropping the third <code>recordModelFailure</code> argument
+and reverting the cooldown expression to <code>isRateLimit ? 30_000 : 300_000</code>; control flow is
+unchanged either way.</li>
+<li>No data or schema impact, so rollback is a pure code revert with no cleanup.</li>
+</ul>
+
+</body>
+</html>
