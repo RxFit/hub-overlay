@@ -314,6 +314,11 @@ export default function HubPage() {
 
   // Chat state (lifted so handleChatInject can share it)
   const [messages, setMessages] = useState<ChatMsg[]>([])
+  // Always-current snapshot of `messages` so event handlers (e.g. panel injects)
+  // can read the latest history synchronously, without depending on a setState
+  // updater having already run (it has NOT, by the next line).
+  const messagesRef = useRef<ChatMsg[]>([])
+  useEffect(() => { messagesRef.current = messages }, [messages])
   const [input, setInput] = useState('')
   const [isTyping, setIsTyping] = useState(false)
   const [activeModel, setActiveModel] = useState<string | null>(null)
@@ -560,7 +565,14 @@ export default function HubPage() {
         let serverDetail = ''
         try {
           const errBody = await res.json()
-          serverDetail = errBody?.details || errBody?.error || ''
+          // `details` may be a string (500 handler) or a structured object such
+          // as Zod's `error.issues` (400 validation) — stringify the latter so the
+          // diagnostic shows the real cause instead of "[object Object]".
+          serverDetail = typeof errBody?.details === 'string'
+            ? errBody.details
+            : errBody?.details != null
+              ? JSON.stringify(errBody.details)
+              : (errBody?.error || '')
         } catch {
           // non-JSON body (e.g. an opaque framework 500) — leave serverDetail empty
         }
@@ -1074,13 +1086,14 @@ Respond with EXACTLY one of:
     // Capture the updated messages array via functional updater, but fire the
     // API call OUTSIDE the updater to prevent double-firing under React
     // concurrent mode / Strict Mode (P7 fix from /review).
-    let updatedMessages: ChatMsg[] = []
-    setMessages(prev => {
-      updatedMessages = [...prev, userMsg]
-      return updatedMessages
-    })
-    // React batches state updates synchronously within event handlers,
-    // so updatedMessages is populated by the time we reach here.
+    // Build the outgoing history from the always-current ref — NOT from the
+    // setMessages updater below. React does not run that updater synchronously,
+    // so the previous code read an EMPTY `updatedMessages` here and sent `[]`,
+    // which the chat route rejected with 400 "messages array required" (the
+    // Zod `.min(1)` failure). That's why panel/document taps failed while typed
+    // messages — which defer their read to after commit — worked.
+    const updatedMessages: ChatMsg[] = [...messagesRef.current, userMsg]
+    setMessages(prev => [...prev, userMsg])
     sendToApi(message, updatedMessages, useCase, cappedAttachments)
   }, [sendToApi, doSend])
 
