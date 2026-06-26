@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth'
 import { getToken } from 'next-auth/jwt'
 import { authOptions } from '@/lib/auth'
 import { createLogger } from '@/lib/logger'
-import { streamChat, buildSystemPrompt } from '@/lib/gemini'
+import { streamChat, buildSystemPrompt, friendlyModelError } from '@/lib/gemini'
 import { getCompanies, getIssues, getAgents, getRuns } from '@/lib/paperclip'
 import { fetchUrlContent, fetchDriveDocContent } from '@/lib/content-fetch'
 import { searchSemanticBrain } from '@/lib/vertex'
@@ -467,7 +467,10 @@ async function handleChat(req: NextRequest): Promise<Response> {
 
         controller.enqueue(encoder.encode('data: [DONE]\n\n'))
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error'
+        // Keep the REAL provider error in Cloud Run logs for operators...
+        log.error({ err }, 'Chat stream failed')
+        // ...but only ever send a clean, non-leaky message to the user.
+        const message = friendlyModelError(err)
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: message })}\n\n`))
       } finally {
         controller.close()
