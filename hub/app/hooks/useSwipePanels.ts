@@ -46,14 +46,25 @@ export function useSwipePanels({
     const dx = touch.clientX - touchStartRef.current.x
     const dy = touch.clientY - touchStartRef.current.y
 
-    // Lock direction on first significant movement
+    // Lock direction on first significant movement.
+    //
+    // A chat answer is scrolled VERTICALLY inside the same shell that owns the
+    // swipe gesture, so disambiguation must be strict — otherwise a slightly
+    // diagonal scroll locks into a horizontal "open panel" swipe and flashes the
+    // backdrop on every scroll. Rules:
+    //   • bail on any vertical-dominant movement (ady >= adx) — it's a scroll
+    //   • only commit to horizontal once it is CLEARLY horizontal (adx >= 1.3*ady)
+    //   • otherwise (near-diagonal) keep waiting for a later, clearer sample
     if (!swipeDirRef.current) {
-      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return
-      if (Math.abs(dy) > Math.abs(dx)) {
-        // Vertical scroll — abort swipe tracking
+      const adx = Math.abs(dx)
+      const ady = Math.abs(dy)
+      if (adx < 12 && ady < 12) return // not enough movement yet
+      if (ady >= adx) {
+        // Vertical (or equal) — treat as a scroll and stop tracking this gesture.
         touchStartRef.current = null
         return
       }
+      if (adx < ady * 1.3) return // horizontal but not clearly so — wait for next move
       swipeDirRef.current = dx > 0 ? 'right' : 'left'
       isSwipingRef.current = true
     }
