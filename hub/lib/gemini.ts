@@ -317,6 +317,35 @@ export function isAuthOrKeyError(err: unknown): boolean {
 }
 
 /**
+ * Maps a raw model-layer failure to a calm, actionable, non-leaky message for
+ * the end user. The RAW error is logged server-side by the caller (route.ts);
+ * this string is the ONLY thing that should ever reach the chat bubble.
+ *
+ * Precedence: auth/config > rate-limit/busy > generic retry.
+ * Never interpolates err.message, so provider internals (endpoints, model ids,
+ * "API key not valid", stack frames) can never leak through.
+ */
+export function friendlyModelError(err: unknown): string {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase()
+
+  // Auth / key / billing / permission: a shared-credential problem the user
+  // can't fix. Frame it as a provider-config issue and point at an admin.
+  if (isAuthOrKeyError(err)) {
+    return 'The AI service is temporarily unavailable (provider configuration). '
+      + 'Please try again shortly — if it persists, contact an administrator.'
+  }
+
+  // Rate limits, overload, quota, or the "all models in cooldown" backoff state:
+  // transient. Tell the user to retry in a moment.
+  if (isRateLimitError(err) || msg.includes('cooldown')) {
+    return 'The AI is busy right now. Please try again in a moment.'
+  }
+
+  // Anything else (timeouts, 5xx, malformed-stream, unknown): generic retry.
+  return "The AI couldn't complete that response. Please try again."
+}
+
+/**
  * Wraps an async iterator with a per-step idle watchdog. The existing 60 s
  * connect timeout only covers *opening* the stream; a model that connects then
  * stalls mid-stream would otherwise hang to the route's maxDuration (120 s),
@@ -358,9 +387,12 @@ export async function* withIdleWatchdog<T>(
  * when multiple models fail in sequence. */
 const _modelCooldowns = new Map<string, { failedAt: number; cooldownMs: number }>()
 
-function recordModelFailure(model: string, isRateLimit: boolean): void {
-  // W-2 FIX: Rate limits get shorter cooldown (30s), real failures get 5 min
-  const cooldownMs = isRateLimit ? 30_000 : 300_000
+function recordModelFailure(model: string, isRateLimit: boolean, isAuth: boolean = false): void {
+  // W-2 FIX: Rate limits get shorter cooldown (30s), real failures get 5 min.
+  // Auth/key failures are not transient — a bad/absent credential won't heal in
+  // 5 min, so give it a much longer skip (30 min) to stop hammering a dead key
+  // on every request and to keep it out of the rotation's churn.
+  const cooldownMs = isAuth ? 1_800_000 : isRateLimit ? 30_000 : 300_000
   _modelCooldowns.set(model, { failedAt: Date.now(), cooldownMs })
 }
 
@@ -511,7 +543,10 @@ async function* streamGeminiWithFallback(
       return // Success
     } catch (err) {
       const isRateLimit = isRateLimitError(err)
-      recordModelFailure(modelName, isRateLimit)
+      const isAuth = isAuthOrKeyError(err)
+      // Auth-failed models get a longer "unavailable" skip (see recordModelFailure):
+      // a permanently-bad key shouldn't be re-attempted every request.
+      recordModelFailure(modelName, isRateLimit, isAuth)
 
       // Mid-stream failure after emitting text: rotating restarts the answer and
       // duplicates it on the wire. Propagate instead.
@@ -520,7 +555,7 @@ async function* streamGeminiWithFallback(
       // Auth/key/permission/billing errors share the credential across every
       // model — the next model can't succeed, so fail fast instead of burning
       // the 2 s fallback delay.
-      if (isAuthOrKeyError(err)) throw err
+      if (isAuth) throw err
 
       if (isLastAttempt) {
         throw err // All approved models exhausted

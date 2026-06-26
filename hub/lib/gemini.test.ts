@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { ChatMessage } from '@/types'
-import { withIdleWatchdog, isRateLimitError, isAuthOrKeyError } from './gemini'
+import { withIdleWatchdog, isRateLimitError, isAuthOrKeyError, friendlyModelError } from './gemini'
 
 /* ════════════════════════════════════════════════════════════════════════════
    STRESS TEST — chat model-rotation engine (lib/gemini.ts streamChat)
@@ -284,5 +284,57 @@ describe('error classification', () => {
     }
     expect(isAuthOrKeyError(new Error('429 rate limit'))).toBe(false)
     expect(isAuthOrKeyError(new Error('Gemini stream timeout'))).toBe(false)
+  })
+})
+
+describe('friendlyModelError — user-facing message mapping', () => {
+  it('maps auth/key/config failures to the config message', () => {
+    const authMsg = 'The AI service is temporarily unavailable (provider configuration). '
+      + 'Please try again shortly — if it persists, contact an administrator.'
+    for (const m of [
+      '[GoogleGenerativeAI Error]: [400 Bad Request] API key not valid. Please pass a valid API key.',
+      'HTTP 401 Unauthorized',
+      'status 403',
+      'permission denied',
+      'billing disabled',
+    ]) {
+      expect(friendlyModelError(new Error(m))).toBe(authMsg)
+    }
+  })
+
+  it('maps rate-limit / busy / cooldown failures to the busy message', () => {
+    const busyMsg = 'The AI is busy right now. Please try again in a moment.'
+    for (const m of ['HTTP 429', 'model overloaded', 'quota exceeded', 'All models are in cooldown']) {
+      expect(friendlyModelError(new Error(m))).toBe(busyMsg)
+    }
+  })
+
+  it('maps unknown/generic failures to the retry message', () => {
+    const retryMsg = "The AI couldn't complete that response. Please try again."
+    for (const m of ['Gemini stream timeout (gemini-2.5-pro)', '500 internal error', 'something exploded']) {
+      expect(friendlyModelError(new Error(m))).toBe(retryMsg)
+    }
+    // Non-Error inputs are handled too.
+    expect(friendlyModelError('boom')).toBe(retryMsg)
+    expect(friendlyModelError(undefined)).toBe(retryMsg)
+  })
+
+  it('auth takes precedence over rate-limit when both could match', () => {
+    // A message containing both an auth and a rate-limit signal resolves to config.
+    const out = friendlyModelError(new Error('401 unauthorized — also rate limit'))
+    expect(out).toContain('provider configuration')
+  })
+
+  it('never leaks raw provider internals into the output', () => {
+    const leaky = '[GoogleGenerativeAI Error]: Error fetching from '
+      + 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:streamGenerateContent: '
+      + '[400 Bad Request] API key not valid. Please pass a valid API key.'
+    const out = friendlyModelError(new Error(leaky))
+    for (const needle of [
+      'GoogleGenerativeAI', 'generativelanguage', 'gemini-2.5-pro',
+      'streamGenerateContent', '400', 'API key not valid', 'https',
+    ]) {
+      expect(out).not.toContain(needle)
+    }
   })
 })
