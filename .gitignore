@@ -38,3 +38,7 @@ Thumbs.db
 # --- Python ---
 __pycache__/
 *.pyc
+
+# --- Local-only directories (not source code) ---
+Memory/
+scratch_paperclip/
