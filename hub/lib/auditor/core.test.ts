@@ -223,6 +223,7 @@ describe('Zero-Tolerance Context Auditor Core', () => {
           element: 'kpis.trend',
           message: 'Column trend is missing in table kpis, required by constraint: "the `kpis` table must contain a `trend` column"',
           ckbReference: 'sc-kpis-trend',
+          sourceFile: 'file.md',
         });
 
         expect(findings).toContainEqual({
@@ -232,6 +233,7 @@ describe('Zero-Tolerance Context Auditor Core', () => {
           element: 'logs',
           message: 'Table logs is missing, required by constraint: "the `logs` table must contain a `level` column"',
           ckbReference: 'sc-missing-table',
+          sourceFile: 'file.md',
         });
       } finally {
         process.env.GEMINI_API_KEY = oldKey;
