@@ -266,7 +266,7 @@ function Restart-PaperclipServer {
     Write-WatchdogLog "INFO" "Starting Paperclip server via: npx -y paperclipai run"
     $stderrLog = Join-Path $INSTANCE_DIR "logs\paperclip-stderr.log"
     try {
-        $process = Start-Process -FilePath "npx" `
+        $process = Start-Process -FilePath "npx.cmd" `
             -ArgumentList "-y", "paperclipai", "run" `
             -WindowStyle Hidden `
             -PassThru `

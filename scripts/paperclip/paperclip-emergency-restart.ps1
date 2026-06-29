@@ -125,7 +125,7 @@ else {
 # ============================================================================
 Write-Host "[5/6] Starting fresh Paperclip instance..." -ForegroundColor Yellow
 try {
-    $process = Start-Process -FilePath "npx" -ArgumentList "-y", "paperclipai", "run" `
+    $process = Start-Process -FilePath "npx.cmd" -ArgumentList "-y", "paperclipai", "run" `
         -WindowStyle Hidden `
         -PassThru
 
