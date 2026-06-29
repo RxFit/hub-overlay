@@ -10,6 +10,7 @@ function getGenAI(): GoogleGenerativeAI {
   if (!_genAI) {
     const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY || ''
     if (!key) {
+      console.warn('[keys] Gemini API key is missing — Gemini models will be unavailable')
       throw new Error('No Gemini API key found. Set GEMINI_API_KEY, GOOGLE_API_KEY, or GOOGLE_GENERATIVE_AI_API_KEY.')
     }
     _genAI = new GoogleGenerativeAI(key)
