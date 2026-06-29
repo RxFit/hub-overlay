@@ -123,9 +123,9 @@ if ($trackedChanges) {
 try {
   Write-Host "`n* Invoking deploy.ps1..." -ForegroundColor Cyan
 
-  $deployArgs = @()
-  if ($SkipQA)  { $deployArgs += "-SkipQA" }
-  if ($DryRun)  { $deployArgs += "-DryRun" }
+  $deployArgs = @{}
+  if ($SkipQA)  { $deployArgs["SkipQA"] = $true }
+  if ($DryRun)  { $deployArgs["DryRun"] = $true }
 
   & $DEPLOY_SCRIPT @deployArgs
 
