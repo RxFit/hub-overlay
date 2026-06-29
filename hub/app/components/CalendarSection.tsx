@@ -1,8 +1,11 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useRef, useMemo, memo } from 'react'
+import { useModalA11y } from '@/app/hooks/useModalA11y'
 import { useCalendar } from '@/app/hooks/useHubData'
+import { writeFetch } from '@/app/hooks/useWriteFetch'
 import type { CalendarEvent } from '@/app/hooks/useHubData'
+import type { ChatAttachment } from '@/types'
 import styles from './LeftPanelSections.module.css'
 import { CollapsibleSection, SkeletonBlock, SectionMessage } from './LeftPanelShared'
 import { formatTime, DAY_LETTERS, getMonday, getWeekDays } from './LeftPanelUtils'
@@ -17,8 +20,17 @@ interface CalendarEventModalProps {
   onCreated: () => void
 }
 
+/** Local calendar date as YYYY-MM-DD, WITHOUT the UTC shift that
+ *  new Date().toISOString() introduces for negative-offset users. */
+function toLocalISODate(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
 function CalendarEventModal({ defaultDate, onClose, onCreated }: CalendarEventModalProps) {
-  const today = defaultDate || new Date().toISOString().split('T')[0]
+  const today = defaultDate || toLocalISODate(new Date())
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [date, setDate] = useState(today)
@@ -29,6 +41,9 @@ function CalendarEventModal({ defaultDate, onClose, onCreated }: CalendarEventMo
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useModalA11y(dialogRef, onClose)
+
   async function handleSave(e: React.FormEvent) {
     e.preventDefault()
     if (!title.trim() || !date || !startTime || !endTime) return
@@ -37,8 +52,11 @@ function CalendarEventModal({ defaultDate, onClose, onCreated }: CalendarEventMo
     try {
       const start = `${date}T${startTime}:00`
       const end = `${date}T${endTime}:00`
+      // Anchor the naive local datetime to the user's actual zone so Google
+      // doesn't reinterpret it against the calendar default (wrong-hour bug).
+      const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
       const emailList = attendees.split(',').map(s => s.trim()).filter(Boolean)
-      const res = await fetch('/api/google/calendar', {
+      await writeFetch('/api/google/calendar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -48,13 +66,13 @@ function CalendarEventModal({ defaultDate, onClose, onCreated }: CalendarEventMo
           end,
           attendees: emailList.length ? emailList : undefined,
           location: location.trim() || undefined,
+          timeZone: timeZone || undefined,
         }),
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Failed to create event')
       onCreated()
       onClose()
     } catch (err) {
+      // writeFetch routed a 401 into signIn('google'); show the message either way.
       setError(err instanceof Error ? err.message : 'Failed to create event')
     } finally {
       setSaving(false)
@@ -71,6 +89,8 @@ function CalendarEventModal({ defaultDate, onClose, onCreated }: CalendarEventMo
       />
       {/* Modal */}
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         className={styles.calEventModal}
         role="dialog"
         aria-modal="true"
@@ -154,7 +174,7 @@ function CalendarEventModal({ defaultDate, onClose, onCreated }: CalendarEventMo
               className={styles.calEventFormInput}
               value={location}
               onChange={e => setLocation(e.target.value)}
-              placeholder="Address or Google Meet link"
+              placeholder="Office, Zoom link, etc."
             />
           </div>
 
@@ -163,11 +183,11 @@ function CalendarEventModal({ defaultDate, onClose, onCreated }: CalendarEventMo
             <label className={styles.calEventFormLabel} htmlFor="cal-event-desc">Description</label>
             <textarea
               id="cal-event-desc"
-              className={`${styles.calEventFormInput} ${styles.calEventFormTextarea}`}
+              className={styles.calEventFormTextarea}
               value={description}
               onChange={e => setDescription(e.target.value)}
-              placeholder="Optional notes"
-              rows={2}
+              placeholder="Optional notes…"
+              rows={3}
             />
           </div>
 
@@ -201,13 +221,42 @@ function CalendarEventModal({ defaultDate, onClose, onCreated }: CalendarEventMo
    CALENDAR SECTION
    ══════════════════════════════════════════════════════════════════════════════ */
 
-export function CalendarSection({ onInjectChat }: { onInjectChat: (msg: string) => void }) {
+function CalendarSectionImpl({ onInjectChat }: { onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void }) {
   const { events, isLoading, error, mutate } = useCalendar()
   const [selectedDate, setSelectedDate] = useState<Date>(() => new Date())
   const [weekStart, setWeekStart] = useState<Date>(() => getMonday(new Date()))
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; summary: string; calendarId?: string } | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+
+  // Build the 7 days of the current week
+  const weekDays = useMemo(() => getWeekDays(weekStart), [weekStart])
+
+  // Determine which days have events
+  const daysWithEvents = useMemo(() => {
+    const set = new Set<string>()
+    events.forEach((event) => {
+      const eventDate = event.start.dateTime
+        ? new Date(event.start.dateTime)
+        : event.start.date
+          ? new Date(event.start.date + 'T00:00:00')
+          : null
+      if (eventDate) set.add(eventDate.toDateString())
+    })
+    return set
+  }, [events])
+
+  // Filter events for selected day
+  const selectedDateStr = selectedDate.toDateString()
+  const dayEvents = useMemo(() => events.filter((event) => {
+    const eventDate = event.start.dateTime
+      ? new Date(event.start.dateTime)
+      : event.start.date
+        ? new Date(event.start.date + 'T00:00:00')
+        : null
+    return eventDate ? eventDate.toDateString() === selectedDateStr : false
+  }), [events, selectedDateStr])
 
   if (isLoading) {
     return (
@@ -234,51 +283,29 @@ export function CalendarSection({ onInjectChat }: { onInjectChat: (msg: string) 
     )
   }
 
-  // Build the 7 days of the current week
-  const weekDays = getWeekDays(weekStart)
   const today = new Date()
   today.setHours(0, 0, 0, 0)
 
-  // Determine which days have events
-  const daysWithEvents = new Set<string>()
-  events.forEach((event) => {
-    const eventDate = event.start.dateTime
-      ? new Date(event.start.dateTime)
-      : event.start.date
-        ? new Date(event.start.date + 'T00:00:00')
-        : null
-    if (eventDate) {
-      daysWithEvents.add(eventDate.toDateString())
-    }
-  })
-
-  // Filter events for selected day
-  const selectedDateStr = selectedDate.toDateString()
-  const dayEvents = events.filter((event) => {
-    const eventDate = event.start.dateTime
-      ? new Date(event.start.dateTime)
-      : event.start.date
-        ? new Date(event.start.date + 'T00:00:00')
-        : null
-    return eventDate ? eventDate.toDateString() === selectedDateStr : false
-  })
-
   const dayName = selectedDate.toLocaleDateString([], { weekday: 'long' })
-  const selectedDateISO = selectedDate.toISOString().split('T')[0]
+  const selectedDateISO = toLocalISODate(selectedDate)
 
   async function handleDeleteConfirm() {
     if (!deleteConfirm) return
     setDeleting(true)
+    setDeleteError(null)
     try {
-      await fetch('/api/google/calendar', {
+      await writeFetch('/api/google/calendar', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ eventId: deleteConfirm.id, calendarId: deleteConfirm.calendarId }),
       })
       mutate?.()
-    } catch { /* non-fatal */ } finally {
-      setDeleting(false)
       setDeleteConfirm(null)
+    } catch (err) {
+      // Keep the dialog open and surface the failure; 401 already triggered reauth.
+      setDeleteError(err instanceof Error ? err.message : 'Failed to delete event')
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -377,13 +404,13 @@ export function CalendarSection({ onInjectChat }: { onInjectChat: (msg: string) 
                       ? `, ends ${new Date(event.end.dateTime).toLocaleTimeString('en-US', { timeZone: userTz, timeStyle: 'short' })}`
                       : ''
                     const loc = event.location ? `, location: ${event.location}` : ''
-                    const attendees = event.attendees?.length
+                    const attendeesStr = event.attendees?.length
                       ? `, attendees: ${event.attendees.map(a => a.email || a.displayName).slice(0, 5).join(', ')}`
                       : ''
                     const desc = event.description
                       ? `. Description: ${event.description.replace(/\s+/g, ' ').slice(0, 300)}`
                       : ''
-                    onInjectChat(`Tell me about this calendar event: "${event.summary}" on ${startStr}${endStr}${loc}${attendees}${desc}`)
+                    onInjectChat(`Tell me about this calendar event: "${event.summary}" on ${startStr}${endStr}${loc}${attendeesStr}${desc}`)
                   }}
                   onDelete={() => setDeleteConfirm({
                     id: event.id,
@@ -418,6 +445,9 @@ export function CalendarSection({ onInjectChat }: { onInjectChat: (msg: string) 
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0 0 16px' }}>
                 Are you sure you want to delete <strong style={{ color: 'var(--text-primary)' }}>&quot;{deleteConfirm.summary}&quot;</strong>? This cannot be undone.
               </p>
+              {deleteError && (
+                <div className={styles.calEventFormError} role="alert">{deleteError}</div>
+              )}
               <div className={styles.calEventFormActions}>
                 <button
                   className={`${styles.calEventFormBtn} ${styles.calEventFormBtnCancel}`}
@@ -440,6 +470,8 @@ export function CalendarSection({ onInjectChat }: { onInjectChat: (msg: string) 
     </>
   )
 }
+
+export const CalendarSection = memo(CalendarSectionImpl)
 
 function CalendarRow({
   event,
@@ -487,4 +519,3 @@ function CalendarRow({
     </div>
   )
 }
-

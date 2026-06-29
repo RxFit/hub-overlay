@@ -2,6 +2,7 @@
 
 import { useState, useEffect, memo } from 'react'
 import { useTasks } from '@/app/hooks/useHubData'
+import { writeFetch } from '@/app/hooks/useWriteFetch'
 import type { TaskItem } from '@/app/hooks/useHubData'
 import type { ChatAttachment } from '@/types'
 import styles from './LeftPanelSections.module.css'
@@ -10,6 +11,9 @@ import { formatRelativeDate } from './LeftPanelUtils'
 
 /* ══════════════════════════════════════════════════════════════════════════════
    TASKS SECTION
+   NOTE: The monolith used a CollapsibleSection render-prop pattern that passed
+   `isOpen` to useTasks() to gate SWR polling on collapsed sections. This
+   optimisation is deferred until CollapsibleSection supports render-prop children.
    ══════════════════════════════════════════════════════════════════════════════ */
 
 function TasksSectionImpl({ onInjectChat, onInjectAction }: { onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void; onInjectAction: (msg: string, attachments?: ChatAttachment[]) => void }) {
@@ -79,14 +83,15 @@ function TasksSectionImpl({ onInjectChat, onInjectAction }: { onInjectChat: (msg
 
     setTogglingIds(prev => new Set(prev).add(task.id))
     try {
-      await fetch('/api/google/tasks', {
+      await writeFetch('/api/google/tasks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: newAction, taskListId: listId, taskId: task.id }),
       })
       mutate?.()
     } catch {
-      // Rollback on error
+      // Rollback optimistic UI on ANY failure (HTTP error or network).
+      // writeFetch already routed a 401 into signIn('google').
       setFadingIds(prev => { const s = new Set(prev); s.delete(task.id); return s })
       setHiddenIds(prev => { const s = new Set(prev); s.delete(task.id); return s })
     } finally {
