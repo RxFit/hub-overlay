@@ -1,0 +1,151 @@
+/* ──────────────────────── Base Reset ──────────────────────── */
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  /* Prevent zoom on input focus on iOS */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  background: var(--bg-void);
+  color: var(--text-primary);
+  line-height: 1.6;
+  overflow: hidden;
+  height: 100vh;
+  height: 100dvh;
+  /* Prevent pinch-zoom and double-tap zoom on mobile */
+  touch-action: manipulation;
+  -webkit-text-size-adjust: 100%;
+  /* Safe area base */
+  padding-top: var(--safe-top);
+  /* Animated orb gradient background */
+  position: relative;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 70% 50% at 15% 20%, rgba(197,160,89,0.055) 0%, transparent 65%),
+    radial-gradient(ellipse 55% 70% at 85% 80%, rgba(197,160,89,0.035) 0%, transparent 65%),
+    radial-gradient(ellipse 40% 40% at 50% 10%, rgba(30,50,110,0.18) 0%, transparent 70%);
+  animation: bgOrbDrift 28s ease-in-out infinite alternate;
+}
+
+/* Ensure hub content sits above the bg orbs */
+.hub-shell {
+  position: relative;
+  z-index: 1;
+}
+
+/* Text selection — gold highlight */
+::selection {
+  background: var(--accent);
+  color: var(--btn-text);
+}
+
+::-moz-selection {
+  background: var(--accent);
+  color: var(--btn-text);
+}
+
+/* ──────────────────────── ICON SYSTEM ──────────────────────── */
+.rx-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+.rx-icon svg {
+  width: 100%;
+  height: 100%;
+  stroke: currentColor;
+  stroke-width: 2.5;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+  fill: none;
+}
+
+/* Modifier Sizes */
+.rx-icon--sm { width: 18px; height: 18px; }
+.rx-icon--lg { width: 32px; height: 32px; }
+.rx-icon--xl { width: 48px; height: 48px; }
+.nav-icon .rx-icon { width: 20px; height: 20px; }
+.loc-icon .rx-icon { width: 28px; height: 28px; }
+.service-icon .rx-icon { width: 36px; height: 36px; }
+.step-icon .rx-icon { width: 36px; height: 36px; }
+
+/* Filled Icons (like Socials) */
+.social-link .rx-icon svg {
+  stroke: none;
+  stroke-width: 0;
+  fill: currentColor;
+}
+
+/* Screen reader only utility */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+a:hover {
+  color: var(--text-primary);
+}
+
+/* Focus visible ring for keyboard navigation */
+*:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
+}
+
+/* ──────────────────────── Scrollbar ──────────────────────── */
+::-webkit-scrollbar {
+  width: 3px;
+  height: 3px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--accent-dim);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}

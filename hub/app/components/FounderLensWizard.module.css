@@ -1,0 +1,310 @@
+/* Scoped styles for the Founder Lens Wizard */
+
+@keyframes flwModalSlideInUp {
+  from { opacity: 0; transform: translate(-50%, calc(-50% + 16px)) scale(0.98); }
+  to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.7);
+  backdrop-filter: blur(4px);
+  z-index: 900;
+  animation: fadeIn .2s ease both;
+}
+
+.modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%,-50%);
+  width: min(540px,calc(100vw - 32px));
+  max-height: min(680px, calc(100vh - 40px));
+  background: var(--bg-card);
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xl),var(--shadow-glow-strong);
+  z-index: 901;
+  display: flex;
+  flex-direction: column;
+  animation: flwModalSlideInUp .3s var(--ease-out) both;
+  overflow: hidden;
+}
+
+.modal::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--accent-gradient);
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.title {
+  font-family: var(--font-heading);
+  font-size: var(--text-base);
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -.02em;
+}
+
+.org {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: var(--text-base);
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  transition: color var(--duration-fast),background var(--duration-fast);
+  line-height: 1;
+}
+
+.close:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.progress {
+  height: 3px;
+  background: var(--bg-elevated);
+  flex-shrink: 0;
+}
+
+.progressBar {
+  height: 100%;
+  background: var(--accent-gradient);
+  transition: width .4s var(--ease-out);
+}
+
+.body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-6);
+  -webkit-overflow-scrolling: touch;
+}
+
+.intro {
+  text-align: center;
+}
+
+.introIcon {
+  font-size: 2rem;
+  margin-bottom: var(--space-3);
+  opacity: .8;
+  color: var(--accent);
+}
+
+.introTitle, .successTitle {
+  font-family: var(--font-heading);
+  font-size: var(--text-xl);
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: var(--space-3);
+  letter-spacing: -.02em;
+}
+
+.introDesc, .successDesc {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin-bottom: var(--space-3);
+}
+
+.introNote {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  background: rgba(197,160,89,.06);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  text-align: left;
+  line-height: 1.5;
+  margin-bottom: var(--space-4);
+}
+
+.introRoles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: center;
+}
+
+.rolePill {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 4px 12px;
+  border-radius: var(--radius-full);
+  background: rgba(255,255,255,.05);
+  border: 1px solid var(--border);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+.roleStep {
+  /* container for step content */
+}
+
+.roleStepHeader {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.roleStepIcon {
+  font-size: 1.75rem;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.roleStepTitle {
+  font-family: var(--font-heading);
+  font-size: var(--text-lg);
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -.02em;
+  margin-bottom: 3px;
+}
+
+.roleStepDesc {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.roleStepFields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.field {
+  /* field container */
+}
+
+.fieldLabel {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.fieldHint {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  margin-bottom: var(--space-1);
+  line-height: 1.4;
+}
+
+.fieldInput {
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  resize: vertical;
+  min-height: 52px;
+  transition: border-color var(--duration-fast),box-shadow var(--duration-fast);
+  line-height: 1.4;
+}
+
+.fieldInput::placeholder {
+  color: var(--text-muted);
+  opacity: .6;
+}
+
+.fieldInput:focus {
+  outline: none;
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px rgba(197,160,89,.1);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.stepCount {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+}
+
+.error {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  background: rgba(239,68,68,.08);
+  border: 1px solid rgba(239,68,68,.2);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  color: hsl(0,84%,78%);
+}
+
+.success {
+  text-align: center;
+  padding: var(--space-4) 0;
+}
+
+.successIcon {
+  font-size: 2.5rem;
+  color: var(--success, #10b981);
+  margin-bottom: var(--space-3);
+}
+
+/* Mobile: Make wizard full-screen to avoid positioning issues */
+@media (max-width: 640px) {
+  .modal {
+    top: 0; left: 0; right: 0; bottom: 0;
+    transform: none;
+    width: 100%;
+    max-height: none;
+    height: 100%;
+    border-radius: 0;
+    border: none;
+    padding-top: env(safe-area-inset-top, 0);
+    padding-bottom: env(safe-area-inset-bottom, 0);
+    animation: fadeIn .2s ease both;
+  }
+  .body {
+    padding: var(--space-4);
+  }
+  .backdrop {
+    z-index: 999;
+  }
+  .modal {
+    z-index: 1000;
+  }
+}
