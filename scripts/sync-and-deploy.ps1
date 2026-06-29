@@ -1,6 +1,6 @@
 <#
   sync-and-deploy.ps1
-  ──────────────────────────────────────────────────────────────────────────────
+  ------------------------------------------------------------------------------
   Convenience wrapper around deploy.ps1 that automates the full deploy cycle:
   1. Verifies you're on the master branch (prompts to switch if not)
   2. Pulls latest from origin (fast-forward only)
@@ -12,7 +12,7 @@
     .\scripts\sync-and-deploy.ps1                # full sync + deploy + QA
     .\scripts\sync-and-deploy.ps1 -SkipQA        # sync + deploy, skip QA
     .\scripts\sync-and-deploy.ps1 -DryRun        # sync + show what would deploy
-  ──────────────────────────────────────────────────────────────────────────────
+  ------------------------------------------------------------------------------
 #>
 
 param(
@@ -20,12 +20,12 @@ param(
   [switch]$DryRun
 )
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 
 $REPO_ROOT   = Join-Path $PSScriptRoot ".."  | Resolve-Path
 $DEPLOY_SCRIPT = Join-Path $REPO_ROOT "deploy.ps1"
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# -- Helpers -------------------------------------------------------------------
 
 function Write-Step {
   param([string]$Number, [string]$Label)
@@ -35,24 +35,24 @@ function Write-Step {
 function Write-Ok {
   param([string]$Detail = "")
   if ($Detail) {
-    Write-Host " ✅ $Detail" -ForegroundColor Green
+    Write-Host " [OK] $Detail" -ForegroundColor Green
   } else {
-    Write-Host " ✅" -ForegroundColor Green
+    Write-Host " [OK]" -ForegroundColor Green
   }
 }
 
 function Write-Fail {
   param([string]$Detail)
-  Write-Host " ❌ $Detail" -ForegroundColor Red
+  Write-Host " [FAILED] $Detail" -ForegroundColor Red
 }
 
-# ── Pre-flight checks ────────────────────────────────────────────────────────
+# -- Pre-flight checks --------------------------------------------------------
 
-Write-Host "`n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
-Write-Host "  🔄 sync-and-deploy — Hub Overlay" -ForegroundColor Cyan
-Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
+Write-Host "`n==============================================" -ForegroundColor DarkGray
+Write-Host "  * sync-and-deploy - Hub Overlay" -ForegroundColor Cyan
+Write-Host "==============================================" -ForegroundColor DarkGray
 
-Write-Host "`n🔍 Pre-flight checks..." -ForegroundColor Cyan
+Write-Host "`n* Pre-flight checks..." -ForegroundColor Cyan
 
 # 1. Verify deploy.ps1 exists
 Write-Step "1/3" "Deploy script..."
@@ -66,7 +66,7 @@ Write-Ok "found"
 Write-Step "2/3" "Git branch..."
 $currentBranch = git -C $REPO_ROOT rev-parse --abbrev-ref HEAD 2>&1
 if ($currentBranch -ne "master") {
-  Write-Host " ⚠️  on '$currentBranch'" -ForegroundColor Yellow
+  Write-Host " WARNING: on '$currentBranch'" -ForegroundColor Yellow
   $response = Read-Host "  Switch to master? (y/N)"
   if ($response -match "^[Yy]") {
     git -C $REPO_ROOT checkout master
@@ -76,7 +76,7 @@ if ($currentBranch -ne "master") {
     }
     Write-Host "  Switched to master" -ForegroundColor Green
   } else {
-    Write-Host "  Aborting — deploy should run from master." -ForegroundColor Red
+    Write-Host "  Aborting - deploy should run from master." -ForegroundColor Red
     exit 1
   }
 } else {
@@ -98,13 +98,13 @@ if ($pullOutput -match "Already up to date") {
   Write-Ok "updated"
 }
 
-# ── Stash tracked changes ────────────────────────────────────────────────────
+# -- Stash tracked changes ----------------------------------------------------
 
 $stashCreated = $false
 $trackedChanges = git -C $REPO_ROOT status --porcelain 2>&1 | Where-Object { $_ -notmatch '^\?\?' }
 
 if ($trackedChanges) {
-  Write-Host "`n📦 Stashing tracked changes..." -ForegroundColor Cyan
+  Write-Host "`n* Stashing tracked changes..." -ForegroundColor Cyan
   $trackedChanges | ForEach-Object { Write-Host "    $_" -ForegroundColor Gray }
 
   git -C $REPO_ROOT stash push -m "pre-deploy stash (sync-and-deploy)" --include-untracked 2>&1 | Out-Null
@@ -113,15 +113,15 @@ if ($trackedChanges) {
     exit 1
   }
   $stashCreated = $true
-  Write-Host "  ✅ Changes stashed" -ForegroundColor Green
+  Write-Host "  [OK] Changes stashed" -ForegroundColor Green
 } else {
-  Write-Host "`n📦 No tracked changes to stash" -ForegroundColor Gray
+  Write-Host "`n* No tracked changes to stash" -ForegroundColor Gray
 }
 
-# ── Deploy (with stash-pop in finally) ────────────────────────────────────────
+# -- Deploy (with stash-pop in finally) ----------------------------------------
 
 try {
-  Write-Host "`n🚀 Invoking deploy.ps1..." -ForegroundColor Cyan
+  Write-Host "`n* Invoking deploy.ps1..." -ForegroundColor Cyan
 
   $deployArgs = @()
   if ($SkipQA)  { $deployArgs += "-SkipQA" }
@@ -134,24 +134,24 @@ try {
   }
 }
 catch {
-  Write-Host "`n❌ Deploy failed: $_" -ForegroundColor Red
+  Write-Host "`n[FAILED] Deploy failed: $_" -ForegroundColor Red
   # Stash pop happens in finally block
   exit 1
 }
 finally {
-  # ── Restore stash ──────────────────────────────────────────────────────────
+  # -- Restore stash ----------------------------------------------------------
   if ($stashCreated) {
-    Write-Host "`n📦 Restoring stashed changes..." -ForegroundColor Cyan
+    Write-Host "`n* Restoring stashed changes..." -ForegroundColor Cyan
     git -C $REPO_ROOT stash pop 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
-      Write-Host "  ⚠️  Stash pop failed — your changes are still in the stash." -ForegroundColor Yellow
+      Write-Host "  WARNING: Stash pop failed - your changes are still in the stash." -ForegroundColor Yellow
       Write-Host "  Run 'git stash pop' manually to restore them." -ForegroundColor Yellow
     } else {
-      Write-Host "  ✅ Stash restored" -ForegroundColor Green
+      Write-Host "  [OK] Stash restored" -ForegroundColor Green
     }
   }
 }
 
-Write-Host "`n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
-Write-Host "  ✅ sync-and-deploy complete" -ForegroundColor Green
-Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
+Write-Host "`n==============================================" -ForegroundColor DarkGray
+Write-Host "  [SUCCESS] sync-and-deploy complete" -ForegroundColor Green
+Write-Host "==============================================" -ForegroundColor DarkGray
