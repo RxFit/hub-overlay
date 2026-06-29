@@ -45,7 +45,7 @@ Write-Host "`n* Pre-flight checks..." -ForegroundColor Cyan
 
 # 1. Verify git status is clean
 Write-Host "  [1/4] Git status..." -NoNewline
-$gitStatus = git -C $PSScriptRoot status --porcelain 2>&1 | Where-Object { $_ -notmatch '^\?\?' }
+$gitStatus = git -C $PSScriptRoot status --porcelain --ignore-submodules 2>&1 | Where-Object { $_ -notmatch '^\?\?' }
 if ($gitStatus) {
   Write-Host " [FAILED]" -ForegroundColor Red
   Write-Host "`n  Uncommitted changes detected:" -ForegroundColor Red
