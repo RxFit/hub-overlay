@@ -128,7 +128,7 @@ export function parseMarkdownConstraints(content: string, filename: string): Sys
   
   // Find "Key Decisions" section
   // Matches "## Key Decisions" or "### Key Decisions" and captures everything until the next header (##/###) or end of file
-  const keyDecisionsRegex = /##+\s*Key\s+Decisions\s*([\s\S]*?)(?:^##+|\n---|$)/i;
+  const keyDecisionsRegex = /##+\s*Key\s+Decisions\s*([\s\S]*?)(?:\r?\n##+|\r?\n---|$)/i;
   const match = keyDecisionsRegex.exec(content);
   
   if (!match) {
