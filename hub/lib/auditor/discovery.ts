@@ -24,21 +24,30 @@ export interface ApplicationFootprint {
 
 /**
  * Recursively find all route.ts files in a directory.
+ * Includes try-catch blocks to handle directory traversal errors gracefully.
  */
-function findRouteFiles(dir: string): string[] {
+export function findRouteFiles(dir: string): string[] {
   let results: string[] = [];
-  if (!fs.existsSync(dir)) {
-    return results;
-  }
-  const list = fs.readdirSync(dir);
-  for (const file of list) {
-    const filePath = path.join(dir, file);
-    const stat = fs.statSync(filePath);
-    if (stat.isDirectory()) {
-      results = results.concat(findRouteFiles(filePath));
-    } else if (stat.isFile() && file === 'route.ts') {
-      results.push(filePath);
+  try {
+    if (!fs.existsSync(dir)) {
+      return results;
     }
+    const list = fs.readdirSync(dir);
+    for (const file of list) {
+      const filePath = path.join(dir, file);
+      try {
+        const stat = fs.statSync(filePath);
+        if (stat.isDirectory()) {
+          results = results.concat(findRouteFiles(filePath));
+        } else if (stat.isFile() && file === 'route.ts') {
+          results.push(filePath);
+        }
+      } catch (e) {
+        console.warn(`[discovery] Failed to stat file or directory ${filePath}:`, e);
+      }
+    }
+  } catch (e) {
+    console.warn(`[discovery] Failed to read directory ${dir}:`, e);
   }
   return results;
 }
@@ -46,7 +55,7 @@ function findRouteFiles(dir: string): string[] {
 /**
  * Extracts columns content matching curly braces.
  */
-function getColumnsBlock(text: string, startIndex: number): string {
+export function getColumnsBlock(text: string, startIndex: number): string {
   let openBraces = 0;
   let blockStart = -1;
   for (let i = startIndex; i < text.length; i++) {
@@ -63,6 +72,76 @@ function getColumnsBlock(text: string, startIndex: number): string {
     }
   }
   return '';
+}
+
+/**
+ * Strips both single-line and multi-line comments from a string.
+ */
+export function stripComments(code: string): string {
+  return code.replace(/\/\*[\s\S]*?\*\/|([^\\:]|^)\/\/.*$/gm, '$1');
+}
+
+/**
+ * Extract HTTP methods from file content.
+ * Supports:
+ * - Direct function exports (e.g. export async function GET)
+ * - Direct variable exports (e.g. export const GET = ...)
+ * - Named re-exports (e.g. export { handler as GET, handler as POST } or export { GET })
+ */
+export function extractMethods(content: string): ApiRoute['method'][] {
+  const methods: ApiRoute['method'][] = [];
+  const candidates: ApiRoute['method'][] = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD'];
+  
+  const cleanContent = stripComments(content);
+
+  // 1. Direct function exports: export async function GET or export function GET
+  const fnRegex = /\bexport\s+(async\s+)?function\s+(\w+)\b/g;
+  let fnMatch;
+  while ((fnMatch = fnRegex.exec(cleanContent)) !== null) {
+    const name = fnMatch[2];
+    if (candidates.includes(name as ApiRoute['method'])) {
+      methods.push(name as ApiRoute['method']);
+    }
+  }
+
+  // 2. Direct variable exports: export const GET = ...
+  const varRegex = /\bexport\s+(const|let|var)\s+(\w+)\b/g;
+  let varMatch;
+  while ((varMatch = varRegex.exec(cleanContent)) !== null) {
+    const name = varMatch[2];
+    if (candidates.includes(name as ApiRoute['method'])) {
+      methods.push(name as ApiRoute['method']);
+    }
+  }
+
+  // 3. Named exports block: export { handler as GET } or export { GET }
+  const exportBraceRegex = /\bexport\s*\{([^}]+)\}/g;
+  let braceMatch;
+  while ((braceMatch = exportBraceRegex.exec(cleanContent)) !== null) {
+    const parts = braceMatch[1].split(',');
+    for (const part of parts) {
+      const trimmed = part.trim();
+      if (!trimmed) continue;
+      
+      const asMatch = trimmed.match(/(?:^|\s+)as\s+(\w+)$/);
+      if (asMatch) {
+        const name = asMatch[1];
+        if (candidates.includes(name as ApiRoute['method'])) {
+          methods.push(name as ApiRoute['method']);
+        }
+      } else {
+        const identifierMatch = trimmed.match(/^(\w+)$/);
+        if (identifierMatch) {
+          const name = identifierMatch[1];
+          if (candidates.includes(name as ApiRoute['method'])) {
+            methods.push(name as ApiRoute['method']);
+          }
+        }
+      }
+    }
+  }
+
+  return Array.from(new Set(methods));
 }
 
 /**
@@ -92,25 +171,21 @@ export function discoverApplicationFootprint(): ApplicationFootprint {
         
         const apiPath = cleanPath ? `/api/${cleanPath}` : '/api';
 
-        // Extract HTTP methods
-        const methods: ApiRoute['method'][] = [];
-        const methodRegex = /export\s+(async\s+)?function\s+(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)\b/g;
-        let methodMatch;
-        while ((methodMatch = methodRegex.exec(content)) !== null) {
-          methods.push(methodMatch[2] as ApiRoute['method']);
-        }
+        // Extract HTTP methods using robust parsing
+        const methods = extractMethods(content);
 
-        // Determine authType
+        // Determine authType on stripped content
+        const cleanContent = stripComments(content);
         let authType: ApiRoute['authType'] = 'none';
         if (
-          content.includes('gateToken') ||
-          content.includes('verifyGateToken') ||
-          content.includes('apiKey')
+          cleanContent.includes('gateToken') ||
+          cleanContent.includes('verifyGateToken') ||
+          cleanContent.includes('apiKey')
         ) {
           authType = 'apikey';
         } else if (
-          content.includes('getServerSession') ||
-          content.includes('getToken')
+          cleanContent.includes('getServerSession') ||
+          cleanContent.includes('getToken')
         ) {
           authType = 'nextauth';
         }
@@ -135,7 +210,7 @@ export function discoverApplicationFootprint(): ApplicationFootprint {
       const content = fs.readFileSync(schemaFilePath, 'utf-8');
       
       // Strip comments to avoid matching commented-out table declarations
-      const cleanContent = content.replace(/\/\*[\s\S]*?\*\/|([^\\:]|^)\/\/.*$/gm, '$1');
+      const cleanContent = stripComments(content);
 
       const pgTableRegex = /pgTable\(\s*['"]([^'"]+)['"]/g;
       let match;
@@ -145,12 +220,14 @@ export function discoverApplicationFootprint(): ApplicationFootprint {
         const columnsContent = getColumnsBlock(cleanContent, startIndex);
 
         const columns: DbColumn[] = [];
-        // Match: propName: colType('col_name'
-        const columnRegex = /(\w+)\s*:\s*(\w+)\(\s*['"]([^'"]+)['"]/g;
+        // Match: propName: colType('col_name' or colType(lookahead closing brace)
+        const columnRegex = /(\w+)\s*:\s*(\w+)\(\s*(?:['"]([^'"]+)['"]|(?=\s*\)))/g;
         let columnMatch;
         while ((columnMatch = columnRegex.exec(columnsContent)) !== null) {
-          const columnName = columnMatch[3];
+          const propertyName = columnMatch[1];
           const columnType = columnMatch[2];
+          const columnName = columnMatch[3] || propertyName; // Fallback to property name if undefined
+          
           columns.push({
             name: columnName,
             type: columnType,
