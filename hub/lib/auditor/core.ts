@@ -11,6 +11,7 @@ export interface AuditFinding {
   element: string;
   message: string;
   ckbReference?: string;
+  sourceFile?: string;
 }
 
 /**
@@ -131,6 +132,7 @@ export async function runComparisonAudit(vaultPath?: string): Promise<AuditFindi
           element: tableName,
           message: `Table ${tableName} is missing, required by constraint: "${constraint.intent}"`,
           ckbReference: constraint.id,
+          sourceFile: constraint.sourceFile,
         });
       } else {
         const column = table.columns.find(c => c.name.toLowerCase() === columnName.toLowerCase());
@@ -142,6 +144,7 @@ export async function runComparisonAudit(vaultPath?: string): Promise<AuditFindi
             element: `${tableName}.${columnName}`,
             message: `Column ${columnName} is missing in table ${tableName}, required by constraint: "${constraint.intent}"`,
             ckbReference: constraint.id,
+            sourceFile: constraint.sourceFile,
           });
         }
       }
@@ -219,6 +222,8 @@ Output a JSON array of AuditFinding objects. Each AuditFinding must have:
           ? semFinding.severity 
           : 'minor';
 
+        const matchingConstraint = constraints.find(c => c.id === semFinding.ckbReference);
+
         const normalized: AuditFinding = {
           id: semFinding.id,
           type,
@@ -226,6 +231,7 @@ Output a JSON array of AuditFinding objects. Each AuditFinding must have:
           element: semFinding.element,
           message: semFinding.message,
           ckbReference: semFinding.ckbReference,
+          sourceFile: matchingConstraint ? matchingConstraint.sourceFile : undefined,
         };
 
         const key = normalized.id.toLowerCase();
