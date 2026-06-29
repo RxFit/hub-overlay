@@ -16,6 +16,7 @@ import { buildGoogleWorkspaceContext } from '@/lib/google-context'
 import { withTimeout } from '@/lib/timeout'
 import { breaker, CircuitOpenError } from '@/lib/circuit-breaker'
 import type { ChatMessage, ChatAttachment } from '@/types'
+import '@/lib/validate-keys'  // Side-effect import: validates API keys on cold start
 
 const log = createLogger('chat')
 
