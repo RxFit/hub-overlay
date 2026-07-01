@@ -11,8 +11,13 @@ const defaultTenant = getTenantConfig()
 export const metadata: Metadata = {
   title: `${defaultTenant.name} Hub — ${defaultTenant.tagline}`,
   description: `${defaultTenant.tagline} — real-time project tracking, AI chat, and agent orchestration for ${defaultTenant.name}.`,
+  manifest: '/site.webmanifest',
   icons: {
-    icon: '/favicon.svg',
+    icon: [
+      { url: '/favicon.svg', type: 'image/svg+xml' },
+      { url: '/favicon.ico', sizes: '32x32' },
+    ],
+    apple: '/apple-touch-icon.png',
   },
   openGraph: {
     title: `${defaultTenant.name} Hub — ${defaultTenant.tagline}`,
