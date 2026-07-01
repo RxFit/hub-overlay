@@ -1,0 +1,103 @@
+name: Deploy to Cloud Run
+
+# Auto-deploys the Hub app to Cloud Run on merge to master.
+# Mirrors deploy.ps1 (project rxfit-automation, service "hub", region us-central1).
+#
+# ── One-time setup (required before this runs) ────────────────────────────────
+# Add ONE repository secret with a GCP service-account key JSON:
+#   Settings → Secrets and variables → Actions → New repository secret
+#     Name:  GCP_SA_KEY
+#     Value: <contents of the service-account key .json>
+#
+# The service account needs these roles on project rxfit-automation:
+#   roles/run.admin               (deploy Cloud Run services)
+#   roles/iam.serviceAccountUser  (act as the runtime SA)
+#   roles/cloudbuild.builds.editor(build the container from source)
+#   roles/artifactregistry.writer (push the built image)
+#   roles/storage.admin           (Cloud Build staging bucket)
+#
+# More secure alternative (recommended long-term): Workload Identity Federation.
+# Swap the "Authenticate" step's `credentials_json` for:
+#     workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+#     service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+# and remove GCP_SA_KEY.
+#
+# App secrets (DB URL, API keys, OAuth, etc.) are NOT set here — they are already
+# attached to the Cloud Run service via Secret Manager (secretKeyRef) and persist
+# across `gcloud run deploy --source` deploys. Only non-secret config is set below.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'hub/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch: {}   # allow manual "Run workflow" from the Actions tab
+
+# Never run two deploys of the same service at once; let an in-flight deploy finish.
+concurrency:
+  group: deploy-hub
+  cancel-in-progress: false
+
+env:
+  GCP_PROJECT: rxfit-automation
+  REGION: us-central1
+  SERVICE: hub
+
+jobs:
+  deploy:
+    name: Build & deploy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # needed if you switch to Workload Identity Federation
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy to Cloud Run
+        run: |
+          set -euo pipefail
+          # Non-secret config — kept in sync with deploy.ps1 $ENV_VARS
+          ENV_VARS="ADMIN_TEAM=Danny Trejo"
+          ENV_VARS="$ENV_VARS,DEFAULT_PAPERCLIP_COMPANY_ID=8f2acc3d-f2dc-4f8c-897e-7c400e91fd85"
+          ENV_VARS="$ENV_VARS,NEXTAUTH_URL=https://hub.casatrejo.com"
+          ENV_VARS="$ENV_VARS,NODE_ENV=production"
+          ENV_VARS="$ENV_VARS,PAPERCLIP_BASE_URL=https://rxfit-paperclip-11747747730.us-central1.run.app"
+          ENV_VARS="$ENV_VARS,SUPERADMIN_EMAILS=danny@rxfitatx.com"
+          ENV_VARS="$ENV_VARS,VERTEX_ENGINE_ID=semanticbrain_1779229063037"
+          ENV_VARS="$ENV_VARS,VERTEX_GCP_PROJECT=semantic-brain-desktop"
+
+          gcloud run deploy "$SERVICE" \
+            --source ./hub \
+            --project="$GCP_PROJECT" \
+            --region="$REGION" \
+            --allow-unauthenticated \
+            --memory=1Gi \
+            --timeout=120 \
+            --min-instances=0 \
+            --max-instances=3 \
+            --update-env-vars="$ENV_VARS"
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          URL=$(gcloud run services describe "$SERVICE" \
+            --project="$GCP_PROJECT" --region="$REGION" \
+            --format='value(status.url)')
+          echo "Service URL: $URL"
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$URL")
+          echo "HTTP $CODE"
+          # Accept any non-5xx (login redirects, auth walls, etc. are fine)
+          if [ "$CODE" -ge 500 ] || [ "$CODE" = "000" ]; then
+            echo "::error::Smoke test failed — service returned $CODE"
+            exit 1
+          fi
