@@ -97,6 +97,93 @@ describe('buildEventInjectMessage', () => {
     const detail = msg.split('\n').find(l => l.startsWith('• Details:'))!.replace('• Details: ', '')
     expect(detail.length).toBeLessThanOrEqual(500)
   })
+
+  it('includes the end time when present and omits it when absent', () => {
+    const start = new Date()
+    const end = new Date(start.getTime() + 3_600_000)
+    const withEnd = buildEventInjectMessage({
+      summary: 's',
+      start: { dateTime: start.toISOString() },
+      end: { dateTime: end.toISOString() },
+    })
+    expect(withEnd).toContain(', ends ')
+
+    const withoutEnd = buildEventInjectMessage({ summary: 's', start: { dateTime: start.toISOString() } })
+    expect(withoutEnd).not.toContain(', ends ')
+  })
+
+  it('clamps a pathological 100k-char attendee email so it cannot blow the message size', () => {
+    const msg = buildEventInjectMessage({
+      summary: 's',
+      start: { dateTime: new Date().toISOString() },
+      attendees: [{ email: 'x'.repeat(100_000) + '@evil.com' }],
+    })
+    const line = msg.split('\n').find(l => l.startsWith('• Attendees:'))!
+    expect(line.length).toBeLessThanOrEqual('• Attendees: '.length + 300)
+    expect(msg.length).toBeLessThan(1_000)
+  })
+
+  it('handles a 10k-entry attendee array without scanning it (fast) and stays bounded', () => {
+    const attendees = Array.from({ length: 10_000 }, (_, i) => ({ email: `a${i}@x.com` }))
+    const start = Date.now()
+    let msg = ''
+    for (let i = 0; i < 1_000; i++) {
+      msg = buildEventInjectMessage({ summary: 's', start: { dateTime: new Date().toISOString() }, attendees })
+    }
+    expect(Date.now() - start).toBeLessThan(2_000)
+    expect(msg).toContain('a4@x.com')
+    expect(msg).not.toContain('a5@x.com')
+  })
+
+  it('does not throw on garbage end times, unicode/emoji attendees, or empty objects', () => {
+    for (const end of [{ dateTime: 'not-a-date' }, { dateTime: '💥' }, {}, undefined]) {
+      expect(() => buildEventInjectMessage({
+        summary: 'naïve café — 日本語',
+        start: { dateTime: new Date().toISOString() },
+        end,
+        attendees: [{ email: '🔥'.repeat(500) }, { displayName: '"quotes" & <tags>' }, {}],
+      })).not.toThrow()
+    }
+  })
+
+  it('stays deterministic and fast over 10k fully-loaded builds', () => {
+    const start = Date.now()
+    let last = ''
+    for (let i = 0; i < 10_000; i++) {
+      last = buildEventInjectMessage({
+        summary: `event ${i}`,
+        start: { dateTime: new Date().toISOString() },
+        end: { dateTime: new Date(Date.now() + 3_600_000).toISOString() },
+        location: 'Zoom',
+        description: 'quarterly review '.repeat(10),
+        attendees: [{ email: 'a@x.com' }, { displayName: 'B' }],
+      })
+    }
+    expect(last).toContain('event 9999')
+    expect(Date.now() - start).toBeLessThan(3_000)
+  })
+
+  it('caps attendees at 5 and skips entries with neither email nor name', () => {
+    const attendees: { email?: string; displayName?: string }[] =
+      Array.from({ length: 8 }, (_, i) => ({ email: `a${i}@x.com` }))
+    attendees.push({})
+    const msg = buildEventInjectMessage({
+      summary: 's',
+      start: { dateTime: new Date().toISOString() },
+      attendees,
+    })
+    const line = msg.split('\n').find(l => l.startsWith('• Attendees:'))!
+    expect(line).toContain('a0@x.com')
+    expect(line).toContain('a4@x.com')
+    expect(line).not.toContain('a5@x.com')
+
+    const noAttendees = buildEventInjectMessage({
+      summary: 's',
+      start: { dateTime: new Date().toISOString() },
+      attendees: [{}],
+    })
+    expect(noAttendees).not.toContain('• Attendees:')
+  })
 })
 
 describe('buildDocumentInject', () => {

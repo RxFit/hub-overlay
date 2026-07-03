@@ -9,6 +9,7 @@ import type { ChatAttachment } from '@/types'
 import styles from './LeftPanelSections.module.css'
 import { CollapsibleSection, SkeletonBlock, SectionMessage } from './LeftPanelShared'
 import { formatTime, DAY_LETTERS, getMonday, getWeekDays } from './LeftPanelUtils'
+import { buildEventInjectMessage } from '@/lib/panel-inject'
 
 /* ══════════════════════════════════════════════════════════════════════════════
    CALENDAR EVENT MODAL
@@ -395,26 +396,13 @@ function CalendarSectionImpl({ onInjectChat }: { onInjectChat: (msg: string, att
                 <CalendarRow
                   key={event.id}
                   event={event}
-                  onClick={() => {
-                    const userTz = Intl.DateTimeFormat().resolvedOptions().timeZone
-                    const startStr = event.start.dateTime
-                      ? new Date(event.start.dateTime).toLocaleString('en-US', { timeZone: userTz, dateStyle: 'medium', timeStyle: 'short' })
-                      : event.start.date ?? ''
-                    const endStr = event.end?.dateTime
-                      ? `, ends ${new Date(event.end.dateTime).toLocaleTimeString('en-US', { timeZone: userTz, timeStyle: 'short' })}`
-                      : ''
-                    const loc = event.location ? `, location: ${event.location}` : ''
-                    const attendeesStr = event.attendees?.length
-                      ? `, attendees: ${event.attendees.map(a => a.email || a.displayName).slice(0, 5).join(', ')}`
-                      : ''
-                    const desc = event.description
-                      ? `. Description: ${event.description.replace(/\s+/g, ' ').slice(0, 300)}`
-                      : ''
-                    onInjectChat(`Tell me about this calendar event: "${event.summary}" on ${startStr}${endStr}${loc}${attendeesStr}${desc}`)
-                  }}
+                  onClick={() => onInjectChat(buildEventInjectMessage(event))}
                   onDelete={() => setDeleteConfirm({
                     id: event.id,
                     summary: event.summary ?? '(untitled)',
+                    // Delete from the event's SOURCE calendar (tagged by the API
+                    // route); falls back to 'primary' server-side if absent.
+                    calendarId: event.calendarId,
                   })}
                 />
               ))}

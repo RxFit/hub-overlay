@@ -7,7 +7,7 @@ import type { TaskItem } from '@/app/hooks/useHubData'
 import type { ChatAttachment } from '@/types'
 import styles from './LeftPanelSections.module.css'
 import { CollapsibleSection, SkeletonBlock, SectionMessage } from './LeftPanelShared'
-import { formatRelativeDate } from './LeftPanelUtils'
+import { buildTaskInjectMessage, formatDueDate } from '@/lib/panel-inject'
 
 /* ══════════════════════════════════════════════════════════════════════════════
    TASKS SECTION
@@ -133,14 +133,7 @@ function TasksSectionImpl({ onInjectChat, onInjectAction }: { onInjectChat: (msg
               isFading={fadingIds.has(task.id)}
               isToggling={togglingIds.has(task.id)}
               onToggle={() => resolvedListId && handleToggleTask(task, resolvedListId)}
-              onInjectChat={() => {
-                // Carry the task's real details inline so the assistant has the
-                // data even if this item is outside the live-context snapshot
-                const due = task.due ? `, due ${new Date(task.due).toLocaleDateString('en-US', { timeZone: 'America/Chicago' })}` : ''
-                const status = task.status === 'completed' ? ' (completed)' : ''
-                const notes = task.notes ? `. Notes: ${task.notes.replace(/\s+/g, ' ').slice(0, 500)}` : ''
-                onInjectChat(`Tell me about this task from my "${activeListName}" list: "${task.title}"${due}${status}${notes}`)
-              }}
+              onInjectChat={() => onInjectChat(buildTaskInjectMessage(task, activeListName))}
             />
           ))}
         </div>
@@ -174,7 +167,9 @@ function TaskRow({
   onToggle: () => void
   onInjectChat: () => void
 }) {
-  const dueDate = task.due ? formatRelativeDate(task.due) : null
+  // formatDueDate handles Google Tasks' date-only UTC-midnight `due` values:
+  // future deltas + overdue, without the "just now" bug formatRelativeDate has.
+  const dueDate = task.due ? formatDueDate(task.due) : null
   const isCompleted = task.status === 'completed'
 
   return (
