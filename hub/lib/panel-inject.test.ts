@@ -97,6 +97,42 @@ describe('buildEventInjectMessage', () => {
     const detail = msg.split('\n').find(l => l.startsWith('• Details:'))!.replace('• Details: ', '')
     expect(detail.length).toBeLessThanOrEqual(500)
   })
+
+  it('includes the end time when present and omits it when absent', () => {
+    const start = new Date()
+    const end = new Date(start.getTime() + 3_600_000)
+    const withEnd = buildEventInjectMessage({
+      summary: 's',
+      start: { dateTime: start.toISOString() },
+      end: { dateTime: end.toISOString() },
+    })
+    expect(withEnd).toContain(', ends ')
+
+    const withoutEnd = buildEventInjectMessage({ summary: 's', start: { dateTime: start.toISOString() } })
+    expect(withoutEnd).not.toContain(', ends ')
+  })
+
+  it('caps attendees at 5 and skips entries with neither email nor name', () => {
+    const attendees: { email?: string; displayName?: string }[] =
+      Array.from({ length: 8 }, (_, i) => ({ email: `a${i}@x.com` }))
+    attendees.push({})
+    const msg = buildEventInjectMessage({
+      summary: 's',
+      start: { dateTime: new Date().toISOString() },
+      attendees,
+    })
+    const line = msg.split('\n').find(l => l.startsWith('• Attendees:'))!
+    expect(line).toContain('a0@x.com')
+    expect(line).toContain('a4@x.com')
+    expect(line).not.toContain('a5@x.com')
+
+    const noAttendees = buildEventInjectMessage({
+      summary: 's',
+      start: { dateTime: new Date().toISOString() },
+      attendees: [{}],
+    })
+    expect(noAttendees).not.toContain('• Attendees:')
+  })
 })
 
 describe('buildDocumentInject', () => {

@@ -23,8 +23,10 @@ export interface TaskInput {
 export interface EventInput {
   summary?: string
   start: { dateTime?: string; date?: string }
+  end?: { dateTime?: string; date?: string }
   location?: string
   description?: string
+  attendees?: { email?: string; displayName?: string }[]
 }
 
 export interface DriveFileInput {
@@ -145,9 +147,15 @@ export function buildEventInjectMessage(event: EventInput): string {
   const lines = [
     `Tell me about this calendar event:`,
     `• Title: ${event.summary || '(untitled)'}`,
-    `• When: ${when}`,
+    `• When: ${when}${event.end?.dateTime ? `, ends ${formatTime(event.end.dateTime)}` : ''}`,
   ]
   if (event.location) lines.push(`• Location: ${event.location}`)
+  const attendeeNames = (event.attendees ?? [])
+    .map(a => a.email || a.displayName)
+    .filter(Boolean)
+  if (attendeeNames.length > 0) {
+    lines.push(`• Attendees: ${attendeeNames.slice(0, 5).join(', ')}`)
+  }
   if (event.description) lines.push(`• Details: ${clampText(event.description)}`)
   return lines.join('\n')
 }

@@ -4,10 +4,11 @@ import { useState } from 'react'
 import useSWR from 'swr'
 import { useDrive } from '@/app/hooks/useHubData'
 import type { DriveFile } from '@/app/hooks/useHubData'
-import type { ToolArtifactRecord } from '@/types'
+import type { ToolArtifactRecord, ChatAttachment } from '@/types'
 import styles from './LeftPanelSections.module.css'
 import { CollapsibleSection, SkeletonBlock, SectionMessage } from './LeftPanelShared'
-import { formatRelativeDate, getDriveIcon } from './LeftPanelUtils'
+import { formatRelativeDate, getDriveIcon, artifactsFetcher } from './LeftPanelUtils'
+import { buildDocumentInject, buildArtifactInject } from '@/lib/panel-inject'
 
 /* ══════════════════════════════════════════════════════════════════════════════
    DOCUMENTS SECTION
@@ -21,14 +22,19 @@ const DOC_FILTERS: { key: DocFilter; label: string }[] = [
   { key: 'transcripts', label: 'Transcripts' },
 ]
 
-export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string) => void }) {
+export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void }) {
   const [activeFilter, setActiveFilter] = useState<DocFilter>('recent')
-  const { files, isLoading, error } = useDrive(activeFilter === 'artifacts' ? 'recent' : activeFilter)
-  
-  /* Fetch tool artifacts when artifacts tab is active */
+  const isArtifactsTab = activeFilter === 'artifacts'
+  // Disable the Drive fetch entirely while the Artifacts tab is active — no
+  // point polling Drive for a tab that renders artifacts.
+  const { files, isLoading, error } = useDrive(isArtifactsTab ? 'recent' : activeFilter, !isArtifactsTab)
+
+  /* Fetch tool artifacts when artifacts tab is active. artifactsFetcher throws
+     a status-tagged error on !res.ok so a 401/500 surfaces as an error state
+     instead of masquerading as "no artifacts". */
   const { data: artifactsData, isLoading: artifactsLoading, error: artifactsError } = useSWR<{ artifacts: ToolArtifactRecord[] }>(
-    activeFilter === 'artifacts' ? '/api/tool-artifacts' : null,
-    (url: string) => fetch(url).then(r => r.json()),
+    isArtifactsTab ? '/api/tool-artifacts' : null,
+    artifactsFetcher,
     { revalidateOnFocus: false }
   )
 
@@ -74,7 +80,10 @@ export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string)
         artifactsLoading ? (
           <SkeletonBlock lines={3} />
         ) : artifactsError ? (
-          <SectionMessage message="Unable to load artifacts" type="error" />
+          <SectionMessage
+            message={(artifactsError as any)?.status === 401 ? 'Session expired — please sign in again' : 'Unable to load artifacts'}
+            type="error"
+          />
         ) : !artifactsData?.artifacts?.length ? (
           <SectionMessage message={emptyMessages.artifacts} type="empty" />
         ) : (
@@ -83,7 +92,12 @@ export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string)
               <button
                 key={artifact.id}
                 role="listitem"
-                onClick={() => onInjectChat(`Show me the ${artifact.toolId} artifact: ${artifact.title}`)}
+                onClick={() => {
+                  // Attach the real artifact id so the chat resolves THIS
+                  // artifact even when two share a toolId + title.
+                  const { message, attachment } = buildArtifactInject(artifact)
+                  onInjectChat(message, [attachment])
+                }}
                 aria-label={`Artifact: ${artifact.title}`}
                 className={styles.sectionRow}
               >
@@ -118,10 +132,10 @@ export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string)
                   key={file.id}
                   file={file}
                   onClick={() => {
-                    const msg = activeFilter === 'transcripts'
-                      ? `Summarize the meeting transcript: ${file.name}`
-                      : `Find document: ${file.name}`
-                    onInjectChat(msg)
+                    // Attaches the real Drive fileId so the chat route resolves
+                    // the document's actual content, not just the file name.
+                    const { message, attachment } = buildDocumentInject(file, activeFilter === 'transcripts')
+                    onInjectChat(message, [attachment])
                   }}
                 />
               ))}
