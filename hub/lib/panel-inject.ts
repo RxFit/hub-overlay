@@ -151,10 +151,12 @@ export function buildEventInjectMessage(event: EventInput): string {
   ]
   if (event.location) lines.push(`• Location: ${event.location}`)
   const attendeeNames = (event.attendees ?? [])
+    .slice(0, 5)
     .map(a => a.email || a.displayName)
     .filter(Boolean)
   if (attendeeNames.length > 0) {
-    lines.push(`• Attendees: ${attendeeNames.slice(0, 5).join(', ')}`)
+    // clampText bounds pathological attendee strings, same as notes/description.
+    lines.push(`• Attendees: ${clampText(attendeeNames.join(', '), 300)}`)
   }
   if (event.description) lines.push(`• Details: ${clampText(event.description)}`)
   return lines.join('\n')
