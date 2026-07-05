@@ -6,6 +6,7 @@ import type { ChatSpace, ChatMessage, SpaceMember } from '@/app/hooks/useGoogleC
 import { MentionPicker, useMentionTrigger } from '@/app/components/MentionPicker'
 import { InfoPopover } from '@/app/components/InfoPopover'
 import { EmailPreviewCard } from '@/app/components/EmailPreviewCard'
+import { extractEmail } from '@/lib/email-address'
 
 
 /* ══════════════════════════════════════════
@@ -483,6 +484,12 @@ function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => void }) {
   const handleSend = async () => {
     if (!reply.trim() || !selectedThread) return
     const last = selectedThread.messages[selectedThread.messages.length - 1]
+    // Reply to the other party, not blindly the last message — our own
+    // optimistic replies are appended with from: 'me', so skip those and
+    // fall back to the thread's first sender.
+    const target = [...selectedThread.messages].reverse().find(m => m.from !== 'me')
+      ?? selectedThread.messages[0]
+    const targetEmail = extractEmail(target.from)
     setSending(true)
     setSendError(null)
     try {
@@ -490,9 +497,9 @@ function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => void }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          to: last.from,
+          to: targetEmail,
           threadId: selectedThread.id,
-          inReplyTo: last.inReplyTo,
+          inReplyTo: target.inReplyTo,
           message: reply,
         }),
       })
@@ -505,7 +512,7 @@ function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => void }) {
         messages: [...prev.messages, {
           id: d.messageId,
           from: 'me',
-          to: last.from,
+          to: targetEmail,
           subject: last.subject,
           date: new Date().toUTCString(),
           body: reply,

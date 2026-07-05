@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
 import { clampInt } from '@/lib/num'
+import { extractEmail } from '@/lib/email-address'
 import { GoogleGmailSendSchema } from '@/lib/zod-schemas'
 
 export const runtime = 'nodejs'
@@ -130,8 +131,12 @@ export async function POST(req: NextRequest) {
   const cleanInReplyTo = inReplyTo ? stripHeader(inReplyTo) : ''
 
   // Validate every recipient address (comma-separated list supported).
+  // Extract the bare address first so bare addresses and simple `Name <addr>`
+  // forms are normalized before validation. Quoted display names containing a
+  // comma (`"Lopez, Maria" <m@x.com>`) are split apart here and rejected —
+  // not supported at the route layer, which fails closed.
   const EMAIL_RE = /^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/
-  const recipients = stripHeader(to).split(',').map(r => r.trim()).filter(Boolean)
+  const recipients = stripHeader(to).split(',').map(r => extractEmail(r)).filter(Boolean)
   if (recipients.length === 0 || !recipients.every(r => EMAIL_RE.test(r))) {
     return NextResponse.json({ error: 'Invalid recipient address' }, { status: 400 })
   }
