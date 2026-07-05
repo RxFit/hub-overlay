@@ -49,10 +49,9 @@ LOW (polish/robustness).
 - **Where:** `CalendarEventModal.handleSave` validates presence only, never `end > start`. Verified: it POSTed `start: …T14:00:00, end: …T13:00:00`. Google may reject or create a negative-length event.
 - **Fix:** validate `end > start` (and same-day) before submit; also validate attendee emails client-side (a bad address currently flows through).
 
-### F8 · LOW/MED · React "unique key" warning in BrandedHeader — CONFIRMED
-- **Where:** console: "Each child in a list should have a unique key prop. Check the render method of `BrandedHeader`." The project/workspace `<option>` list is missing `key`s.
-- **Impact:** cosmetic today, but missing keys can cause selection/render glitches on list changes.
-- **Fix:** add stable `key`s to the mapped `<option>`s.
+### F8 · RETRACTED · React "unique key" warning in BrandedHeader — test-harness artifact
+- **Originally filed as:** missing `key`s on the project/workspace `<option>` list (console warning observed during the test run).
+- **Retraction (2026-07-05):** source audit shows every map in `BrandedHeader.tsx` is keyed with stable ids (`c.id`, `companyName`, `p.id`) in all versions of the file. The warning fired because the test harness mocked `/api/projects` with ProjectKPI-shaped fixtures that have `companyId` but no `id`, making `key={p.id}` undefined for every option. Real API data always carries `id` (required by `CompanySchema`/`ProjectSchema` in `lib/zod-schemas.ts`). No app change needed.
 
 ### F9 · LOW · Chat error path leaks raw server error text to end users — CONFIRMED
 - **Where:** `app/api/chat/route.ts` 500 handler returns `details: err.message`; `app/page.tsx` `sendToApi` renders that string into the chat bubble. The code comments call it a "TEMP DIAGNOSTIC … Remove once the issue is resolved."
