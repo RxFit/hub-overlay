@@ -14,6 +14,7 @@ import { needsInternalSearch, needsExternalSearch } from '@/lib/search-routing'
 import { ChatRequestSchema } from '@/lib/zod-schemas'
 import { buildGoogleWorkspaceContext } from '@/lib/google-context'
 import { withTimeout } from '@/lib/timeout'
+import { chatErrorBody } from '@/lib/chat-error'
 import { breaker, CircuitOpenError } from '@/lib/circuit-breaker'
 import type { ChatMessage, ChatAttachment } from '@/types'
 import '@/lib/validate-keys'  // Side-effect import: validates API keys on cold start
@@ -492,10 +493,10 @@ export async function POST(req: NextRequest) {
   try {
     return await handleChat(req)
   } catch (err) {
-    const details = err instanceof Error ? err.message : 'Unknown error'
     log.error({ err }, 'Chat request failed before streaming started')
+    // Raw error text is dev-only diagnostics — production bodies must stay generic.
     return NextResponse.json(
-      { error: 'Chat request failed', details },
+      chatErrorBody(err, process.env.NODE_ENV === 'production'),
       { status: 500 },
     )
   }
