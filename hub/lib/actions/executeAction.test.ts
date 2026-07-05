@@ -17,15 +17,23 @@ function jsonResponse(body: unknown, ok = true, status = 200) {
   }
 }
 
-function specFor(intent: ActionSpec['intent'], details: Record<string, string>): ActionSpec {
+function specFor(
+  intent: ActionSpec['intent'],
+  details: Record<string, string>,
+  gateToken?: string
+): ActionSpec {
   return {
     intent,
     details,
     targetSystems: [],
     summary: `${intent} — test`,
     requiredPermission: 'staff',
+    ...(gateToken ? { gateToken } : {}),
   }
 }
+
+/** Signed-token stand-in — the routes verify it server-side, the client just carries it. */
+const GATE_TOKEN = 'body.signature'
 
 const fetchMock = vi.fn()
 
@@ -49,7 +57,7 @@ describe('executeAction: send_gmail', () => {
         to: 'maria@rxfitatx.com',
         subject: 'Invoice',
         body: 'The invoice is paid',
-      }),
+      }, GATE_TOKEN),
       deps
     )
 
@@ -67,6 +75,32 @@ describe('executeAction: send_gmail', () => {
     expect(result).toContain('Invoice')
   })
 
+  it('attaches X-Gate-Token and X-AI-Intent headers to the send POST (P0-2)', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ sent: true }))
+
+    await executeAction(
+      specFor('send_gmail', { to: 'maria@rxfitatx.com', subject: 'x', body: 'y' }, GATE_TOKEN),
+      deps
+    )
+
+    const [, init] = fetchMock.mock.calls[0]
+    expect(init.headers).toEqual({
+      'Content-Type': 'application/json',
+      'X-Gate-Token': GATE_TOKEN,
+      'X-AI-Intent': 'send_gmail',
+    })
+  })
+
+  it('throws without fetching when the quality-gate token is missing (fail fast)', async () => {
+    await expect(
+      executeAction(
+        specFor('send_gmail', { to: 'maria@rxfitatx.com', subject: 'x', body: 'y' }),
+        deps
+      )
+    ).rejects.toThrow('Missing quality-gate token')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('defaults the subject and falls back to details for the body', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ sent: true }))
 
@@ -74,7 +108,7 @@ describe('executeAction: send_gmail', () => {
       specFor('send_gmail', {
         to: 'maria@rxfitatx.com',
         details: 'Free-text collected answer',
-      }),
+      }, GATE_TOKEN),
       deps
     )
 
@@ -91,7 +125,7 @@ describe('executeAction: send_gmail', () => {
 
     await expect(
       executeAction(
-        specFor('send_gmail', { to: 'maria@rxfitatx.com', subject: 'x', body: 'y' }),
+        specFor('send_gmail', { to: 'maria@rxfitatx.com', subject: 'x', body: 'y' }, GATE_TOKEN),
         deps
       )
     ).rejects.toThrow('Email send failed: 500')
@@ -114,21 +148,38 @@ describe('executeAction: post_chat_message', () => {
       .mockResolvedValueOnce(jsonResponse({ message: { name: 'spaces/AAA/messages/1' } }))
 
     const result = await executeAction(
-      specFor('post_chat_message', { space: 'rxfit ops', message: 'Demo moved to 3pm' }),
+      specFor('post_chat_message', { space: 'rxfit ops', message: 'Demo moved to 3pm' }, GATE_TOKEN),
       deps
     )
 
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(fetchMock.mock.calls[0][0]).toBe('/api/google/chat/spaces')
+    // The spaces GET is a read — it must NOT carry gate headers.
+    expect(fetchMock.mock.calls[0][1]).toBeUndefined()
 
     const [url, init] = fetchMock.mock.calls[1]
     expect(url).toBe('/api/google/chat/messages')
     expect(init.method).toBe('POST')
+    expect(init.headers).toEqual({
+      'Content-Type': 'application/json',
+      'X-Gate-Token': GATE_TOKEN,
+      'X-AI-Intent': 'post_chat_message',
+    })
     expect(JSON.parse(init.body)).toEqual({
       spaceId: 'spaces/AAA',
       text: 'Demo moved to 3pm',
     })
     expect(result).toContain('Posted to RxFit Ops')
+  })
+
+  it('throws without fetching when the quality-gate token is missing (fail fast)', async () => {
+    await expect(
+      executeAction(
+        specFor('post_chat_message', { space: 'RxFit Ops', message: 'hi' }),
+        deps
+      )
+    ).rejects.toThrow('Missing quality-gate token')
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('throws when no space matches', async () => {
@@ -138,7 +189,7 @@ describe('executeAction: post_chat_message', () => {
 
     await expect(
       executeAction(
-        specFor('post_chat_message', { space: 'RxFit Ops', message: 'hi' }),
+        specFor('post_chat_message', { space: 'RxFit Ops', message: 'hi' }, GATE_TOKEN),
         deps
       )
     ).rejects.toThrow('Chat space matching "RxFit Ops" not found')
@@ -157,7 +208,7 @@ describe('executeAction: post_chat_message', () => {
 
     await expect(
       executeAction(
-        specFor('post_chat_message', { space: 'RxFit', message: 'hi' }),
+        specFor('post_chat_message', { space: 'RxFit', message: 'hi' }, GATE_TOKEN),
         deps
       )
     ).rejects.toThrow(/RxFit Ops.*RxFit Ops Archive/)
@@ -177,7 +228,7 @@ describe('executeAction: post_chat_message', () => {
       .mockResolvedValueOnce(jsonResponse({ message: { name: 'spaces/AAA/messages/2' } }))
 
     const result = await executeAction(
-      specFor('post_chat_message', { space: 'rxfit ops', message: 'hi' }),
+      specFor('post_chat_message', { space: 'rxfit ops', message: 'hi' }, GATE_TOKEN),
       deps
     )
 
@@ -193,7 +244,7 @@ describe('executeAction: post_chat_message', () => {
 
     await expect(
       executeAction(
-        specFor('post_chat_message', { space: 'RxFit Ops', message: 'hi' }),
+        specFor('post_chat_message', { space: 'RxFit Ops', message: 'hi' }, GATE_TOKEN),
         deps
       )
     ).rejects.toThrow('Failed to fetch Chat spaces: 403')
@@ -208,7 +259,7 @@ describe('executeAction: post_chat_message', () => {
 
     await expect(
       executeAction(
-        specFor('post_chat_message', { space: 'RxFit Ops', message: 'hi' }),
+        specFor('post_chat_message', { space: 'RxFit Ops', message: 'hi' }, GATE_TOKEN),
         deps
       )
     ).rejects.toThrow('Chat message failed: 500')

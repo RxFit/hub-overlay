@@ -11,6 +11,7 @@ import {
 import { clampInt } from '@/lib/num'
 import { extractEmail } from '@/lib/email-address'
 import { GoogleGmailSendSchema } from '@/lib/zod-schemas'
+import { requireAiGate } from '@/lib/requireGate'
 
 export const runtime = 'nodejs'
 
@@ -114,6 +115,14 @@ export async function POST(req: NextRequest) {
   const auth = await resolveGoogleAuth(req)
   if (!auth.ok) return auth.response
   const accessToken = auth.accessToken
+
+  // P0-2 (Option B): AI-originated sends (X-AI-Intent present) must carry a
+  // valid server-issued quality-gate token — missing/forged/expired/mismatched
+  // tokens fail closed. Manual composer sends carry no AI marker and pass.
+  const gate = requireAiGate(req.headers, ['send_gmail'])
+  if (!gate.ok) {
+    return NextResponse.json({ error: gate.error }, { status: gate.status })
+  }
 
   let bodyJson: unknown
   try {

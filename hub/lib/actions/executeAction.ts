@@ -17,6 +17,25 @@ function issueHeaders(spec: ActionSpec): Record<string, string> {
   return headers
 }
 
+/**
+ * Headers for AI-originated Google sends (send_gmail / post_chat_message).
+ * Sibling of `issueHeaders` for routes that verify the gate directly (P0-2,
+ * Option B): marks the request as AI-originated via X-AI-Intent and carries
+ * the server-issued quality-gate token so the route can fail closed on
+ * missing/forged/expired/mismatched tokens. Throws (fail fast, before any
+ * network call) when the spec has no token — the server would reject it anyway.
+ */
+function gatedSendHeaders(spec: ActionSpec): Record<string, string> {
+  if (!spec.gateToken) {
+    throw new Error('Missing quality-gate token — please re-run the request so the safety gate can score it.')
+  }
+  return {
+    'Content-Type': 'application/json',
+    'X-Gate-Token': spec.gateToken,
+    'X-AI-Intent': spec.intent,
+  }
+}
+
 function pickList<T>(data: unknown, key: string): T[] {
   if (Array.isArray(data)) return data as T[]
   if (data && typeof data === 'object' && key in data) {
@@ -186,6 +205,10 @@ export async function executeAction(
     }
 
     case 'send_gmail': {
+      // Fail fast (before any fetch) if the quality-gate token is missing —
+      // the server verifies it and would 403 the send anyway (P0-2, Option B).
+      const gmailHeaders = gatedSendHeaders(spec)
+
       // Interview collects: to, subject, body (entity extraction may prefill)
       const to = spec.details.to
       const subject = spec.details.subject || '(no subject)'
@@ -193,7 +216,7 @@ export async function executeAction(
 
       const res = await fetch('/api/google/gmail', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: gmailHeaders,
         body: JSON.stringify({ to, subject, message: body }),
       })
       if (!res.ok) throw new Error(`Email send failed: ${res.status}`)
@@ -202,7 +225,12 @@ export async function executeAction(
     }
 
     case 'post_chat_message': {
+      // Fail fast (before any fetch) if the quality-gate token is missing —
+      // the server verifies it and would 403 the post anyway (P0-2, Option B).
+      const chatHeaders = gatedSendHeaders(spec)
+
       // Resolve the space by display name — never pick silently on ambiguity.
+      // The spaces GET is a read and needs no gate; only the send carries it.
       const spacesRes = await fetch('/api/google/chat/spaces')
       if (!spacesRes.ok) throw new Error(`Failed to fetch Chat spaces: ${spacesRes.status}`)
       const spaces = pickList<{ name: string; displayName: string }>(await spacesRes.json(), 'spaces')
@@ -227,7 +255,7 @@ export async function executeAction(
 
       const msgRes = await fetch('/api/google/chat/messages', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: chatHeaders,
         body: JSON.stringify({ spaceId: space.name, text: spec.details.message }),
       })
       if (!msgRes.ok) throw new Error(`Chat message failed: ${msgRes.status}`)
