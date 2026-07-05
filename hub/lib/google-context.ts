@@ -138,8 +138,13 @@ export async function buildGoogleWorkspaceContext(
       let used = header.length
       let shown = 0
       for (const t of threads) {
+        // Every user-generated field is per-field sliced BEFORE the section
+        // budget check — otherwise one hostile mail with a huge subject as the
+        // newest thread would blow the budget on line 1 and hide the whole inbox.
+        const subject = t.subject.replace(/\s+/g, ' ').trim().slice(0, 120)
+        const from = t.from.replace(/\s+/g, ' ').trim().slice(0, 80)
         const snippet = t.snippet.replace(/\s+/g, ' ').trim().slice(0, 120)
-        let line = `  - ${t.isUnread ? '[UNREAD] ' : ''}"${t.subject}" — ${t.from} (${fmtDate(t.date)})`
+        let line = `  - ${t.isUnread ? '[UNREAD] ' : ''}"${subject}" — ${from} (${fmtDate(t.date)})`
         if (snippet) line += ` :: ${snippet}`
         if (used + line.length + 1 > GMAIL_SECTION_CAP) break
         lines.push(line)
@@ -173,7 +178,9 @@ export async function buildGoogleWorkspaceContext(
           for (const m of messagesBySpace[i] ?? []) {
             const text = (m.text ?? '').replace(/\s+/g, ' ').trim()
             if (!text) continue
-            const line = `\n    · ${m.sender?.displayName || '(unknown)'}: ${text.slice(0, 100)}`
+            const sender =
+              (m.sender?.displayName ?? '').replace(/\s+/g, ' ').trim().slice(0, 80) || '(unknown)'
+            const line = `\n    · ${sender}: ${text.slice(0, 100)}`
             if (line.length > msgBudget) break
             block += line
             msgBudget -= line.length

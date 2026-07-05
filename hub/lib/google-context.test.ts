@@ -138,6 +138,31 @@ describe('buildGoogleWorkspaceContext — Gmail section', () => {
     expect(gmail).toMatch(/…and \d+ more/)
     expect(gmail).not.toContain('x'.repeat(121))
   })
+
+  it('truncates a hostile oversized subject/sender instead of collapsing the section', async () => {
+    // The NEWEST thread carries a 2,000-char subject and a 500-char From. If
+    // those fields were unbounded, line 1 would blow the 1,800 budget and the
+    // whole section would collapse to header + "…and N more" (denial of
+    // visibility). Per-field slices must keep the line AND later threads.
+    mocks.listRecentGmailThreads.mockResolvedValue([
+      thread('t1', { subject: 'A'.repeat(2_000), from: 'F'.repeat(500), isUnread: true }),
+      thread('t2'),
+      thread('t3'),
+    ])
+
+    const { detail } = await buildGoogleWorkspaceContext('token')
+    const gmail = section(detail, '### Gmail')
+
+    // The hostile thread still renders, truncated to the per-field caps.
+    expect(gmail).toContain(`[UNREAD] "${'A'.repeat(120)}"`)
+    expect(gmail).not.toContain('A'.repeat(121))
+    expect(gmail).toContain('F'.repeat(80))
+    expect(gmail).not.toContain('F'.repeat(81))
+    // …and it does NOT crowd out the rest of the inbox.
+    expect(gmail).toContain('"Subject t2" — sender-t2@rxfitatx.com')
+    expect(gmail).toContain('"Subject t3" — sender-t3@rxfitatx.com')
+    expect(gmail).not.toMatch(/…and \d+ more/)
+  })
 })
 
 describe('buildGoogleWorkspaceContext — Chat messages', () => {
@@ -192,5 +217,14 @@ describe('buildGoogleWorkspaceContext — Chat messages', () => {
     expect(total).toBeLessThanOrEqual(1_500)
     // Per-message slice: no line carries more than ~100 chars of body.
     expect(chat).not.toContain('m'.repeat(101))
+  })
+
+  it('slices an oversized sender display name to ~80 chars', async () => {
+    mocks.listChatMessages.mockResolvedValue([chatMsg('N'.repeat(300), 'hello')])
+
+    const { detail } = await buildGoogleWorkspaceContext('token')
+
+    expect(detail).toContain(`· ${'N'.repeat(80)}: hello`)
+    expect(detail).not.toContain('N'.repeat(81))
   })
 })
