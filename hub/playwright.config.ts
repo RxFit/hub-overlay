@@ -35,6 +35,10 @@ export default defineConfig({
   // The panel tests share one dev server; run serially to keep compile-time
   // interference out of the timings.
   workers: 1,
+  // In CI also write the HTML report (uploaded as an artifact on failure).
+  reporter: process.env.CI
+    ? [['list'], ['html', { open: 'never' }]]
+    : 'list',
   use: {
     baseURL: 'http://localhost:3100',
     // Pre-provisioned Chromium (PLAYWRIGHT_BROWSERS_PATH may point at a

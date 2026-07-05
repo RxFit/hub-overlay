@@ -29,7 +29,7 @@ export default function DailyFeed() {
           </div>
           <p className="text-zinc-700 dark:text-zinc-300 text-sm leading-relaxed">
             I noticed you updated the <strong>Q3 Projections Sheet</strong> in Drive. 
-            Based on those new numbers, I've linked the data to your <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-zinc-200 dark:bg-zinc-700 text-zinc-800 dark:text-zinc-200 cursor-pointer hover:bg-zinc-300 transition-colors">[[kpi:Revenue|Q3 Revenue]]</span> KPI. 
+            Based on those new numbers, I&apos;ve linked the data to your <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-zinc-200 dark:bg-zinc-700 text-zinc-800 dark:text-zinc-200 cursor-pointer hover:bg-zinc-300 transition-colors">[[kpi:Revenue|Q3 Revenue]]</span> KPI. 
             It looks like we are trending 12% higher than expected.
           </p>
         </div>
@@ -40,7 +40,7 @@ export default function DailyFeed() {
             Gmail Action Item
           </div>
           <p className="text-zinc-700 dark:text-zinc-300 text-sm leading-relaxed">
-            A client emailed you about a delayed shipment. I've automatically created a <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-zinc-200 dark:bg-zinc-700 text-zinc-800 dark:text-zinc-200 cursor-pointer hover:bg-zinc-300 transition-colors">[[task:102|Logistics Issue]]</span> node in the Graph and pinged the fulfillment agent.
+            A client emailed you about a delayed shipment. I&apos;ve automatically created a <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-zinc-200 dark:bg-zinc-700 text-zinc-800 dark:text-zinc-200 cursor-pointer hover:bg-zinc-300 transition-colors">[[task:102|Logistics Issue]]</span> node in the Graph and pinged the fulfillment agent.
           </p>
         </div>
 
