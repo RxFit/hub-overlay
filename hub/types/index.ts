@@ -218,6 +218,9 @@ export type InterviewIntent =
   | 'create_workspace'
   | 'delete_workspace'
   | 'delete_agent'
+  // F3: Direct human-confirmed send actions (Gmail + Google Chat)
+  | 'send_gmail'
+  | 'post_chat_message'
 
 export interface InterviewStep {
   question: string

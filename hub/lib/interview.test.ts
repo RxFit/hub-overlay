@@ -6,7 +6,9 @@ import {
   buildConfirmationSpec,
   isDestructiveIntent,
   isReadOnlyIntent,
+  isHighStakesIntent,
   getTotalQuestions,
+  INTENT_DEFINITIONS,
 } from '@/lib/interview'
 
 describe('hasPermission', () => {
@@ -74,5 +76,84 @@ describe('intent classification helpers', () => {
     expect(spec.details._confirm).toBeUndefined() // _confirm is stripped
     expect(spec.requiredPermission).toBe('staff')
     expect(getTotalQuestions('create_task')).toBe(2)
+  })
+})
+
+describe('F3 direct-send intents (send_gmail / post_chat_message)', () => {
+  it('registers both intents in the classifier definitions', () => {
+    const ids = INTENT_DEFINITIONS.map(d => d.id)
+    expect(ids).toContain('send_gmail')
+    expect(ids).toContain('post_chat_message')
+
+    const gmail = INTENT_DEFINITIONS.find(d => d.id === 'send_gmail')
+    expect(gmail?.expectedEntities).toEqual(['to', 'subject', 'body'])
+    const chat = INTENT_DEFINITIONS.find(d => d.id === 'post_chat_message')
+    expect(chat?.expectedEntities).toEqual(['space', 'message'])
+  })
+
+  it('requires staff permission for both intents', () => {
+    expect(hasPermission('staff', 'send_gmail')).toBe(true)
+    expect(hasPermission('onboarding', 'send_gmail')).toBe(false)
+    expect(hasPermission('staff', 'post_chat_message')).toBe(true)
+    expect(hasPermission('onboarding', 'post_chat_message')).toBe(false)
+  })
+
+  it('flags both intents as high-stakes (Pre-Cog + gate token + confirm card)', () => {
+    expect(isHighStakesIntent('send_gmail')).toBe(true)
+    expect(isHighStakesIntent('post_chat_message')).toBe(true)
+  })
+
+  it('is neither destructive nor read-only', () => {
+    expect(isDestructiveIntent('send_gmail')).toBe(false)
+    expect(isDestructiveIntent('post_chat_message')).toBe(false)
+    expect(isReadOnlyIntent('send_gmail')).toBe(false)
+    expect(isReadOnlyIntent('post_chat_message')).toBe(false)
+  })
+
+  it('advances send_gmail through to _confirm and builds a spec', () => {
+    let state = startInterview('send_gmail')
+    expect(state.active).toBe(true)
+    expect(getTotalQuestions('send_gmail')).toBe(4)
+
+    state = advanceInterview(state, 'maria@rxfitatx.com')
+    state = advanceInterview(state, '') // subject → default '(no subject)'
+    state = advanceInterview(state, 'The invoice is paid')
+    expect(state.active).toBe(true) // parked on _confirm
+
+    state = advanceInterview(state, 'yes')
+    expect(state.active).toBe(false)
+    expect(state.spec?.intent).toBe('send_gmail')
+    expect(state.spec?.details.to).toBe('maria@rxfitatx.com')
+    expect(state.spec?.details.subject).toBe('(no subject)')
+    expect(state.spec?.details.body).toBe('The invoice is paid')
+    expect(state.spec?.targetSystems).toEqual(['Gmail'])
+    expect(state.spec?.requiredPermission).toBe('staff')
+  })
+
+  it('advances post_chat_message through to _confirm and builds a spec', () => {
+    let state = startInterview('post_chat_message')
+    expect(getTotalQuestions('post_chat_message')).toBe(3)
+
+    state = advanceInterview(state, 'RxFit Ops')
+    state = advanceInterview(state, 'Demo moved to 3pm')
+    expect(state.active).toBe(true) // parked on _confirm
+
+    state = advanceInterview(state, 'yes')
+    expect(state.active).toBe(false)
+    expect(state.spec?.intent).toBe('post_chat_message')
+    expect(state.spec?.details.space).toBe('RxFit Ops')
+    expect(state.spec?.details.message).toBe('Demo moved to 3pm')
+    expect(state.spec?.targetSystems).toEqual(['Google Chat'])
+    expect(state.spec?.requiredPermission).toBe('staff')
+  })
+
+  it('fast-forwards past extracted entities to _confirm', () => {
+    const state = startInterview('send_gmail', {
+      to: 'maria@rxfitatx.com',
+      subject: 'Invoice',
+      body: 'The invoice is paid',
+    })
+    expect(state.active).toBe(true)
+    expect(state.step).toBe(3) // parked on _confirm
   })
 })

@@ -58,6 +58,8 @@ const INTENT_DIMENSIONS: Record<string, string[]> = {
   create_task: ['outcome', 'timeline', 'constraints', 'success_criteria'],
   schedule_event: ['attendees', 'timing', 'purpose', 'duration'],
   send_communication: ['recipient', 'channel', 'message_content', 'tone'],
+  send_gmail: ['recipient', 'subject', 'message_content'],
+  post_chat_message: ['space', 'message_content'],
   create_paperclip_issue: ['task_clarity', 'agent_context', 'success_criteria'],
   check_agent_status: ['scope'],
   view_runs: ['scope', 'time_range'],
@@ -227,7 +229,8 @@ export async function POST(req: NextRequest) {
     // For high-stakes or destructive intents, FAIL CLOSED — a scoring outage
     // must not let a consequential action through unvalidated.
     const failClosedIntents = [
-      'send_communication', 'create_paperclip_issue', 'create_agent', 'launch_campaign',
+      'send_communication', 'send_gmail', 'post_chat_message',
+      'create_paperclip_issue', 'create_agent', 'launch_campaign',
       'assign_issue', 'update_issue_state', 'restart_agent',
       'create_workspace', 'delete_workspace', 'delete_agent',
     ]

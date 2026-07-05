@@ -193,6 +193,8 @@ Question sequences by intent:
 • create_task: What exactly? → Priority? → Deadline? → Assign to? → Confirm
 • schedule_event: What event? → When? → Who? → Where? → Duration? → Confirm
 • send_communication: To whom? → Channel? → Content? → Tone? → Confirm
+• send_gmail: To whom (email)? → Subject? → Body? → Confirm
+• post_chat_message: Which Chat space? → Message? → Confirm
 • check_agent_status: Which project? → Which agent? → Confirm
 • view_runs: Which project? → Time range? → Confirm
 • assign_issue: Which issue? → Which agent? → Confirm
