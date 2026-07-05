@@ -16,6 +16,7 @@ import { buildGoogleWorkspaceContext } from '@/lib/google-context'
 import { withTimeout } from '@/lib/timeout'
 import { chatErrorBody } from '@/lib/chat-error'
 import { breaker, CircuitOpenError } from '@/lib/circuit-breaker'
+import { checkRateLimit } from '@/lib/rate-limit'
 import type { ChatMessage, ChatAttachment } from '@/types'
 import '@/lib/validate-keys'  // Side-effect import: validates API keys on cold start
 
@@ -23,6 +24,10 @@ const log = createLogger('chat')
 
 export const runtime = 'nodejs'
 export const maxDuration = 120
+
+// Body-size ceiling (Backend_Hardening_H1_M5_C6): reject oversized payloads
+// before JSON parsing so a single request can't buffer unbounded input.
+const MAX_BODY_BYTES = 524_288 // 512KB
 
 // Search-routing heuristics live in lib/search-routing.ts (word-boundary
 // matched + unit-tested) — imported above as needsInternalSearch / needsExternalSearch.
@@ -164,9 +169,30 @@ async function handleChat(req: NextRequest): Promise<Response> {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  // Rate limit AFTER auth — unauthenticated requests still get 401 above, and
+  // the limiter key is the authenticated email (not a spoofable header).
+  const rate = checkRateLimit(session.user.email ?? 'anonymous')
+  if (!rate.allowed) {
+    return NextResponse.json(
+      { error: 'Too many requests — please slow down.' },
+      { status: 429, headers: { 'Retry-After': String(rate.retryAfterSec ?? 60) } },
+    )
+  }
+
+  // Body-size guard: check content-length first; Next/undici may omit it for
+  // streamed bodies, so fall back to measuring the raw text (body read once).
+  const contentLength = req.headers.get('content-length')
+  if (contentLength && Number(contentLength) > MAX_BODY_BYTES) {
+    return NextResponse.json({ error: 'Request too large' }, { status: 413 })
+  }
+
   let body: { messages: ChatMessage[]; useCase?: string; attachments?: ChatAttachment[]; activeSkill?: string }
   try {
-    body = await req.json()
+    const rawBody = await req.text()
+    if (rawBody.length > MAX_BODY_BYTES) {
+      return NextResponse.json({ error: 'Request too large' }, { status: 413 })
+    }
+    body = JSON.parse(rawBody)
   } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
