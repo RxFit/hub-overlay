@@ -489,6 +489,7 @@ function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => void }) {
     // fall back to the thread's first sender.
     const target = [...selectedThread.messages].reverse().find(m => m.from !== 'me')
       ?? selectedThread.messages[0]
+    const targetEmail = extractEmail(target.from)
     setSending(true)
     setSendError(null)
     try {
@@ -496,9 +497,9 @@ function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => void }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          to: extractEmail(target.from),
+          to: targetEmail,
           threadId: selectedThread.id,
-          inReplyTo: last.inReplyTo,
+          inReplyTo: target.inReplyTo,
           message: reply,
         }),
       })
@@ -511,7 +512,7 @@ function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => void }) {
         messages: [...prev.messages, {
           id: d.messageId,
           from: 'me',
-          to: extractEmail(target.from),
+          to: targetEmail,
           subject: last.subject,
           date: new Date().toUTCString(),
           body: reply,
