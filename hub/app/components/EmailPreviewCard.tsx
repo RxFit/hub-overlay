@@ -1,12 +1,29 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { sanitizeEmailHtml } from '@/lib/sanitize-email'
 
 interface EmailPreviewCardProps {
   htmlContent: string
   subject?: string
   recipient?: string
 }
+
+// Trusted script appended to the srcDoc (after sanitization) to report the
+// content height back to the parent for iframe auto-resize.
+const scriptToInject = `
+  <script>
+    window.onload = () => {
+      const height = document.documentElement.scrollHeight;
+      window.parent.postMessage({ type: 'resize', height }, '*');
+    };
+    // Observe subsequent height changes (e.g. images loading)
+    new ResizeObserver(() => {
+      const height = document.documentElement.scrollHeight;
+      window.parent.postMessage({ type: 'resize', height }, '*');
+    }).observe(document.body);
+  </script>
+`
 
 export function EmailPreviewCard({ htmlContent, subject, recipient }: EmailPreviewCardProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null)
@@ -26,25 +43,10 @@ export function EmailPreviewCard({ htmlContent, subject, recipient }: EmailPrevi
     return () => window.removeEventListener('message', handleMessage)
   }, [])
 
-  // Inject a small script into the srcDoc to report the height back to the parent
-  const scriptToInject = `
-    <script>
-      window.onload = () => {
-        const height = document.documentElement.scrollHeight;
-        window.parent.postMessage({ type: 'resize', height }, '*');
-      };
-      // Observe subsequent height changes (e.g. images loading)
-      new ResizeObserver(() => {
-        const height = document.documentElement.scrollHeight;
-        window.parent.postMessage({ type: 'resize', height }, '*');
-      }).observe(document.body);
-    </script>
-  `
-  
-  // Clean up and inject the script before the closing </body> or at the end
-  const safeHtml = htmlContent.includes('</body>')
-    ? htmlContent.replace('</body>', `${scriptToInject}</body>`)
-    : htmlContent + scriptToInject
+  // Sanitize the sender-controlled email HTML first, then append our trusted
+  // resize-reporter script (sanitized output has no guaranteed <body> wrapper).
+  // Memoized so height-state re-renders don't re-sanitize.
+  const safeHtml = useMemo(() => sanitizeEmailHtml(htmlContent) + scriptToInject, [htmlContent])
 
   return (
     <div className="email-preview-card" style={{
