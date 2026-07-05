@@ -174,7 +174,7 @@ function getDateGroup(timestamp: string): string {
 function DateGroupLabel({ label }: { label: string }) {
   return (
     <div className="feed-date-group">
-      <span style={{ color: 'var(--accent)', fontWeight: 700, opacity: 0.7 }}>// </span>
+      <span style={{ color: 'var(--accent)', fontWeight: 700, opacity: 0.7 }}>{'// '}</span>
       {label}
     </div>
   )

@@ -1344,7 +1344,7 @@ Respond with EXACTLY one of:
                     color: 'var(--text-muted)',
                     maxWidth: '300px', lineHeight: 1.6, margin: 0,
                   }}>
-                    I'm your business co-pilot. Ask me anything about your workspace.
+                    I&apos;m your business co-pilot. Ask me anything about your workspace.
                   </p>
                 </div>
               )}

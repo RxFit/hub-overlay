@@ -78,7 +78,7 @@ export function CollapsibleSection({
         </span>
 
         {/* Protocol number */}
-        <span className="rx-comment-label">{protocolNum} //</span>
+        <span className="rx-comment-label">{protocolNum}{' //'}</span>
 
         {/* Title */}
         <span className={styles.collapsibleHeaderTitle}>

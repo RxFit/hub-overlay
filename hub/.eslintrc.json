@@ -1,0 +1,17 @@
+{
+  // First-ever lint baseline (W2-#11). Errors are zero; warnings are allowed
+  // and tracked here as debt rather than papered over with rule downgrades.
+  //
+  // TODO(lint-debt): 6 warnings at baseline —
+  //   react-hooks/exhaustive-deps  x4 (ToolPanel x2, page.tsx x2)
+  //   jsx-a11y/role-has-required-aria-props x1 (ContextAttachMenu)
+  //   jsx-a11y/role-supports-aria-props     x1 (GoogleChatPanel)
+  //   plus 11 pre-existing inline exhaustive-deps disables in app/components/panels/.
+  // Fix opportunistically; do not let the count grow.
+  "extends": "next/core-web-vitals",
+  // Registers @typescript-eslint rules (bundled with eslint-config-next) so the
+  // codebase's inline `@typescript-eslint/no-explicit-any` disable directives
+  // resolve. No @typescript-eslint rules are enabled yet (typed linting is
+  // future debt); the plugin only needs to be loaded for the directives.
+  "plugins": ["@typescript-eslint"]
+}
