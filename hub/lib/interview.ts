@@ -23,6 +23,8 @@ const INTENT_PERMISSIONS: Record<InterviewIntent, ActionPermission> = {
   create_task: 'staff',
   schedule_event: 'staff',
   send_communication: 'staff',
+  send_gmail: 'staff',
+  post_chat_message: 'staff',
   create_paperclip_issue: 'staff',
   check_agent_status: 'staff',
   view_runs: 'staff',
@@ -63,7 +65,7 @@ export function getRequiredPermission(intent: InterviewIntent): ActionPermission
 
 /* ── Intent Definitions ── */
 
-const INTENT_DEFINITIONS: Array<{ id: InterviewIntent; description: string; expectedEntities: string[] }> = [
+export const INTENT_DEFINITIONS: Array<{ id: InterviewIntent; description: string; expectedEntities: string[] }> = [
   {
     id: 'create_task',
     description: 'User wants to create, add, or delegate a new task, todo item, or ticket.',
@@ -76,8 +78,18 @@ const INTENT_DEFINITIONS: Array<{ id: InterviewIntent; description: string; expe
   },
   {
     id: 'send_communication',
-    description: 'User wants to send, draft, or compose a communication like an email, slack, or memo.',
+    description: 'User wants to delegate composing and sending a communication (memo, outreach, or multi-recipient message) to the COO agent. Do NOT use this for a direct email (use send_gmail) or a Google Chat post (use post_chat_message).',
     expectedEntities: ['details'],
+  },
+  {
+    id: 'send_gmail',
+    description: 'User wants to directly send an email via Gmail to a specific recipient, e.g. "email Maria that the invoice is paid".',
+    expectedEntities: ['to', 'subject', 'body'],
+  },
+  {
+    id: 'post_chat_message',
+    description: 'User wants to post or send a message in a Google Chat space, e.g. "post in RxFit Ops that the demo moved to 3pm".',
+    expectedEntities: ['space', 'message'],
   },
   {
     id: 'create_paperclip_issue',
@@ -198,6 +210,41 @@ const INTERVIEW_SEQUENCES: Record<InterviewIntent, InterviewStep[]> = {
     },
     {
       question: 'I\'ll brief the COO Agent to send this communication. Confirm? (yes / edit / cancel)',
+      key: '_confirm',
+    },
+  ],
+
+  send_gmail: [
+    {
+      question: 'Who should receive this email? (email address)',
+      key: 'to',
+    },
+    {
+      question: 'What should the subject line be?',
+      key: 'subject',
+      defaultValue: '(no subject)',
+    },
+    {
+      question: 'What should the email say?',
+      key: 'body',
+    },
+    {
+      question: 'I\'ll send this email from your Gmail account. Confirm? (yes / edit / cancel)',
+      key: '_confirm',
+    },
+  ],
+
+  post_chat_message: [
+    {
+      question: 'Which Google Chat space should this be posted in?',
+      key: 'space',
+    },
+    {
+      question: 'What should the message say?',
+      key: 'message',
+    },
+    {
+      question: 'I\'ll post this message to Google Chat. Confirm? (yes / edit / cancel)',
       key: '_confirm',
     },
   ],
@@ -534,6 +581,8 @@ const INTENT_LABELS: Record<InterviewIntent, string> = {
   create_task: 'Create Task',
   schedule_event: 'Schedule Event',
   send_communication: 'Send Communication',
+  send_gmail: 'Send Gmail',
+  post_chat_message: 'Post Chat Message',
   create_paperclip_issue: 'Create Paperclip Issue',
   check_agent_status: 'Check Agent Status',
   view_runs: 'View Run History',
@@ -552,6 +601,8 @@ const INTENT_TARGET_SYSTEMS: Record<InterviewIntent, string[]> = {
   create_task: ['Google Tasks', 'Paperclip'],
   schedule_event: ['Google Calendar'],
   send_communication: ['Paperclip AI — COO Routed'],
+  send_gmail: ['Gmail'],
+  post_chat_message: ['Google Chat'],
   create_paperclip_issue: ['Paperclip AI'],
   check_agent_status: ['Paperclip AI'],
   view_runs: ['Paperclip AI'],
@@ -623,9 +674,11 @@ export function isReadOnlyIntent(intent: InterviewIntent): boolean {
  */
 export function isHighStakesIntent(intent: InterviewIntent): boolean {
   return (
-    intent === 'create_agent' || 
+    intent === 'create_agent' ||
     intent === 'launch_campaign' ||
     intent === 'send_communication' ||
+    intent === 'send_gmail' ||
+    intent === 'post_chat_message' ||
     intent === 'create_paperclip_issue'
   )
 }

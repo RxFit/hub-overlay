@@ -185,6 +185,56 @@ export async function executeAction(
       break
     }
 
+    case 'send_gmail': {
+      // Interview collects: to, subject, body (entity extraction may prefill)
+      const to = spec.details.to
+      const subject = spec.details.subject || '(no subject)'
+      const body = spec.details.body || spec.details.details || spec.summary
+
+      const res = await fetch('/api/google/gmail', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to, subject, message: body }),
+      })
+      if (!res.ok) throw new Error(`Email send failed: ${res.status}`)
+      resultMsg = `✉️ **Email sent** to ${to} — "${subject}".`
+      break
+    }
+
+    case 'post_chat_message': {
+      // Resolve the space by display name — never pick silently on ambiguity.
+      const spacesRes = await fetch('/api/google/chat/spaces')
+      if (!spacesRes.ok) throw new Error(`Failed to fetch Chat spaces: ${spacesRes.status}`)
+      const spaces = pickList<{ name: string; displayName: string }>(await spacesRes.json(), 'spaces')
+
+      const spaceRef = (spec.details.space || '').toLowerCase().trim()
+      const matches = spaces.filter((s) => s.displayName?.toLowerCase().includes(spaceRef))
+      if (matches.length === 0) {
+        throw new Error(`Chat space matching "${spec.details.space}" not found`)
+      }
+      // Exact-match short-circuit: with substring matching alone, a space whose
+      // name is contained in another's ("RxFit Ops" vs "RxFit Ops Archive")
+      // could never be targeted — even its exact name would multi-match.
+      const exactMatches = matches.filter(
+        (s) => s.displayName?.toLowerCase().trim() === spaceRef
+      )
+      if (matches.length > 1 && exactMatches.length !== 1) {
+        throw new Error(
+          `Multiple Chat spaces match "${spec.details.space}": ${matches.map((s) => s.displayName).join(', ')}. Please edit and specify which one.`
+        )
+      }
+      const space = exactMatches.length === 1 ? exactMatches[0] : matches[0]
+
+      const msgRes = await fetch('/api/google/chat/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ spaceId: space.name, text: spec.details.message }),
+      })
+      if (!msgRes.ok) throw new Error(`Chat message failed: ${msgRes.status}`)
+      resultMsg = `💬 **Posted to ${space.displayName}**.`
+      break
+    }
+
     case 'create_paperclip_issue': {
       const issueTitle = spec.details.title || spec.summary
       const issueDesc = spec.details.description || ''
