@@ -8,7 +8,7 @@ import type { CalendarEvent } from '@/app/hooks/useHubData'
 import type { ChatAttachment } from '@/types'
 import styles from './LeftPanelSections.module.css'
 import { CollapsibleSection, SkeletonBlock, SectionMessage } from './LeftPanelShared'
-import { formatTime, eventDisplayTitle, DAY_LETTERS, getMonday, getWeekDays } from './LeftPanelUtils'
+import { formatTime, eventDisplayTitle, validateEventForm, DAY_LETTERS, getMonday, getWeekDays } from './LeftPanelUtils'
 import { buildEventInjectMessage } from '@/lib/panel-inject'
 
 /* ══════════════════════════════════════════════════════════════════════════════
@@ -48,6 +48,11 @@ function CalendarEventModal({ defaultDate, onClose, onCreated }: CalendarEventMo
   async function handleSave(e: React.FormEvent) {
     e.preventDefault()
     if (!title.trim() || !date || !startTime || !endTime) return
+    const validationError = validateEventForm({ startTime, endTime, attendees })
+    if (validationError) {
+      setError(validationError)
+      return
+    }
     setSaving(true)
     setError(null)
     try {
@@ -138,7 +143,7 @@ function CalendarEventModal({ defaultDate, onClose, onCreated }: CalendarEventMo
                 type="time"
                 className={styles.calEventFormInput}
                 value={startTime}
-                onChange={e => setStartTime(e.target.value)}
+                onChange={e => { setStartTime(e.target.value); setError(null) }}
               />
             </div>
             <div className={styles.calEventFormField}>
@@ -148,7 +153,7 @@ function CalendarEventModal({ defaultDate, onClose, onCreated }: CalendarEventMo
                 type="time"
                 className={styles.calEventFormInput}
                 value={endTime}
-                onChange={e => setEndTime(e.target.value)}
+                onChange={e => { setEndTime(e.target.value); setError(null) }}
               />
             </div>
           </div>
@@ -161,7 +166,7 @@ function CalendarEventModal({ defaultDate, onClose, onCreated }: CalendarEventMo
               type="text"
               className={styles.calEventFormInput}
               value={attendees}
-              onChange={e => setAttendees(e.target.value)}
+              onChange={e => { setAttendees(e.target.value); setError(null) }}
               placeholder="email@example.com, ..."
             />
           </div>
