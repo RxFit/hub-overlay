@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { createCalendarEvent } from './google'
+import { createCalendarEvent, listRecentGmailThreads, type GmailThread } from './google'
 
 /* ════════════════════════════════════════════════════════════════════════════
    createCalendarEvent body construction (audit C-P0-1 / C-P0-2)
@@ -89,5 +89,144 @@ describe('createCalendarEvent body construction', () => {
     const body = capturedBody(fetchMock)
     expect(body.start).toEqual({ dateTime: '2026-06-24T09:00:00' })
     expect(body.start.timeZone).toBeUndefined()
+  })
+})
+
+/* ════════════════════════════════════════════════════════════════════════════
+   listRecentGmailThreads (Plan 8 / F2)
+   Stub fetch and answer the inbox list + per-thread metadata calls. Must:
+   - parse From/Subject/Date headers into a flat summary,
+   - derive isUnread from the LAST message's labelIds and snippet from the FIRST,
+   - request INBOX threads with metadata headers,
+   - throw the module's standard error on a non-OK response.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+function jsonRes(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
+function gmailHeaders(subject: string, from: string, date: string) {
+  return [
+    { name: 'Subject', value: subject },
+    { name: 'From', value: from },
+    { name: 'Date', value: date },
+  ]
+}
+
+function stubGmailFetch(
+  list: unknown,
+  threads: Record<string, GmailThread | { status: number }>,
+) {
+  const fetchMock = vi.fn(async (url: RequestInfo | URL) => {
+    const u = String(url)
+    if (u.includes('/threads?')) {
+      return typeof list === 'object' && list !== null && 'status' in (list as object)
+        ? jsonRes({ error: 'denied' }, (list as { status: number }).status)
+        : jsonRes(list)
+    }
+    const id = u.match(/\/threads\/([^?]+)/)?.[1] ?? ''
+    const t = threads[id]
+    if (t && 'status' in t && typeof t.status === 'number' && !('id' in t)) {
+      return jsonRes({ error: 'boom' }, t.status)
+    }
+    return jsonRes(t)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+describe('listRecentGmailThreads', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('parses thread metadata into { id, from, subject, date, snippet, isUnread }', async () => {
+    stubGmailFetch(
+      { threads: [{ id: 't1' }, { id: 't2' }] },
+      {
+        t1: {
+          id: 't1',
+          messages: [
+            {
+              id: 'm1', threadId: 't1', snippet: 'first message snippet',
+              labelIds: ['INBOX'],
+              payload: { headers: gmailHeaders('Old subject', 'a@x.com', 'Thu, 02 Jul 2026 09:00:00 -0500') },
+            },
+            {
+              id: 'm2', threadId: 't1', snippet: 'latest reply snippet',
+              labelIds: ['INBOX', 'UNREAD'],
+              payload: { headers: gmailHeaders('Re: Old subject', 'Bob <b@x.com>', 'Fri, 03 Jul 2026 10:00:00 -0500') },
+            },
+          ],
+        },
+        t2: {
+          id: 't2',
+          messages: [
+            {
+              id: 'm3', threadId: 't2', snippet: 'read one',
+              labelIds: ['INBOX'],
+              payload: { headers: gmailHeaders('Invoice', 'billing@x.com', 'Wed, 01 Jul 2026 08:00:00 -0500') },
+            },
+          ],
+        },
+      },
+    )
+
+    const threads = await listRecentGmailThreads('token', { maxResults: 2 })
+    expect(threads).toHaveLength(2)
+    // Headers + unread flag come from the LAST message; snippet from the FIRST.
+    expect(threads[0]).toMatchObject({
+      id: 't1',
+      subject: 'Re: Old subject',
+      from: 'Bob <b@x.com>',
+      date: 'Fri, 03 Jul 2026 10:00:00 -0500',
+      snippet: 'first message snippet',
+      isUnread: true,
+      messageCount: 2,
+    })
+    expect(threads[1]).toMatchObject({ id: 't2', subject: 'Invoice', isUnread: false })
+  })
+
+  it('requests INBOX threads then per-thread metadata with From/Subject/Date headers', async () => {
+    const fetchMock = stubGmailFetch({ threads: [{ id: 't1' }] }, {
+      t1: {
+        id: 't1',
+        messages: [{ id: 'm1', threadId: 't1', labelIds: [], payload: { headers: gmailHeaders('S', 'f@x.com', 'D') } }],
+      },
+    })
+
+    await listRecentGmailThreads('token', { maxResults: 7 })
+    const urls = fetchMock.mock.calls.map(c => String(c[0]))
+    expect(urls[0]).toContain('/threads?labelIds=INBOX&maxResults=7')
+    expect(urls[1]).toContain('/threads/t1?format=metadata')
+    expect(urls[1]).toContain('metadataHeaders=From')
+    expect(urls[1]).toContain('metadataHeaders=Subject')
+    expect(urls[1]).toContain('metadataHeaders=Date')
+  })
+
+  it('returns [] for an empty inbox and drops threads whose metadata fetch fails', async () => {
+    stubGmailFetch({ threads: [] }, {})
+    expect(await listRecentGmailThreads('token')).toEqual([])
+
+    vi.unstubAllGlobals()
+    stubGmailFetch({ threads: [{ id: 'ok' }, { id: 'bad' }] }, {
+      ok: {
+        id: 'ok',
+        messages: [{ id: 'm1', threadId: 'ok', labelIds: [], payload: { headers: gmailHeaders('S', 'f@x.com', 'D') } }],
+      },
+      bad: { status: 500 },
+    })
+    const threads = await listRecentGmailThreads('token')
+    expect(threads).toHaveLength(1)
+    expect(threads[0].id).toBe('ok')
+  })
+
+  it('throws the standard Google API error when the list call is not OK', async () => {
+    stubGmailFetch({ status: 403 }, {})
+    await expect(listRecentGmailThreads('token')).rejects.toThrow(/Google API error 403/)
   })
 })

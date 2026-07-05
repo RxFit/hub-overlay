@@ -308,6 +308,91 @@ export async function listRecentFiles(
 }
 
 /* ══════════════════════════════════════════
+   Gmail  —  https://gmail.googleapis.com/gmail/v1
+   ══════════════════════════════════════════ */
+
+const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me'
+
+export interface GmailMessage {
+  id: string
+  threadId: string
+  labelIds?: string[]
+  snippet?: string
+  payload?: {
+    headers?: { name: string; value: string }[]
+    body?: { data?: string }
+    parts?: { mimeType: string; body?: { data?: string } }[]
+  }
+  internalDate?: string
+}
+
+export interface GmailThread {
+  id: string
+  messages?: GmailMessage[]
+  snippet?: string
+}
+
+export interface GmailThreadSummary {
+  id: string
+  subject: string
+  from: string
+  date: string
+  snippet: string
+  isUnread: boolean
+  messageCount: number
+}
+
+/** Read a named RFC-2822 header off a Gmail message (case-insensitive). */
+export function getGmailHeader(msg: GmailMessage, name: string): string {
+  return msg.payload?.headers?.find(h => h.name.toLowerCase() === name.toLowerCase())?.value ?? ''
+}
+
+/** Collapse a metadata-format Gmail thread into a one-line summary.
+ *  Shared by the Gmail route and the AI context builder — keep it the single
+ *  implementation of thread-summary parsing. */
+export function parseGmailThreadMeta(thread: GmailThread): GmailThreadSummary | null {
+  const lastMsg = thread.messages?.[thread.messages.length - 1]
+  if (!lastMsg) return null
+  const isUnread = lastMsg.labelIds?.includes('UNREAD') ?? false
+  return {
+    id: thread.id,
+    subject: getGmailHeader(lastMsg, 'Subject') || '(no subject)',
+    from: getGmailHeader(lastMsg, 'From') || '',
+    date: getGmailHeader(lastMsg, 'Date') || '',
+    snippet: thread.messages?.[0]?.snippet ?? '',
+    isUnread,
+    messageCount: thread.messages?.length ?? 1,
+  }
+}
+
+/** List the most recent inbox threads with From/Subject/Date metadata. */
+export async function listRecentGmailThreads(
+  accessToken: string,
+  opts?: { maxResults?: number }
+): Promise<GmailThreadSummary[]> {
+  const maxResults = opts?.maxResults ?? 10
+  const list = await googleFetch<{ threads?: { id: string; snippet?: string }[] }>(
+    `${GMAIL_BASE}/threads?labelIds=INBOX&maxResults=${maxResults}`,
+    accessToken
+  )
+  if (!list.threads?.length) return []
+
+  // Fetch metadata for each thread in parallel; a single bad thread is dropped
+  // rather than failing the whole list.
+  const threads = await Promise.all(
+    list.threads.map(t =>
+      googleFetch<GmailThread>(
+        `${GMAIL_BASE}/threads/${t.id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`,
+        accessToken
+      )
+        .then(parseGmailThreadMeta)
+        .catch(() => null)
+    )
+  )
+  return threads.filter((t): t is GmailThreadSummary => t !== null)
+}
+
+/* ══════════════════════════════════════════
    Google Chat  —  https://chat.googleapis.com/v1
    ══════════════════════════════════════════ */
 
