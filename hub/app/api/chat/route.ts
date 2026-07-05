@@ -12,6 +12,7 @@ import { loadSkillContent } from '@/lib/skills-loader'
 import { SKILL_MAP } from '@/lib/skills'
 import { needsInternalSearch, needsExternalSearch } from '@/lib/search-routing'
 import { ChatRequestSchema } from '@/lib/zod-schemas'
+import { boundHistory, MAX_HISTORY_MESSAGES } from '@/lib/history-window'
 import { buildGoogleWorkspaceContext } from '@/lib/google-context'
 import { withTimeout } from '@/lib/timeout'
 import { chatErrorBody } from '@/lib/chat-error'
@@ -199,10 +200,24 @@ async function handleChat(req: NextRequest): Promise<Response> {
 
   const { messages, useCase = 'deep_dive', attachments, activeSkill } = body
 
-  // Validate core message structure
+  // Validate core message structure — always validate the FULL incoming array.
   const msgValidation = ChatRequestSchema.pick({ messages: true }).safeParse({ messages })
   if (!msgValidation.success) {
     return NextResponse.json({ error: 'Messages array required', details: msgValidation.error.issues }, { status: 400 })
+  }
+
+  // Bound the history sent to the model + search pipeline (W1-#7): keep only the
+  // most recent MAX_HISTORY_MESSAGES so token cost/latency don't grow unbounded
+  // with session length. Server-side cap = defense-in-depth regardless of client.
+  // The full `messages` array above is still what gets Zod-validated; only what's
+  // forwarded downstream is bounded. Since we keep the tail, the latest user
+  // message is always retained (lastUserMsg is derived from boundedMessages below).
+  const boundedMessages = boundHistory(messages)
+  if (boundedMessages.length < messages.length) {
+    log.info(
+      { total: messages.length, forwarded: boundedMessages.length, dropped: messages.length - boundedMessages.length, max: MAX_HISTORY_MESSAGES },
+      'Chat history truncated to recency window',
+    )
   }
 
   // ── Parallel pre-stream context assembly ──
@@ -224,7 +239,7 @@ async function handleChat(req: NextRequest): Promise<Response> {
   // Search depends only on the query + useCase (not on Paperclip/Google context),
   // so kick it off NOW to run CONCURRENTLY with the context fetches below.
   const effectiveUseCase = activeSkill ? 'deep_dive' : useCase
-  const lastUserMsg = messages.filter(m => m.role === 'user').pop()
+  const lastUserMsg = boundedMessages.filter(m => m.role === 'user').pop()
   const query = lastUserMsg?.content ?? ''
   const searchPromise: Promise<string[]> = query
     ? runSearchPipeline(query, effectiveUseCase)
@@ -465,7 +480,7 @@ async function handleChat(req: NextRequest): Promise<Response> {
       try {
         let fullText = ''
         const hasActiveSkill = Boolean(activeSkill)
-        for await (const chunk of streamChat(messages, systemPrompt, effectiveUseCase, hasActiveSkill)) {
+        for await (const chunk of streamChat(boundedMessages, systemPrompt, effectiveUseCase, hasActiveSkill)) {
           if (typeof chunk === 'object' && 'modelUsed' in chunk) {
             // Emit model identification event to the UI
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ modelUsed: chunk.modelUsed })}\n\n`))
