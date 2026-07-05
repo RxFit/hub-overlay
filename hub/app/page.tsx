@@ -38,6 +38,7 @@ import {
   isHighStakesIntent,
 } from '@/lib/interview'
 import { PAPERCLIP_BASE_URL } from '@/lib/paperclipConfig'
+import { INTERVIEW_SCAFFOLD_KIND, isInterviewScaffold, type ChatMsgKind } from '@/lib/interview-scaffold'
 import { shouldRouteThroughSend } from '@/lib/inject-routing'
 import { useCompanies } from '@/app/hooks/useCompanies'
 import type { InterviewState, ActionSpec, ChatAttachment, ActiveSkill } from '@/types'
@@ -207,7 +208,13 @@ function RightPanel({
    ══════════════════════════════════════════════════════════════════════════════ */
 
 type MobileTab = 'chat' | 'command' | 'execution' | 'google_chat' | 'tool_panel'
-type ChatMsg = { id: string; role: 'user' | 'assistant'; content: string; timestamp?: string; attachments?: ChatAttachment[] }
+/**
+ * `kind` tags scaffold messages injected by Interview Mode (e.g. the
+ * "Interview complete!" / "Briefing approved" prompts shown above the
+ * ActionConfirmCard) so cleanup can filter by type instead of fragile
+ * content string-matching.
+ */
+type ChatMsg = { id: string; role: 'user' | 'assistant'; content: string; kind?: ChatMsgKind; timestamp?: string; attachments?: ChatAttachment[] }
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
@@ -937,6 +944,7 @@ Respond with EXACTLY one of:
                     const filtered = prev.filter(m => m.id !== thinkingId)
                     return [...filtered, {
                       id: crypto.randomUUID(), role: 'assistant' as const,
+                      kind: INTERVIEW_SCAFFOLD_KIND,
                       content: '✅ Briefing approved by AI quality gate. Please review the action below and approve, edit, or cancel.',
                       timestamp: new Date().toISOString(),
                     }]
@@ -958,6 +966,7 @@ Respond with EXACTLY one of:
                   const filtered = prev.filter(m => m.id !== thinkingId)
                   return [...filtered, {
                     id: crypto.randomUUID(), role: 'assistant' as const,
+                    kind: INTERVIEW_SCAFFOLD_KIND,
                     content: '✅ Interview complete! Please review the action below and approve, edit, or cancel.',
                     timestamp: new Date().toISOString(),
                   }]
@@ -971,6 +980,7 @@ Respond with EXACTLY one of:
             setMessages(prev => [...prev, {
               id: crypto.randomUUID(),
               role: 'assistant' as const,
+              kind: INTERVIEW_SCAFFOLD_KIND,
               content: '✅ Interview complete! Please review the action below and approve, edit, or cancel.',
               timestamp: new Date().toISOString(),
             }])
@@ -1161,7 +1171,7 @@ Respond with EXACTLY one of:
     setActionExecuting(true)
     setActionSpec(null)
     setInterviewState(null)
-    setMessages(prev => prev.filter(m => !m.content.includes('Interview complete!')))
+    setMessages(prev => prev.filter(m => !isInterviewScaffold(m)))
 
     // Add a "working on it" message
     const workingId = crypto.randomUUID()
@@ -1396,8 +1406,8 @@ Respond with EXACTLY one of:
                       const editState = restartInterview(actionSpec.intent, actionSpec.details)
                       setInterviewState(editState)
                       setActionSpec(null)
-                      // Remove the "interview complete" message
-                      setMessages(prev => prev.filter(m => !m.content.includes('Interview complete!') && !m.content.includes('Briefing approved')))
+                      // Remove the interview scaffold messages ("Interview complete!" / "Briefing approved")
+                      setMessages(prev => prev.filter(m => !isInterviewScaffold(m)))
                       // Show the first question with the previous answer as default
                       const question = getCurrentQuestionWithDefaults(editState)
                       if (question) {
@@ -1415,7 +1425,7 @@ Respond with EXACTLY one of:
                   onCancel={() => {
                     setActionSpec(null)
                     setInterviewState(null)
-                    setMessages(prev => prev.filter(m => !m.content.includes('Interview complete!')))
+                    setMessages(prev => prev.filter(m => !isInterviewScaffold(m)))
                   }}
                 />
               )}
