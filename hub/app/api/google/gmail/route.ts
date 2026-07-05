@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
+import {
+  getGmailHeader as getHeader,
+  parseGmailThreadMeta as parseThreadMeta,
+  type GmailMessage,
+  type GmailThread,
+} from '@/lib/google'
 import { clampInt } from '@/lib/num'
 import { extractEmail } from '@/lib/email-address'
 import { GoogleGmailSendSchema } from '@/lib/zod-schemas'
@@ -180,30 +186,10 @@ export async function POST(req: NextRequest) {
   }
 }
 
-/* ── Parsers ── */
-
-interface GmailThread {
-  id: string
-  messages?: GmailMessage[]
-  snippet?: string
-}
-
-interface GmailMessage {
-  id: string
-  threadId: string
-  labelIds?: string[]
-  snippet?: string
-  payload?: {
-    headers?: { name: string; value: string }[]
-    body?: { data?: string }
-    parts?: { mimeType: string; body?: { data?: string } }[]
-  }
-  internalDate?: string
-}
-
-function getHeader(msg: GmailMessage, name: string): string {
-  return msg.payload?.headers?.find(h => h.name.toLowerCase() === name.toLowerCase())?.value ?? ''
-}
+/* ── Parsers ──
+   GmailThread/GmailMessage types plus the getHeader/parseThreadMeta helpers
+   now live in @/lib/google (shared with the AI context builder). Only the
+   full-body parsing used by the thread view remains route-local. */
 
 function decodeBody(msg: GmailMessage): string {
   const data =
@@ -212,21 +198,6 @@ function decodeBody(msg: GmailMessage): string {
     ''
   if (!data) return msg.snippet ?? ''
   return Buffer.from(data, 'base64').toString('utf-8')
-}
-
-function parseThreadMeta(thread: GmailThread) {
-  const lastMsg = thread.messages?.[thread.messages.length - 1]
-  if (!lastMsg) return null
-  const isUnread = lastMsg.labelIds?.includes('UNREAD') ?? false
-  return {
-    id: thread.id,
-    subject: getHeader(lastMsg, 'Subject') || '(no subject)',
-    from: getHeader(lastMsg, 'From') || '',
-    date: getHeader(lastMsg, 'Date') || '',
-    snippet: thread.messages?.[0]?.snippet ?? '',
-    isUnread,
-    messageCount: thread.messages?.length ?? 1,
-  }
 }
 
 function parseThread(thread: GmailThread) {

@@ -318,7 +318,7 @@ async function handleChat(req: NextRequest): Promise<Response> {
   agentActivity = paperclipContextResult.agentActivity
 
   let googleWorkspaceDetail: string | undefined
-  let googleWorkspaceCounts: { taskCount?: number; upcomingEvents?: number; recentFiles?: number } = {}
+  let googleWorkspaceCounts: { taskCount?: number; upcomingEvents?: number; recentFiles?: number; unreadEmails?: number } = {}
   if (googleWsResult) {
     googleWorkspaceDetail = googleWsResult.detail
     googleWorkspaceCounts = googleWsResult.counts

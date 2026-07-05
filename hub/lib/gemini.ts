@@ -114,6 +114,7 @@ export function buildSystemPrompt(context: {
     taskCount?: number
     upcomingEvents?: number
     recentFiles?: number
+    unreadEmails?: number
     kpiSummary?: string
   }
   /** Detailed live Google Workspace data (task titles, event summaries, file names, chat spaces). */
@@ -153,15 +154,16 @@ export function buildSystemPrompt(context: {
     if (ws.taskCount !== undefined) parts.push(`${ws.taskCount} pending tasks`)
     if (ws.upcomingEvents !== undefined) parts.push(`${ws.upcomingEvents} upcoming calendar events`)
     if (ws.recentFiles !== undefined) parts.push(`${ws.recentFiles} recently modified files`)
+    if (ws.unreadEmails !== undefined) parts.push(`${ws.unreadEmails} unread emails`)
     if (ws.kpiSummary) parts.push(`KPI status: ${ws.kpiSummary}`)
     if (parts.length > 0) {
       prompt += `Google Workspace state:\n${parts.map(p => `• ${p}`).join('\n')}\n\n`
     }
   }
 
-  /* ── Live Google Workspace detail (the user's real tasks/events/files/chat) ── */
+  /* ── Live Google Workspace detail (the user's real tasks/events/files/mail/chat) ── */
   if (context.googleWorkspaceDetail) {
-    prompt += `## Live Google Workspace (real-time, the user's actual data)\n${fenceUntrusted('Live Google Workspace', context.googleWorkspaceDetail)}\n\nThis is the user's REAL current Tasks, Calendar, Drive, and Chat data. Use it directly to answer any question about their tasks, schedule, files, or conversations — including when they tap an item like "Tell me about task: …". Cite specific titles, dates, and notes from this section. If a specific item they asked about is not listed here, say you don't see it in their current pending items and offer to look another way — do NOT blame Paperclip or claim a system is "warming up".\n\n`
+    prompt += `## Live Google Workspace (real-time, the user's actual data)\n${fenceUntrusted('Live Google Workspace', context.googleWorkspaceDetail)}\n\nThis is the user's REAL current Tasks, Calendar, Drive, Gmail, and Chat data. Use it directly to answer any question about their tasks, schedule, files, email, or conversations — including when they tap an item like "Tell me about task: …". Cite specific titles, dates, and notes from this section. When answering email questions, cite the exact subjects and senders shown in the Gmail section; if a message the user asks about is not in this snapshot, say so and point them to the Gmail panel — NEVER invent mail. If a specific item they asked about is not listed here, say you don't see it in their current pending items and offer to look another way — do NOT blame Paperclip or claim a system is "warming up".\n\n`
   }
 
   /* ── Project / activity context ── */

@@ -1,7 +1,7 @@
 /**
  * Builds a compact, model-readable snapshot of the user's live Google
- * Workspace data (Tasks, Calendar, Drive, Chat) for injection into the AI
- * assistant's system prompt.
+ * Workspace data (Tasks, Calendar, Drive, Gmail, Chat) for injection into the
+ * AI assistant's system prompt.
  *
  * WHY THIS EXISTS: the chat route fetched Paperclip + Vertex + pgvector + Exa
  * context but never the user's own Google data. So tapping a Google Task
@@ -17,7 +17,10 @@ import {
   listTasks,
   listUpcomingEvents,
   listRecentFiles,
+  listRecentGmailThreads,
   listChatSpaces,
+  listChatMessages,
+  type ChatMessage,
 } from './google'
 
 export interface GoogleWorkspaceContext {
@@ -26,8 +29,15 @@ export interface GoogleWorkspaceContext {
     taskCount?: number
     upcomingEvents?: number
     recentFiles?: number
+    unreadEmails?: number
   }
 }
+
+/* Prompt-size caps: the Gmail section and the Chat message lines are the only
+   unbounded-ish inputs (subjects/snippets/messages are user-generated), so
+   each gets a hard character budget on top of the per-item slices. */
+const GMAIL_SECTION_CAP = 1_800
+const CHAT_MESSAGES_CAP = 1_500
 
 const CHICAGO = 'America/Chicago'
 function fmtDate(iso?: string): string {
@@ -116,14 +126,67 @@ export async function buildGoogleWorkspaceContext(
     }
   })()
 
-  // ── Chat: spaces the user belongs to ──
+  // ── Gmail: most recent inbox threads ──
+  const gmailSection = (async () => {
+    try {
+      const threads = await listRecentGmailThreads(accessToken, { maxResults: 10 })
+      const unread = threads.filter(t => t.isUnread).length
+      counts.unreadEmails = unread
+      if (threads.length === 0) return '### Gmail\nInbox is empty.'
+      const header = `### Gmail (inbox, most recent ${threads.length} threads — ${unread} unread)`
+      const lines: string[] = []
+      let used = header.length
+      let shown = 0
+      for (const t of threads) {
+        // Every user-generated field is per-field sliced BEFORE the section
+        // budget check — otherwise one hostile mail with a huge subject as the
+        // newest thread would blow the budget on line 1 and hide the whole inbox.
+        const subject = t.subject.replace(/\s+/g, ' ').trim().slice(0, 120)
+        const from = t.from.replace(/\s+/g, ' ').trim().slice(0, 80)
+        const snippet = t.snippet.replace(/\s+/g, ' ').trim().slice(0, 120)
+        let line = `  - ${t.isUnread ? '[UNREAD] ' : ''}"${subject}" — ${from} (${fmtDate(t.date)})`
+        if (snippet) line += ` :: ${snippet}`
+        if (used + line.length + 1 > GMAIL_SECTION_CAP) break
+        lines.push(line)
+        used += line.length + 1
+        shown++
+      }
+      if (shown < threads.length) lines.push(`  …and ${threads.length - shown} more`)
+      return `${header}\n${lines.join('\n')}`
+    } catch {
+      return '### Gmail\n[Could not load Gmail this turn — the Gmail panel on the left has the live view.]'
+    }
+  })()
+
+  // ── Chat: spaces the user belongs to, plus recent messages for the first few ──
   const chatSection = (async () => {
     try {
       const spaces = await listChatSpaces(accessToken)
       if (spaces.length === 0) return '### Chat\nNo spaces.'
+      // Last few messages for the first spaces, fetched in parallel; a failed
+      // space just renders as names-only instead of blanking the section.
+      const messagesBySpace = await Promise.all(
+        spaces.slice(0, 3).map(s =>
+          listChatMessages(accessToken, s.name, 5).catch((): ChatMessage[] => []),
+        ),
+      )
+      let msgBudget = CHAT_MESSAGES_CAP
       const lines = spaces
         .slice(0, 15)
-        .map(s => `  - ${s.displayName || '(direct message)'} [${s.spaceType ?? s.type}]`)
+        .map((s, i) => {
+          let block = `  - ${s.displayName || '(direct message)'} [${s.spaceType ?? s.type}]`
+          for (const m of messagesBySpace[i] ?? []) {
+            const text = (m.text ?? '').replace(/\s+/g, ' ').trim()
+            if (!text) continue
+            const sender =
+              (m.sender?.displayName ?? '').replace(/\s+/g, ' ').trim().slice(0, 80) || '(unknown)'
+            const line = `\n    · ${sender}: ${text.slice(0, 100)}`
+            if (line.length > msgBudget) break
+            block += line
+            msgBudget -= line.length
+          }
+          return block
+        })
         .join('\n')
       return `### Chat (${spaces.length} spaces)\n${lines}`
     } catch {
@@ -131,6 +194,6 @@ export async function buildGoogleWorkspaceContext(
     }
   })()
 
-  const resolved = await Promise.all([tasksSection, eventsSection, filesSection, chatSection])
+  const resolved = await Promise.all([tasksSection, eventsSection, filesSection, gmailSection, chatSection])
   return { detail: resolved.join('\n\n'), counts }
 }
