@@ -1,0 +1,215 @@
+<title>CT Hub — Architecture Plan for the 18 Improvements</title>
+<style>
+  :root{
+    --paper:#FAF7F1; --ink:#1E1B16; --ink-2:#565046; --ink-3:#8A8378;
+    --line:#E6E0D4; --card:#FFFFFF; --code-bg:#F1EDE4; --code-ink:#3A362E;
+    --accent:#8F7335; --accent-soft:#C5A0591F; --rule:#C5A059;
+    --p0:#B03A30; --p0-bg:#B03A3014; --p1:#A66B1B; --p1-bg:#A66B1B14; --p2:#5D6B80; --p2-bg:#5D6B8014;
+    --ok:#3E7C55; --ok-bg:#3E7C5514; --drop:#8A6D8F; --drop-bg:#8A6D8F16;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --paper:#131110; --ink:#EDE7DB; --ink-2:#A79F90; --ink-3:#78715f;
+      --line:#2A261F; --card:#1B1814; --code-bg:#211E18; --code-ink:#D8D0BF;
+      --accent:#C5A059; --accent-soft:#C5A05920; --rule:#8F7335;
+      --p0:#E06B5F; --p0-bg:#E06B5F1A; --p1:#D89A45; --p1-bg:#D89A451A; --p2:#93A2B8; --p2-bg:#93A2B81A;
+      --ok:#6FBF8E; --ok-bg:#6FBF8E1A; --drop:#B79DBB; --drop-bg:#B79DBB1A;
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#131110; --ink:#EDE7DB; --ink-2:#A79F90; --ink-3:#78715f;
+    --line:#2A261F; --card:#1B1814; --code-bg:#211E18; --code-ink:#D8D0BF;
+    --accent:#C5A059; --accent-soft:#C5A05920; --rule:#8F7335;
+    --p0:#E06B5F; --p0-bg:#E06B5F1A; --p1:#D89A45; --p1-bg:#D89A451A; --p2:#93A2B8; --p2-bg:#93A2B81A;
+    --ok:#6FBF8E; --ok-bg:#6FBF8E1A; --drop:#B79DBB; --drop-bg:#B79DBB1A;
+  }
+  :root[data-theme="light"]{
+    --paper:#FAF7F1; --ink:#1E1B16; --ink-2:#565046; --ink-3:#8A8378;
+    --line:#E6E0D4; --card:#FFFFFF; --code-bg:#F1EDE4; --code-ink:#3A362E;
+    --accent:#8F7335; --accent-soft:#C5A0591F; --rule:#C5A059;
+    --p0:#B03A30; --p0-bg:#B03A3014; --p1:#A66B1B; --p1-bg:#A66B1B14; --p2:#5D6B80; --p2-bg:#5D6B8014;
+    --ok:#3E7C55; --ok-bg:#3E7C5514; --drop:#8A6D8F; --drop-bg:#8A6D8F16;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;font-size:15.5px;line-height:1.62}
+  .wrap{max-width:920px;margin:0 auto;padding:48px 24px 104px}
+  header.doc{border-bottom:2px solid var(--rule);padding-bottom:26px;margin-bottom:34px}
+  .eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 10px}
+  h1{font-size:31px;line-height:1.12;margin:0 0 12px;letter-spacing:-.015em;text-wrap:balance}
+  .lede{color:var(--ink-2);max-width:66ch;margin:0}
+  h2{font-size:15px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase;letter-spacing:.08em;margin:0;color:var(--accent)}
+  .sec{margin:44px 0 0;border-top:1px solid var(--line);padding-top:28px}
+  h3{font-size:20px;margin:0 0 4px;letter-spacing:-.01em;text-wrap:balance}
+  h4{font-size:12px;text-transform:uppercase;letter-spacing:.1em;color:var(--ink-3);margin:20px 0 8px;font-weight:650}
+  p{margin:0 0 12px;max-width:72ch}
+  a{color:var(--accent);text-underline-offset:2px}
+  a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.85em;background:var(--code-bg);color:var(--code-ink);padding:1px 5px;border-radius:4px}
+  ul,ol{margin:0 0 12px;padding-left:20px}
+  li{margin:0 0 7px;max-width:70ch}
+  li::marker{color:var(--accent)}
+  .tbl-wrap{overflow-x:auto;margin:18px 0}
+  table{width:100%;border-collapse:collapse;font-size:13px;min-width:660px}
+  th{text-align:left;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);font-weight:600;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:bottom}
+  td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  td.n{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ink-3);white-space:nowrap}
+  .tag{display:inline-block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;font-weight:700;letter-spacing:.04em;padding:2px 7px;border-radius:999px;white-space:nowrap}
+  .t-p0{color:var(--p0);background:var(--p0-bg)} .t-p1{color:var(--p1);background:var(--p1-bg)} .t-p2{color:var(--p2);background:var(--p2-bg)}
+  .t-done{color:var(--ok);background:var(--ok-bg)} .t-drop{color:var(--drop);background:var(--drop-bg)}
+  .ws{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:26px 28px;margin:20px 0}
+  .ws-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:2px}
+  .ws-id{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;font-weight:700;color:var(--accent)}
+  .ws-meta{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;color:var(--ink-3);margin-left:auto}
+  .covers{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 2px}
+  .chip{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px;color:var(--ink-2);background:var(--accent-soft);border:1px solid var(--line);border-radius:6px;padding:2px 7px}
+  .note{border-left:3px solid var(--rule);background:var(--accent-soft);padding:10px 14px;border-radius:0 6px 6px 0;margin:12px 0}
+  .note p:last-child{margin-bottom:0}
+  .seq{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;line-height:1.95;color:var(--ink-2);background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:16px 18px;overflow-x:auto}
+  .seq b{color:var(--ink)} .seq .w{color:var(--accent);font-weight:700}
+  strong{color:var(--ink);font-weight:650}
+  @media (prefers-reduced-motion: no-preference){html{scroll-behavior:smooth}}
+</style>
+
+<div class="wrap">
+<header class="doc">
+  <p class="eyebrow">CT Hub · architecture plan · rev 2 · 2026-07-05 · RxFit single-tenant MVP</p>
+  <h1>Architecture Plan — the 18 Improvements</h1>
+  <p class="lede">A plan for the 18 opportunities from the exploratory test pass, grounded in the product intent (an AI ops hub for RxFit that must both <em>answer from</em> and <em>act on</em> Google Workspace + Paperclip) and reconciled against two authorities: the 2026-06-17 technical audit and the vault-hydrated expert review. Rev 2 folds in the expert's corrections — every disputed claim below was re-verified against current <code>master</code> code, not taken from any document at face value.</p>
+</header>
+
+<!-- CORRECTIONS -->
+<div class="sec">
+  <h2>Corrections applied in rev 2</h2>
+  <h3>What the expert review changed — all code-verified</h3>
+  <p>Three of my calls were wrong and are now fixed. Verifying beats trusting: the design doc and the review disagreed on the rate limiter, and the code settled it.</p>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>#</th><th>Was</th><th>Now (verified in code)</th></tr></thead>
+    <tbody>
+      <tr><td class="n">13</td><td>Proposed: add <code>prefers-reduced-motion</code></td><td><span class="tag t-drop">dropped</span> block already exists at <code>globals.css:6903</code>. My Playwright flake was <em>not</em> animation (reduced-motion + <code>animation:0</code> still timed out) — cause is elsewhere and still open.</td></tr>
+      <tr><td class="n">15</td><td>Proposed: audit embeddings/webhook auth</td><td><span class="tag t-drop">dropped</span> both self-authenticate fail-closed (<code>embeddings/upsert</code>: Bearer vs <code>PAPERCLIP_API_KEY</code>; webhook: channel token + 500-if-unset + idempotency). Confirmed by read.</td></tr>
+      <tr><td class="n">16</td><td>I retracted it (design doc said limiter exists)</td><td><span class="tag t-p0">reinstated — P0</span> the design doc described the <em>intended</em> state; the code has <strong>no</strong> inbound limiter (no <code>rate-limit.ts</code>, no 429/sliding-window, no 512KB body cap). A limiter was built June 16 then lost — this is <strong>recovery from a known spec</strong>, not net-new.</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note"><p>Also adjusted per the review's vault context: <strong>#14</strong> — clean only the <code>.txt</code>/<code>.js</code> cruft; <strong>preserve <code>railway/</code> and the two-Paperclip-instances docs in AGENTS.md</strong> (intentional decision, 2026-06-13). <strong>#17</strong> — <code>userScalable:false</code> is intentional for the <code>useSwipePanels</code> gesture layer; needs a swipe-<em>and</em>-zoom solution, not a bare removal. <strong>#5</strong> — Gmail is a <em>secondary</em> surface (Calendar/Tasks/Chat are primary); downgraded. <strong>#6, #8</strong> — verify existing infra (<code>search-routing.ts</code>/<code>inject-routing.ts</code>/<code>detect-intent</code>; <code>withIdleWatchdog</code> 30s + 60s connect) before building.</p></div>
+</div>
+
+<!-- PRINCIPLES -->
+<div class="sec">
+  <h2>Architectural principles</h2>
+  <h3>Five rules the workstreams inherit</h3>
+  <ol>
+    <li><strong>Server is the only authority for consequence.</strong> Any client gate (interview score, Pre-Cog, role, rate) is UX; the write boundary must re-derive or re-verify it. The through-line of Wave 1.</li>
+    <li><strong>Verify before you fix.</strong> Both source documents proved partly stale against live code (reduced-motion already done; rate limiter already gone). Every security task opens with a code-truth check; "already done" is a valid, welcome outcome.</li>
+    <li><strong>Fence at the boundary, once.</strong> Untrusted text (email, Exa, fetched URLs, Drive docs, Paperclip titles) is wrapped in <code>&lt;untrusted_data&gt;</code> where it enters the prompt — one choke point, tested once. P8 already routes Gmail/Chat through <code>fenceUntrusted</code>; complete the coverage.</li>
+    <li><strong>Single source for config &amp; scope.</strong> The hardcoded Paperclip URL, company IDs, and <code>'rxfit'</code> literal collapse to one env-sourced module — the seam multi-tenancy reopens later. Keep it clean; don't build it. Do <strong>not</strong> collapse the intentional two-instance separation.</li>
+    <li><strong>Refactor only under a net.</strong> No touching the <code>page.tsx</code> / <code>settings</code> / <code>globals.css</code> monoliths until Playwright e2e runs in CI. #11 gates #12 — a prior <code>useChatOrchestrator</code> attempt was reverted (no remnant in code), exactly the risk the net removes.</li>
+  </ol>
+</div>
+
+<!-- WORKSTREAMS -->
+<div class="sec">
+  <h2>Workstreams</h2>
+  <h3>Five epics — the thematic grouping (execution order is the wave plan below)</h3>
+
+  <div class="ws">
+    <div class="ws-head"><span class="ws-id">WS-A · Server-authoritative safety &amp; limits</span><span class="tag t-p0">MVP GATE</span><span class="ws-meta">largest · security</span></div>
+    <div class="covers"><span class="chip">#1</span><span class="chip">#16</span><span class="chip">P0-1</span><span class="chip">P0-2</span><span class="chip">P1-1</span><span class="chip">P1-2</span><span class="chip">P1-3</span><span class="chip">P1-4</span><span class="chip">P1-6</span></div>
+    <h4>Intent</h4>
+    <p>Move every consequential gate to the write boundary, restore the lost request limiter, and close the confirmed authorization gaps. This is what makes "the AI can act" safe to ship — the true launch blocker.</p>
+    <h4>Architecture</h4>
+    <ul>
+      <li><strong>Recover the request limiter (#16).</strong> Re-implement the June-16 spec (sliding window, 15 req / 60s per email, in-memory Map + background sweep, 429 + <code>Retry-After</code>, 512KB body guard → 413) as <code>lib/rate-limit.ts</code>, applied at the top of <code>/api/chat</code>. Recovery, not design — the vault entry <code>Backend_Hardening_H1_M5_C6.md</code> is the reference. Cost + abuse protection on the most expensive path (each call fans out to Vertex/pgvector/Exa + a model stream).</li>
+      <li><strong>Gate as a server-verified token (#1 / P0-2 remainder).</strong> The signed <code>gateToken</code> (minted by <code>/api/chat/score-context</code>) already gates the Paperclip issue path; the Google <em>send</em> routes don't check it. Generalize to a <code>requireGate(req, intent)</code> guard the AI-origin send routes call before executing. <em>Verify first:</em> the client already fails closed (<code>finalScore = 0</code>, not 80 — the audit's claim is stale) and <code>lib/gateToken.ts</code> exists; this is wiring the server check, not inventing the primitive.</li>
+      <li><strong>Role → method → path matrix in the proxy (P0-1 / P1-6).</strong> Replace the ad-hoc allowlist in <code>api/paperclip/[...path]/route.ts</code> with a declarative table (staff = read + issue-create; admin = mutate/reassign/restart; superadmin = delete), covering the direct resource routes (<code>/api/issues/:id</code>, <code>/api/agents/:id</code>) the CTO audit flagged. Align <code>delete_agent</code> to superadmin; validate <code>assigneeId</code>/<code>assigneeUserId</code> server-side against the target company.</li>
+      <li><strong>Complete the fence (P1-1).</strong> Route Exa snippets, fetched-URL text, Drive content, and attachments through the same <code>fenceUntrusted</code> Gmail/Chat use; unit-test that an "ignore previous instructions" payload lands inside the fence.</li>
+      <li><strong>Auth resilience (P1-2) + strict Zod (P1-4).</strong> Drop <code>accessToken</code> in the JWT callback when <code>token.error</code> is set (one fix, every Google route); make <code>paperclipFetch</code> throw on list-endpoint schema failure instead of returning raw <code>as T</code>.</li>
+    </ul>
+    <div class="note"><p><strong>Verified-stale, do not re-fix:</strong> P0-2 "<code>finalScore</code> defaults to 80" (code is <code>= 0</code>), webhook token bypass (fail-closed), embeddings auth (Bearer). Confirm in the opening verify-PR, then cross off.</p></div>
+  </div>
+
+  <div class="ws">
+    <div class="ws-head"><span class="ws-id">WS-B · Test &amp; CI foundation</span><span class="tag t-p1">ENABLER</span><span class="ws-meta">small · gates WS-C #12</span></div>
+    <div class="covers"><span class="chip">#11</span></div>
+    <h4>Intent</h4>
+    <p>Build the net before the monolith refactor. Small, high-leverage, and the hard prerequisite the reverted <code>useChatOrchestrator</code> attempt proves is necessary.</p>
+    <h4>Architecture</h4>
+    <ul>
+      <li><strong>Playwright e2e into CI.</strong> The suite exists (<code>tests/e2e/left-panel-inject.spec.ts</code>) and catches the exact panel-inject regression a past extraction caused. Add a GH Actions job (reuse the pre-provisioned Chromium the config already locates); gate merges on it. <em>While here, chase the real Playwright actionability flake</em> — it is not reduced-motion (verified) and not an obvious overlay; likely a JS-driven rAF (AnimatedNumber / sparkle) keeping the stability check from settling. Worth a root-cause so CI e2e isn't flaky.</li>
+      <li><strong>ESLint config.</strong> A <code>lint</code> script exists with no config; <code>next lint</code> + <code>react/jsx-key</code>, <code>react-hooks/*</code>, <code>no-floating-promises</code> would have caught the F8-class issue for free. Wire into CI.</li>
+    </ul>
+    <p style="color:var(--ink-3);font-size:12.5px">(#13 reduced-motion removed from this stream — already implemented.)</p>
+  </div>
+
+  <div class="ws">
+    <div class="ws-head"><span class="ws-id">WS-C · Chat engine: extract &amp; harden</span><span class="tag t-p1">HIGH VALUE</span><span class="ws-meta">largest · #12 depends on WS-B</span></div>
+    <div class="covers"><span class="chip">#10</span><span class="chip">#7</span><span class="chip">#12</span><span class="chip">#6</span><span class="chip">#8</span></div>
+    <h4>Intent</h4>
+    <p>The chat is the product core, inside a 1,668-line monolith we've grazed twice. Fix the two reachable correctness/perf bugs now (Wave 1), then extract behind the net (Wave 2), then the verify-first optimizations.</p>
+    <h4>Architecture</h4>
+    <ul>
+      <li><strong>Message <code>kind</code> field (#10 · Wave 1).</strong> Replace the <code>content.includes('Interview complete!')</code> cleanup — fragile at 5 sites in <code>page.tsx</code>, and a user message quoting the phrase corrupts state — with a typed <code>kind</code> discriminator. Correctness bug; do it before the extraction so the new hook is born clean.</li>
+      <li><strong>History bounding (#7 · Wave 1).</strong> The full message array is POSTed every turn — unbounded token cost/latency, and long sessions will hit the context window. Keep last N turns verbatim + a running summary of the tail.</li>
+      <li><strong><code>useChatEngine</code> extraction (#12 · Wave 2, after WS-B).</strong> Lift chat/interview/skill state and <code>doSend</code>/<code>sendToApi</code>/<code>handleChatInject</code> out of <code>page.tsx</code> into a hook; page shrinks to layout. Behavior-preserving PR, e2e green, no bundled changes.</li>
+      <li><strong>Search-routing cost (#6 · Wave 2, verify-first).</strong> Before building: confirm what <code>search-routing.ts</code> + <code>inject-routing.ts</code> + <code>detect-intent</code> already route. If trivial turns still fan out to Vertex+pgvector+Exa, add a cheap classifier to <code>recall</code>/skip. Optimize only the gap that's real.</li>
+      <li><strong>Timeout alignment (#8 · Wave 4, verify-first).</strong> <code>withIdleWatchdog</code> (30s) + 60s connect already exist; the 45s client abort is Claude-path-specific. Confirm the budgets don't kill slow-but-successful streams, then align only if a real skew remains.</li>
+    </ul>
+  </div>
+
+  <div class="ws">
+    <div class="ws-head"><span class="ws-id">WS-D · Workspace surface completeness</span><span class="tag t-p2">PRODUCT</span><span class="ws-meta">medium · Wave 3</span></div>
+    <div class="covers"><span class="chip">#2</span><span class="chip">#9</span><span class="chip">#5</span><span class="chip">#4</span></div>
+    <h4>Intent</h4>
+    <p>Finish the Workspace surfaces to daily-driver quality — same class as the Gmail-reply bug already fixed — weighted by how primary each surface is.</p>
+    <h4>Architecture</h4>
+    <ul>
+      <li><strong>Reply threading &amp; email edge cases (#2, #4).</strong> Send an explicit <code>subject</code> on replies (route falls back to the literal <code>Re: &lt;Message-ID&gt;</code>); tighten <code>EMAIL_RE</code> for malformed <code>&lt;a@b.c</code>; support quoted display names with commas at the route layer; drop the unused <code>EmailPreviewCard</code> import. Low effort, finishes the F1/F4 Gmail arc.</li>
+      <li><strong>Completed-task recovery (#9).</strong> Panel fetches <code>showCompleted=false</code>, so an accidental tap vanishes into the Google Tasks app. Add a recently-completed/undo affordance — the API supports <code>uncomplete</code>; pure UI.</li>
+      <li><strong>Gmail as a live surface (#5 · lower priority).</strong> Migrate <code>GmailView</code>'s one-shot fetch to the SWR pattern (a <code>useGmail</code> hook), with polling/refresh/pagination. Real, but Gmail is secondary to Calendar/Tasks/Chat — schedule after the primary-surface work.</li>
+    </ul>
+  </div>
+
+  <div class="ws">
+    <div class="ws-head"><span class="ws-id">WS-E · Platform &amp; hygiene</span><span class="tag t-p2">HYGIENE</span><span class="ws-meta">small · Wave 3 / parallel</span></div>
+    <div class="covers"><span class="chip">#3</span><span class="chip">#14</span><span class="chip">#17</span><span class="chip">#18</span></div>
+    <h4>Intent</h4>
+    <p>Low-risk cleanups that cut cost and foot-guns. Parallelizable with anything.</p>
+    <h4>Architecture</h4>
+    <ul>
+      <li><strong>Self-host fonts via <code>next/font</code> (#3).</strong> Removes the third-party request <em>and</em> the CSP exception PR #44 added — a net simplification. (The follow-up #44 logged.)</li>
+      <li><strong>Scoped cruft cleanup (#14).</strong> Delete <code>ceo_comments.txt</code>, <code>coo_comments.txt</code>, <code>test-browser.js</code>, <code>test-chat.js</code>, and the superseded RXHARDEN/audit md's. <strong>Preserve <code>railway/</code> and the two-instance AGENTS.md docs</strong> (intentional, 2026-06-13). Optionally consolidate the hardcoded Paperclip URL/IDs into one env module.</li>
+      <li><strong>Zoom without breaking swipe (#17).</strong> <code>userScalable:false</code> exists to stop pinch fighting <code>useSwipePanels</code>. Solve both: scope the swipe handlers (use <code>touch-action</code> / require single-touch horizontal intent) so pinch-zoom is allowed while the drawer gesture survives. WCAG 1.4.4 without a UX regression.</li>
+      <li><strong>Coverage for the dark corners (#18 · future).</strong> Exploratory + e2e over <code>/settings</code>, <code>/admin</code>, KPI sync — admin-only, not MVP-blocking. Settings is an 84KB monolith for the same extract-under-net treatment later.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- WAVE PLAN -->
+<div class="sec">
+  <h2>Execution — the wave plan</h2>
+  <h3>Four waves (adopted from the expert review's vault-informed ordering)</h3>
+  <div class="seq">
+<span class="w">WAVE 1 — Security &amp; critical performance</span>   (do first; mostly server-side / hook-local, no net needed)
+   <b>#1</b>  server-verified send gate            WS-A
+   <b>#16</b> recover the request limiter          WS-A   ← known spec, not net-new
+   <b>#10</b> interview cleanup → <code>kind</code> field       WS-C   ← eats user messages today
+   <b>#7</b>  chat history cap / summarization     WS-C
+   plus the WS-A verify-PR (P0/P1 status vs. real code) up front.
+
+<span class="w">WAVE 2 — Engineering foundation</span>   (#11 gates #12)
+   <b>#11</b> Playwright e2e in CI + ESLint        WS-B   ← PREREQUISITE
+   <b>#12</b> <code>useChatEngine</code> extraction           WS-C   ← behavior-preserving, under the net
+   <b>#6</b>  verify + tune search routing         WS-C   ← may already be handled
+
+<span class="w">WAVE 3 — UX polish &amp; hygiene</span>   (parallelizable)
+   <b>#2</b> reply subject    <b>#3</b> self-host fonts    <b>#9</b> completed-task undo
+   <b>#4</b> tiny cleanups    <b>#5</b> Gmail refresh (lower)  <b>#17</b> zoom-without-breaking-swipe
+   <b>#14</b> scoped cruft cleanup (preserve railway/ + AGENTS.md)
+
+<span class="w">WAVE 4 — Future / verify</span>
+   <b>#18</b> settings/admin/KPI coverage (admin-only)   <b>#8</b> timeout alignment (verify skew first)
+  </div>
+  <p style="color:var(--ink-3);font-size:13px">Delivery vehicle: the agentic loop just used (implementer → PR → adversarial reviewer → comment loop → merge → next), which fits Wave 1 especially, where independent verification is the point. <strong>Recommended first three PRs:</strong> WS-A <strong>verify-PR</strong> (know the real security state), <strong>#16 limiter recovery</strong> (self-contained P0), <strong>#10 <code>kind</code> field</strong> (correctness bug, and it cleans the state the Wave-2 extraction inherits).</p>
+</div>
+
+<p style="color:var(--ink-3);font-size:13px;border-top:1px solid var(--line);padding-top:16px;margin-top:40px">Contexts of record: the 2026-07-05 Design &amp; Architecture doc, the authoritative <code>HUB_TECHNICAL_FUNCTIONAL_AUDIT_2026-06-17.md</code>, and the vault-hydrated expert review — all read against current <code>master</code> (post fix PRs #41–#48). Scope: RxFit single tenant; multi-tenancy deferred. Every disputed claim spot-verified in code.</p>
+</div>
