@@ -145,7 +145,7 @@ describe('executeAction: post_chat_message', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
-  it('throws listing candidates when multiple spaces match — never picks silently', async () => {
+  it('throws listing candidates when multiple spaces match with no exact match — never picks silently', async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse({
         spaces: [
@@ -157,11 +157,35 @@ describe('executeAction: post_chat_message', () => {
 
     await expect(
       executeAction(
-        specFor('post_chat_message', { space: 'rxfit ops', message: 'hi' }),
+        specFor('post_chat_message', { space: 'RxFit', message: 'hi' }),
         deps
       )
     ).rejects.toThrow(/RxFit Ops.*RxFit Ops Archive/)
     expect(fetchMock).toHaveBeenCalledTimes(1) // no message POST attempted
+  })
+
+  it('prefers the exact-name match when one space name contains another', async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          spaces: [
+            { name: 'spaces/AAA', displayName: 'RxFit Ops' },
+            { name: 'spaces/CCC', displayName: 'RxFit Ops Archive' },
+          ],
+        })
+      )
+      .mockResolvedValueOnce(jsonResponse({ message: { name: 'spaces/AAA/messages/2' } }))
+
+    const result = await executeAction(
+      specFor('post_chat_message', { space: 'rxfit ops', message: 'hi' }),
+      deps
+    )
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const [url, init] = fetchMock.mock.calls[1]
+    expect(url).toBe('/api/google/chat/messages')
+    expect(JSON.parse(init.body)).toEqual({ spaceId: 'spaces/AAA', text: 'hi' })
+    expect(result).toContain('Posted to RxFit Ops')
   })
 
   it('throws with the status when the spaces fetch fails', async () => {

@@ -207,17 +207,23 @@ export async function executeAction(
       if (!spacesRes.ok) throw new Error(`Failed to fetch Chat spaces: ${spacesRes.status}`)
       const spaces = pickList<{ name: string; displayName: string }>(await spacesRes.json(), 'spaces')
 
-      const spaceRef = (spec.details.space || '').toLowerCase()
+      const spaceRef = (spec.details.space || '').toLowerCase().trim()
       const matches = spaces.filter((s) => s.displayName?.toLowerCase().includes(spaceRef))
       if (matches.length === 0) {
         throw new Error(`Chat space matching "${spec.details.space}" not found`)
       }
-      if (matches.length > 1) {
+      // Exact-match short-circuit: with substring matching alone, a space whose
+      // name is contained in another's ("RxFit Ops" vs "RxFit Ops Archive")
+      // could never be targeted — even its exact name would multi-match.
+      const exactMatches = matches.filter(
+        (s) => s.displayName?.toLowerCase().trim() === spaceRef
+      )
+      if (matches.length > 1 && exactMatches.length !== 1) {
         throw new Error(
           `Multiple Chat spaces match "${spec.details.space}": ${matches.map((s) => s.displayName).join(', ')}. Please edit and specify which one.`
         )
       }
-      const space = matches[0]
+      const space = exactMatches.length === 1 ? exactMatches[0] : matches[0]
 
       const msgRes = await fetch('/api/google/chat/messages', {
         method: 'POST',
