@@ -21,6 +21,9 @@ import DOMPurify from 'dompurify'
  * Plain-text bodies pass through unchanged.
  */
 export function sanitizeEmailHtml(html: string): string {
+  // Fail closed outside a real DOM: without one, DOMPurify.sanitize returns
+  // its input UNCHANGED (fail-open), so render nothing instead.
+  if (typeof window === 'undefined' || !DOMPurify.isSupported) return ''
   return DOMPurify.sanitize(html, {
     USE_PROFILES: { html: true },
     FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'form', 'base', 'meta', 'link'],

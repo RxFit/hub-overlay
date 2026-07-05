@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { sanitizeEmailHtml } from './sanitize-email'
 
 describe('sanitizeEmailHtml', () => {
@@ -61,6 +61,17 @@ describe('sanitizeEmailHtml', () => {
     expect(out).toContain('<td')
     expect(out).toContain('style=')
     expect(out).toContain('cell')
+  })
+
+  it('fails closed (returns empty string) without a DOM', () => {
+    // Simulate a no-DOM (SSR-like) environment; DOMPurify would otherwise
+    // return its input unchanged.
+    vi.stubGlobal('window', undefined)
+    try {
+      expect(sanitizeEmailHtml('<script>alert(1)</script><p>hi</p>')).toBe('')
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('passes plain text through unchanged', () => {
