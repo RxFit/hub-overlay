@@ -49,6 +49,30 @@ export function eventDisplayTitle(summary?: string): string {
   return trimmed || '(untitled)'
 }
 
+/**
+ * Client-side validation for the new-event modal (F7). Returns a user-facing
+ * error message, or null when the form is valid. Times are same-day "HH:MM"
+ * strings, so lexical comparison is chronological. Attendees are validated
+ * against the same rule the server enforces (see EMAIL_RE in
+ * app/api/google/gmail/route.ts) so bad addresses fail fast instead of
+ * round-tripping to Google.
+ */
+export function validateEventForm({ startTime, endTime, attendees }: {
+  startTime: string
+  endTime: string
+  attendees: string
+}): string | null {
+  if (endTime <= startTime) {
+    return 'End time must be after the start time.'
+  }
+  const EMAIL_RE = /^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/
+  const bad = attendees.split(',').map(s => s.trim()).filter(Boolean).filter(e => !EMAIL_RE.test(e))
+  if (bad.length > 0) {
+    return `Invalid attendee email${bad.length > 1 ? 's' : ''}: ${bad.join(', ')}`
+  }
+  return null
+}
+
 export const DAY_LETTERS = ['S', 'M', 'T', 'W', 'T', 'F', 'S']
 
 export function getMonday(d: Date): Date {
