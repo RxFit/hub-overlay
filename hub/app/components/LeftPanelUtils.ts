@@ -39,6 +39,16 @@ export function getDriveIcon(mimeType: string): string {
   return '📄'
 }
 
+/**
+ * Display title for a calendar event. Google allows summary-less events, so
+ * fall back to the '(untitled)' convention (matches lib/panel-inject.ts)
+ * instead of rendering "undefined".
+ */
+export function eventDisplayTitle(summary?: string): string {
+  const trimmed = summary?.trim()
+  return trimmed || '(untitled)'
+}
+
 export const DAY_LETTERS = ['S', 'M', 'T', 'W', 'T', 'F', 'S']
 
 export function getMonday(d: Date): Date {

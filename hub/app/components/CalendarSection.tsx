@@ -8,7 +8,7 @@ import type { CalendarEvent } from '@/app/hooks/useHubData'
 import type { ChatAttachment } from '@/types'
 import styles from './LeftPanelSections.module.css'
 import { CollapsibleSection, SkeletonBlock, SectionMessage } from './LeftPanelShared'
-import { formatTime, DAY_LETTERS, getMonday, getWeekDays } from './LeftPanelUtils'
+import { formatTime, eventDisplayTitle, DAY_LETTERS, getMonday, getWeekDays } from './LeftPanelUtils'
 import { buildEventInjectMessage } from '@/lib/panel-inject'
 
 /* ══════════════════════════════════════════════════════════════════════════════
@@ -399,7 +399,7 @@ function CalendarSectionImpl({ onInjectChat }: { onInjectChat: (msg: string, att
                   onClick={() => onInjectChat(buildEventInjectMessage(event))}
                   onDelete={() => setDeleteConfirm({
                     id: event.id,
-                    summary: event.summary ?? '(untitled)',
+                    summary: eventDisplayTitle(event.summary),
                     // Delete from the event's SOURCE calendar (tagged by the API
                     // route); falls back to 'primary' server-side if absent.
                     calendarId: event.calendarId,
@@ -473,6 +473,7 @@ function CalendarRow({
   const startTime = event.start.dateTime
     ? formatTime(event.start.dateTime)
     : 'All day'
+  const title = eventDisplayTitle(event.summary)
 
   return (
     <div
@@ -484,11 +485,11 @@ function CalendarRow({
       <button
         onClick={onClick}
         className={styles.calEventRowMain}
-        aria-label={`Event: ${event.summary} at ${startTime}`}
+        aria-label={`Event: ${title} at ${startTime}`}
       >
         <span className={styles.calendarTimeBadge}>{startTime}</span>
         <div className={styles.calendarDetails}>
-          <div className={styles.calendarSummary}>{event.summary}</div>
+          <div className={styles.calendarSummary}>{title}</div>
           {(event as any).location && (
             <div className={styles.calendarMeta}>{(event as any).location}</div>
           )}
@@ -499,8 +500,8 @@ function CalendarRow({
       <button
         className={styles.calRowDeleteBtn}
         onClick={(e) => { e.stopPropagation(); onDelete() }}
-        aria-label={`Delete event: ${event.summary}`}
-        title="Delete event"
+        aria-label={`Delete event: ${title}`}
+        title={`Delete event: ${title}`}
       >
         🗑
       </button>
