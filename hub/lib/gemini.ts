@@ -412,6 +412,20 @@ function isModelInCooldown(model: string): boolean {
 }
 
 /**
+ * TEST-ONLY: clears the module-level per-model cooldown cache.
+ *
+ * The cooldown Map is a process-level singleton (correct for production, where
+ * one process serves every request). In tests it must be reset between cases so
+ * a cooldown recorded by one test can't leak into the next. Tests call this in a
+ * `beforeEach` instead of relying on `vi.resetModules()`, which is fragile when
+ * fake timers are installed. This function is never invoked by runtime code, so
+ * production rotation/cooldown behavior is unchanged.
+ */
+export function __resetModelCooldownsForTest(): void {
+  _modelCooldowns.clear()
+}
+
+/**
  * Primary streaming entry point — routes to Claude or Gemini based on useCase.
  * Yields: { text: string } chunks and a final { modelUsed: string } event.
  * The modelUsed event tells the UI which model answered this request.

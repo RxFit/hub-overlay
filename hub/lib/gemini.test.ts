@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { ChatMessage } from '@/types'
-import { withIdleWatchdog, isRateLimitError, isAuthOrKeyError, friendlyModelError } from './gemini'
+import { streamChat, withIdleWatchdog, isRateLimitError, isAuthOrKeyError, friendlyModelError, __resetModelCooldownsForTest } from './gemini'
 
 /* ════════════════════════════════════════════════════════════════════════════
    STRESS TEST — chat model-rotation engine (lib/gemini.ts streamChat)
@@ -95,11 +95,6 @@ async function collect(gen: AsyncGenerator<string | { modelUsed: string }>) {
   return { text: textParts.join(''), models, error }
 }
 
-async function loadFreshGemini() {
-  vi.resetModules() // fresh per-model cooldown map
-  return import('./gemini')
-}
-
 /* ──────────────────────────────────────────────────────────────────────────── */
 
 describe('streamChat — Claude → Gemini rotation', () => {
@@ -108,17 +103,23 @@ describe('streamChat — Claude → Gemini rotation', () => {
     hoisted.geminiCalls.length = 0
     hoisted.claudeBehavior = null
     hoisted.geminiBehavior = null
+    // The per-model cooldown Map is a module-level singleton. Clear it before
+    // each test so a cooldown recorded by one case can't leak into the next —
+    // this is what made the suite flaky under the full parallel run. Reset
+    // explicitly rather than via vi.resetModules()+dynamic import(), which is
+    // fragile once fake timers are installed.
+    __resetModelCooldownsForTest()
     vi.useFakeTimers()
   })
   afterEach(() => {
     vi.useRealTimers()
+    __resetModelCooldownsForTest()
   })
 
   it('falls through Fable 5 → Sonnet 4.6 → Gemini Flash on pre-stream failures', async () => {
     hoisted.claudeBehavior = () => claudeYieldThenThrow([], new Error('claude down'))
     hoisted.geminiBehavior = () => geminiStream(['gem-answer'])
 
-    const { streamChat } = await loadFreshGemini()
     const r = await collect(streamChat(MESSAGES, 'sys', 'interview', false))
 
     expect(hoisted.claudeCalls).toEqual(['claude-fable-5', 'claude-sonnet-4-6'])
@@ -134,7 +135,6 @@ describe('streamChat — Claude → Gemini rotation', () => {
         : claudeYield(['SHOULD-NOT-RUN'])
     hoisted.geminiBehavior = () => geminiStream(['SHOULD-NOT-RUN'])
 
-    const { streamChat } = await loadFreshGemini()
     const r = await collect(streamChat(MESSAGES, 'sys', 'interview', false))
 
     expect(r.text).toBe('Hello ')                 // partial preserved, NOT restarted
@@ -148,7 +148,6 @@ describe('streamChat — Claude → Gemini rotation', () => {
     hoisted.claudeBehavior = () => claudeYieldThenThrow([], Object.assign(new Error('401'), { claudeError: { type: 'auth' } }))
     hoisted.geminiBehavior = () => geminiStream(['gem'])
 
-    const { streamChat } = await loadFreshGemini()
     const r = await collect(streamChat(MESSAGES, 'sys', 'interview', false))
 
     expect(hoisted.claudeCalls).toEqual(['claude-fable-5'])  // Sonnet skipped (shared key)
@@ -159,7 +158,6 @@ describe('streamChat — Claude → Gemini rotation', () => {
   it('skips Claude entirely for the recall use case (panel-tap default)', async () => {
     hoisted.geminiBehavior = () => geminiStream(['recall-answer'])
 
-    const { streamChat } = await loadFreshGemini()
     const r = await collect(streamChat(MESSAGES, 'sys', 'recall', false))
 
     expect(hoisted.claudeCalls).toEqual([])
@@ -173,7 +171,6 @@ describe('streamChat — Claude → Gemini rotation', () => {
         ? geminiStreamThenThrow(['X'], new Error('flash stalled'))
         : geminiStream(['SHOULD-NOT-RUN'])
 
-    const { streamChat } = await loadFreshGemini()
     const r = await collect(streamChat(MESSAGES, 'sys', 'recall', false))
 
     expect(r.text).toBe('X')
@@ -188,8 +185,7 @@ describe('streamChat — Claude → Gemini rotation', () => {
         : claudeYield(['sonnet-answer'])
     hoisted.geminiBehavior = () => geminiStream(['unused'])
 
-    const { streamChat } = await loadFreshGemini() // load ONCE, reuse state across calls
-
+    // Two sequential calls share the module-level cooldown Map (reset in beforeEach).
     const first = await collect(streamChat(MESSAGES, 'sys', 'interview', false))
     expect(hoisted.claudeCalls).toEqual(['claude-fable-5', 'claude-sonnet-4-6'])
     expect(first.text).toBe('sonnet-answer')
@@ -206,7 +202,6 @@ describe('streamChat — Claude → Gemini rotation', () => {
     let counter = 0
     hoisted.geminiBehavior = () => geminiStream([`tok${counter++}`])
 
-    const { streamChat } = await loadFreshGemini()
     const results = await Promise.all(
       Array.from({ length: 50 }, () => collect(streamChat(MESSAGES, 'sys', 'recall', false))),
     )
