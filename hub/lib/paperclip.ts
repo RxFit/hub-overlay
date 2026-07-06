@@ -15,11 +15,42 @@ import {
   AgentsResponseSchema,
   AgentResponseSchema,
   ProjectsResponseSchema,
+  RunsResponseSchema,
 } from '@/lib/zod-schemas'
 import type { ZodType } from 'zod'
 
 const log = createLogger('paperclip')
 const PAPERCLIP_BASE = PAPERCLIP_BASE_URL
+
+/**
+ * Thrown when a Paperclip *list* response fails schema validation.
+ *
+ * List helpers previously logged a warning and returned the raw, unvalidated
+ * payload on a schema mismatch; `pickArray` / per-issue catches then collapsed
+ * that to `[]`, so a genuine fetch/parse failure was indistinguishable from a
+ * legitimately empty list. Throwing this typed error makes a wrong-SHAPE
+ * response (expected array, got object; required field missing/wrong type) an
+ * observable failure. Unknown EXTRA fields still pass via `.passthrough()`.
+ *
+ * Callers that must degrade gracefully in the UI catch this and fall back to
+ * `[]` at the call site — the throw exists so the failure is not swallowed
+ * silently inside `paperclipFetch`.
+ */
+export class PaperclipSchemaError extends Error {
+  readonly path: string
+  readonly issues: unknown
+  constructor(path: string, issues: unknown) {
+    super(`Paperclip response schema mismatch for ${path}`)
+    this.name = 'PaperclipSchemaError'
+    this.path = path
+    this.issues = issues
+  }
+}
+
+/** True when `assigneeId` matches an agent belonging to the resolved company. */
+export function isAgentMemberOfCompany(agents: Agent[], assigneeId: string): boolean {
+  return agents.some((a) => a.id === assigneeId)
+}
 
 /* ══════════════════════════════════════════════════════════════════════════
    PAPERCLIP API CONTRACT NORMALIZATION
@@ -170,6 +201,12 @@ export async function paperclipFetch<T>(
   opts?: RequestInit,
   schema?: ZodType<T>,
   scope?: string,
+  // List endpoints pass `true`: a schema mismatch throws PaperclipSchemaError
+  // instead of returning raw data, so a parse failure is a real (observable)
+  // error rather than a silently-empty list. Detail endpoints keep the
+  // lenient default so a slightly-off-but-successful mutation response is not
+  // turned into a failure.
+  strictSchema = false,
 ): Promise<T> {
   const url = `${PAPERCLIP_BASE}${path}`
   const method = opts?.method || 'GET'
@@ -220,6 +257,15 @@ export async function paperclipFetch<T>(
     if (schema) {
       const result = schema.safeParse(json)
       if (!result.success) {
+        if (strictSchema) {
+          // List boundary: a wrong-shape payload is a real error, not an
+          // empty list. Throw so callers can distinguish empty from failure.
+          log.error(
+            { path, errors: result.error.issues },
+            'Paperclip list response failed schema validation — rejecting',
+          )
+          throw new PaperclipSchemaError(path, result.error.issues)
+        }
         log.warn(
           { path, errors: result.error.issues },
           'Paperclip response schema mismatch — using raw data',
@@ -256,7 +302,7 @@ async function doPaperclipFetch(url: string, opts?: RequestInit): Promise<Respon
 /* ── Companies ── */
 
 export async function getCompanies(): Promise<Company[]> {
-  const data = await paperclipFetch('/api/companies', undefined, CompaniesResponseSchema)
+  const data = await paperclipFetch('/api/companies', undefined, CompaniesResponseSchema, undefined, true)
   return pickArray<Company>(data, 'companies')
 }
 
@@ -302,6 +348,8 @@ export async function getIssues(
     `/api/companies/${companyId}/issues${qs}`,
     undefined,
     IssuesResponseSchema,
+    undefined,
+    true,
   )
   return pickArray<Record<string, unknown>>(data, 'issues').map(normalizeIssue)
 }
@@ -386,7 +434,13 @@ export async function getRuns(
   const runArrays = await Promise.all(
     issues.slice(0, 8).map(async (issue) => {
       try {
-        const data = await paperclipFetch(`/api/issues/${issue.id}/runs`)
+        const data = await paperclipFetch(
+          `/api/issues/${issue.id}/runs`,
+          undefined,
+          RunsResponseSchema,
+          undefined,
+          true,
+        )
         return pickArray<Record<string, unknown>>(data, 'runs').map((raw): Run => {
           const rawStatus = typeof raw.status === 'string' ? raw.status : 'queued'
           const startedAt = (raw.startedAt as string | null) ?? null
@@ -415,7 +469,11 @@ export async function getRuns(
             companyId,
           }
         })
-      } catch {
+      } catch (err) {
+        // Degrade this issue's runs to [] so one bad payload doesn't sink the
+        // whole aggregation — but log it (PaperclipSchemaError included) so the
+        // failure is observable rather than silently swallowed.
+        log.warn({ issueId: issue.id, err }, 'Failed to fetch/parse runs for issue — skipping')
         return [] as Run[]
       }
     })
@@ -438,6 +496,8 @@ export async function getProjects(companyId: string): Promise<Project[]> {
     `/api/companies/${companyId}/projects`,
     undefined,
     ProjectsResponseSchema,
+    undefined,
+    true,
   )
   return pickArray<Project>(data, 'projects')
 }
@@ -449,6 +509,8 @@ export async function getAgents(companyId: string): Promise<Agent[]> {
     `/api/companies/${companyId}/agents`,
     undefined,
     AgentsResponseSchema,
+    undefined,
+    true,
   )
   return pickArray<Record<string, unknown>>(data, 'agents').map(normalizeAgent)
 }

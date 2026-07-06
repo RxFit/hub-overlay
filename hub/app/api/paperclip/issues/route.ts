@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { createLogger } from '@/lib/logger'
-import { createIssue, getAgents } from '@/lib/paperclip'
+import { createIssue, getAgents, isAgentMemberOfCompany } from '@/lib/paperclip'
 import { recordEvent } from '@/lib/event-logger'
 import { RXFIT_CEO_COMPANY_ID, RXFIT_CEO_AGENT_ID } from '@/lib/paperclipConfig'
 import { CreateIssueRequestSchema } from '@/lib/zod-schemas'
@@ -98,11 +98,24 @@ export async function POST(req: Request) {
 
   try {
     // Find the CEO agent — all inbound issues go to the CEO first (chain-of-command):
-    // 1. Use explicit assigneeId from request body if provided
+    // 1. Use explicit assigneeId from request body if provided (P1-6b: must be
+    //    verified to belong to the target company before use)
     // 2. Search for CEO by name in the workspace
     // 3. Fallback to RXFIT_CEO_AGENT_ID from centralized config
     let assigneeId: string | undefined = bodyAssigneeId
-    if (!assigneeId) {
+    if (assigneeId) {
+      // P1-6b: an explicit assignee must be a member of the target company's
+      // agents — otherwise a caller could assign an issue to any arbitrary
+      // agent id in another workspace. Fail closed if the agent list can't be
+      // resolved (the outer catch returns 500) rather than trusting the input.
+      const agents = await getAgents(companyId)
+      if (!isAgentMemberOfCompany(agents, assigneeId)) {
+        return NextResponse.json(
+          { error: 'assigneeId does not belong to the target company' },
+          { status: 400 }
+        )
+      }
+    } else {
       try {
         const agents = await getAgents(companyId)
         const ceo = agents.find(
