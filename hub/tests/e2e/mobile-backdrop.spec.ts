@@ -90,8 +90,10 @@ test('a tap on a non-panel control does not leave the backdrop stuck over the sc
 test('the backdrop still appears on a real panel open and hides on close', async ({ page }) => {
   expect(await backdropDisplay(page)).toBe('none')
 
-  // Open the left panel via the tablet control bar ("Open Tasks").
-  await page.getByRole('button', { name: 'Open Tasks' }).tap()
+  // Open the left panel via the tablet control bar ("Open Tasks"). exact:true so
+  // this doesn't also match the onboarding suggestion chip "Ask: Show my open
+  // tasks", which renders during the pre-session-hydration window.
+  await page.getByRole('button', { name: 'Open Tasks', exact: true }).tap()
   await expect(page.locator('aside.panel-left.mobile-open')).toBeVisible()
   expect(await backdropDisplay(page)).toBe('block')
 
