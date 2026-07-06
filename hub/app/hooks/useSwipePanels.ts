@@ -22,6 +22,13 @@ export function useSwipePanels({
   const SWIPE_COMMIT = 104 // px to commit open/close (~30% more bail room)
 
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    // Multi-finger gesture (e.g. pinch-zoom) — never a panel swipe. When a second
+    // finger lands mid-swipe a fresh touchstart fires with touches.length > 1, so
+    // cancel any in-progress tracking rather than snapping the drawer.
+    if (e.touches.length > 1) {
+      cancelGesture()
+      return
+    }
     const touch = e.touches[0]
     const target = e.target as HTMLElement
     // Skip swipe tracking inside the chat interaction zone
@@ -42,6 +49,12 @@ export function useSwipePanels({
 
   const handleTouchMove = useCallback((e: React.TouchEvent) => {
     if (!touchStartRef.current) return
+    // A second finger landed mid-swipe (pinch-zoom) — abort the swipe so the
+    // drawer snaps back instead of jumping toward the new touch point.
+    if (e.touches.length > 1) {
+      cancelGesture()
+      return
+    }
     const touch = e.touches[0]
     const dx = touch.clientX - touchStartRef.current.x
     const dy = touch.clientY - touchStartRef.current.y
@@ -131,6 +144,26 @@ export function useSwipePanels({
     }
   }
 
+  // Reset a panel's inline drag styles so CSS transitions take over again.
+  const resetPanel = (el: HTMLElement | null) => {
+    if (!el) return
+    el.style.transform = ''
+    el.style.transition = ''
+    el.style.visibility = ''
+  }
+
+  // Abort any in-progress swipe and clear all per-gesture state. Used when a
+  // multi-finger (pinch-zoom) gesture is detected so the drawer snaps back to
+  // its rendered position instead of jumping to a second finger.
+  const cancelGesture = () => {
+    resetPanel(leftPanelRef.current)
+    resetPanel(rightPanelRef.current)
+    resetBackdropToReact()
+    touchStartRef.current = null
+    swipeDirRef.current = null
+    isSwipingRef.current = false
+  }
+
   const handleTouchEnd = useCallback((e: React.TouchEvent) => {
     if (!touchStartRef.current || !isSwipingRef.current) {
       touchStartRef.current = null
@@ -148,13 +181,6 @@ export function useSwipePanels({
     const screenW = window.innerWidth
     if (screenW > 640) return
 
-    // Reset inline styles so CSS transitions take over
-    const resetPanel = (el: HTMLElement | null) => {
-      if (!el) return
-      el.style.transform = ''
-      el.style.transition = ''
-      el.style.visibility = ''
-    }
     // Let React's rendered backdrop style (page.tsx) become the source of truth
     // once the gesture ends; handleClosePanels/handleMobileTab below flip the
     // open flags that drive the rendered display/opacity.
