@@ -1,5 +1,37 @@
 import type { Metadata, Viewport } from 'next'
+import { Syne, Space_Grotesk, DM_Sans, JetBrains_Mono } from 'next/font/google'
 import './globals.css'
+
+/* Self-hosted brand fonts via next/font (build-time fetch + self-host).
+   Weights mirror the previous Google Fonts @import; each exposes a CSS
+   variable consumed by the --font-* design tokens in globals.css. */
+const syne = Syne({
+  subsets: ['latin'],
+  weight: ['700', '800'],
+  display: 'swap',
+  variable: '--font-syne',
+})
+
+const spaceGrotesk = Space_Grotesk({
+  subsets: ['latin'],
+  weight: ['300', '400', '500', '600', '700'],
+  display: 'swap',
+  variable: '--font-space-grotesk',
+})
+
+const dmSans = DM_Sans({
+  subsets: ['latin'],
+  weight: ['300', '400', '500'],
+  display: 'swap',
+  variable: '--font-dm-sans',
+})
+
+const jetBrainsMono = JetBrains_Mono({
+  subsets: ['latin'],
+  weight: ['400', '500', '700'],
+  display: 'swap',
+  variable: '--font-jetbrains-mono',
+})
 import { getTenantConfig } from '@/lib/tenant'
 import { TenantProvider } from './components/TenantProvider'
 import { Providers } from './components/Providers'
@@ -47,7 +79,12 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="en" dir="ltr" data-theme="dark">
+    <html
+      lang="en"
+      dir="ltr"
+      data-theme="dark"
+      className={`${syne.variable} ${spaceGrotesk.variable} ${dmSans.variable} ${jetBrainsMono.variable}`}
+    >
       <body>
         <Providers>
           <TenantProvider>{children}</TenantProvider>

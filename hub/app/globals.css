@@ -1,4 +1,6 @@
-@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Space+Grotesk:wght@300;400;500;600;700&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&family=JetBrains+Mono:wght@400;500;700&display=swap');
+/* Brand fonts are self-hosted via next/font/google (see app/layout.tsx),
+   which injects the --font-syne / --font-space-grotesk / --font-dm-sans /
+   --font-jetbrains-mono CSS variables consumed by the --font-* tokens below. */
 
 /* ============================================================================
    CASA TREJO HUB — Global Design System v3 (Mobile-Optimized)
@@ -60,11 +62,11 @@
   --btn-text: hsl(224, 42%, 10%);
 
   /* Typography — Fluid Scale (UI UX Pro Max) */
-  --font-display: 'Syne', 'Space Grotesk', system-ui, -apple-system, sans-serif;
-  --font-heading: 'Space Grotesk', system-ui, -apple-system, sans-serif;
-  --font-body:    'Space Grotesk', system-ui, -apple-system, sans-serif;
-  --font-chat:    'DM Sans', 'Space Grotesk', system-ui, -apple-system, sans-serif;
-  --font-mono:    'JetBrains Mono', 'Fira Code', monospace;
+  --font-display: var(--font-syne), var(--font-space-grotesk), 'Syne', 'Space Grotesk', system-ui, -apple-system, sans-serif;
+  --font-heading: var(--font-space-grotesk), 'Space Grotesk', system-ui, -apple-system, sans-serif;
+  --font-body:    var(--font-space-grotesk), 'Space Grotesk', system-ui, -apple-system, sans-serif;
+  --font-chat:    var(--font-dm-sans), var(--font-space-grotesk), 'DM Sans', 'Space Grotesk', system-ui, -apple-system, sans-serif;
+  --font-mono:    var(--font-jetbrains-mono), 'JetBrains Mono', 'Fira Code', monospace;
 
   /* Fluid type scale — clamp(min, preferred, max) */
   --text-2xs:  clamp(0.625rem, 0.58rem + 0.22vw, 0.7rem);     /* 10–11px */
