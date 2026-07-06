@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getToken } from 'next-auth/jwt'
+import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
 import { listSpaceMembers } from '@/lib/google'
 
 export const runtime = 'nodejs'
@@ -9,13 +9,8 @@ export const runtime = 'nodejs'
  * Returns human members of a Google Chat space (for @mention picker).
  */
 export async function GET(req: NextRequest) {
-  const token = await getToken({ req })
-  if (!token?.accessToken) {
-    return NextResponse.json(
-      { error: 'Unauthorized', code: 'NO_TOKEN' },
-      { status: 401 }
-    )
-  }
+  const auth = await resolveGoogleAuth(req)
+  if (!auth.ok) return auth.response
 
   const spaceId = req.nextUrl.searchParams.get('spaceId')
   if (!spaceId) {
@@ -26,10 +21,7 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const memberships = await listSpaceMembers(
-      token.accessToken as string,
-      spaceId
-    )
+    const memberships = await listSpaceMembers(auth.accessToken, spaceId)
 
     // Flatten to a simpler structure for the frontend
     const members = memberships.map(m => ({
@@ -44,7 +36,8 @@ export async function GET(req: NextRequest) {
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to fetch members'
 
-    // Detect missing scope
+    // Detect missing scope — keeps its dedicated 403 + MISSING_SCOPE code.
+    // Must run BEFORE the generic mapper, which would fold 403 into a 401.
     if (message.includes('403') || message.includes('PERMISSION_DENIED')) {
       return NextResponse.json(
         { error: 'Missing Chat scope', code: 'MISSING_SCOPE', members: [] },
@@ -52,6 +45,6 @@ export async function GET(req: NextRequest) {
       )
     }
 
-    return NextResponse.json({ error: message, members: [] }, { status: 500 })
+    return googleApiErrorResponse(err)
   }
 }
