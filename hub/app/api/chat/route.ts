@@ -10,7 +10,7 @@ import { searchSemanticBrain } from '@/lib/vertex'
 import { searchWeb, fetchUrlWithExa } from '@/lib/exa'
 import { loadSkillContent } from '@/lib/skills-loader'
 import { SKILL_MAP } from '@/lib/skills'
-import { needsInternalSearch, needsExternalSearch } from '@/lib/search-routing'
+import { needsInternalSearch, needsExternalSearch, isTrivialMessage } from '@/lib/search-routing'
 import { ChatRequestSchema } from '@/lib/zod-schemas'
 import { boundHistory, MAX_HISTORY_MESSAGES } from '@/lib/history-window'
 import { buildGoogleWorkspaceContext } from '@/lib/google-context'
@@ -43,10 +43,17 @@ async function runSearchPipeline(query: string, effectiveUseCase: string): Promi
         const searchPromises: Promise<string | null>[] = []
 
         const explicitInternalReq = needsInternalSearch(query)
-        const shouldRunVertex = effectiveUseCase === 'deep_dive' || effectiveUseCase === 'interview' || (effectiveUseCase === 'execute' && explicitInternalReq)
-        const shouldRunPgVector = effectiveUseCase === 'recall' || effectiveUseCase === 'deep_dive' || effectiveUseCase === 'interview' || (effectiveUseCase === 'execute' && explicitInternalReq)
+        // Trivial greetings/acks ("thanks", "ok", "got it", 👍) need no internal
+        // context, so skip the Vertex + pgvector fan-out entirely (cost/latency).
+        // Conservative: any question, >3 words, or search signal → not trivial.
+        const trivial = isTrivialMessage(query)
+        const shouldRunVertex = !trivial && (effectiveUseCase === 'deep_dive' || effectiveUseCase === 'interview' || (effectiveUseCase === 'execute' && explicitInternalReq))
+        const shouldRunPgVector = !trivial && (effectiveUseCase === 'recall' || effectiveUseCase === 'deep_dive' || effectiveUseCase === 'interview' || (effectiveUseCase === 'execute' && explicitInternalReq))
 
-        log.info({ effectiveUseCase, shouldRunVertex, shouldRunPgVector, explicitInternalReq }, 'Search routing decision')
+        if (trivial) {
+          log.info({ trivial }, 'Internal search (Vertex + pgvector) skipped for trivial message')
+        }
+        log.info({ effectiveUseCase, shouldRunVertex, shouldRunPgVector, explicitInternalReq, trivial }, 'Search routing decision')
 
         // Try Vertex AI for internal context
         if (shouldRunVertex) {

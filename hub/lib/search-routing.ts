@@ -62,3 +62,35 @@ export const EXTERNAL_PHRASE_SIGNALS = [
 export function needsExternalSearch(message: string): boolean {
   return matchesSignals(message, EXTERNAL_WORD_SIGNALS, EXTERNAL_PHRASE_SIGNALS)
 }
+
+/**
+ * Short greeting/acknowledgement messages that carry no information need, so
+ * fanning them out to Vertex/pgvector is pure wasted cost + latency. Normalized
+ * (lowercased, trimmed, punctuation-stripped) before comparison.
+ */
+export const TRIVIAL_MESSAGES = new Set([
+  'thanks', 'thank you', 'thankyou', 'thx', 'ty', 'tysm',
+  'ok', 'okay', 'k', 'kk', 'okey',
+  'got it', 'gotit', 'cool', 'nice', 'great', 'awesome', 'sweet',
+  'hi', 'hello', 'hey', 'yo', 'hiya', 'heya',
+  'yes', 'yep', 'yeah', 'yup', 'no', 'nope', 'nah',
+  'sure', 'perfect', 'done', 'ok thanks', 'okay thanks',
+  '👍', '🙏', '👌',
+])
+
+/**
+ * True ONLY for short greetings/acks that need no search context (thanks, ok,
+ * got it, 👍). Deliberately conservative: any '?', any message >3 words, and any
+ * internal/external search signal all return false so genuine questions are
+ * NEVER suppressed. When uncertain, returns false (search still runs).
+ */
+export function isTrivialMessage(query: string): boolean {
+  if (!query) return false
+  const wordCount = query.split(/\s+/).filter(Boolean).length
+  if (wordCount === 0 || wordCount > 3) return false
+  if (query.includes('?')) return false
+  if (needsInternalSearch(query) || needsExternalSearch(query)) return false
+  // Normalize: lowercase, trim, strip common punctuation (keep emoji + letters).
+  const normalized = query.toLowerCase().trim().replace(/[.,!;:'"()\-]/g, '').replace(/\s+/g, ' ').trim()
+  return TRIVIAL_MESSAGES.has(normalized)
+}
