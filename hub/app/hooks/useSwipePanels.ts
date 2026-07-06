@@ -118,12 +118,16 @@ export function useSwipePanels({
     }
   }, [mobileLeftOpen, mobileRightOpen])
 
-  // Clear imperative inline backdrop styles so React's rendered values win again
-  // (prevents a mid-drag display/opacity from desyncing after a gesture ends).
+  // Re-establish the inline backdrop styles to match React's intended state so a
+  // mid-drag display/opacity can't desync after a gesture ends. We set explicit
+  // values from the current open flags rather than clearing to '' — clearing let
+  // the CSS cascade take over, and the ≤1024px rule forced `display: block`, so
+  // the backdrop got stuck visible over the whole screen after any tap.
   const resetBackdropToReact = () => {
     if (backdropRef.current) {
-      backdropRef.current.style.display = ''
-      backdropRef.current.style.opacity = ''
+      const open = mobileLeftOpen || mobileRightOpen
+      backdropRef.current.style.display = open ? 'block' : 'none'
+      backdropRef.current.style.opacity = open ? '1' : '0'
     }
   }
 
