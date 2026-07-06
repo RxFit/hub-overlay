@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getToken } from 'next-auth/jwt'
+import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
 import { getSpaceReadState } from '@/lib/google'
 
 export const runtime = 'nodejs'
@@ -9,13 +9,8 @@ export const runtime = 'nodejs'
  * Returns the authenticated user's lastReadTime for a space.
  */
 export async function GET(req: NextRequest) {
-  const token = await getToken({ req })
-  if (!token?.accessToken) {
-    return NextResponse.json(
-      { error: 'Unauthorized', code: 'NO_TOKEN' },
-      { status: 401 }
-    )
-  }
+  const auth = await resolveGoogleAuth(req)
+  if (!auth.ok) return auth.response
 
   const spaceId = req.nextUrl.searchParams.get('spaceId')
   if (!spaceId) {
@@ -26,10 +21,7 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const readState = await getSpaceReadState(
-      token.accessToken as string,
-      spaceId
-    )
+    const readState = await getSpaceReadState(auth.accessToken, spaceId)
 
     return NextResponse.json({
       spaceId,
@@ -38,7 +30,8 @@ export async function GET(req: NextRequest) {
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to fetch read state'
 
-    // Read state scope not yet granted — degrade gracefully
+    // Read state scope not yet granted — degrade gracefully. Must run BEFORE
+    // the generic mapper, which would fold 403 into a reauth 401.
     if (message.includes('403') || message.includes('PERMISSION_DENIED')) {
       return NextResponse.json(
         { spaceId, lastReadTime: null, code: 'MISSING_SCOPE' },
@@ -46,6 +39,6 @@ export async function GET(req: NextRequest) {
       )
     }
 
-    return NextResponse.json({ error: message }, { status: 500 })
+    return googleApiErrorResponse(err)
   }
 }

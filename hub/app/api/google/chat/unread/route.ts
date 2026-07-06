@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
-import { getToken } from 'next-auth/jwt'
 import type { NextRequest } from 'next/server'
+import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
 import { getSpaceReadState, listChatMessages } from '@/lib/google'
 
 export const runtime = 'nodejs'
@@ -19,12 +19,10 @@ export const runtime = 'nodejs'
  * the badge. Concurrency is throttled to stay under Google API rate limits.
  */
 export async function GET(req: NextRequest) {
-  const token = await getToken({ req })
-  if (!token?.accessToken) {
-    return NextResponse.json({ error: 'Unauthorized', code: 'NO_TOKEN' }, { status: 401 })
-  }
+  const auth = await resolveGoogleAuth(req)
+  if (!auth.ok) return auth.response
 
-  const accessToken = token.accessToken as string
+  const accessToken = auth.accessToken
   const raw = req.nextUrl.searchParams.get('spaceIds') ?? ''
   const spaceIds = raw.split(',').map(s => s.trim()).filter(Boolean)
 
@@ -62,7 +60,6 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ unread, total })
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to compute unread counts'
-    return NextResponse.json({ error: message }, { status: 500 })
+    return googleApiErrorResponse(err)
   }
 }

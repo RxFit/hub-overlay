@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
-import { getToken } from 'next-auth/jwt'
 import { authOptions } from '@/lib/auth'
+import { resolveGoogleAuth } from '@/lib/google-session'
 import { db, withTransaction } from '@/lib/db'
 import { kpis, tenants } from '@/lib/schema'
 import { eq, and, inArray } from 'drizzle-orm'
@@ -70,14 +70,17 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Get the Google OAuth access token (needed for GA4 + GSC)
-  // Note: cron calls have no user session, so GA4/GSC will be skipped gracefully.
+  // Get the Google OAuth access token (needed for GA4 + GSC).
+  // - Cron calls carry no user JWT at all, so GA4/GSC are skipped gracefully
+  //   (Stripe-only sync proceeds), exactly as before.
+  // - Browser sessions go through resolveGoogleAuth (P1-2): a missing token or
+  //   a failed refresh (RefreshAccessTokenError) returns 401 { reauth: true }
+  //   instead of firing GA4/GSC with a dead credential.
   let accessToken: string | undefined
-  try {
-    const token = await getToken({ req })
-    accessToken = token?.accessToken as string | undefined
-  } catch {
-    // No token available (cron path) — Stripe-only sync will proceed
+  if (!isCron) {
+    const auth = await resolveGoogleAuth(req)
+    if (!auth.ok) return auth.response
+    accessToken = auth.accessToken
   }
 
   try {
