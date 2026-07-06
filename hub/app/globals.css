@@ -1927,7 +1927,13 @@ a:hover .rx-arrow {
   }
 
   .mobile-backdrop {
-    display: block;
+    /* Hidden by default even on tablet/mobile. Visibility is driven by the
+       inline style React renders (open flags) or the imperative style the swipe
+       gesture sets — NOT by this rule. Forcing `display: block` here made the
+       backdrop reappear whenever the swipe hook cleared its inline display,
+       leaving a fixed z-999 blur layer stuck over the whole screen and eating
+       every tap on ≤1024px viewports. */
+    display: none;
     position: fixed;
     inset: 0;
     background: rgba(15, 18, 30, 0.7);
