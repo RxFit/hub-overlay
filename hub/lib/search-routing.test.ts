@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { needsInternalSearch, needsExternalSearch } from '@/lib/search-routing'
+import { needsInternalSearch, needsExternalSearch, isTrivialMessage } from '@/lib/search-routing'
 
 describe('needsInternalSearch', () => {
   it('matches genuine internal-data signals', () => {
@@ -37,5 +37,43 @@ describe('needsExternalSearch', () => {
 
   it('returns false for purely internal requests', () => {
     expect(needsExternalSearch('summarize my tasks for today')).toBe(false)
+  })
+})
+
+describe('isTrivialMessage', () => {
+  it('returns true for short greetings/acks', () => {
+    expect(isTrivialMessage('thanks')).toBe(true)
+    expect(isTrivialMessage('Thanks!')).toBe(true)
+    expect(isTrivialMessage('ok')).toBe(true)
+    expect(isTrivialMessage('got it')).toBe(true)
+    expect(isTrivialMessage('👍')).toBe(true)
+    expect(isTrivialMessage('  hey  ')).toBe(true)
+    expect(isTrivialMessage('thank you')).toBe(true)
+  })
+
+  it('returns false for any message containing a question mark', () => {
+    expect(isTrivialMessage("what's next?")).toBe(false)
+    expect(isTrivialMessage('ok?')).toBe(false)
+  })
+
+  it('returns false for messages longer than 3 words', () => {
+    expect(isTrivialMessage('summarize the Q3 revenue report')).toBe(false)
+    expect(isTrivialMessage('thanks for the detailed audit report')).toBe(false)
+  })
+
+  it('returns false when the message carries an internal/external search signal', () => {
+    // 'my' is an internal signal → not trivial even though it is short
+    expect(isTrivialMessage('show my issues')).toBe(false)
+    // 'seo' is an external signal
+    expect(isTrivialMessage('seo trends')).toBe(false)
+  })
+
+  it('returns false for empty/whitespace messages', () => {
+    expect(isTrivialMessage('')).toBe(false)
+    expect(isTrivialMessage('   ')).toBe(false)
+  })
+
+  it('returns false for ordinary short non-greeting messages', () => {
+    expect(isTrivialMessage('the revenue')).toBe(false)
   })
 })
