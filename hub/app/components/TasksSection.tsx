@@ -8,6 +8,14 @@ import type { ChatAttachment } from '@/types'
 import styles from './LeftPanelSections.module.css'
 import { CollapsibleSection, SkeletonBlock, SectionMessage } from './LeftPanelShared'
 import { buildTaskInjectMessage, formatDueDate } from '@/lib/panel-inject'
+import {
+  addRecentlyCompleted,
+  removeRecentlyCompleted,
+  type CompletedTaskEntry,
+} from '@/lib/recently-completed'
+
+/** How long a completed-task undo affordance stays offered before auto-dismissing (ms). */
+const UNDO_TIMEOUT_MS = 10_000
 
 /* ══════════════════════════════════════════════════════════════════════════════
    TASKS SECTION
@@ -30,6 +38,9 @@ function TasksSectionImpl({ onInjectChat, onInjectAction }: { onInjectChat: (msg
   const [fadingIds, setFadingIds] = useState<Set<string>>(new Set())
   // IDs to hide from the list (after fade completes)
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set())
+  // Just-completed tasks kept locally so the panel can offer an "Undo" affordance
+  // even though the fetch (showCompleted=false) has dropped them from the list.
+  const [recentlyCompleted, setRecentlyCompleted] = useState<CompletedTaskEntry[]>([])
 
   // Clear all optimistic state when switching lists — prevents hidden/fading
   // tasks from one list bleeding into another tab's view
@@ -37,6 +48,7 @@ function TasksSectionImpl({ onInjectChat, onInjectAction }: { onInjectChat: (msg
     setFadingIds(new Set())
     setHiddenIds(new Set())
     setTogglingIds(new Set())
+    setRecentlyCompleted([])
   }, [resolvedListId])
 
   if (isLoading) {
@@ -67,6 +79,17 @@ function TasksSectionImpl({ onInjectChat, onInjectAction }: { onInjectChat: (msg
   const currentTasks = resolvedListId ? (tasksByList[resolvedListId] ?? []) : []
   const visibleTasks = currentTasks.filter(t => !hiddenIds.has(t.id))
 
+  // Single write path shared by complete, uncomplete, and undo. Posts the action
+  // and refreshes SWR; callers own their own optimistic UI.
+  async function postTaskAction(action: 'complete' | 'uncomplete', listId: string, taskId: string) {
+    await writeFetch('/api/google/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, taskListId: listId, taskId }),
+    })
+    mutate?.()
+  }
+
   async function handleToggleTask(task: TaskItem, listId: string) {
     if (togglingIds.has(task.id)) return
     const wasCompleted = task.status === 'completed'
@@ -83,12 +106,15 @@ function TasksSectionImpl({ onInjectChat, onInjectAction }: { onInjectChat: (msg
 
     setTogglingIds(prev => new Set(prev).add(task.id))
     try {
-      await writeFetch('/api/google/tasks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: newAction, taskListId: listId, taskId: task.id }),
-      })
-      mutate?.()
+      await postTaskAction(newAction, listId, task.id)
+      if (!wasCompleted) {
+        // Offer an in-panel undo for the just-completed task, then auto-dismiss.
+        const entry: CompletedTaskEntry = { id: task.id, title: task.title, listId }
+        setRecentlyCompleted(prev => addRecentlyCompleted(prev, entry))
+        setTimeout(() => {
+          setRecentlyCompleted(prev => removeRecentlyCompleted(prev, task.id))
+        }, UNDO_TIMEOUT_MS)
+      }
     } catch {
       // Rollback optimistic UI on ANY failure (HTTP error or network).
       // writeFetch already routed a 401 into signIn('google').
@@ -96,6 +122,24 @@ function TasksSectionImpl({ onInjectChat, onInjectAction }: { onInjectChat: (msg
       setHiddenIds(prev => { const s = new Set(prev); s.delete(task.id); return s })
     } finally {
       setTogglingIds(prev => { const s = new Set(prev); s.delete(task.id); return s })
+    }
+  }
+
+  // Undo a completion: reuse the existing uncomplete write path, then restore the
+  // row (un-hide / un-fade) and drop the undo entry.
+  async function handleUndoComplete(entry: CompletedTaskEntry) {
+    if (togglingIds.has(entry.id)) return
+    setTogglingIds(prev => new Set(prev).add(entry.id))
+    try {
+      await postTaskAction('uncomplete', entry.listId, entry.id)
+      setHiddenIds(prev => { const s = new Set(prev); s.delete(entry.id); return s })
+      setFadingIds(prev => { const s = new Set(prev); s.delete(entry.id); return s })
+      setRecentlyCompleted(prev => removeRecentlyCompleted(prev, entry.id))
+    } catch {
+      // Leave the undo affordance in place so the user can retry.
+      // writeFetch already routed a 401 into signIn('google').
+    } finally {
+      setTogglingIds(prev => { const s = new Set(prev); s.delete(entry.id); return s })
     }
   }
 
@@ -136,6 +180,31 @@ function TasksSectionImpl({ onInjectChat, onInjectAction }: { onInjectChat: (msg
               onInjectChat={() => onInjectChat(buildTaskInjectMessage(task, activeListName))}
             />
           ))}
+        </div>
+      )}
+
+      {/* Recently-completed undo affordance — restores accidental completions
+          without leaving for the Google Tasks app */}
+      {recentlyCompleted.some(e => e.listId === resolvedListId) && (
+        <div className={styles.undoStack} role="status" aria-live="polite">
+          {recentlyCompleted
+            .filter(e => e.listId === resolvedListId)
+            .map(entry => (
+              <div key={entry.id} className={styles.undoRow}>
+                <span className={styles.undoLabel}>
+                  Completed “{entry.title}”
+                </span>
+                <button
+                  type="button"
+                  className={styles.undoBtn}
+                  onClick={() => handleUndoComplete(entry)}
+                  disabled={togglingIds.has(entry.id)}
+                  aria-label={`Undo completing ${entry.title}`}
+                >
+                  Undo
+                </button>
+              </div>
+            ))}
         </div>
       )}
 

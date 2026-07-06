@@ -725,6 +725,58 @@
   background: rgba(197,160,89,0.06);
 }
 
+/* Recently-completed "Undo" affordance */
+.undoStack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+.undoRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgba(197,160,89,0.06);
+  animation: undoRowIn 0.15s var(--ease-out, ease-out);
+}
+@keyframes undoRowIn {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.undoLabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+}
+.undoBtn {
+  flex-shrink: 0;
+  padding: 2px 10px;
+  background: transparent;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  color: var(--accent);
+  font-size: 0.68rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.undoBtn:hover:not(:disabled) {
+  background: rgba(197,160,89,0.12);
+}
+.undoBtn:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
 /* "+ Event" compact button in calendar section header */
 .calCreateBtn {
   padding: 3px 10px;
