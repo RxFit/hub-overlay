@@ -82,7 +82,10 @@ export async function executeAction(
 
       const res = await fetch('/api/google/tasks', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        // X-AI-Intent marks this as an AI-originated action so the route records
+        // it in the ai_action_log audit trail (NS-2). Task creation is not
+        // gate-token-guarded, so no X-Gate-Token is attached.
+        headers: { 'Content-Type': 'application/json', 'X-AI-Intent': 'create_task' },
         body: JSON.stringify({
           action: 'create',
           taskListId,

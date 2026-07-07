@@ -1,5 +1,14 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { checkRateLimit, _sweep, _reset, LIMIT, WINDOW_MS } from './rate-limit'
+import {
+  checkRateLimit,
+  checkActionLimit,
+  ACTION_LIMITS,
+  DEFAULT_ACTION_LIMIT,
+  _sweep,
+  _reset,
+  LIMIT,
+  WINDOW_MS,
+} from './rate-limit'
 
 describe('checkRateLimit sliding window', () => {
   beforeEach(() => {
@@ -78,5 +87,71 @@ describe('_sweep stale-key cleanup', () => {
       expect(checkRateLimit('active@rxfitatx.com', t0 + WINDOW_MS).allowed).toBe(true)
     }
     expect(checkRateLimit('active@rxfitatx.com', t0 + WINDOW_MS).allowed).toBe(false)
+  })
+})
+
+describe('checkActionLimit — per-action-type windows (NS-2)', () => {
+  beforeEach(() => {
+    _reset()
+  })
+
+  it('limits the (N+1)th gmail_send in the window (stricter 5/60s)', () => {
+    const t0 = 1_000_000
+    const email = 'danny@rxfitatx.com'
+    const gmailLimit = ACTION_LIMITS.gmail_send
+    expect(gmailLimit).toBe(5)
+
+    for (let i = 0; i < gmailLimit; i++) {
+      expect(checkActionLimit(email, 'gmail_send', t0 + i).allowed).toBe(true)
+    }
+    const denied = checkActionLimit(email, 'gmail_send', t0 + gmailLimit)
+    expect(denied.allowed).toBe(false)
+    expect(denied.retryAfterSec).toBeGreaterThan(0)
+  })
+
+  it('keeps action types independent — a maxed gmail_send does not block chat_post', () => {
+    const t0 = 1_000_000
+    const email = 'danny@rxfitatx.com'
+
+    for (let i = 0; i < ACTION_LIMITS.gmail_send; i++) {
+      checkActionLimit(email, 'gmail_send', t0 + i)
+    }
+    // gmail_send is now exhausted...
+    expect(checkActionLimit(email, 'gmail_send', t0 + 100).allowed).toBe(false)
+    // ...but chat_post has its own untouched window.
+    expect(checkActionLimit(email, 'chat_post', t0 + 100).allowed).toBe(true)
+    // ...and task_create too.
+    expect(checkActionLimit(email, 'task_create', t0 + 100).allowed).toBe(true)
+  })
+
+  it('scopes windows per user — one user maxing out does not affect another', () => {
+    const t0 = 1_000_000
+    for (let i = 0; i < ACTION_LIMITS.gmail_send; i++) {
+      checkActionLimit('a@rxfitatx.com', 'gmail_send', t0 + i)
+    }
+    expect(checkActionLimit('a@rxfitatx.com', 'gmail_send', t0 + 100).allowed).toBe(false)
+    expect(checkActionLimit('b@rxfitatx.com', 'gmail_send', t0 + 100).allowed).toBe(true)
+  })
+
+  it('unknown action types fall back to the global default limit', () => {
+    const t0 = 1_000_000
+    const email = 'danny@rxfitatx.com'
+    expect(DEFAULT_ACTION_LIMIT).toBe(LIMIT)
+    for (let i = 0; i < DEFAULT_ACTION_LIMIT; i++) {
+      expect(checkActionLimit(email, 'mystery_action', t0 + i).allowed).toBe(true)
+    }
+    expect(checkActionLimit(email, 'mystery_action', t0 + DEFAULT_ACTION_LIMIT).allowed).toBe(false)
+  })
+
+  it('does not collide with the global chat limiter for the same email', () => {
+    const t0 = 1_000_000
+    const email = 'danny@rxfitatx.com'
+    // Exhaust the per-action gmail_send window.
+    for (let i = 0; i < ACTION_LIMITS.gmail_send; i++) {
+      checkActionLimit(email, 'gmail_send', t0 + i)
+    }
+    expect(checkActionLimit(email, 'gmail_send', t0 + 100).allowed).toBe(false)
+    // The global chat window keyed on the bare email is independent.
+    expect(checkRateLimit(email, t0 + 100).allowed).toBe(true)
   })
 })

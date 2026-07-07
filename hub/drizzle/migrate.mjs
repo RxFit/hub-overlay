@@ -198,6 +198,30 @@ async function run() {
   `
   console.log('[migrate] ✓ founder_lens_sections table')
 
+  // AI Action Log — append-only provenance for AI-initiated actions (NS-2).
+  // Strictly additive; no backfill. `target` holds routing metadata only (no
+  // bodies); `gate_token_id` is a token fingerprint (never the full token).
+  await sql`
+    CREATE TABLE IF NOT EXISTS ai_action_log (
+      id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      created_at    TIMESTAMPTZ DEFAULT now() NOT NULL,
+      user_email    TEXT,
+      actor         TEXT NOT NULL DEFAULT 'ai',
+      action_type   TEXT NOT NULL,
+      target        JSONB,
+      intent        TEXT,
+      gate_token_id TEXT,
+      request_id    TEXT,
+      status        TEXT NOT NULL,
+      error         TEXT
+    )
+  `
+  await sql`
+    CREATE INDEX IF NOT EXISTS ai_action_log_user_created_idx
+    ON ai_action_log (user_email, created_at DESC)
+  `
+  console.log('[migrate] ✓ ai_action_log table')
+
   // Seed rxfit tenant
   await sql`
     INSERT INTO tenants (id, name, domain)
