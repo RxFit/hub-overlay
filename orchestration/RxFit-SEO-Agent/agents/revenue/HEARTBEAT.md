@@ -23,7 +23,7 @@
 
 **Month-End (within 3 days of month close):**
 - Pull GSC data: total clicks + impressions for SEO Agent-generated content
-- Calculate organic traffic value: estimated CPC equivalent (use Google Ads benchmark for fitness keywords)
+- Calculate organic traffic value: estimated CPC equivalent (use Google Ads benchmark for B2B advisory keywords)
 - Pull total monthly running cost from weekly summaries
 - Calculate agency cost equivalent: month's content volume × agency rate-per-piece
 - Compute Net ROI: `(Agency Equivalent + Organic Traffic Value) - Monthly Running Cost`

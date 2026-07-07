@@ -11,17 +11,17 @@ const log = createLogger('test-chunking')
 
 // Create a large mock document with distinct paragraphs to test semantic chunking
 const MOCK_LARGE_DOCUMENT = `
-PARAGRAPH 1: Introduction to RxFit Performance Standards.
-The core mission of RxFit is to deliver top-tier health and athletic performance insights. By combining data-driven training metrics with advanced metabolic analytics, we ensure that every client receives a highly customized roadmap. This document outlines the operational guidelines for the coaching fleet, superadmins, and staff. It is imperative that all members adhere strictly to these benchmarks to maintain consistency and safety across all training locations.
+PARAGRAPH 1: Introduction to RxFit Engagement Standards.
+The core mission of RxFit is to deliver top-tier operating and growth insights for founders and executives. By combining data-driven engagement metrics with advanced pipeline analytics, we ensure that every client receives a highly customized roadmap. This document outlines the operational guidelines for the advisory fleet, superadmins, and staff. It is imperative that all members adhere strictly to these benchmarks to maintain consistency and quality across all client engagements.
 
-PARAGRAPH 2: Metabolic Conditioning Protocols and Guidelines.
-When designing conditioning plans, coaches must prioritize aerobic foundation development before introducing high-intensity anaerobic work. Metabolic pathways are trained sequentially, beginning with zone 2 endurance workouts designed to build mitochondrial density. Each session should be logged in the client dashboard, noting heart rate recovery times and perceived exertion rates. This tracking allows the AI engine to accurately predict performance gains and flag potential overtraining risks.
+PARAGRAPH 2: Engagement Cadence Design and Guidelines.
+When designing engagement cadences, operating partners must prioritize a stable operating rhythm before introducing high-intensity growth sprints. Workstreams are sequenced deliberately, beginning with weekly pipeline reviews designed to build forecasting discipline. Each working session should be logged in the client dashboard, noting decision turnaround times and execution velocity. This tracking allows the AI engine to accurately predict momentum gains and flag potential process breakdown risks.
 
-PARAGRAPH 3: Nutrition and Recovery Integration.
-Performance is only as good as recovery. Our integrated nutrition guides focus on whole-food diets tailored to the client's metabolic type. High-protein intake combined with healthy fats and complex carbohydrates forms the bedrock of our nutritional recommendations. Sleep tracking is also a core requirement; clients must log at least 7.5 hours of sleep nightly. If a client falls below this threshold, the command center will automatically flag their recovery index.
+PARAGRAPH 3: Financial Operations and Runway Integration.
+Execution is only as good as the runway that funds it. Our integrated financial operations guides focus on disciplined budgets tailored to the client's stage and burn multiple. Predictable revenue combined with healthy gross margins and conservative hiring plans forms the bedrock of our planning recommendations. KPI logging is also a core requirement; clients must maintain at least 7.5 months of runway visibility. If a client falls below this threshold, the command center will automatically flag their runway index.
 
-PARAGRAPH 4: Safety, Compliance, and Injury Prevention.
-Under no circumstances should client metrics be ignored when they indicate physical strain. Coaches must perform a weekly functional movement screening to identify joint restrictions or kinetic imbalances. If a client reports joint pain exceeding a level 3 out of 10, the workout must be terminated immediately and referred to a physical therapist. All injury incidents, no matter how minor, must be logged using the event-logger.
+PARAGRAPH 4: Governance, Compliance, and Escalation Protocols.
+Under no circumstances should client metrics be ignored when they indicate operational strain. Operating partners must perform a weekly operating review to identify process bottlenecks or reporting gaps. If a client's burn rate exceeds plan by more than a level 3 variance out of 10, the engagement plan must be paused immediately and the client referred to a fractional CFO. All escalation incidents, no matter how minor, must be logged using the event-logger.
 
 PARAGRAPH 5: AI Integration and Client Dashboards.
 The final pillar of the RxFit methodology is the ingestion of all telemetry data into our centralized knowledge base. The AI assistant uses these data chunks to provide real-time suggestions during chat sessions. This context-aware system relies on high-quality vector embeddings stored in pgvector. By feeding clean, structured document chunks to the embedding model, we ensure that the system answers questions with maximum accuracy and relevance.

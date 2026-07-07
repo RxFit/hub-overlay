@@ -1,4 +1,4 @@
-# RxFit Wellness App — Revenue Lead | Tools
+# RxFit Client Platform — Revenue Lead | Tools
 
 ## Available Tools
 

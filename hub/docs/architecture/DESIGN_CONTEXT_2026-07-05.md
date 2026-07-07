@@ -14,7 +14,7 @@ The companion plan is `IMPROVEMENT_PLAN_2026-07-05.html` in this folder.
 
 ## Product intent
 
-- **App:** three-panel AI operations hub for **RxFit** (fitness business, Austin TX).
+- **App:** three-panel AI operations hub for **RxFit** (executive advisory firm, Austin TX).
   Live at hub.casatrejo.com.
 - **Users:** Danny Trejo (founder), RxFit staff, and Paperclip AI agents (CEO/COO/CTO).
 - **Value:** unify Google Workspace (Calendar, Tasks, Drive, Gmail, Chat) + Paperclip

@@ -87,7 +87,7 @@ beforeEach(() => {
   ])
   mocks.listChatSpaces.mockResolvedValue([
     space('spaces/A', 'Ops Team'),
-    space('spaces/B', 'Trainers'),
+    space('spaces/B', 'Partners'),
   ])
   mocks.listChatMessages.mockResolvedValue([
     chatMsg('Danny', 'Can someone cover the 6am session?'),

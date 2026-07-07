@@ -1,4 +1,4 @@
-# RxFit Wellness App — Technical Lead | Memory
+# RxFit Client Platform — Technical Lead | Memory
 
 *Read at start of each heartbeat cycle. Update after task completion. All values start empty.*
 

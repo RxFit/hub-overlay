@@ -33,8 +33,8 @@ async function runSimulation() {
   console.log(`[Agent] ✅ Authenticated as Service Account: ${GREEN}${mockSecret.client_email}${RESET}\n`)
 
   console.log(`[Agent] Drafting email...`)
-  const draftSubject = 'RxFit Corporate Wellness Proposal'
-  const draftBody = 'Hi there, attached is our wellness proposal...'
+  const draftSubject = 'RxFit Corporate Advisory Proposal'
+  const draftBody = 'Hi there, attached is our advisory proposal...'
   await sleep(800)
 
   // 1. Send Test Email to Admin

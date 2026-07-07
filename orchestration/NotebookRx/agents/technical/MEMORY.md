@@ -9,7 +9,7 @@ _Persistent state for the Technical Lead agent. Updated on each cadence cycle._
 | Component | Current Version | Deployed Date | Previous Version | Change Rationale |
 |---|---|---|---|---|
 | Primary LLM | _[agent populates — e.g., "gemini-1.5-pro"]_ | | | |
-| Health pattern detection prompt | _[agent populates — e.g., "v1.2"]_ | | | |
+| Business pattern detection prompt | _[agent populates — e.g., "v1.2"]_ | | | |
 | Session summary prompt | _[agent populates]_ | | | |
 | Insight generation prompt | _[agent populates]_ | | | |
 
@@ -52,9 +52,9 @@ _Persistent state for the Technical Lead agent. Updated on each cadence cycle._
 
 | Pattern Type | Detected | Accuracy (user-rated) | Sample Size | Notes |
 |---|---|---|---|---|
-| Sleep-performance correlation | _[agent populates]_ | | | |
-| Nutrition-energy correlation | _[agent populates]_ | | | |
-| Workout-recovery correlation | _[agent populates]_ | | | |
+| Pipeline-headcount correlation | _[agent populates]_ | | | |
+| Cadence-retention correlation | _[agent populates]_ | | | |
+| Burn-runway correlation | _[agent populates]_ | | | |
 | _[custom — agent populates]_ | | | | |
 
 **AI Insight Quality Score (overall):** _[agent populates — 1-5 scale, user-rated average]_
@@ -65,9 +65,9 @@ _Persistent state for the Technical Lead agent. Updated on each cadence cycle._
 
 | Dataset | Last Re-embedded | Embedding Model | Staleness Alert | Notes |
 |---|---|---|---|---|
-| Coach session notes | _[agent populates]_ | | | |
-| Client health journals | _[agent populates]_ | | | |
-| Health research corpus | _[agent populates]_ | | | |
+| Advisor session notes | _[agent populates]_ | | | |
+| Client operating journals | _[agent populates]_ | | | |
+| Market research corpus | _[agent populates]_ | | | |
 
 ---
 

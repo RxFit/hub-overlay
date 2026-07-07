@@ -72,6 +72,6 @@ All escalations route through **Antigravity (AI Board Member)** first:
 
 ## Founder Context (Brief)
 
-Danny built RxFit as a response to what he saw missing in the Austin fitness market: a premium, outcome-driven, in-home training experience that respects the client's time and intelligence. He is NASM-certified, has direct training relationships with current clients, and his personal reputation is embedded in every client interaction. He is not a passive founder — he is the product.
+Danny built RxFit as a response to what he saw missing in the Austin B2B services market: a premium, outcome-driven, on-site advisory experience that respects the client's time and intelligence. He is operator-credentialed (ex-founder), has direct advisory relationships with current clients, and his personal reputation is embedded in every client interaction. He is not a passive founder — he is the product.
 
 All agents should operate in a manner that reflects well on Danny and upholds the brand standards defined in `PROJECT.md`.

@@ -2,9 +2,9 @@
 
 ## What It Is
 
-**NotebookRx** is an AI-powered health and fitness intelligence notebook — a structured memory layer for health journeys. It combines coach session logs, client self-tracking data, and health science research into a single AI-augmented system that detects patterns, surfaces insights, and generates personalized health protocols over time.
+**NotebookRx** is an AI-powered account intelligence notebook — a structured memory layer for client engagements. It combines advisor meeting notes, client self-reported operating metrics, and market research into a single AI-augmented system that detects patterns, surfaces insights, and generates personalized operating playbooks over time.
 
-Think of it as **"your personal health AI that remembers everything"** — clinical in precision, warm in delivery.
+Think of it as **"your firm's institutional memory that remembers everything"** — analytical in precision, warm in delivery.
 
 ---
 
@@ -12,24 +12,24 @@ Think of it as **"your personal health AI that remembers everything"** — clini
 
 | User Type | How They Use It |
 |---|---|
-| **RxFit Coaches** | Log client sessions, track progress over time, receive AI-surfaced pattern alerts ("client's sleep quality correlates with workout performance drops") |
-| **RxFit Clients** | Self-track health journals, receive AI-generated insight summaries, follow personalized prescription-style recommendations |
+| **RxFit Advisors** | Log client sessions, track progress over time, receive AI-surfaced pattern alerts ("client's pipeline coverage correlates with hiring-plan slippage") |
+| **RxFit Clients** | Self-report operating metrics, receive AI-generated insight summaries, follow personalized board-memo-style recommendations |
 
 ---
 
 ## Core Value Proposition
 
-Most health apps capture data but fail to synthesize it. NotebookRx is the synthesis layer:
-- **Pattern detection** across time-series health data (sleep, nutrition, workouts, mood, biomarkers)
-- **Coach augmentation** — AI surfaces what human coaches might miss across 20+ clients
-- **Client engagement** — clients see their own health narrative, not just raw numbers
-- **Scientific credibility** — recommendations grounded in health research, not generic advice
+Most business tools capture data but fail to synthesize it. NotebookRx is the synthesis layer:
+- **Pattern detection** across time-series business data (revenue, pipeline, engagement, sentiment, operating KPIs)
+- **Advisor augmentation** — AI surfaces what human advisors might miss across 20+ clients
+- **Client engagement** — clients see their own growth narrative, not just raw numbers
+- **Analytical credibility** — recommendations grounded in market research, not generic advice
 
 ---
 
 ## Brand Voice
 
-Intelligent. Clinical but warm. Scientifically credible without being cold. Think "brilliant doctor who actually listens." Avoids wellness-industry hype. Every recommendation has a rationale.
+Intelligent. Analytical but warm. Data-credible without being cold. Think "brilliant chief of staff who actually listens." Avoids startup-guru hype. Every recommendation has a rationale.
 
 ---
 
@@ -38,7 +38,7 @@ Intelligent. Clinical but warm. Scientifically credible without being cold. Thin
 ```
 NotebookRx
       │
-      ├── Feeds patterns to ─────► Jade CoS (operational health intelligence)
+      ├── Feeds patterns to ─────► Jade CoS (operational account intelligence)
       │
       ├── Stores data in ─────────► Cloud SQL (antigravity_brain, pgvector for semantic search)
       │
@@ -52,7 +52,7 @@ NotebookRx
 **Experimental / Early-Stage.** Core architecture is being validated. The primary technical challenge is AI insight quality — the tool must surface insights that feel meaningfully intelligent, not generic. Product-Market Fit (PMF) has not yet been confirmed.
 
 Key open questions:
-- Is the primary user a coach or a client?
+- Is the primary user an advisor or a client?
 - What is the premium feature set (vs. free tier)?
 - Which data integrations drive the highest insight quality?
 
@@ -70,7 +70,7 @@ Key open questions:
 
 ## Governance Notes
 
-- Health data is sensitive — HIPAA-adjacent considerations apply even if not formally required
-- All AI-generated health recommendations must be framed as informational, not prescriptive (legal risk)
+- Client engagement data is sensitive — SOC 2-aligned, confidentiality-first considerations apply even if not formally required
+- All AI-generated recommendations must be framed as informational — no content that could constitute financial or legal advice (legal risk)
 - Stripe integration is active for premium tier — all billing changes require human execution
 - Escalate to Antigravity for any data model changes or privacy-adjacent decisions

@@ -21,7 +21,7 @@
   - Key alerts: service down, inference error rate >5%, DB connection failures
 
 - **Paperclip task queue**
-  - Use to: schedule and monitor AI insight generation jobs, manage async health pattern analysis
+  - Use to: schedule and monitor AI insight generation jobs, manage async business pattern analysis
 
 ## Memory
 
@@ -31,6 +31,6 @@
 ## Governance
 
 - `${GITHUB_TOKEN}`, `${CLOUD_SQL_HOST}`, `${GEMINI_API_KEY}` — never inline
-- Health data handling: HIPAA-adjacent standards regardless of formal requirement
+- Client data handling: SOC 2-aligned, confidentiality-first standards regardless of formal requirement
 - DB schema changes blocked until Antigravity approves
 - All prompt changes version-controlled as code, not ad hoc edits

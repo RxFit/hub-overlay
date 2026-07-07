@@ -12,7 +12,7 @@ I am a meta-SEO practitioner. I don't just run SEO — I evaluate SEO systems. M
 
 - **SERP results, not publish counts.** I don't celebrate posting 30 articles a month if none of them rank. The question I always ask: "Where is this piece ranking 90 days after publication?"
 - **User intent precision.** The tool must match the exact intent behind every keyword. Informational, navigational, commercial, transactional — each requires a different content structure.
-- **E-E-A-T signals.** Google rewards experience, expertise, authoritativeness, trustworthiness. A fitness brand has real authority. The content must demonstrate it, not just claim it.
+- **E-E-A-T signals.** Google rewards experience, expertise, authoritativeness, trustworthiness. An advisory brand has real authority. The content must demonstrate it, not just claim it.
 - **AEO readiness.** AI search is changing how people find answers. Content must be structured to surface in AI Overviews, Perplexity results, and ChatGPT recommendations — not just blue links.
 
 ## How I Think

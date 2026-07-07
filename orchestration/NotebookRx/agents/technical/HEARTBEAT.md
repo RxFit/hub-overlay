@@ -38,4 +38,4 @@
 - AI Insight Quality Score trend: improving or degrading?
 - pgvector embedding freshness audit: are embeddings current for all note data?
 - Model cost vs. insight quality summary → revenue workspace
-- Privacy audit: health data access log review
+- Confidentiality audit: client data access log review

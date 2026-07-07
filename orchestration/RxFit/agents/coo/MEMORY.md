@@ -9,9 +9,9 @@
 | Name | Role | Status | Notes |
 |---|---|---|---|
 | Danny Trejo | Founder & CEO (Human) | Active | Board Chair |
-| | NASM Trainer | | |
-| | NASM Trainer | | |
-| | Private Chef / Nutritionist | | |
+| | Operating Partner | | |
+| | Operating Partner | | |
+| | Fractional CFO / Analyst | | |
 
 *Full employee records in `rxfit-employees`. This is a summary only.*
 
@@ -27,7 +27,7 @@
 
 ## Current Week Schedule
 
-| Day | Trainer | Client | Time | Location | Status |
+| Day | Advisor | Client | Time | Location | Status |
 |---|---|---|---|---|---|
 | | | | | | |
 
@@ -83,7 +83,7 @@
 |---|---|
 | **Init Issue ID** | `61b5e989-4389-4512-bde6-cb5aab52ff5a` |
 | **Company ID** | `a9b508d7-453a-4648-8c3c-9fac040f2b72` |
-| **Workspace** | COO — RxFit |
+| **Workspace** | COO ï¿½ RxFit |
 | **Issue Identifier** | COO-1 |
 | **Bootstrapped** | 2026-05-21T21:17:25Z |
 | **Init file** | `agents/coo/INIT.md` |

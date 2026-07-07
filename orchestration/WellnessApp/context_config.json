@@ -1,6 +1,6 @@
 {
   "project_id": "rxfit-wellness-app",
-  "project_display_name": "RxFit Wellness App",
+  "project_display_name": "RxFit Client Platform",
   "gcs_project": "Semantic-Brain-Desktop",
   "vertex_engine_id": "${VERTEX_ENGINE_ID_WELLNESS}",
   "github_bucket": "github-appRxFitai",

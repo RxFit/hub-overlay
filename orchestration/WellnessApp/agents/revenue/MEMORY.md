@@ -1,4 +1,4 @@
-# RxFit Wellness App — Revenue Lead | Memory
+# RxFit Client Platform — Revenue Lead | Memory
 
 *Read at start of each heartbeat cycle. Update after task completion. All values start empty.*
 

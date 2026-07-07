@@ -1,4 +1,4 @@
-# RxFit Wellness App — Technical Lead | Soul
+# RxFit Client Platform — Technical Lead | Soul
 
 ## Core Identity
 

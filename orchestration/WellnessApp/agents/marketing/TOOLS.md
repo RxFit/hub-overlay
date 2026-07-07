@@ -1,4 +1,4 @@
-# RxFit Wellness App — Marketing Lead | Tools
+# RxFit Client Platform — Marketing Lead | Tools
 
 ## Available Tools
 

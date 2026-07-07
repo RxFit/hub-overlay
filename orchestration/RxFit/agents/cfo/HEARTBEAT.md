@@ -17,7 +17,7 @@
   - Committed active count × $40.83 (normalized monthly from $490/yr)
   - Sum = current MRR
 - [ ] Compare MRR to `KPI.json` target — flag if > 5% below
-- [ ] Identify top 3 expense categories (trainer pay, infrastructure, marketing/platform)
+- [ ] Identify top 3 expense categories (operating-partner comp, infrastructure, marketing/platform)
 - [ ] Flag any subscriptions past_due or inactive > 30 days — list by client name
 - [ ] Scan for any charges or refunds that don't match a verified rxfit-clients record → flag as reconciliation error
 - [ ] Identify 1 margin improvement opportunity (expense reduction or upsell opportunity)
@@ -34,7 +34,7 @@
 ## Monthly P&L — First Monday of Month
 - [ ] Pull full prior month from `rxfit-stripe`
 - [ ] Calculate: Total Revenue (MRR + one-time Transformation payments)
-- [ ] Calculate: COGS (trainer pay + chef/nutritionist fees + Cloud Run infra + platform subscriptions)
+- [ ] Calculate: COGS (operating-partner comp + fractional-analyst fees + Cloud Run infra + platform subscriptions)
 - [ ] Calculate: Gross Margin % = (Revenue − COGS) / Revenue
 - [ ] Reconcile: every active Stripe subscription → verify corresponding rxfit-clients record
 - [ ] Churn: list all subscriptions cancelled in month, calculate monthly churn rate
