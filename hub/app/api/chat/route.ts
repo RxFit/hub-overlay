@@ -18,6 +18,7 @@ import { withTimeout } from '@/lib/timeout'
 import { chatErrorBody } from '@/lib/chat-error'
 import { breaker, CircuitOpenError } from '@/lib/circuit-breaker'
 import { checkRateLimit } from '@/lib/rate-limit'
+import { emit, newRequestId } from '@/lib/observability'
 import type { ChatMessage, ChatAttachment } from '@/types'
 import '@/lib/validate-keys'  // Side-effect import: validates API keys on cold start
 
@@ -483,6 +484,12 @@ async function handleChat(req: NextRequest): Promise<Response> {
 
   // effectiveUseCase already computed above (before search routing) for consistency
 
+  // Correlation id for the whole AI request lifecycle. `ai_request_start` here
+  // pairs with the terminal `ai_complete`/`ai_error` emitted inside streamChat,
+  // all sharing this requestId (see lib/observability.ts). Pure logging seam.
+  const requestId = newRequestId()
+  emit({ type: 'ai_request_start', requestId, route: '/api/chat' })
+
   // Stream response
   const encoder = new TextEncoder()
   const stream = new ReadableStream({
@@ -490,7 +497,7 @@ async function handleChat(req: NextRequest): Promise<Response> {
       try {
         let fullText = ''
         const hasActiveSkill = Boolean(activeSkill)
-        for await (const chunk of streamChat(boundedMessages, systemPrompt, effectiveUseCase, hasActiveSkill)) {
+        for await (const chunk of streamChat(boundedMessages, systemPrompt, effectiveUseCase, hasActiveSkill, requestId)) {
           if (typeof chunk === 'object' && 'modelUsed' in chunk) {
             // Emit model identification event to the UI
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ modelUsed: chunk.modelUsed })}\n\n`))

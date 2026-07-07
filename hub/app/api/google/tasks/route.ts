@@ -5,6 +5,10 @@ import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
 import { clampInt } from '@/lib/num'
 import { GoogleTaskCreateSchema } from '@/lib/zod-schemas'
 import { listTaskLists, listTasks, createTask, completeTask, uncompleteTask } from '@/lib/google'
+import { AI_INTENT_HEADER, GATE_TOKEN_HEADER } from '@/lib/requireGate'
+import { recordAiAction } from '@/lib/ai-audit'
+import { checkActionLimit } from '@/lib/rate-limit'
+import { newRequestId } from '@/lib/observability'
 
 export const runtime = 'nodejs'
 
@@ -73,8 +77,56 @@ export async function POST(req: NextRequest) {
           { status: 400 }
         )
       }
-      const task = await createTask(accessToken, taskListId, parsed.data)
-      return NextResponse.json({ task })
+
+      // AI-action audit trail (NS-2). Only AI-originated task creations
+      // (X-AI-Intent present) are audited + per-action rate-limited. `target`
+      // keeps routing metadata only (taskListId / created taskId) — never the
+      // title or notes.
+      const aiIntent = req.headers.get(AI_INTENT_HEADER)
+      const isAiAction = aiIntent !== null
+      const email = session.user.email ?? ''
+      const auditBase = {
+        userEmail: email || null,
+        actor: 'ai' as const,
+        actionType: 'task_create' as const,
+        target: { taskListId } as Record<string, unknown>,
+        intent: aiIntent,
+        gateToken: req.headers.get(GATE_TOKEN_HEADER),
+        requestId: newRequestId(),
+      }
+
+      if (isAiAction) {
+        const limit = checkActionLimit(email, 'task_create')
+        if (!limit.allowed) {
+          await recordAiAction({ ...auditBase, status: 'failed', error: 'rate_limited' })
+          return NextResponse.json(
+            { error: 'Rate limit exceeded for task_create. Please try again shortly.' },
+            { status: 429, headers: { 'Retry-After': String(limit.retryAfterSec ?? 60) } }
+          )
+        }
+      }
+
+      try {
+        const task = await createTask(accessToken, taskListId, parsed.data)
+        if (isAiAction) {
+          const taskId = (task as { id?: string })?.id
+          await recordAiAction({
+            ...auditBase,
+            target: { taskListId, ...(taskId ? { taskId } : {}) },
+            status: 'success',
+          })
+        }
+        return NextResponse.json({ task })
+      } catch (createErr) {
+        if (isAiAction) {
+          await recordAiAction({
+            ...auditBase,
+            status: 'failed',
+            error: createErr instanceof Error ? createErr.message : 'unknown error',
+          })
+        }
+        throw createErr
+      }
     }
 
     if (action === 'complete') {

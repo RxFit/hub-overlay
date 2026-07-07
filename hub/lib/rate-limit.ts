@@ -43,20 +43,63 @@ export function checkRateLimit(
   key: string,
   now: number = Date.now(),
 ): { allowed: boolean; retryAfterSec?: number } {
+  return checkWindow(key, LIMIT, now)
+}
+
+/**
+ * Shared sliding-window core. `checkRateLimit` and `checkActionLimit` both call
+ * this so behavior (pruning, retry-after math, bounded memory) is identical;
+ * only the key namespace and the limit differ.
+ */
+function checkWindow(
+  key: string,
+  limit: number,
+  now: number,
+): { allowed: boolean; retryAfterSec?: number } {
   const cutoff = now - WINDOW_MS
   const timestamps = (buckets.get(key) ?? []).filter(t => t > cutoff)
 
-  if (timestamps.length >= LIMIT) {
+  if (timestamps.length >= limit) {
     buckets.set(key, timestamps)
     // Window slides open when the oldest in-window request ages out
     const retryAfterSec = Math.max(1, Math.ceil((timestamps[0] + WINDOW_MS - now) / 1000))
-    log.warn({ key, limit: LIMIT, windowMs: WINDOW_MS, retryAfterSec }, `Rate limit exceeded for key: ${key}`)
+    log.warn({ key, limit, windowMs: WINDOW_MS, retryAfterSec }, `Rate limit exceeded for key: ${key}`)
     return { allowed: false, retryAfterSec }
   }
 
   timestamps.push(now)
   buckets.set(key, timestamps)
   return { allowed: true }
+}
+
+/**
+ * Per-action-type limits (NS-2). AI-initiated actions are throttled per
+ * (email, actionType) INDEPENDENTLY of each other and of the global /api/chat
+ * window, so a burst of Gmail sends can't starve Chat posts and vice-versa.
+ * `gmail_send` is the strictest (outbound email is the highest-blast-radius
+ * action); unknown action types fall back to the global LIMIT.
+ */
+export const ACTION_LIMITS: Readonly<Record<string, number>> = {
+  gmail_send: 5,
+  chat_post: 10,
+  task_create: 10,
+}
+
+/** Limit applied to any action type not present in ACTION_LIMITS. */
+export const DEFAULT_ACTION_LIMIT = LIMIT
+
+/**
+ * Check (and count) one AI action of `actionType` for `email` in its own
+ * per-action sliding window. Same 429/Retry-After contract as checkRateLimit.
+ * Keyed under an `action:` namespace so it never collides with the chat limiter.
+ */
+export function checkActionLimit(
+  email: string,
+  actionType: string,
+  now: number = Date.now(),
+): { allowed: boolean; retryAfterSec?: number } {
+  const limit = ACTION_LIMITS[actionType] ?? DEFAULT_ACTION_LIMIT
+  return checkWindow(`action:${actionType}:${email}`, limit, now)
 }
 
 /**
