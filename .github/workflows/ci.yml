@@ -20,6 +20,24 @@ jobs:
     defaults:
       run:
         working-directory: hub
+    # Ephemeral, test-scoped Postgres for DB-backed route/repository tests
+    # (NS-3). pgvector image so drizzle/migrate.mjs' `CREATE EXTENSION vector`
+    # succeeds. This is a throwaway service container — NEVER a real/prod DB.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: hub_test
+        ports:
+          - 5432:5432
+        # Health-wait so tests never race a not-yet-ready DB (no flakiness).
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -38,8 +56,16 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Test
-        run: npm run test
+      # Runs the full unit suite WITH v8 coverage and the DB harness. The
+      # coverage thresholds in vitest.config.ts act as a ratchet: CI fails if
+      # coverage drops below the committed baseline. DATABASE_URL points at the
+      # ephemeral service so the DB-backed suite (tests/settings-kpis-db.test.ts)
+      # runs here; locally, without a DB, that suite skips and `npm test` stays
+      # green. The text summary is emitted to the job log.
+      - name: Test (coverage + DB harness)
+        run: npm run test:coverage
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/hub_test
 
   e2e:
     name: Playwright e2e
