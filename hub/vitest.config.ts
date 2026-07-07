@@ -23,15 +23,18 @@ export default defineConfig({
         '**/__mocks__/**',
       ],
       // Ratchet floor — set a couple points below the current measured
-      // baseline (lines/statements 29.98%, branches 71.87%, functions 54.19%)
-      // so it passes today and never regresses. In CI the DB-backed suite runs
-      // and coverage rises above these; locally it skips and still clears them.
-      // Raise these as coverage improves; CI fails if any metric drops below.
+      // NO-DB baseline (lines/statements 38.02%, branches 75.43%, functions
+      // 61.97% as of NS-8). The no-DB run is the conservative lower bound:
+      // locally the DB-backed suites skip; with a DB (CI) they run and
+      // coverage lands higher (40.60/76.57/66.54 lines/branches/functions),
+      // so a floor that clears the local run clears CI too. Raise these as
+      // coverage improves; the run fails if any metric drops below. Never
+      // lower them.
       thresholds: {
-        lines: 27,
-        functions: 51,
-        branches: 68,
-        statements: 27,
+        lines: 36,
+        functions: 60,
+        branches: 73,
+        statements: 36,
       },
     },
   },
