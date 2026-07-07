@@ -412,16 +412,42 @@ function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => void }) {
   const [composeSubject, setComposeSubject] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => {
-    fetch('/api/google/gmail?view=inbox&maxResults=20')
+  // Single refresh path for the inbox thread list. Only touches the list +
+  // unread count — never selectedThread/compose/reply — so a background poll
+  // can safely run while a thread is open or the user is composing.
+  const refreshInbox = useCallback(() => {
+    return fetch('/api/google/gmail?view=inbox&maxResults=20')
       .then(r => r.json())
       .then(d => {
         setThreads(d.threads ?? [])
         onUnreadCount(d.unreadCount ?? 0)
       })
       .catch(() => {})
-      .finally(() => setLoading(false))
   }, [onUnreadCount])
+
+  // Initial load on mount.
+  useEffect(() => {
+    refreshInbox().finally(() => setLoading(false))
+  }, [refreshInbox])
+
+  // Lightweight SWR-style polling: refresh every 60s while the tab is visible.
+  // Pause while hidden (don't hammer the Gmail API for a backgrounded tab) and
+  // refresh immediately when the tab becomes visible again.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') refreshInbox()
+    }, 60_000)
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') refreshInbox()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+
+    return () => {
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [refreshInbox])
 
   const openThread = async (id: string) => {
     setIsComposing(false)
@@ -470,11 +496,7 @@ function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => void }) {
       setReply('')
       setMobileView('list')
       // Optimistically reload threads to see the new message
-      fetch('/api/google/gmail?view=inbox&maxResults=20')
-        .then(r => r.json())
-        .then(d => {
-          setThreads(d.threads ?? [])
-        })
+      refreshInbox()
     } catch (err) {
       setSendError(err instanceof Error ? err.message : 'Failed to send')
     }
