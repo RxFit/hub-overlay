@@ -5,6 +5,8 @@
  * Every function accepts an OAuth access_token obtained from the JWT.
  */
 
+import { GOOGLE_API_TIMEOUT_MS } from './timeout-config'
+
 /* ── Base helpers ── */
 
 async function googleFetch<T>(
@@ -13,9 +15,9 @@ async function googleFetch<T>(
   opts?: RequestInit
 ): Promise<T> {
   const res = await fetch(url, {
-    // Bound every Google call (10s) so a hung upstream can't block the route to
-    // its maxDuration; callers may override via opts.signal.
-    signal: AbortSignal.timeout(10_000),
+    // Bound every Google call (GOOGLE_API_TIMEOUT_MS) so a hung upstream can't
+    // block the route to its maxDuration; callers may override via opts.signal.
+    signal: AbortSignal.timeout(GOOGLE_API_TIMEOUT_MS),
     ...opts,
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -262,7 +264,7 @@ export async function deleteCalendarEvent(
     {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${accessToken}` },
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(GOOGLE_API_TIMEOUT_MS),
     }
   )
   if (!res.ok && res.status !== 204 && res.status !== 410) {

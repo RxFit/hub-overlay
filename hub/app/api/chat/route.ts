@@ -24,6 +24,9 @@ import '@/lib/validate-keys'  // Side-effect import: validates API keys on cold 
 const log = createLogger('chat')
 
 export const runtime = 'nodejs'
+// Platform request ceiling — the outermost rung of the timeout ladder. Must be a
+// literal for Next's static analysis; mirrored as ROUTE_MAX_DURATION_MS (120_000)
+// in lib/timeout-config.ts, where the full ladder and its ordering invariant live.
 export const maxDuration = 120
 
 // Body-size ceiling (Backend_Hardening_H1_M5_C6): reject oversized payloads

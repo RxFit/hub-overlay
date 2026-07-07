@@ -60,4 +60,19 @@ describe('filterByRole', () => {
     const ids = visible.map(k => k.id).sort()
     expect(ids).toEqual(['g', 'p1'])
   })
+
+  it('gives staff with the wildcard assignment every KPI', () => {
+    const visible = filterByRole(kpis, 'staff', ['*'])
+    expect(visible.map(k => k.id).sort()).toEqual(['g', 'p1', 'p2'])
+  })
+
+  it('gives staff with no assignments only global KPIs', () => {
+    const visible = filterByRole(kpis, 'staff', [])
+    expect(visible.map(k => k.id)).toEqual(['g'])
+  })
+
+  it('denies an unknown role any project-scoped KPI (only global passes)', () => {
+    const visible = filterByRole(kpis, 'contractor', [])
+    expect(visible.map(k => k.id)).toEqual(['g'])
+  })
 })

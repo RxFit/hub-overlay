@@ -15,6 +15,7 @@ import {
 } from '@/lib/interview'
 import { INTERVIEW_SCAFFOLD_KIND, isInterviewScaffold, type ChatMsgKind } from '@/lib/interview-scaffold'
 import { shouldRouteThroughSend } from '@/lib/inject-routing'
+import { CLIENT_ABORT_MS } from '@/lib/timeout-config'
 import { executeAction } from '@/lib/actions/executeAction'
 import type { InterviewState, ActionSpec, ChatAttachment, ActiveSkill, Company } from '@/types'
 
@@ -117,9 +118,10 @@ export function useChatEngine(options: UseChatEngineOptions) {
   const sendToApi = useCallback(async (userMessage: string, allMessages: ChatMsg[], useCase: string = 'deep_dive', msgAttachments?: ChatAttachment[]) => {
     setIsTyping(true)
 
-    // HARDENED: AbortController with 45-second client-side timeout
+    // HARDENED: AbortController with client-side timeout (CLIENT_ABORT_MS) — the
+    // outermost user-facing bound in the timeout ladder (see lib/timeout-config.ts).
     const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 45_000)
+    const timeoutId = setTimeout(() => controller.abort(), CLIENT_ABORT_MS)
 
     try {
       const res = await fetch('/api/chat', {
