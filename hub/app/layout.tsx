@@ -68,8 +68,6 @@ export const viewport: Viewport = {
   themeColor: defaultTenant.brandColors.bgPrimary,
   width: 'device-width',
   initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
   viewportFit: 'cover',
 }
 
