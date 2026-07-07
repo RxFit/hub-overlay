@@ -20,7 +20,7 @@ const UNDO_TIMEOUT_MS = 10_000
 /* ══════════════════════════════════════════════════════════════════════════════
    TASKS SECTION
    NOTE: The monolith used a CollapsibleSection render-prop pattern that passed
-   `isOpen` to useTasks() to gate SWR polling on collapsed sections. This
+   `isOpen` to useTasks() to gate query polling on collapsed sections. This
    optimisation is deferred until CollapsibleSection supports render-prop children.
    ══════════════════════════════════════════════════════════════════════════════ */
 
@@ -80,7 +80,7 @@ function TasksSectionImpl({ onInjectChat, onInjectAction }: { onInjectChat: (msg
   const visibleTasks = currentTasks.filter(t => !hiddenIds.has(t.id))
 
   // Single write path shared by complete, uncomplete, and undo. Posts the action
-  // and refreshes SWR; callers own their own optimistic UI.
+  // and refreshes the tasks query; callers own their own optimistic UI.
   async function postTaskAction(action: 'complete' | 'uncomplete', listId: string, taskId: string) {
     await writeFetch('/api/google/tasks', {
       method: 'POST',

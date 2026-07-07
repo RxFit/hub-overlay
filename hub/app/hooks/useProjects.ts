@@ -1,4 +1,4 @@
-import useSWR from 'swr'
+import { useQuery } from '@tanstack/react-query'
 import type { Project } from '@/types'
 
 async function fetcher(url: string): Promise<{ projects: Project[] }> {
@@ -21,20 +21,18 @@ async function fetcher(url: string): Promise<{ projects: Project[] }> {
  * Refreshes every 60 seconds.
  */
 export function useProjects() {
-  const { data, error, isLoading, mutate } = useSWR<{ projects: Project[] }>(
-    '/api/projects',
-    fetcher,
-    {
-      refreshInterval: 60_000,
-      revalidateOnFocus: true,
-      dedupingInterval: 30_000,
-    }
-  )
+  const { data, error, isLoading, refetch } = useQuery<{ projects: Project[] }>({
+    queryKey: ['projects'],
+    queryFn: () => fetcher('/api/projects'),
+    // Re-fetch every 60s. Focus refetch and the 30s dedupe (staleTime) come
+    // from the QueryProvider defaults.
+    refetchInterval: 60_000,
+  })
 
   return {
     projects: data?.projects ?? [],
     isLoading,
-    error,
-    refetch: mutate,
+    error: error ?? undefined,
+    refetch,
   }
 }

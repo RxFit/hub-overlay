@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import useSWR from 'swr'
+import { useQuery } from '@tanstack/react-query'
 import { useDrive } from '@/app/hooks/useHubData'
 import type { DriveFile } from '@/app/hooks/useHubData'
 import type { ToolArtifactRecord, ChatAttachment } from '@/types'
@@ -32,11 +32,12 @@ export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string,
   /* Fetch tool artifacts when artifacts tab is active. artifactsFetcher throws
      a status-tagged error on !res.ok so a 401/500 surfaces as an error state
      instead of masquerading as "no artifacts". */
-  const { data: artifactsData, isLoading: artifactsLoading, error: artifactsError } = useSWR<{ artifacts: ToolArtifactRecord[] }>(
-    isArtifactsTab ? '/api/tool-artifacts' : null,
-    artifactsFetcher,
-    { revalidateOnFocus: false }
-  )
+  const { data: artifactsData, isLoading: artifactsLoading, error: artifactsError } = useQuery<{ artifacts: ToolArtifactRecord[] }>({
+    queryKey: ['tool-artifacts'],
+    queryFn: () => artifactsFetcher('/api/tool-artifacts'),
+    enabled: isArtifactsTab,
+    refetchOnWindowFocus: false,
+  })
 
   const isAuthError = error && (error as any)?.status === 401
 

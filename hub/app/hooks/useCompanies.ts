@@ -1,4 +1,4 @@
-import useSWR from 'swr'
+import { useQuery } from '@tanstack/react-query'
 import type { Company } from '@/types'
 
 async function fetcher(url: string): Promise<{ companies: Company[] }> {
@@ -20,20 +20,18 @@ async function fetcher(url: string): Promise<{ companies: Company[] }> {
  * Falls back to an empty array on error — callers should handle gracefully.
  */
 export function useCompanies() {
-  const { data, error, isLoading, mutate } = useSWR<{ companies: Company[] }>(
-    '/api/companies',
-    fetcher,
-    {
-      refreshInterval: 60_000,      // re-fetch every 60s to pick up new Paperclip workspaces
-      revalidateOnFocus: true,
-      dedupingInterval: 30_000,
-    }
-  )
+  const { data, error, isLoading, refetch } = useQuery<{ companies: Company[] }>({
+    queryKey: ['companies'],
+    queryFn: () => fetcher('/api/companies'),
+    // Re-fetch every 60s to pick up new Paperclip workspaces. Focus refetch and
+    // the 30s dedupe (staleTime) come from the QueryProvider defaults.
+    refetchInterval: 60_000,
+  })
 
   return {
     companies: data?.companies ?? [],
     isLoading,
-    error,
-    refetch: mutate,
+    error: error ?? undefined,
+    refetch,
   }
 }

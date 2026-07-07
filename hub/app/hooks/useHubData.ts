@@ -1,16 +1,16 @@
 'use client'
 
-import useSWR from 'swr'
+import { useQuery } from '@tanstack/react-query'
 import { signIn } from 'next-auth/react'
 import { useEffect, useRef } from 'react'
 
 /* ── Auth error recovery ── */
 
 /**
- * Detects 401 errors from SWR hooks and auto-redirects to sign-in.
+ * Detects 401 errors from data hooks and auto-redirects to sign-in.
  * Returns true if an auth error was detected (for UI display).
  */
-export function useAuthErrorRecovery(error: Error | undefined): boolean {
+export function useAuthErrorRecovery(error: Error | undefined | null): boolean {
   const redirected = useRef(false)
 
   useEffect(() => {
@@ -108,7 +108,7 @@ interface TasksResponse {
  *
  * Task lists change rarely, so the list set is polled slowly (5 min); the
  * per-list aggregate fan-out polls at 60s. Both are gated on `isOpen` so a
- * collapsed section stops polling entirely (the SWR key stays stable, so
+ * collapsed section stops polling entirely (the query key stays stable, so
  * cached data renders instantly on re-open).
  */
 export function useTasks(isOpen: boolean = true) {
@@ -116,41 +116,43 @@ export function useTasks(isOpen: boolean = true) {
   const {
     data: listData,
     error: listError,
-  } = useSWR<TasksResponse>(
-    '/api/google/tasks',
-    fetcher,
-    { refreshInterval: isOpen ? 300_000 : 0, revalidateOnFocus: false, dedupingInterval: 30_000 }
-  )
+    isLoading: isLoadingLists,
+  } = useQuery<TasksResponse>({
+    queryKey: ['hub', 'tasks', 'lists'],
+    queryFn: () => fetcher<TasksResponse>('/api/google/tasks'),
+    refetchInterval: isOpen ? 300_000 : false,
+    refetchOnWindowFocus: false,
+    staleTime: 30_000,
+  })
 
   const taskLists = listData?.taskLists ?? []
 
-  // Step 2: fetch tasks for EVERY list in parallel
-  // SWR can't do dynamic-length hooks, so we cap at 10 lists and use a join key
+  // Step 2: fetch tasks for EVERY list in parallel via a single aggregate query
+  // keyed on the joined list-id set, so cache identity follows the list set.
   const listIds = taskLists.map(l => l.id)
-  const allListsKey = listIds.length > 0
-    ? `/api/google/tasks?allLists=${listIds.map(id => encodeURIComponent(id)).join(',')}`
-    : null
 
   const {
     data: allTasksData,
     error: tasksError,
     isLoading: isLoadingTasks,
-    mutate: mutateTasks,
-  } = useSWR<Record<string, TaskItem[]>>(
-    allListsKey,
-    () => fetchTasksByList(listIds),
-    { refreshInterval: isOpen ? 60_000 : 0, revalidateOnFocus: false, dedupingInterval: 30_000 }
-  )
+    refetch: refetchTasks,
+  } = useQuery<Record<string, TaskItem[]>>({
+    queryKey: ['hub', 'tasks', 'byList', listIds.join(',')],
+    queryFn: () => fetchTasksByList(listIds),
+    enabled: listIds.length > 0,
+    refetchInterval: isOpen ? 60_000 : false,
+    refetchOnWindowFocus: false,
+    staleTime: 30_000,
+  })
 
-  const isLoading = !listData && !listError
   const error = listError || tasksError
 
   return {
     taskLists,
     tasksByList: allTasksData ?? {},
-    isLoading: isLoading || isLoadingTasks,
-    error,
-    mutate: mutateTasks,
+    isLoading: isLoadingLists || isLoadingTasks,
+    error: error ?? undefined,
+    mutate: refetchTasks,
   }
 }
 
@@ -183,17 +185,19 @@ interface CalendarResponse {
  */
 export function useCalendar(isOpen: boolean = true) {
   // Request up to 100 events covering 30 days from today (server sets timeMin=today, timeMax=+30d)
-  const { data, error, isLoading, mutate } = useSWR<CalendarResponse>(
-    '/api/google/calendar?maxResults=100',
-    fetcher,
-    { refreshInterval: isOpen ? 60_000 : 0, revalidateOnFocus: false, dedupingInterval: 30_000 }
-  )
+  const { data, error, isLoading, refetch } = useQuery<CalendarResponse>({
+    queryKey: ['hub', 'calendar'],
+    queryFn: () => fetcher<CalendarResponse>('/api/google/calendar?maxResults=100'),
+    refetchInterval: isOpen ? 60_000 : false,
+    refetchOnWindowFocus: false,
+    staleTime: 30_000,
+  })
 
   return {
     events: data?.events ?? [],
     isLoading,
-    error,
-    mutate,
+    error: error ?? undefined,
+    mutate: refetch,
   }
 }
 
@@ -223,17 +227,20 @@ interface DriveResponse {
  */
 export function useDrive(filter?: string, enabled: boolean = true, isOpen: boolean = true) {
   const filterParam = filter || 'recent'
-  const { data, error, isLoading, mutate } = useSWR<DriveResponse>(
-    enabled ? `/api/google/drive?filter=${filterParam}` : null,
-    fetcher,
-    { refreshInterval: isOpen ? 120_000 : 0, revalidateOnFocus: false, dedupingInterval: 30_000 }
-  )
+  const { data, error, isLoading, refetch } = useQuery<DriveResponse>({
+    queryKey: ['hub', 'drive', filterParam],
+    queryFn: () => fetcher<DriveResponse>(`/api/google/drive?filter=${filterParam}`),
+    enabled,
+    refetchInterval: isOpen ? 120_000 : false,
+    refetchOnWindowFocus: false,
+    staleTime: 30_000,
+  })
 
   return {
     files: data?.files ?? [],
     isLoading,
-    error,
-    mutate,
+    error: error ?? undefined,
+    mutate: refetch,
   }
 }
 
@@ -263,16 +270,17 @@ interface FeedResponse {
  * Refreshes every 30 seconds.
  */
 export function useFeed() {
-  const { data, error, isLoading } = useSWR<FeedResponse>(
-    '/api/feed',
-    fetcher,
-    { refreshInterval: 30_000, revalidateOnFocus: false }
-  )
+  const { data, error, isLoading } = useQuery<FeedResponse>({
+    queryKey: ['feed'],
+    queryFn: () => fetcher<FeedResponse>('/api/feed'),
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: false,
+  })
 
   return {
     items: data?.feed ?? [],
     isLoading,
-    error,
+    error: error ?? undefined,
   }
 }
 

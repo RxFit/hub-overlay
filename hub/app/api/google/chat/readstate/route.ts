@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
     if (message.includes('403') || message.includes('PERMISSION_DENIED')) {
       return NextResponse.json(
         { spaceId, lastReadTime: null, code: 'MISSING_SCOPE' },
-        { status: 200 } // 200 so SWR doesn't error — just returns null
+        { status: 200 } // 200 so the client read hook doesn’t error — just returns null
       )
     }
 
