@@ -3,6 +3,7 @@ import type { ChatMessage } from '@/types'
 import { SKILL_CATALOG_PROMPT } from './skills'
 import { fenceUntrusted, UNTRUSTED_CONTENT_POLICY } from './prompt-safety'
 import { IDLE_TIMEOUT_MS, CONNECT_TIMEOUT_MS } from './timeout-config'
+import { emit, newRequestId, startTimer, type AiProvider } from './observability'
 
 /* Lazy-initialized so the API key is read at runtime, not build time.
    Prevents empty-key 403s when Railway injects env vars after the build step. */
@@ -323,6 +324,41 @@ export function isAuthOrKeyError(err: unknown): boolean {
 }
 
 /**
+ * Coarse, non-leaky code for the `ai_error` telemetry event. Derived from the
+ * same classifiers the rotation uses, so the log's `code` matches the branch
+ * the rotation actually took. Never contains PII.
+ */
+function telemetryErrorCode(err: unknown): string {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase()
+  if (isAuthOrKeyError(err)) return 'auth'
+  if (isRateLimitError(err)) return 'rate_limit'
+  if (msg.includes('idle watchdog')) return 'idle_timeout'
+  if (msg.includes('timeout')) return 'connect_timeout'
+  if (msg.includes('cooldown')) return 'cooldown'
+  return 'error'
+}
+
+/** Bounded error text for telemetry. Provider error strings are metadata (no
+ *  email/content/token), but cap length so a stack-y message can't bloat a log line. */
+function telemetryErrorMessage(err: unknown): string {
+  return (err instanceof Error ? err.message : String(err)).slice(0, 300)
+}
+
+/**
+ * Per-request observability context threaded through the rotation so every
+ * lifecycle event shares one requestId and a monotonic timer, and so the
+ * terminal `complete`/`error` event can name the provider/model that actually
+ * served. Pure logging state — never influences rotation decisions.
+ */
+interface ObsCtx {
+  requestId: string
+  timer: () => number
+  attempt: number
+  provider?: AiProvider
+  model?: string
+}
+
+/**
  * Maps a raw model-layer failure to a calm, actionable, non-leaky message for
  * the end user. The RAW error is logged server-side by the caller (route.ts);
  * this string is the ONLY thing that should ever reach the chat bubble.
@@ -364,13 +400,19 @@ export async function* withIdleWatchdog<T>(
   iterator: AsyncIterator<T>,
   idleMs: number,
   label: string,
+  onTimeout?: () => void,
 ): AsyncGenerator<T> {
   try {
     while (true) {
       let timer: ReturnType<typeof setTimeout> | undefined
       const idle = new Promise<never>((_, reject) => {
         timer = setTimeout(
-          () => reject(new Error(`${label} idle watchdog fired — no output for ${idleMs}ms`)),
+          () => {
+            // Pure logging seam — fire the telemetry hook, then reject exactly as
+            // before so teardown/propagation behavior is unchanged.
+            onTimeout?.()
+            reject(new Error(`${label} idle watchdog fired — no output for ${idleMs}ms`))
+          },
           idleMs,
         )
       })
@@ -432,12 +474,62 @@ export function __resetModelCooldownsForTest(): void {
  * Primary streaming entry point — routes to Claude or Gemini based on useCase.
  * Yields: { text: string } chunks and a final { modelUsed: string } event.
  * The modelUsed event tells the UI which model answered this request.
+ *
+ * This wrapper owns the request-terminal telemetry (`ai_first_token`,
+ * `ai_complete`, `ai_error`) so exactly one terminal event fires per request;
+ * per-attempt events (`ai_provider_selected`, `ai_timeout`, `ai_fallback`) are
+ * emitted by the rotation below. The optional `requestId` correlates these with
+ * the route's `ai_request_start`; a fresh id is minted if the caller omits it.
+ * Telemetry is a pure logging seam — it never changes what is yielded.
  */
 export async function* streamChat(
   messages: ChatMessage[],
   systemPrompt: string,
   useCase: string = 'deep_dive',
-  hasActiveSkill: boolean = false
+  hasActiveSkill: boolean = false,
+  requestId: string = newRequestId(),
+): AsyncGenerator<string | { modelUsed: string }> {
+  const obs: ObsCtx = { requestId, timer: startTimer(), attempt: 0 }
+  let firstTokenEmitted = false
+  try {
+    for await (const chunk of streamChatRotation(messages, systemPrompt, useCase, hasActiveSkill, obs)) {
+      if (typeof chunk === 'string' && chunk.length > 0 && !firstTokenEmitted) {
+        firstTokenEmitted = true
+        emit({ type: 'ai_first_token', requestId, ms: obs.timer() })
+      }
+      yield chunk
+    }
+    emit({
+      type: 'ai_complete',
+      requestId,
+      ms: obs.timer(),
+      provider: obs.provider ?? 'unknown',
+      model: obs.model ?? 'unknown',
+    })
+  } catch (err) {
+    emit({
+      type: 'ai_error',
+      requestId,
+      provider: obs.provider,
+      code: telemetryErrorCode(err),
+      message: telemetryErrorMessage(err),
+    })
+    throw err
+  }
+}
+
+/**
+ * The Claude→Gemini rotation. Emits per-attempt telemetry (provider_selected,
+ * timeout, fallback) through `obs`; the streamChat wrapper above emits the
+ * terminal events. Behavior (rotation, cooldown, timeouts) is unchanged from
+ * before the telemetry seam was added.
+ */
+async function* streamChatRotation(
+  messages: ChatMessage[],
+  systemPrompt: string,
+  useCase: string,
+  hasActiveSkill: boolean,
+  obs: ObsCtx,
 ): AsyncGenerator<string | { modelUsed: string }> {
   if (shouldUseClaude(useCase, hasActiveSkill)) {
     const { streamClaudeChat } = await import('@/lib/claude')
@@ -450,11 +542,16 @@ export async function* streamChat(
       let claudeEmitted = false
       try {
         // Emit modelUsed event BEFORE streaming
+        obs.provider = 'claude'
+        obs.model = claudeModel
+        obs.attempt += 1
+        emit({ type: 'ai_provider_selected', requestId: obs.requestId, provider: 'claude', model: claudeModel, attempt: obs.attempt })
         yield { modelUsed: getModelDisplayName(claudeModel) }
 
         // Idle watchdog guards against a connected-then-stalled Claude stream.
         const claudeIter = streamClaudeChat(messages, systemPrompt, { model: claudeModel })[Symbol.asyncIterator]()
-        for await (const chunk of withIdleWatchdog(claudeIter, IDLE_TIMEOUT_MS, claudeModel)) {
+        for await (const chunk of withIdleWatchdog(claudeIter, IDLE_TIMEOUT_MS, claudeModel, () =>
+          emit({ type: 'ai_timeout', requestId: obs.requestId, layer: 'idle', provider: 'claude', model: claudeModel }))) {
           claudeEmitted = true
           yield chunk
         }
@@ -475,18 +572,21 @@ export async function* streamChat(
         // Auth/key/billing failures share the credential across the whole Claude
         // chain — the backup can't succeed either, so skip straight to Gemini.
         if (claudeErr?.type === 'auth') {
+          emit({ type: 'ai_fallback', requestId: obs.requestId, from: claudeModel, to: 'gemini-2.5-flash', reason: 'auth' })
           console.warn(`[streamChat] Claude ${claudeModel} auth failure — skipping Claude chain, falling back to Gemini:`, err)
           break
         }
 
         // Otherwise try the next Claude model (backup), then Gemini.
+        const claudeFallbackTo = CLAUDE_MODEL_CHAIN[i + 1] ?? 'gemini-2.5-flash'
+        emit({ type: 'ai_fallback', requestId: obs.requestId, from: claudeModel, to: claudeFallbackTo, reason: isRateLimit ? 'rate_limit' : 'error' })
         console.warn(`[streamChat] Claude ${claudeModel} failed pre-stream (${isRateLimit ? 'rate_limit' : 'error'}), trying next model:`, err)
       }
     }
   }
 
   // Fallback: Gemini 2.5 Flash → Gemini 2.5 Pro
-  yield* streamGeminiWithFallback(messages, systemPrompt)
+  yield* streamGeminiWithFallback(messages, systemPrompt, obs)
 }
 
 /**
@@ -495,7 +595,8 @@ export async function* streamChat(
  */
 async function* streamGeminiWithFallback(
   messages: ChatMessage[],
-  systemPrompt: string
+  systemPrompt: string,
+  obs: ObsCtx,
 ): AsyncGenerator<string | { modelUsed: string }> {
   const modelsToTry = ['gemini-2.5-flash', 'gemini-2.5-pro'] as const
   modelsToTry.forEach(assertApprovedGeminiModel)
@@ -540,7 +641,11 @@ async function* streamGeminiWithFallback(
       const resultPromise = chat.sendMessageStream(lastMessage.content)
       let connectTimer: ReturnType<typeof setTimeout> | undefined
       const timeoutPromise = new Promise<never>((_, reject) => {
-        connectTimer = setTimeout(() => reject(new Error(`Gemini stream timeout (${modelName})`)), CONNECT_TIMEOUT_MS)
+        connectTimer = setTimeout(() => {
+          // Pure logging seam — record the connect-layer trip, then reject as before.
+          emit({ type: 'ai_timeout', requestId: obs.requestId, layer: 'connect', provider: 'gemini', model: modelName })
+          reject(new Error(`Gemini stream timeout (${modelName})`))
+        }, CONNECT_TIMEOUT_MS)
       })
       let result: Awaited<typeof resultPromise>
       try {
@@ -550,6 +655,10 @@ async function* streamGeminiWithFallback(
       }
 
       // Emit modelUsed event
+      obs.provider = 'gemini'
+      obs.model = modelName
+      obs.attempt += 1
+      emit({ type: 'ai_provider_selected', requestId: obs.requestId, provider: 'gemini', model: modelName, attempt: obs.attempt })
       yield { modelUsed: getModelDisplayName(modelName) }
 
       if (i > 0) {
@@ -558,7 +667,8 @@ async function* streamGeminiWithFallback(
 
       // Idle watchdog guards against a connected-then-stalled Gemini stream.
       const streamIter = result.stream[Symbol.asyncIterator]()
-      for await (const chunk of withIdleWatchdog(streamIter, IDLE_TIMEOUT_MS, modelName)) {
+      for await (const chunk of withIdleWatchdog(streamIter, IDLE_TIMEOUT_MS, modelName, () =>
+        emit({ type: 'ai_timeout', requestId: obs.requestId, layer: 'idle', provider: 'gemini', model: modelName }))) {
         const text = chunk.text()
         if (text) {
           emittedAny = true
@@ -586,6 +696,7 @@ async function* streamGeminiWithFallback(
       if (isLastAttempt) {
         throw err // All approved models exhausted
       }
+      emit({ type: 'ai_fallback', requestId: obs.requestId, from: modelName, to: modelsToTry[i + 1], reason: isRateLimit ? 'rate_limit' : 'error' })
       console.warn(`[gemini] ${modelName} failed (${isRateLimit ? 'rate_limit' : 'error'}), falling back to ${modelsToTry[i + 1]}:`, err)
     }
   }

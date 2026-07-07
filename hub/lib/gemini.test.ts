@@ -236,21 +236,24 @@ describe('withIdleWatchdog — mid-stream stall protection', () => {
     expect(out).toEqual(['x', 'y', 'z'])
   })
 
-  it('fires after the idle period and tears down the upstream iterator', async () => {
+  it('fires after the idle period, invokes onTimeout, and tears down the upstream iterator', async () => {
     vi.useFakeTimers()
     try {
       const it = stallingIterator(['a'])
       const out: string[] = []
       let err: unknown
-      const run = (async () => { for await (const v of withIdleWatchdog(it, 30_000, 'test')) out.push(v) })().catch(e => { err = e })
+      const onTimeout = vi.fn()
+      const run = (async () => { for await (const v of withIdleWatchdog(it, 30_000, 'test', onTimeout)) out.push(v) })().catch(e => { err = e })
 
       await vi.advanceTimersByTimeAsync(1)       // let 'a' flow through
       expect(out).toEqual(['a'])
+      expect(onTimeout).not.toHaveBeenCalled()   // not yet — stream still within idle budget
       await vi.advanceTimersByTimeAsync(30_000)  // trip the watchdog on the stalled next()
       await run
 
       expect(err).toBeInstanceOf(Error)
       expect(String((err as Error).message)).toMatch(/idle watchdog/)
+      expect(onTimeout).toHaveBeenCalledTimes(1) // telemetry hook fired on the real idle trigger
       expect(it.wasReturned()).toBe(true)
     } finally {
       vi.useRealTimers()
@@ -261,6 +264,90 @@ describe('withIdleWatchdog — mid-stream stall protection', () => {
     const it = stallingIterator(['a', 'b'])
     for await (const _v of withIdleWatchdog(it, 1_000, 't')) break
     expect(it.wasReturned()).toBe(true)
+  })
+})
+
+/* ──────────────────────────────────────────────────────────────────────────── */
+
+describe('streamChat — observability telemetry', () => {
+  type Emitted = Record<string, unknown> & { type: string }
+  let events: Emitted[]
+  let logSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    hoisted.claudeCalls.length = 0
+    hoisted.geminiCalls.length = 0
+    hoisted.claudeBehavior = null
+    hoisted.geminiBehavior = null
+    __resetModelCooldownsForTest()
+    events = []
+    logSpy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      const line = args[0]
+      if (typeof line !== 'string') return
+      try {
+        const parsed = JSON.parse(line)
+        if (parsed && typeof parsed.type === 'string' && parsed.type.startsWith('ai_')) events.push(parsed)
+      } catch { /* non-telemetry log line — ignore */ }
+    })
+  })
+  afterEach(() => {
+    logSpy.mockRestore()
+    __resetModelCooldownsForTest()
+  })
+
+  const byType = (t: string) => events.filter(e => e.type === t)
+
+  it('emits provider_selected → first_token → complete for a straight-through request', async () => {
+    hoisted.geminiBehavior = () => geminiStream(['answer'])
+
+    const r = await collect(streamChat(MESSAGES, 'sys', 'recall', false, 'req-ok'))
+    expect(r.text).toBe('answer')
+
+    // Exactly one selection, one first_token, one terminal complete, no error.
+    expect(byType('ai_provider_selected')).toHaveLength(1)
+    expect(byType('ai_first_token')).toHaveLength(1)
+    expect(byType('ai_complete')).toHaveLength(1)
+    expect(byType('ai_error')).toHaveLength(0)
+
+    const complete = byType('ai_complete')[0]
+    expect(complete).toMatchObject({ provider: 'gemini', model: 'gemini-2.5-flash' })
+    expect(typeof complete.ms).toBe('number')
+    // Every event correlates on the threaded requestId.
+    for (const e of events) expect(e.requestId).toBe('req-ok')
+  })
+
+  it('emits a fallback event when the primary (Fable 5) fails and rotates to the backup', async () => {
+    // Fable 5 fails pre-stream → rotate to Sonnet 4.6, which succeeds.
+    hoisted.claudeBehavior = (model) =>
+      model === 'claude-fable-5'
+        ? claudeYieldThenThrow([], new Error('fable down'))
+        : claudeYield(['sonnet-answer'])
+
+    const r = await collect(streamChat(MESSAGES, 'sys', 'interview', false, 'req-fb'))
+    expect(r.text).toBe('sonnet-answer')
+
+    // The fallback event fired on its REAL trigger (a genuine primary failure).
+    const fallbacks = byType('ai_fallback')
+    expect(fallbacks).toHaveLength(1)
+    expect(fallbacks[0]).toMatchObject({ from: 'claude-fable-5', to: 'claude-sonnet-4-6', reason: 'error' })
+
+    // Both attempts were announced; the terminal names the model that served.
+    expect(byType('ai_provider_selected')).toHaveLength(2)
+    expect(byType('ai_complete')[0]).toMatchObject({ provider: 'claude', model: 'claude-sonnet-4-6' })
+  })
+
+  it('emits a terminal error event (and no complete) when every provider fails', async () => {
+    hoisted.claudeBehavior = () => claudeYieldThenThrow([], new Error('claude down'))
+    hoisted.geminiBehavior = () => { throw new Error('gemini 500 internal error') }
+
+    const r = await collect(streamChat(MESSAGES, 'sys', 'interview', false, 'req-err'))
+    expect(r.error).toBeInstanceOf(Error)
+
+    expect(byType('ai_complete')).toHaveLength(0)
+    const errs = byType('ai_error')
+    expect(errs).toHaveLength(1)
+    expect(errs[0].requestId).toBe('req-err')
+    expect(typeof errs[0].code).toBe('string')
   })
 })
 
