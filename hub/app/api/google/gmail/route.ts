@@ -150,7 +150,7 @@ export async function POST(req: NextRequest) {
   // forms are normalized before validation. Quoted display names containing a
   // comma (`"Lopez, Maria" <m@x.com>`) are split apart here and rejected —
   // not supported at the route layer, which fails closed.
-  const EMAIL_RE = /^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/
+  const EMAIL_RE = /^[^\s@,<>]+@[^\s@,<>]+\.[^\s@,<>]+$/
   const recipients = stripHeader(to).split(',').map(r => extractEmail(r)).filter(Boolean)
   if (recipients.length === 0 || !recipients.every(r => EMAIL_RE.test(r))) {
     return NextResponse.json({ error: 'Invalid recipient address' }, { status: 400 })

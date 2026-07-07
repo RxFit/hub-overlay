@@ -6,7 +6,7 @@ import type { ChatSpace, ChatMessage, SpaceMember } from '@/app/hooks/useGoogleC
 import { MentionPicker, useMentionTrigger } from '@/app/components/MentionPicker'
 import { InfoPopover } from '@/app/components/InfoPopover'
 import { EmailPreviewCard } from '@/app/components/EmailPreviewCard'
-import { extractEmail } from '@/lib/email-address'
+import { extractEmail, replySubject } from '@/lib/email-address'
 
 
 /* ══════════════════════════════════════════
@@ -490,6 +490,9 @@ function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => void }) {
     const target = [...selectedThread.messages].reverse().find(m => m.from !== 'me')
       ?? selectedThread.messages[0]
     const targetEmail = extractEmail(target.from)
+    // Send an explicit "Re: <original subject>" so the route doesn't fall back
+    // to stamping the Message-ID as the subject (which breaks threading).
+    const subject = replySubject(last.subject)
     setSending(true)
     setSendError(null)
     try {
@@ -498,6 +501,7 @@ function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => void }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           to: targetEmail,
+          subject,
           threadId: selectedThread.id,
           inReplyTo: target.inReplyTo,
           message: reply,
