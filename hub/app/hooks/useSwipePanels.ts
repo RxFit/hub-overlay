@@ -1,4 +1,24 @@
-import { useRef, useCallback } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
+
+/* ════════════════════════════════════════════════════════════════════════════
+   useSwipePanels — single-finger drawer swipe + pinch-zoom guard (#29)
+
+   The gesture logic is a PURE, typed state machine (`gestureReducer`) so every
+   terminal transition is provable and unit-testable. The React hook is a thin
+   adapter that feeds touch events into the reducer and applies the two allowed
+   side effects:
+
+     • open/close commands → the page's open-state setters (React state), which
+       are the SOLE source of truth for backdrop + resting drawer position.
+     • a live drag transform → ONE CSS custom property (`--drawer-drag-x`) written
+       to the dragged panel via requestAnimationFrame, plus a `[data-dragging]`
+       attribute the stylesheet keys off. The transform math is in CSS.
+
+   Critically, this hook NEVER mutates the backdrop's inline display/opacity.
+   Backdrop visibility is a pure function of `mobileLeftOpen || mobileRightOpen`
+   rendered by React (see page.tsx), so a stranded inline style — the root cause
+   of the stuck-`.mobile-backdrop` P0 — is structurally impossible.
+   ════════════════════════════════════════════════════════════════════════════ */
 
 export interface SwipePanelsProps {
   mobileLeftOpen: boolean
@@ -7,220 +27,292 @@ export interface SwipePanelsProps {
   handleMobileTab: (tab: 'command' | 'execution' | 'chat') => void
 }
 
+// px of horizontal travel required before the direction lock even considers a
+// gesture (below this it's a tap / jitter).
+export const SWIPE_MOVE_THRESHOLD = 12
+// horizontal must exceed vertical by this ratio to lock as a drawer swipe — a
+// chat answer scrolls vertically in the same shell, so disambiguation is strict.
+export const SWIPE_DIR_RATIO = 1.3
+// px to commit an open/close on release.
+export const SWIPE_COMMIT = 104
+// live drag visuals only run on phone-width viewports (matches the resting CSS).
+export const DRAG_MAX_WIDTH = 640
+
+export type SwipeDir = 'left' | 'right'
+
+export interface PanelOpenFlags {
+  left: boolean
+  right: boolean
+}
+
+/** Terminal transitions ask the page to flip open-state; nothing else. */
+export type GestureCommand = 'none' | 'open-left' | 'open-right' | 'close'
+
+/** Which panel to translate and by how many px during a live drag. */
+export interface DragTransform {
+  side: SwipeDir
+  x: number
+}
+
+export type GestureState =
+  | { phase: 'idle' }
+  | { phase: 'tracking'; startX: number; startY: number }
+  | { phase: 'dragging'; startX: number; startY: number; dir: SwipeDir }
+
+export type GestureInput =
+  | { type: 'start'; x: number; y: number; touches: number; blocked: boolean }
+  | { type: 'move'; x: number; y: number; touches: number; screenW: number; open: PanelOpenFlags }
+  | { type: 'end'; x: number; screenW: number; open: PanelOpenFlags }
+
+export interface GestureResult {
+  state: GestureState
+  command: GestureCommand
+  /** Active drag transform to paint, or null to clear all drag visuals. */
+  drag: DragTransform | null
+}
+
+export const IDLE: GestureState = { phase: 'idle' }
+
+/**
+ * Pure translate math for a live drag — identical to the pre-refactor inline
+ * transforms, just returned as data instead of written to `el.style`.
+ */
+export function computeDrag(
+  dir: SwipeDir,
+  dx: number,
+  open: PanelOpenFlags,
+  screenW: number,
+): DragTransform | null {
+  if (dir === 'right') {
+    if (open.right) {
+      // Closing the right panel — drag it away to the right.
+      return { side: 'right', x: Math.max(0, dx) }
+    }
+    if (!open.left) {
+      // Opening the left panel — drag it in from -100%.
+      const progress = Math.min(dx / screenW, 1)
+      return { side: 'left', x: -screenW + progress * screenW }
+    }
+    return null
+  }
+  // dir === 'left'
+  if (open.left) {
+    // Closing the left panel — drag it away to the left.
+    return { side: 'left', x: Math.min(0, dx) }
+  }
+  if (!open.right) {
+    // Opening the right panel — drag it in from +100%.
+    const progress = Math.min(Math.abs(dx) / screenW, 1)
+    return { side: 'right', x: screenW - progress * screenW }
+  }
+  return null
+}
+
+/**
+ * The gesture state machine. Pure: `(state, input) → { state, command, drag }`.
+ * By construction the only way open-state changes is a terminal `end` producing
+ * a command, and every terminal transition returns `state: IDLE` with `drag:
+ * null` — so no residual drag visual and no backdrop desync can survive it.
+ */
+export function gestureReducer(state: GestureState, input: GestureInput): GestureResult {
+  switch (input.type) {
+    case 'start': {
+      // Multi-finger (pinch-zoom, #29) or a tap inside a chat interaction zone is
+      // never a panel swipe — drop straight to idle so nothing tracks it.
+      if (input.touches > 1 || input.blocked) {
+        return { state: IDLE, command: 'none', drag: null }
+      }
+      return {
+        state: { phase: 'tracking', startX: input.x, startY: input.y },
+        command: 'none',
+        drag: null,
+      }
+    }
+
+    case 'move': {
+      if (state.phase === 'idle') return { state, command: 'none', drag: null }
+      // A second finger landed mid-swipe (pinch) — abort so the drawer snaps back
+      // instead of jumping toward the new touch point.
+      if (input.touches > 1) return { state: IDLE, command: 'none', drag: null }
+
+      let next = state
+      if (state.phase === 'tracking') {
+        const dx = input.x - state.startX
+        const dy = input.y - state.startY
+        const adx = Math.abs(dx)
+        const ady = Math.abs(dy)
+        if (adx < SWIPE_MOVE_THRESHOLD && ady < SWIPE_MOVE_THRESHOLD) {
+          return { state, command: 'none', drag: null } // not enough movement yet
+        }
+        if (ady >= adx) {
+          // Vertical-dominant — it's a scroll. Stop tracking this gesture.
+          return { state: IDLE, command: 'none', drag: null }
+        }
+        if (adx < ady * SWIPE_DIR_RATIO) {
+          return { state, command: 'none', drag: null } // horizontal but not clearly so — wait
+        }
+        next = { phase: 'dragging', startX: state.startX, startY: state.startY, dir: dx > 0 ? 'right' : 'left' }
+      }
+
+      // next.phase === 'dragging' here
+      if (next.phase !== 'dragging') return { state: next, command: 'none', drag: null }
+      if (input.screenW > DRAG_MAX_WIDTH) {
+        return { state: next, command: 'none', drag: null } // desktop/tablet — no live drag
+      }
+      const dx = input.x - next.startX
+      return { state: next, command: 'none', drag: computeDrag(next.dir, dx, input.open, input.screenW) }
+    }
+
+    case 'end': {
+      // Only a locked-in drag can commit; anything else (tap, scroll, pinch) is a
+      // no-op that lands back at idle with zero residual.
+      if (state.phase !== 'dragging' || input.screenW > DRAG_MAX_WIDTH) {
+        return { state: IDLE, command: 'none', drag: null }
+      }
+      const dx = input.x - state.startX
+      const committed = Math.abs(dx) > SWIPE_COMMIT
+      const { left, right } = input.open
+      let command: GestureCommand = 'none'
+      if (state.dir === 'right') {
+        if (right && committed) command = 'close'
+        else if (!left && committed) command = 'open-left'
+      } else {
+        if (left && committed) command = 'close'
+        else if (!right && committed) command = 'open-right'
+      }
+      return { state: IDLE, command, drag: null }
+    }
+  }
+}
+
+// Chat interaction zones where a horizontal drag must not be hijacked as a swipe.
+const INTERACTION_ZONE_SELECTORS = [
+  '.chat-suggestions',
+  '.chat-input-area',
+  '.quoted-reply-chip',
+  '.doc-filter-tabs',
+  '.section-row',
+]
+
+function isBlockedTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null
+  if (!el || typeof el.closest !== 'function') return false
+  return INTERACTION_ZONE_SELECTORS.some(sel => el.closest(sel))
+}
+
 export function useSwipePanels({
   mobileLeftOpen,
   mobileRightOpen,
   handleClosePanels,
   handleMobileTab,
 }: SwipePanelsProps) {
-  const touchStartRef = useRef<{ x: number; y: number } | null>(null)
-  const swipeDirRef = useRef<'left' | 'right' | null>(null)
-  const isSwipingRef = useRef(false)
   const leftPanelRef = useRef<HTMLElement>(null)
   const rightPanelRef = useRef<HTMLElement>(null)
-  const backdropRef = useRef<HTMLDivElement>(null)
-  const SWIPE_COMMIT = 104 // px to commit open/close (~30% more bail room)
 
-  const handleTouchStart = useCallback((e: React.TouchEvent) => {
-    // Multi-finger gesture (e.g. pinch-zoom) — never a panel swipe. When a second
-    // finger lands mid-swipe a fresh touchstart fires with touches.length > 1, so
-    // cancel any in-progress tracking rather than snapping the drawer.
-    if (e.touches.length > 1) {
-      cancelGesture()
-      return
+  const stateRef = useRef<GestureState>(IDLE)
+  const rafRef = useRef<number | null>(null)
+  const pendingDragRef = useRef<DragTransform | null>(null)
+
+  // Write the live drag transform to the dragged panel via a single CSS var. The
+  // stylesheet turns `--drawer-drag-x` + `[data-dragging]` into the transform,
+  // so no imperative transform/display/opacity write happens here.
+  const paintDrag = useCallback((drag: DragTransform | null) => {
+    const left = leftPanelRef.current
+    const right = rightPanelRef.current
+    const clear = (el: HTMLElement | null) => {
+      if (!el) return
+      el.style.removeProperty('--drawer-drag-x')
+      el.removeAttribute('data-dragging')
     }
-    const touch = e.touches[0]
-    const target = e.target as HTMLElement
-    // Skip swipe tracking inside the chat interaction zone
-    if (
-      target.closest('.chat-suggestions') ||
-      target.closest('.chat-input-area') ||
-      target.closest('.quoted-reply-chip') ||
-      target.closest('.doc-filter-tabs') ||
-      target.closest('.section-row')
-    ) {
-      touchStartRef.current = null
-      return
+    clear(left)
+    clear(right)
+    if (drag) {
+      const el = drag.side === 'left' ? left : right
+      if (el) {
+        el.style.setProperty('--drawer-drag-x', `${drag.x}px`)
+        el.setAttribute('data-dragging', 'true')
+      }
     }
-    touchStartRef.current = { x: touch.clientX, y: touch.clientY }
-    swipeDirRef.current = null
-    isSwipingRef.current = false
   }, [])
 
-  const handleTouchMove = useCallback((e: React.TouchEvent) => {
-    if (!touchStartRef.current) return
-    // A second finger landed mid-swipe (pinch-zoom) — abort the swipe so the
-    // drawer snaps back instead of jumping toward the new touch point.
-    if (e.touches.length > 1) {
-      cancelGesture()
-      return
+  // Coalesce move-driven paints to one per frame.
+  const scheduleDrag = useCallback((drag: DragTransform | null) => {
+    pendingDragRef.current = drag
+    if (rafRef.current != null) return
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null
+      paintDrag(pendingDragRef.current)
+    })
+  }, [paintDrag])
+
+  // Immediately drop all drag visuals (release/cancel) so React's open-state and
+  // the resting CSS transition take over the drawer position.
+  const clearDrag = useCallback(() => {
+    if (rafRef.current != null) {
+      cancelAnimationFrame(rafRef.current)
+      rafRef.current = null
     }
+    pendingDragRef.current = null
+    paintDrag(null)
+  }, [paintDrag])
+
+  const runCommand = useCallback((command: GestureCommand) => {
+    if (command === 'open-left') handleMobileTab('command')
+    else if (command === 'open-right') handleMobileTab('execution')
+    else if (command === 'close') handleClosePanels()
+  }, [handleMobileTab, handleClosePanels])
+
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
     const touch = e.touches[0]
-    const dx = touch.clientX - touchStartRef.current.x
-    const dy = touch.clientY - touchStartRef.current.y
+    const result = gestureReducer(stateRef.current, {
+      type: 'start',
+      x: touch ? touch.clientX : 0,
+      y: touch ? touch.clientY : 0,
+      touches: e.touches.length,
+      blocked: isBlockedTarget(e.target),
+    })
+    stateRef.current = result.state
+    // A pinch that interrupts an in-progress drag lands here as a fresh
+    // multi-touch start → idle; clear any drag visuals so it snaps back.
+    if (result.state.phase === 'idle') clearDrag()
+  }, [clearDrag])
 
-    // Lock direction on first significant movement.
-    //
-    // A chat answer is scrolled VERTICALLY inside the same shell that owns the
-    // swipe gesture, so disambiguation must be strict — otherwise a slightly
-    // diagonal scroll locks into a horizontal "open panel" swipe and flashes the
-    // backdrop on every scroll. Rules:
-    //   • bail on any vertical-dominant movement (ady >= adx) — it's a scroll
-    //   • only commit to horizontal once it is CLEARLY horizontal (adx >= 1.3*ady)
-    //   • otherwise (near-diagonal) keep waiting for a later, clearer sample
-    if (!swipeDirRef.current) {
-      const adx = Math.abs(dx)
-      const ady = Math.abs(dy)
-      if (adx < 12 && ady < 12) return // not enough movement yet
-      if (ady >= adx) {
-        // Vertical (or equal) — treat as a scroll and stop tracking this gesture.
-        touchStartRef.current = null
-        return
-      }
-      if (adx < ady * 1.3) return // horizontal but not clearly so — wait for next move
-      swipeDirRef.current = dx > 0 ? 'right' : 'left'
-      isSwipingRef.current = true
-    }
-
-    const screenW = window.innerWidth
-    if (screenW > 640) return // Desktop — no drag
-
-    // Determine what panel to show based on swipe + current state
-    if (swipeDirRef.current === 'right') {
-      if (mobileRightOpen && rightPanelRef.current) {
-        // Closing right panel — drag it away
-        const offset = Math.max(0, dx)
-        rightPanelRef.current.style.transform = `translateX(${offset}px)`
-        rightPanelRef.current.style.transition = 'none'
-        if (backdropRef.current) {
-          backdropRef.current.style.opacity = String(Math.max(0, 1 - offset / (screenW * 0.4)))
-        }
-      } else if (!mobileLeftOpen && leftPanelRef.current) {
-        // Opening left panel — drag it in from -100%
-        const progress = Math.min(dx / screenW, 1)
-        const panelX = -screenW + (progress * screenW)
-        leftPanelRef.current.style.transform = `translateX(${panelX}px)`
-        leftPanelRef.current.style.transition = 'none'
-        leftPanelRef.current.style.visibility = 'visible'
-        if (backdropRef.current) {
-          backdropRef.current.style.display = 'block'
-          backdropRef.current.style.opacity = String(Math.min(progress * 1.5, 1))
-        }
-      }
-    } else if (swipeDirRef.current === 'left') {
-      if (mobileLeftOpen && leftPanelRef.current) {
-        // Closing left panel — drag it away
-        const offset = Math.min(0, dx)
-        leftPanelRef.current.style.transform = `translateX(${offset}px)`
-        leftPanelRef.current.style.transition = 'none'
-        if (backdropRef.current) {
-          backdropRef.current.style.opacity = String(Math.max(0, 1 - Math.abs(offset) / (screenW * 0.4)))
-        }
-      } else if (!mobileRightOpen && rightPanelRef.current) {
-        // Opening right panel — drag it in from +100%
-        const progress = Math.min(Math.abs(dx) / screenW, 1)
-        const panelX = screenW - (progress * screenW)
-        rightPanelRef.current.style.transform = `translateX(${panelX}px)`
-        rightPanelRef.current.style.transition = 'none'
-        rightPanelRef.current.style.visibility = 'visible'
-        if (backdropRef.current) {
-          backdropRef.current.style.display = 'block'
-          backdropRef.current.style.opacity = String(Math.min(progress * 1.5, 1))
-        }
-      }
-    }
-  }, [mobileLeftOpen, mobileRightOpen])
-
-  // Re-establish the inline backdrop styles to match React's intended state so a
-  // mid-drag display/opacity can't desync after a gesture ends. We set explicit
-  // values from the current open flags rather than clearing to '' — clearing let
-  // the CSS cascade take over, and the ≤1024px rule forced `display: block`, so
-  // the backdrop got stuck visible over the whole screen after any tap.
-  const resetBackdropToReact = () => {
-    if (backdropRef.current) {
-      const open = mobileLeftOpen || mobileRightOpen
-      backdropRef.current.style.display = open ? 'block' : 'none'
-      backdropRef.current.style.opacity = open ? '1' : '0'
-    }
-  }
-
-  // Reset a panel's inline drag styles so CSS transitions take over again.
-  const resetPanel = (el: HTMLElement | null) => {
-    if (!el) return
-    el.style.transform = ''
-    el.style.transition = ''
-    el.style.visibility = ''
-  }
-
-  // Abort any in-progress swipe and clear all per-gesture state. Used when a
-  // multi-finger (pinch-zoom) gesture is detected so the drawer snaps back to
-  // its rendered position instead of jumping to a second finger.
-  const cancelGesture = () => {
-    resetPanel(leftPanelRef.current)
-    resetPanel(rightPanelRef.current)
-    resetBackdropToReact()
-    touchStartRef.current = null
-    swipeDirRef.current = null
-    isSwipingRef.current = false
-  }
+  const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    const touch = e.touches[0]
+    const result = gestureReducer(stateRef.current, {
+      type: 'move',
+      x: touch ? touch.clientX : 0,
+      y: touch ? touch.clientY : 0,
+      touches: e.touches.length,
+      screenW: window.innerWidth,
+      open: { left: mobileLeftOpen, right: mobileRightOpen },
+    })
+    stateRef.current = result.state
+    if (result.state.phase === 'dragging') scheduleDrag(result.drag)
+    else clearDrag()
+  }, [mobileLeftOpen, mobileRightOpen, scheduleDrag, clearDrag])
 
   const handleTouchEnd = useCallback((e: React.TouchEvent) => {
-    if (!touchStartRef.current || !isSwipingRef.current) {
-      touchStartRef.current = null
-      resetBackdropToReact()
-      return
-    }
-
     const touch = e.changedTouches[0]
-    const dx = touch.clientX - touchStartRef.current.x
-    const dir = swipeDirRef.current
-    touchStartRef.current = null
-    swipeDirRef.current = null
-    isSwipingRef.current = false
+    const result = gestureReducer(stateRef.current, {
+      type: 'end',
+      x: touch ? touch.clientX : 0,
+      screenW: window.innerWidth,
+      open: { left: mobileLeftOpen, right: mobileRightOpen },
+    })
+    stateRef.current = result.state
+    clearDrag()
+    runCommand(result.command)
+  }, [mobileLeftOpen, mobileRightOpen, clearDrag, runCommand])
 
-    const screenW = window.innerWidth
-    if (screenW > 640) return
-
-    // Let React's rendered backdrop style (page.tsx) become the source of truth
-    // once the gesture ends; handleClosePanels/handleMobileTab below flip the
-    // open flags that drive the rendered display/opacity.
-    resetBackdropToReact()
-
-    const absDx = Math.abs(dx)
-    const committed = absDx > SWIPE_COMMIT
-
-    if (dir === 'right') {
-      if (mobileRightOpen && committed) {
-        resetPanel(rightPanelRef.current)
-        handleClosePanels()
-      } else if (!mobileLeftOpen && committed) {
-        resetPanel(leftPanelRef.current)
-        handleMobileTab('command')
-      } else {
-        resetPanel(leftPanelRef.current)
-        resetPanel(rightPanelRef.current)
-      }
-    } else if (dir === 'left') {
-      if (mobileLeftOpen && committed) {
-        resetPanel(leftPanelRef.current)
-        handleClosePanels()
-      } else if (!mobileRightOpen && committed) {
-        resetPanel(rightPanelRef.current)
-        handleMobileTab('execution')
-      } else {
-        resetPanel(leftPanelRef.current)
-        resetPanel(rightPanelRef.current)
-      }
-    } else {
-      resetPanel(leftPanelRef.current)
-      resetPanel(rightPanelRef.current)
-    }
-  }, [mobileLeftOpen, mobileRightOpen, handleClosePanels, handleMobileTab])
+  // rAF cleanup on unmount.
+  useEffect(() => () => {
+    if (rafRef.current != null) cancelAnimationFrame(rafRef.current)
+  }, [])
 
   return {
     leftPanelRef,
     rightPanelRef,
-    backdropRef,
     handleTouchStart,
     handleTouchMove,
     handleTouchEnd,

@@ -434,7 +434,6 @@ export default function HubPage() {
   const {
     leftPanelRef,
     rightPanelRef,
-    backdropRef,
     handleTouchStart,
     handleTouchMove,
     handleTouchEnd,
@@ -1015,9 +1014,10 @@ export default function HubPage() {
         </button>
       </nav>
 
-      {/* Backdrop (always rendered for swipe gesture opacity control) */}
+      {/* Backdrop — visibility is a PURE function of the open flags, rendered by
+          React. Nothing mutates its inline style imperatively, so it can never be
+          stranded visible (the stuck-`.mobile-backdrop` P0 class). */}
       <div
-        ref={backdropRef}
         className="mobile-backdrop"
         onClick={handleClosePanels}
         aria-hidden="true"
