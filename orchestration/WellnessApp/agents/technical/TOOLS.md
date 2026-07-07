@@ -1,4 +1,4 @@
-# RxFit Wellness App — Technical Lead | Tools
+# RxFit Client Platform — Technical Lead | Tools
 
 ## Available Tools
 

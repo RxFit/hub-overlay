@@ -21,16 +21,16 @@
 - [ ] Also run: Paid Ads weekly review (see Paid section below)
 
 ## Tuesday — AEO Pillar (Answer Engine Optimization)
-- [ ] Research top 5 fitness/wellness queries returning AI-generated answers on Perplexity, ChatGPT, Gemini
+- [ ] Research top 5 executive-advisory queries returning AI-generated answers on Perplexity, ChatGPT, Gemini
 - [ ] Check if RxFit is cited in any answer → log coverage in `MEMORY.md`
 - [ ] Identify 1 FAQ or featured snippet opportunity (query + RxFit's answer angle)
 - [ ] Draft structured answer content (Q&A format, 150–300 words, schema-ready)
 - [ ] Queue in Paperclip content queue
 
 ## Wednesday — GEO Pillar (Generative Engine Optimization)
-- [ ] Search Perplexity/ChatGPT/Gemini: "best personal trainer Austin TX" + 3 variant queries
+- [ ] Search Perplexity/ChatGPT/Gemini: "best executive advisor Austin TX" + 3 variant queries
 - [ ] Check if RxFit is mentioned → log coverage
-- [ ] Identify 1 authority angle where RxFit should be cited (science-backed, biometric training, concierge)
+- [ ] Identify 1 authority angle where RxFit should be cited (data-backed, metrics-driven advisory, concierge)
 - [ ] Draft 1 content brief: article/resource that establishes that authority angle
 - [ ] Queue brief in Paperclip content queue
 

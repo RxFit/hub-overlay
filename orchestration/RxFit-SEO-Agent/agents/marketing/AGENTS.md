@@ -16,7 +16,7 @@
 
 ### Keyword Strategy Oversight
 - Identify gaps in the tool's keyword targeting strategy
-- Flag keyword categories that are underserved (e.g., local Austin fitness terms, RxFit brand terms)
+- Flag keyword categories that are underserved (e.g., local Austin advisory terms, RxFit brand terms)
 - Monitor keyword difficulty vs. content effort ratio — is the tool chasing the right keywords?
 - Escalate priority keyword opportunities to Antigravity for founder review
 

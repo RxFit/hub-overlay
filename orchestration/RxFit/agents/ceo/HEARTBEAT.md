@@ -14,7 +14,7 @@
 - [ ] Pull current MRR actual (from CFO report + Stripe)
 - [ ] Pull organic traffic + qualified leads actual (from CMO report)
 - [ ] Pull platform uptime + Jules open issues (from CTO report)
-- [ ] Pull trainer utilization + client escalations (from COO report)
+- [ ] Pull advisor utilization + client escalations (from COO report)
 - [ ] Flag any KPI that is > 10% below target → mark as "at risk"
 - [ ] Flag any KPI that is > 25% below target → mark as "escalate to Antigravity"
 

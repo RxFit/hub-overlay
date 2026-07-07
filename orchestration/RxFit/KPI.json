@@ -87,7 +87,7 @@
       "owner": "COO Agent"
     },
     "operations_trainer_utilization": {
-      "metric": "Trainer Session Utilization Rate",
+      "metric": "Advisor Session Utilization Rate",
       "target": "Upward trend — targets set quarterly",
       "target_cadence": "Reviewed and updated every quarter (Jan 1, Apr 1, Jul 1, Oct 1)",
       "actual": null,

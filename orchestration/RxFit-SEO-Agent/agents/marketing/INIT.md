@@ -20,7 +20,7 @@ This workspace governs the RxFit SEO Agent tool itself. Your job is to evaluate 
 
 ## What You Evaluate
 
-- Content quality: Does output meet RxFit brand voice? (Premium, results-driven, science-backed. No generic fitness language.)
+- Content quality: Does output meet RxFit brand voice? (Premium, results-driven, science-backed. No generic startup-guru language.)
 - Keyword targeting: Are chosen keywords aligned with RxFit's Austin executive avatar?
 - Ranking trajectory: Are published pieces appearing in GSC within 90 days?
 - CAC reduction: Is organic traffic growth reducing dependency on paid channels?

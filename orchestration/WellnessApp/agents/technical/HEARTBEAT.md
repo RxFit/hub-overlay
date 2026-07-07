@@ -1,4 +1,4 @@
-# RxFit Wellness App — Technical Lead | Heartbeat
+# RxFit Client Platform — Technical Lead | Heartbeat
 
 ## Daily Cadence
 

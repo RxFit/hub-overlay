@@ -42,13 +42,13 @@ _Persistent state for the Marketing Lead agent. Updated on each cadence cycle._
 
 ## Avatar Research Notes
 
-### Avatar A: RxFit Coach
+### Avatar A: RxFit Advisor
 - Pain points: _[agent populates]_
 - Search behavior: _[agent populates]_
 - Language patterns: _[agent populates]_
 - Willingness to pay signal: _[agent populates]_
 
-### Avatar B: Health-Obsessed Client / Biohacker
+### Avatar B: Metrics-Obsessed Client / Founder Mode Operator
 - Pain points: _[agent populates]_
 - Search behavior: _[agent populates]_
 - Language patterns: _[agent populates]_

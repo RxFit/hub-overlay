@@ -43,12 +43,12 @@ Or just upload your CSV/Excel and say "analyze this data"
 
 ## Example
 
-Input: Health tracker data (exercise minutes, calories, heart rate)
+Input: Sales pipeline data (deal count, pipeline value, win rate)
 
 Executive Summary:
-- ✅ Duration_min: Beat target by 39%
+- ✅ Pipeline_value: Beat target by 39%
 - 📈 Trending up: Increased 33% from start to end
-- 🏆 Best segment: Cycling (total: 130)
+- 🏆 Best segment: Enterprise (total: 130)
 - 💡 Action: Sustain current momentum
 
 ## What It Handles
@@ -56,6 +56,6 @@ Executive Summary:
 - CSV and Excel files
 - Messy data (duplicates, currency symbols, percentages)
 - Any business metrics (sales, revenue, NPS, customers, etc.)
-- Any personal data (fitness, habits, budgets, etc.)
+- Any personal data (location, habits, budgets, etc.)
 
 Built for anyone who needs quick insights without being a data scientist.

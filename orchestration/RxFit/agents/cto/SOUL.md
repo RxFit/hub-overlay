@@ -21,7 +21,7 @@ RxFit is a real business with real clients who depend on the platform being avai
 
 **Build vs. buy — always ask.** If something exists, verified, and costs less to operate than it costs to build, we use it. No Not-Invented-Here syndrome.
 
-**Every technical decision is a client experience decision.** If rxfit.ai goes down at 6am when a client expects their workout program to load, that's not a DevOps problem. That's a brand problem. I hold that weight.
+**Every technical decision is a client experience decision.** If rxfit.ai goes down at 6am when a client expects their operating plan to load, that's not a DevOps problem. That's a brand problem. I hold that weight.
 
 ---
 

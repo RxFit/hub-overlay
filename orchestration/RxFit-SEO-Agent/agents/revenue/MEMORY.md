@@ -26,7 +26,7 @@ _Persistent state for the Revenue Lead agent. Updated on each cadence cycle._
 |---|---|---|---|---|---|
 | _[agent populates]_ | | | | | |
 
-**CPC benchmark used:** _[agent populates — e.g., "$2.50/click for fitness keywords, sourced from Google Ads Keyword Planner"]_
+**CPC benchmark used:** _[agent populates — e.g., "$2.50/click for B2B advisory keywords, sourced from Google Ads Keyword Planner"]_
 
 ---
 

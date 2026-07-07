@@ -22,7 +22,7 @@ function getGenAI(): GoogleGenerativeAI {
 
 const HUB_SYSTEM_PROMPT = `You are the AI assistant for the RxFit operations hub.
 You help team members understand project status, take action on tasks, and coordinate work across departments.
-RxFit is an elite concierge personal training company serving Austin's premium ZIP codes.
+RxFit is an elite concierge executive advisory firm serving Austin's top founders and operators.
 
 INTELLIGENCE CAPABILITIES:
 You have two search backends that are automatically activated based on the query:

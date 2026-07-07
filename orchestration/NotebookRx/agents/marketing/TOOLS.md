@@ -28,5 +28,5 @@
 
 - GA4 access is read-only
 - No direct publish access — all content queued for human review
-- Health claims in content must be reviewed for regulatory compliance before use
+- Content claims must be reviewed for regulatory compliance before use — nothing that could constitute financial or legal advice
 - No paid acquisition spending without founder approval

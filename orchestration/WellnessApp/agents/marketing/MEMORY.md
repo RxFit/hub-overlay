@@ -1,4 +1,4 @@
-# RxFit Wellness App — Marketing Lead | Memory
+# RxFit Client Platform — Marketing Lead | Memory
 
 *This file is read and updated by the Marketing Lead agent on each heartbeat cycle. All fields start as empty templates. Values are populated as campaigns run and data accumulates.*
 
@@ -25,10 +25,10 @@ Lowest-converting traffic source: [empty]
 Top-performing content topic: [empty]
 ```
 
-### Trainer Avatar — Live Notes
+### Advisor Avatar — Live Notes
 ```
-Channels where trainers are found: [empty]
-Top-performing trainer recruitment message: [empty]
+Channels where advisors are found: [empty]
+Top-performing advisor recruitment message: [empty]
 ```
 
 ---

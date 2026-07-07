@@ -1,16 +1,16 @@
-# RxFit Wellness App — Marketing Lead | Heartbeat
+# RxFit Client Platform — Marketing Lead | Heartbeat
 
 ## Daily Cadence (Monday–Thursday)
 
 ### Monday — SEO
 - Pull keyword gap report from analytics + semantic bucket
-- Identify 3–5 high-value long-tail keywords (e.g., "personal trainer Austin concierge," "home personal training Austin executive")
+- Identify 3–5 high-value long-tail keywords (e.g., "operating partner Austin concierge," "embedded advisor for Austin executives")
 - Review top 3 competitor pages ranking for target terms
 - Queue: 1 SEO-optimized blog post or landing page update targeting identified gap
 - Check: meta titles, descriptions, H1 tags on core app landing pages
 
 ### Tuesday — AEO (AI Engine Optimization)
-- Identify 5 questions the target avatar asks AI assistants (e.g., "best personal trainer apps for busy professionals," "how do I find a reliable personal trainer in Austin")
+- Identify 5 questions the target avatar asks AI assistants (e.g., "best executive advisory platforms for busy professionals," "how do I find a reliable operating partner in Austin")
 - Audit whether rxfit.co content surfaces in AI-generated answers
 - Queue: 1 FAQ-style content piece or schema-markup update to improve featured snippet eligibility
 - Check: structured data validity for service pages
@@ -19,7 +19,7 @@
 - Review brand mentions in AI-generated content (ChatGPT, Gemini, Perplexity)
 - Identify gaps where competitor brands appear and RxFit does not
 - Queue: 1 piece of authoritative, linkable content (guides, data-backed articles) designed to be cited by LLMs
-- Check: digital PR backlink opportunities — fitness publications, Austin business media
+- Check: digital PR backlink opportunities — business publications, Austin business media
 
 ### Thursday — CRO (Conversion Rate Optimization)
 - Pull landing page conversion data from GA4
@@ -29,7 +29,7 @@
 - Review: lead form submissions vs. traffic ratio
 
 ### Friday — SKIP (Local Map Pack not applicable)
-*No Friday marketing task. RxFit Wellness App is a nationwide/Austin web app, not a local storefront.*
+*No Friday marketing task. RxFit Client Platform is a nationwide/Austin web app, not a local storefront.*
 
 ---
 

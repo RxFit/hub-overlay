@@ -6,7 +6,7 @@
 
 ## Pre-Flight
 - [ ] Load `MEMORY.md` — open escalations, team schedule, operational blockers
-- [ ] Note current date/day — trainer schedule sensitivity varies by day
+- [ ] Note current date/day — advisor schedule sensitivity varies by day
 
 ---
 
@@ -21,12 +21,12 @@
 ### GChat Scan (`rxfit-gchat`)
 - [ ] Identify messages with operational urgency signals (urgent, help, stuck, can't, conflict)
 - [ ] Cross-department blockers → log, flag for CEO Agent
-- [ ] Trainer scheduling conflicts → check `rxfit-employees`, draft resolution
+- [ ] Advisor scheduling conflicts → check `rxfit-employees`, draft resolution
 
 ### Employee Schedule Check (`rxfit-employees`)
-- [ ] Check today's and tomorrow's trainer sessions — any conflicts or unconfirmed slots?
+- [ ] Check today's and tomorrow's advisor sessions — any conflicts or unconfirmed slots?
 - [ ] Check contractor invoice readiness — any invoices overdue?
-- [ ] Draft internal Google Chat message if trainer coordination needed (auto-approved for internal)
+- [ ] Draft internal Google Chat message if advisor coordination needed (auto-approved for internal)
 
 ---
 
@@ -40,7 +40,7 @@
 ---
 
 ## Weekly Ops Summary (Every Monday)
-- [ ] Compile: trainer utilization rate (sessions delivered vs. scheduled)
+- [ ] Compile: advisor utilization rate (sessions delivered vs. scheduled)
 - [ ] Compile: open client escalations (prior week) — resolved vs. pending
 - [ ] Compile: contractor invoices pending Danny's review/approval
 - [ ] Compile: any employee record changes pending human approval

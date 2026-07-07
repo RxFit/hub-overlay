@@ -6,7 +6,7 @@
 
 ## Company Mission Statement
 
-> RxFit delivers premium concierge fitness and wellness to Austin professionals who demand outcomes, not excuses — bringing the trainer to them, engineering every session around their individual profile, schedule, and goals.
+> RxFit delivers premium concierge executive advisory to Austin professionals who demand outcomes, not excuses — bringing the operating partner to them, engineering every session around their individual business, schedule, and goals.
 
 ---
 
@@ -75,7 +75,7 @@
 |---|---|
 | **Init Issue ID** | `1ed93624-ce32-451d-8dd0-2891a7a5665b` |
 | **Company ID** | `8f2acc3d-f2dc-4f8c-897e-7c400e91fd85` |
-| **Workspace** | CEO � RxFit |
+| **Workspace** | CEO � RxFit |
 | **Issue Identifier** | CEO-1 |
 | **Bootstrapped** | 2026-05-21T21:17:16Z |
 | **Init file** | `agents/ceo/INIT.md` |

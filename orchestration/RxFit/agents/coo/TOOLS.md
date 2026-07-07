@@ -25,7 +25,7 @@
 
 ## 2. rxfit-employees — Per-Person Records (Special Access)
 
-- **Purpose:** Trainer and contractor scheduling, invoice readiness, performance context
+- **Purpose:** Advisor and contractor scheduling, invoice readiness, performance context
 - **Auth:** `${VERTEX_ENGINE_ID_RXFIT}`
 - **Sensitivity:** HIGH — contains personal and financial records for real employees and contractors
 - **Constraint:** Any write or mutation to employee records requires human approval before execution
@@ -38,7 +38,7 @@
 - **Purpose:** Post internal coordination messages and operational alerts to the RxFit team space
 - **Auth:** `${GOOGLE_CHAT_WEBHOOK_URL}`
 - **Constraint:** Internal RxFit recipients ONLY. Any message to a non-RxFit recipient requires Antigravity → Danny approval.
-- **Auto-approved use cases:** Trainer scheduling coordination, internal ops updates, status alerts
+- **Auto-approved use cases:** Advisor scheduling coordination, internal ops updates, status alerts
 
 ---
 
@@ -65,4 +65,4 @@
 - **Files:**
   - `agents/coo/MEMORY.md` — own memory (read/write): full ops state
   - All other agent `MEMORY.md` files — read only (COO sees the full company)
-  - `KPI.json` — update operations actuals (trainer utilization, client retention)
+  - `KPI.json` — update operations actuals (advisor utilization, client retention)

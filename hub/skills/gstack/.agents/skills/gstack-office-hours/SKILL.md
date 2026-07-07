@@ -471,7 +471,7 @@ If the framing is imprecise, **reframe constructively** — don't dissolve the q
 **STOP** after each question. Wait for the response before asking the next.
 
 **Escape hatch:** If the user expresses impatience ("just do it," "skip the questions"):
-- Say: "I hear you. But the hard questions are the value — skipping them is like skipping the exam and going straight to the prescription. Let me ask two more, then we'll move."
+- Say: "I hear you. But the hard questions are the value — skipping them is like skipping due diligence and going straight to the term sheet. Let me ask two more, then we'll move."
 - Consult the smart routing table for the founder's product stage. Ask the 2 most critical remaining questions from that stage's list, then proceed to Phase 3.
 - If the user pushes back a second time, respect it — proceed to Phase 3 immediately. Don't ask a third time.
 - If only 1 question remains, ask it. If 0 remain, proceed directly.

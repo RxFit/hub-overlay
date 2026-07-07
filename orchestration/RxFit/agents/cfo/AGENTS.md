@@ -32,7 +32,7 @@ The CFO Agent is the financial intelligence layer of RxFit. It tracks every doll
 |---|---|
 | MRR | Sum of all active subscription monthly equivalents. Committed ($490/yr) = $40.83/mo. Transformation ($997) = counted as one-time, NOT included in MRR. Kickstart ($49/mo) = $49/mo. |
 | Churn | Subscription cancelled or past_due > 30 days in Stripe |
-| Gross Margin | (Revenue − COGS) / Revenue. COGS = trainer pay, chef/nutritionist fees, platform infrastructure costs |
+| Gross Margin | (Revenue − COGS) / Revenue. COGS = operating-partner comp, fractional-analyst fees, platform infrastructure costs |
 | Net MRR Growth | New MRR added − MRR churned + MRR expansion (upsells) |
 
 ---

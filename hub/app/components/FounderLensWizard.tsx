@@ -69,13 +69,13 @@ const ROLE_CONFIGS: RoleConfig[] = [
       {
         field: 'competitiveAdvantages',
         label: 'What makes you genuinely different from competitors',
-        placeholder: 'e.g., We combine biometric data with periodization science. Our clients track HRV...',
+        placeholder: 'e.g., We combine operating metrics with proven playbook design. Our clients track NDR...',
         hint: 'Specific, verifiable claims only. Not "great service" or "passion."',
       },
       {
         field: 'tonePreferences',
         label: 'Brand voice and tone rules',
-        placeholder: 'e.g., Authoritative not arrogant. Data-driven. Never use fitness clichés...',
+        placeholder: 'e.g., Authoritative not arrogant. Data-driven. Never use growth-hacking clichés...',
         hint: 'Include what NOT to say as well as what to say.',
       },
       {
@@ -107,7 +107,7 @@ const ROLE_CONFIGS: RoleConfig[] = [
       {
         field: 'competitiveAdvantages',
         label: 'Technical moats or unique infrastructure',
-        placeholder: 'e.g., Proprietary AI coaching model, custom biometric integration...',
+        placeholder: 'e.g., Proprietary AI advisory model, custom KPI-pipeline integration...',
         hint: 'What technical capabilities does this business have that others don\'t?',
       },
     ],

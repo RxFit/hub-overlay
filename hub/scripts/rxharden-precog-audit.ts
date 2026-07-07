@@ -120,7 +120,7 @@ async function phase2_EmpiricalTesting() {
   // E1: Test embedding generation
   let embedding: number[] | null = null
   try {
-    embedding = await generateEmbedding('RxFit patient scheduling optimization')
+    embedding = await generateEmbedding('RxFit client scheduling optimization')
     record('Empirical', 'Embedding generation', embedding.length === 768,
       `Generated embedding with ${embedding.length} dimensions`)
   } catch (err) {

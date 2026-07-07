@@ -1,5 +1,5 @@
 # Paperclip Backend API â€” CEO Operational Reference
-# Project: Wellness App
+# Project: Client Platform
 
 > All credentials via env vars. Never hardcoded. The IDs below are workspace/agent IDs (not secrets).
 
@@ -15,7 +15,7 @@ Content:   Content-Type: application/json
 
 ---
 
-## Workspace & Agent IDs (Wellness App)
+## Workspace & Agent IDs (Client Platform)
 
 | Role | Workspace Name | Company ID | Agent ID |
 |---|---|---|---|
@@ -154,4 +154,4 @@ When any agent encounters an API key error, the agent MUST:
 **Key Scope Reference:** See `orchestration/secrets-manifest.json` for which keys each workspace is authorized to use.
 
 ---
-*Last updated: 2026-06-06 by Antigravity – Wellness App CEO bootstrap – added key failure escalation protocol*
+*Last updated: 2026-06-06 by Antigravity – Client Platform CEO bootstrap – added key failure escalation protocol*

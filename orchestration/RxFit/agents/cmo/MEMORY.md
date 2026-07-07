@@ -6,8 +6,8 @@
 
 ## Brand Voice Guide Summary
 
-**Core pillars:** Premium · Science-backed · Personal · Results-driven · Respects intelligence
-**Never:** Generic transformation language, discount signaling, seasonal fitness tropes, fitness clichés
+**Core pillars:** Premium · Data-backed · Personal · Results-driven · Respects intelligence
+**Never:** Generic transformation language, discount signaling, seasonal growth-hacking tropes, startup-guru clichés
 **Always:** Specific outcomes, specific timelines, verifiable claims, authority-first framing
 *Full guide: `PROJECT.md` Section 4*
 
@@ -25,11 +25,11 @@
 
 | Keyword | Volume Est. | Current Position | Priority | Last Actioned |
 |---|---|---|---|---|
-| austin personal trainer concierge | — | — | High | — |
-| in-home personal training austin | — | — | High | — |
-| personal trainer austin tx | — | — | High | — |
+| austin executive advisor concierge | — | — | High | — |
+| on-site executive advisory austin | — | — | High | — |
+| executive advisor austin tx | — | — | High | — |
 | rxfit austin | — | — | Brand | — |
-| biometric personal training austin | — | — | Medium | — |
+| data-driven executive advisory austin | — | — | Medium | — |
 
 *CMO Agent updates positions weekly from GSC data*
 
@@ -39,21 +39,21 @@
 
 ### Avatar 1 — "The Austin Achiever" (Primary)
 - **Profile:** 38yo male, VP of Engineering at a Series B SaaS company, $280K income, 2 kids, West Lake Hills
-- **Pain point:** "I have a Peloton I haven't touched in 4 months. I know what to do — I just don't make myself do it without someone there."
-- **Buying trigger:** Turned 40, wants to run a half marathon and not embarrass himself
-- **Content resonance:** Biometrics, HRV data, outcome specificity, peer social proof from similar professionals
+- **Pain point:** "I have a Notion operating dashboard I haven't touched in 4 months. I know what to do — I just don't make myself do it without someone there."
+- **Buying trigger:** Turned 40, wants to launch his own company and not embarrass himself
+- **Content resonance:** Operating metrics, pipeline-coverage data, outcome specificity, peer social proof from similar professionals
 
 ### Avatar 2 — "The Senior Consultant" (Primary)
 - **Profile:** 45yo female, management consultant, $350K+ income, heavy travel schedule, Tarrytown
-- **Pain point:** "I'm in hotels 3 nights a week. My nutrition is a disaster and I have no consistent routine."
-- **Buying trigger:** Annual physical showed rising blood pressure. Doctor said "exercise and diet."
-- **Content resonance:** Flexibility of in-home model, nutrition + training integration, Rx360 package, low-friction onboarding
+- **Pain point:** "I'm in hotels 3 nights a week. My financial operations are a disaster and I have no consistent operating routine."
+- **Buying trigger:** Annual board review showed rising burn multiple. Her chief of staff said "cadence and runway."
+- **Content resonance:** Flexibility of on-site model, strategy + financial-ops integration, Rx360 package, low-friction onboarding
 
 ### Avatar 3 — "The rxfit.ai Subscriber" (Digital Tier)
-- **Profile:** 33yo male, software engineer, $160K income, moved to Austin from SF, doesn't know a trainer here
-- **Pain point:** "I trained with a great coach in SF. Haven't found anyone here who programs like him."
+- **Profile:** 33yo male, software engineer, $160K income, moved to Austin from SF, doesn't know an advisor here
+- **Pain point:** "I worked with a great operating partner in SF. Haven't found anyone here who plans like him."
 - **Buying trigger:** Referral from a colleague who used rxfit.ai
-- **Content resonance:** AI methodology, structured programming, Kickstart tier entry point, proof of rxfit.ai platform quality
+- **Content resonance:** AI methodology, structured operating playbooks, Kickstart tier entry point, proof of rxfit.ai platform quality
 
 ---
 

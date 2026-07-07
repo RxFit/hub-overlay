@@ -1,4 +1,4 @@
-# RxFit Wellness App — Revenue Lead | Heartbeat
+# RxFit Client Platform — Revenue Lead | Heartbeat
 
 ## Weekly Cadence
 

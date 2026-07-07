@@ -46,7 +46,7 @@ _Observed patterns where the SEO Agent tool consistently underperforms:_
 ## Keyword Strategy Notes
 
 **Underserved keyword categories identified:**
-- _[agent populates — e.g., "RxFit local Austin fitness" — low content coverage]_
+- _[agent populates — e.g., "RxFit local Austin advisory" — low content coverage]_
 
 **High-opportunity, low-competition targets:**
 - _[agent populates]_

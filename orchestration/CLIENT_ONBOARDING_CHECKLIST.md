@@ -49,7 +49,7 @@
   - PAPERCLIP_OPS.md: Copy from template, update IDs
 
 - [ ] **Tenant ID** — Assign unique tenant ID (lowercase, no spaces)
-  - Format: `clientname` (e.g., `acmefitness`)
+  - Format: `clientname` (e.g., `acmesaas`)
   - Set as `NEXT_PUBLIC_TENANT_ID` for their HUB instance (if separate)
 
 - [ ] **Database Isolation** — One of:

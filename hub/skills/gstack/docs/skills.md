@@ -724,7 +724,7 @@ When `/review` catches bugs from Claude's perspective, `/codex` brings a complet
 
 ### Cross-model analysis
 
-When both `/review` (Claude) and `/codex` (OpenAI) have reviewed the same branch, you get a cross-model comparison: which findings overlap (high confidence), which are unique to Codex (different perspective), and which are unique to Claude. This is the "two doctors, same patient" approach to code review.
+When both `/review` (Claude) and `/codex` (OpenAI) have reviewed the same branch, you get a cross-model comparison: which findings overlap (high confidence), which are unique to Codex (different perspective), and which are unique to Claude. This is the "two independent auditors, same books" approach to code review.
 
 ```
 You:   /codex review

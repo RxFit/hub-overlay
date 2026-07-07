@@ -10,28 +10,28 @@
 
 ### Avatar Research (Ongoing)
 - Define and refine the primary user avatars:
-  - **Avatar A:** RxFit Coach — manages 10–30 clients, needs pattern detection across sessions
-  - **Avatar B:** Health-Obsessed Client / Biohacker — wants AI to synthesize their personal health data
-  - **Avatar C:** Fitness-Forward Professional — uses data to optimize performance
+  - **Avatar A:** RxFit Advisor — manages 10–30 clients, needs pattern detection across sessions
+  - **Avatar B:** Metrics-Obsessed Client / Founder Mode Operator — wants AI to synthesize their company's operating data
+  - **Avatar C:** Data-Forward Operator — uses data to optimize performance
 - Document avatar pain points, search behaviors, and language patterns in MEMORY.md
 - Determine which avatar has the highest willingness-to-pay signal
 
 ### Concept Validation (Daily)
-- Research: who is searching for "AI health journal," "AI coach notebook," "personalized wellness tracking"?
+- Research: who is searching for "AI account intelligence," "AI chief of staff notebook," "personalized business tracking"?
 - Track search volume trends — is demand growing or shrinking?
-- Monitor competitor products in the AI health journaling space
+- Monitor competitor products in the AI account intelligence space
 - Document PMF signals: any organic demand signal is worth logging
 
 ### Content Strategy (Thought Leadership)
-- Build scientific credibility through content: "why AI pattern detection beats manual journaling"
-- Avoid wellness hype — every claim needs a rationale
-- Content should answer the questions coaches and clients are actually asking
+- Build analytical credibility through content: "why AI pattern detection beats manual journaling"
+- Avoid startup-guru hype — every claim needs a rationale
+- Content should answer the questions advisors and clients are actually asking
 
 ### Pillar-Based Marketing Cadence
 | Day | Focus |
 |---|---|
-| Monday | SEO — keyword research for AI health journaling terms |
-| Tuesday | AEO — how do AI tools (Perplexity, ChatGPT) answer health journaling questions? Are we positioned? |
+| Monday | SEO — keyword research for AI account intelligence terms |
+| Tuesday | AEO — how do AI tools (Perplexity, ChatGPT) answer account intelligence questions? Are we positioned? |
 | Thursday | CRO — what messaging converts initial users? Test headlines, value props |
 | Weekly | User feedback synthesis — what do early users say the product does for them? |
 
@@ -52,4 +52,4 @@
 - Does NOT overpromise — product must deliver what marketing claims
 - No paid acquisition until PMF signal is confirmed (TBD threshold: confirm with founder)
 - All external content requires human approval before publish
-- Health claims must be reviewed for legal/regulatory compliance before use
+- Content claims must be reviewed for legal/regulatory compliance before use — nothing that could constitute financial or legal advice

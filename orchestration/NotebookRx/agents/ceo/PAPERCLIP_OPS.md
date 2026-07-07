@@ -45,10 +45,10 @@ Authorization: Bearer ${PAPERCLIP_API_KEY}
 ### 3. Create a Task for an Officer Agent
 
 **NOTEBOOKRX CEO NOTES:**
-- Before creating CMO acquisition tasks, confirm primary user (coach vs. client) is resolved â€” CMO channel strategy depends entirely on this answer
+- Before creating CMO acquisition tasks, confirm primary user (advisor vs. client) is resolved â€” CMO channel strategy depends entirely on this answer
 - CTO tasks must include insight quality benchmarking â€” not just uptime. Generic insights = product failure
 - CFO tasks must always note Stripe is active for premium tier â€” billing changes require human execution
-- All health data model questions â†’ escalate before creating CTO tasks that touch data schema
+- All client data model questions â†’ escalate before creating CTO tasks that touch data schema
 
 ```http
 POST ${PAPERCLIP_BASE_URL}/api/companies/{officerCompanyId}/issues
@@ -87,7 +87,7 @@ Content-Type: application/json
 
 {
   "status": "done",
-  "comment": "Weekly briefing delivered. PMF questions status: coach/client=[X], premium tier=[X], integration=[X]."
+  "comment": "Weekly briefing delivered. PMF questions status: advisor/client=[X], premium tier=[X], integration=[X]."
 }
 ```
 
@@ -123,8 +123,8 @@ npx paperclipai issue create \
 | `500` | Internal server error | Escalate if recurring |
 
 ## Mandatory Escalation Triggers
-- Any health data model change requested by CTO â†’ escalate to Antigravity before proceeding
-- PMF questions (coach/client, premium tier, integrations) unresolved after 2 briefing cycles â†’ escalate to Antigravity â†’ Danny
+- Any client data model change requested by CTO â†’ escalate to Antigravity before proceeding
+- PMF questions (advisor/client, premium tier, integrations) unresolved after 2 briefing cycles â†’ escalate to Antigravity â†’ Danny
 - CTO AI recommendation framing changes â†’ escalate (legal risk)
 - Stripe billing changes â†’ stage for human execution only â€” never auto-execute
 - CTO `status = error` â†’ flag to Antigravity (pgvector insight pipeline at risk)
