@@ -42,7 +42,13 @@ export const describeDb = describe.skipIf(!dbAvailable)
 
 /** Tables the harness owns/resets between tests. Order is not significant
  *  because we TRUNCATE with CASCADE, but `tenants` is re-seeded afterwards. */
-const RESET_TABLES = ['kpis', 'ai_action_log', 'event_log'] as const
+const RESET_TABLES = [
+  'kpis',
+  'ai_action_log',
+  'event_log',
+  'hub_users',
+  'agent_memory',
+] as const
 
 let _sql: ReturnType<typeof postgres> | null = null
 let _migrated = false
@@ -123,10 +129,57 @@ export async function seedKpi(input: {
 }
 
 /**
+ * Insert one `ai_action_log` row directly (bypassing the redaction mapper) and
+ * return its id. An explicit `createdAt` makes newest-first ordering tests
+ * deterministic — rows inserted in the same millisecond would otherwise tie.
+ */
+export async function seedAiAction(input: {
+  userEmail: string
+  actionType?: string
+  actor?: string
+  status?: string
+  intent?: string | null
+  requestId?: string | null
+  createdAt?: Date
+}): Promise<string> {
+  const sql = getSql()
+  const rows = await sql<{ id: string }[]>`
+    INSERT INTO ai_action_log (user_email, actor, action_type, intent, request_id, status, created_at)
+    VALUES (
+      ${input.userEmail.toLowerCase().trim()},
+      ${input.actor ?? 'ai'},
+      ${input.actionType ?? 'gmail_send'},
+      ${input.intent ?? null},
+      ${input.requestId ?? null},
+      ${input.status ?? 'success'},
+      ${input.createdAt ?? new Date()}
+    )
+    RETURNING id
+  `
+  return rows[0].id
+}
+
+/* Vitest runs test FILES in parallel workers, but they all share the single
+ * test database — one suite's TRUNCATE would race another suite's inserts.
+ * A session-level advisory lock serializes DB-backed suites: the first
+ * `resetDb()` in a worker takes the lock and holds it until `closeDb()`
+ * (or worker exit) releases it, so suites run one at a time while pure
+ * suites stay fully parallel. */
+const SUITE_LOCK_KEY = 727272
+let _suiteLocked = false
+
+async function acquireSuiteLock(): Promise<void> {
+  if (_suiteLocked) return
+  await getSql()`SELECT pg_advisory_lock(${SUITE_LOCK_KEY})`
+  _suiteLocked = true
+}
+
+/**
  * Truncate the harness-owned tables and restore the base seed so each test
  * starts from a deterministic, empty-but-seeded state (no flakiness).
  */
 export async function resetDb(): Promise<void> {
+  await acquireSuiteLock()
   const sql = getSql()
   await sql.unsafe(
     `TRUNCATE TABLE ${RESET_TABLES.join(', ')} RESTART IDENTITY CASCADE`,
@@ -140,9 +193,14 @@ export async function withCleanDb<T>(fn: () => Promise<T>): Promise<T> {
   return fn()
 }
 
-/** Close the shared client. Call from an afterAll if a suite needs teardown. */
+/** Close the shared client (releasing the suite lock). Call from an afterAll
+ *  if a suite needs teardown. */
 export async function closeDb(): Promise<void> {
   if (_sql) {
+    if (_suiteLocked) {
+      await _sql`SELECT pg_advisory_unlock(${SUITE_LOCK_KEY})`.catch(() => {})
+      _suiteLocked = false
+    }
     await _sql.end({ timeout: 5 })
     _sql = null
   }
