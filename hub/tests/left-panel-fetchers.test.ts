@@ -26,11 +26,26 @@ function mockFetchResponse({ ok, status, body }: { ok: boolean; status: number; 
 }
 
 describe('useKPIData fetcher (F2)', () => {
-  beforeEach(() => vi.restoreAllMocks())
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    signInMock.mockClear()
+  })
 
   it('throws a status-tagged error on 401', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => mockFetchResponse({ ok: false, status: 401, body: { error: 'nope' } })))
     await expect(kpiFetcher('/api/kpis')).rejects.toMatchObject({ status: 401 })
+  })
+
+  it('triggers signIn(google) on a 401 { reauth: true } (NS-6 reauth contract)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => mockFetchResponse({ ok: false, status: 401, body: { reauth: true } })))
+    await expect(kpiFetcher('/api/kpis')).rejects.toMatchObject({ status: 401 })
+    expect(signInMock).toHaveBeenCalledWith('google')
+  })
+
+  it('does NOT call signIn when the 401 says reauth:false', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => mockFetchResponse({ ok: false, status: 401, body: { reauth: false } })))
+    await expect(kpiFetcher('/api/kpis')).rejects.toMatchObject({ status: 401 })
+    expect(signInMock).not.toHaveBeenCalled()
   })
 
   it('throws a status-tagged error on 500', async () => {

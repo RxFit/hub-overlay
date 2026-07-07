@@ -1,20 +1,28 @@
 'use client'
 
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { extractEmail, replySubject } from '@/lib/email-address'
 
 /**
  * useGmailInbox — the Gmail inbox data/logic extracted from GoogleChatPanel's
- * GmailView (NS-5). This is a behavior-preserving MOVE: the handler bodies below
- * are byte-equivalent to the ones that used to live inline in GmailView —
- * including the single `refreshInbox` path, the 60s poll + visibilitychange
- * pause (#28), the `replySubject` reply subject (#25), and the optimistic reply
- * append. Only the seam changed: state + handlers live here and are returned for
- * the presentational GmailView to render, so a background poll can refresh the
- * list while a thread is open or the user is composing without disturbing them.
+ * GmailView (NS-5), now backed by TanStack Query (NS-6).
  *
- * INPUT: `onUnreadCount` — emitted with the inbox unread count on every refresh
- * (mount, post-send, and poll all flow through the single `refreshInbox`).
+ * The inbox thread-list read runs on `useQuery` with `refetchInterval: 60_000`
+ * and `refetchOnWindowFocus: true` — this REPLACES the hand-rolled `setInterval`
+ * + `visibilitychange` polling from #28. react-query pauses the interval while
+ * the tab is hidden by default and re-fetches on focus, so the #28 behavior
+ * (don't hammer a backgrounded tab; refresh on return) is preserved by the
+ * library instead of by bespoke plumbing.
+ *
+ * CRUCIALLY (the #28 guarantee): `selectedThread`, `isComposing`, and the
+ * compose/reply draft fields remain LOCAL component state — they are NOT in the
+ * query cache. A background list refetch therefore cannot disturb an open thread
+ * or an in-progress compose draft. The unread count is emitted via an effect on
+ * the query `data` (react-query v5 removed `onSuccess` on useQuery).
+ *
+ * INPUT: `onUnreadCount` — emitted with the inbox unread count whenever the
+ * query resolves fresh data (mount, focus, 60s poll, and post-send refetch).
  */
 
 export interface GmailThread {
@@ -66,9 +74,11 @@ export interface UseGmailInboxOptions {
 }
 
 export function useGmailInbox({ onUnreadCount }: UseGmailInboxOptions) {
+  // Thread list mirrors the query cache but stays LOCAL so `openThread` can
+  // optimistically mark a thread read; a background refetch resyncs it from the
+  // server (same as the pre-NS-6 poll overwrote the list wholesale).
   const [threads, setThreads] = useState<GmailThread[]>([])
   const [selectedThread, setSelectedThread] = useState<SelectedThread | null>(null)
-  const [loading, setLoading] = useState(true)
   const [threadLoading, setThreadLoading] = useState(false)
   const [reply, setReply] = useState('')
   const [sending, setSending] = useState(false)
@@ -79,43 +89,33 @@ export function useGmailInbox({ onUnreadCount }: UseGmailInboxOptions) {
   const [composeSubject, setComposeSubject] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
 
-  // Single refresh path for the inbox thread list. Only touches the list +
-  // unread count — never selectedThread/compose/reply — so a background poll
-  // can safely run while a thread is open or the user is composing.
-  const refreshInbox = useCallback(() => {
-    return fetch('/api/google/gmail?view=inbox&maxResults=20')
-      .then(r => r.json())
-      .then(d => {
-        const { threads: nextThreads, unreadCount } = parseInboxResponse(d)
-        setThreads(nextThreads)
-        onUnreadCount(unreadCount)
-      })
-      .catch(() => {})
-  }, [onUnreadCount])
+  // Inbox thread-list read on TanStack Query. `refetchInterval` (paused while
+  // the tab is hidden) + `refetchOnWindowFocus` replace the manual #28 poll.
+  // The queryFn only reads the list + unread count — it never touches
+  // selectedThread/compose/reply, so a background refetch cannot disturb an open
+  // thread or an in-progress draft (the #28 guarantee).
+  const { data, isLoading: loading, refetch } = useQuery({
+    queryKey: ['gmail', 'inbox'],
+    queryFn: async () => {
+      const r = await fetch('/api/google/gmail?view=inbox&maxResults=20')
+      return parseInboxResponse(await r.json())
+    },
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
+  })
 
-  // Initial load on mount.
+  // Emit the fresh list + unread count into local state whenever the query
+  // resolves (mount, 60s poll, focus, post-send refetch). react-query v5 has no
+  // useQuery `onSuccess`, so we derive from `data` in an effect.
   useEffect(() => {
-    refreshInbox().finally(() => setLoading(false))
-  }, [refreshInbox])
+    if (!data) return
+    setThreads(data.threads)
+    onUnreadCount(data.unreadCount)
+  }, [data, onUnreadCount])
 
-  // Lightweight SWR-style polling: refresh every 60s while the tab is visible.
-  // Pause while hidden (don't hammer the Gmail API for a backgrounded tab) and
-  // refresh immediately when the tab becomes visible again.
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (document.visibilityState === 'visible') refreshInbox()
-    }, 60_000)
-
-    const onVisibility = () => {
-      if (document.visibilityState === 'visible') refreshInbox()
-    }
-    document.addEventListener('visibilitychange', onVisibility)
-
-    return () => {
-      clearInterval(interval)
-      document.removeEventListener('visibilitychange', onVisibility)
-    }
-  }, [refreshInbox])
+  // Single refresh path for callers (post-send). Delegates to the query so the
+  // 60s poll and manual refresh share one cache entry.
+  const refreshInbox = () => refetch()
 
   const openThread = async (id: string) => {
     setIsComposing(false)

@@ -35,6 +35,7 @@ const jetBrainsMono = JetBrains_Mono({
 import { getTenantConfig } from '@/lib/tenant'
 import { TenantProvider } from './components/TenantProvider'
 import { Providers } from './components/Providers'
+import { QueryProvider } from './providers'
 
 /* Static metadata — uses default tenant at build time.
    TenantProvider updates document.title at runtime for white-label. */
@@ -85,7 +86,9 @@ export default function RootLayout({
     >
       <body>
         <Providers>
-          <TenantProvider>{children}</TenantProvider>
+          <QueryProvider>
+            <TenantProvider>{children}</TenantProvider>
+          </QueryProvider>
         </Providers>
       </body>
     </html>
