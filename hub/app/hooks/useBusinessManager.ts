@@ -1,6 +1,6 @@
 'use client'
 
-import useSWR from 'swr'
+import { useQuery } from '@tanstack/react-query'
 import type { CEOPulseRecord } from '@/types'
 
 /* ══════════════════════════════════════════════════════════════════════════════
@@ -42,26 +42,23 @@ export function useBusinessManager(orgId?: string): BusinessManagerState {
     ? `/api/paperclip/ceo-pulse?orgId=${encodeURIComponent(orgId)}`
     : '/api/paperclip/ceo-pulse'
 
-  const { data, error, isLoading, mutate } = useSWR<CEOPulseRecord>(
-    url,
-    fetcher,
-    {
-      // Poll every 5 minutes — matches stall detector cadence
-      refreshInterval: 5 * 60 * 1000,
-      revalidateOnFocus: false,
-      // Don't throw on error, return stale data
-      shouldRetryOnError: true,
-      errorRetryCount: 3,
-    }
-  )
+  const { data, error, isLoading, refetch } = useQuery<CEOPulseRecord>({
+    queryKey: ['ceo-pulse', orgId ?? 'default'],
+    queryFn: () => fetcher<CEOPulseRecord>(url),
+    // Poll every 5 minutes — matches stall detector cadence
+    refetchInterval: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    // Retry failures up to 3 times; stale data keeps rendering meanwhile
+    retry: 3,
+  })
 
   return {
     pulse: data ?? null,
     globalHealthPct: data?.globalHealthPct ?? 0,
     orgName: data?.org ?? '',
     isLoading,
-    error,
-    mutate,
+    error: error ?? undefined,
+    mutate: refetch,
   }
 }
 

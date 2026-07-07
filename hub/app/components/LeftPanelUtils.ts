@@ -94,7 +94,7 @@ export function getWeekDays(monday: Date): Date[] {
 }
 
 /**
- * SWR fetcher for the Documents Artifacts tab. Throws a status-tagged error on
+ * Read fetcher for the Documents Artifacts tab. Throws a status-tagged error on
  * !res.ok so a 401/500 surfaces as an auth/error state instead of "empty".
  */
 export async function artifactsFetcher(url: string) {

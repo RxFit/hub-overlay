@@ -10,7 +10,7 @@ export const runtime = 'nodejs'
  *
  * Batched unread-count endpoint (Plan 05 / Change 5). Collapses what used to be
  * a client-side `setInterval` fan-out (N readstate + N messages fetches per
- * tick, bypassing SWR) into a single request. For each requested space it
+ * tick, bypassing the client cache) into a single request. For each requested space it
  * compares the user's `lastReadTime` against the latest messages and returns:
  *
  *   { unread: Record<spaceId, number>, total: number }

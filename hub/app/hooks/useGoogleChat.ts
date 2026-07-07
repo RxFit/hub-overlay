@@ -1,6 +1,6 @@
 'use client'
 
-import useSWR, { useSWRConfig } from 'swr'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, useCallback } from 'react'
 
 /* ── Shared fetcher (reuses the same error contract as useHubData) ── */
@@ -80,11 +80,12 @@ interface SpacesResponse {
 }
 
 export function useSpaces() {
-  const { data, error, isLoading, mutate } = useSWR<SpacesResponse>(
-    '/api/google/chat/spaces',
-    fetcher,
-    { refreshInterval: 120_000, revalidateOnFocus: false }
-  )
+  const { data, error, isLoading, refetch } = useQuery<SpacesResponse>({
+    queryKey: ['chat', 'spaces'],
+    queryFn: () => fetcher<SpacesResponse>('/api/google/chat/spaces'),
+    refetchInterval: 120_000,
+    refetchOnWindowFocus: false,
+  })
 
   const allSpaces = data?.spaces ?? []
   const pinnedNames = getPinnedSpaces()
@@ -98,9 +99,9 @@ export function useSpaces() {
     allSpaces,
     visibleSpaces,
     isLoading,
-    error,
+    error: error ?? undefined,
     missingScope: (error as any)?.code === 'MISSING_SCOPE',
-    refetch: mutate,
+    refetch,
   }
 }
 
@@ -112,22 +113,32 @@ interface MessagesResponse {
   messages: ChatMessage[]
 }
 
-export function useMessages(spaceId: string | null) {
-  const key = spaceId
-    ? `/api/google/chat/messages?spaceId=${encodeURIComponent(spaceId)}&pageSize=50`
-    : null
+/** Cache key for a space's message list — shared with useSendMessage's post-send invalidation. */
+export function messagesQueryKey(spaceId: string) {
+  return ['chat', 'messages', spaceId] as const
+}
 
-  const { data, error, isLoading, mutate } = useSWR<MessagesResponse>(
-    key,
-    fetcher,
-    { refreshInterval: 30_000, revalidateOnFocus: true }
-  )
+export function useMessages(spaceId: string | null) {
+  const { data, error, isLoading, refetch } = useQuery<MessagesResponse>({
+    queryKey: messagesQueryKey(spaceId ?? ''),
+    queryFn: () =>
+      fetcher<MessagesResponse>(
+        `/api/google/chat/messages?spaceId=${encodeURIComponent(spaceId!)}&pageSize=50`
+      ),
+    enabled: !!spaceId,
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+    // Messages are the most latency-sensitive chat read — keep a short focus
+    // dedupe window (mirrors the previous focus-throttle) instead of the
+    // provider-wide 30s staleTime.
+    staleTime: 5_000,
+  })
 
   return {
     messages: data?.messages ?? [],
     isLoading,
-    error,
-    refetch: mutate,
+    error: error ?? undefined,
+    refetch,
   }
 }
 
@@ -136,7 +147,7 @@ export function useMessages(spaceId: string | null) {
    ══════════════════════════════════════════ */
 
 export function useSendMessage() {
-  const { mutate } = useSWRConfig()
+  const queryClient = useQueryClient()
   const [isSending, setIsSending] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
 
@@ -161,9 +172,8 @@ export function useSendMessage() {
         throw new Error(body?.error ?? `Send failed (${res.status})`)
       }
 
-      // Revalidate the messages SWR cache for this space
-      const key = `/api/google/chat/messages?spaceId=${encodeURIComponent(spaceId)}&pageSize=50`
-      await mutate(key)
+      // Revalidate the cached messages for this space
+      await queryClient.invalidateQueries({ queryKey: messagesQueryKey(spaceId) })
       return true
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to send'
@@ -172,7 +182,7 @@ export function useSendMessage() {
     } finally {
       setIsSending(false)
     }
-  }, [mutate])
+  }, [queryClient])
 
   return { send, isSending, sendError, clearError: () => setSendError(null) }
 }
@@ -194,20 +204,21 @@ interface MembersResponse {
 }
 
 export function useSpaceMembers(spaceId: string | null) {
-  const key = spaceId
-    ? `/api/google/chat/members?spaceId=${encodeURIComponent(spaceId)}`
-    : null
-
-  const { data, error, isLoading } = useSWR<MembersResponse>(
-    key,
-    fetcher,
-    { refreshInterval: 300_000, revalidateOnFocus: false } // 5-min cache
-  )
+  const { data, error, isLoading } = useQuery<MembersResponse>({
+    queryKey: ['chat', 'members', spaceId ?? ''],
+    queryFn: () =>
+      fetcher<MembersResponse>(
+        `/api/google/chat/members?spaceId=${encodeURIComponent(spaceId!)}`
+      ),
+    enabled: !!spaceId,
+    refetchInterval: 300_000, // 5-min cache
+    refetchOnWindowFocus: false,
+  })
 
   return {
     members: data?.members ?? [],
     isLoading,
-    error,
+    error: error ?? undefined,
   }
 }
 
@@ -221,10 +232,11 @@ interface UnreadResponse {
 }
 
 /**
- * Builds the single SWR key for the batched unread endpoint from a space set.
- * Exported for unit testing — asserts the hook derives all of its data from one
- * stable, deduped key (Plan 05 / Change 5) instead of a per-space fan-out.
- * Returns `null` (SWR's "skip" sentinel) when there are no spaces.
+ * Builds the single URL (and cache-key discriminator) for the batched unread
+ * endpoint from a space set. Exported for unit testing — asserts the hook
+ * derives all of its data from one stable, deduped key (Plan 05 / Change 5)
+ * instead of a per-space fan-out. Returns `null` (the "skip" sentinel that
+ * disables the query) when there are no spaces.
  */
 export function buildUnreadKey(spaces: ChatSpace[]): string | null {
   const spaceIds = spaces.map(s => s.name).sort()
@@ -234,20 +246,23 @@ export function buildUnreadKey(spaces: ChatSpace[]): string | null {
 }
 
 /**
- * Computes unread counts via a single batched SWR subscription against
+ * Computes unread counts via a single batched query subscription against
  * `/api/google/chat/unread`. The server compares each space's lastReadTime
  * against its latest messages. Polls every 60s (slower than messages, deduped
- * within 30s) and reuses SWR's cache — no raw setInterval, no duplicate
+ * within 30s) and reuses the query cache — no raw setInterval, no duplicate
  * message fetches, and no stale-closure footgun on the spaces array.
  */
 export function useUnreadCounts(spaces: ChatSpace[]) {
   const key = buildUnreadKey(spaces)
 
-  const { data } = useSWR<UnreadResponse>(
-    key,
-    fetcher,
-    { refreshInterval: 60_000, revalidateOnFocus: false, dedupingInterval: 30_000 }
-  )
+  const { data } = useQuery<UnreadResponse>({
+    queryKey: ['chat', 'unread', key ?? ''],
+    queryFn: () => fetcher<UnreadResponse>(key!),
+    enabled: !!key,
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: false,
+    staleTime: 30_000,
+  })
 
   const unreadMap = new Map<string, number>(Object.entries(data?.unread ?? {}))
   const totalUnread = data?.total ?? 0

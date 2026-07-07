@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { mutate } from 'swr'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   detectIntent,
   startInterview,
@@ -73,6 +73,23 @@ export function useChatEngine(options: UseChatEngineOptions) {
     setMobileTab,
     textareaRef,
   } = options
+
+  const queryClient = useQueryClient()
+
+  /**
+   * executeAction historically revalidated read caches by URL key
+   * (`mutate('/api/feed')` etc., from SWR's global mutate). The read layer now
+   * lives on TanStack Query, so map each URL onto its query key and invalidate
+   * — active queries refetch, preserving the old "bare mutate() = revalidate"
+   * semantics at every executeAction callsite.
+   */
+  const invalidateByUrl = useCallback((url: string) => {
+    const urlToQueryKey: Record<string, readonly unknown[]> = {
+      '/api/feed': ['feed'],
+      '/api/companies': ['companies'],
+    }
+    return queryClient.invalidateQueries({ queryKey: urlToQueryKey[url] ?? [url] })
+  }, [queryClient])
 
   // Chat state (lifted so handleChatInject can share it)
   const [messages, setMessages] = useState<ChatMsg[]>([])
@@ -719,7 +736,7 @@ Respond with EXACTLY one of:
 
       const resultMsg = await executeAction(spec, {
         activeCompany: activeCompanyObj,
-        mutate,
+        mutate: invalidateByUrl,
       })
 
       // Replace the "working" message with the result
@@ -736,7 +753,7 @@ Respond with EXACTLY one of:
     } finally {
       setActionExecuting(false)
     }
-  }, [resolveActiveCompany, mutate])
+  }, [resolveActiveCompany, invalidateByUrl])
 
   return {
     // ── State values (read in JSX) ──
