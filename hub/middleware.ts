@@ -1,6 +1,7 @@
 import { getToken } from 'next-auth/jwt'
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
+import { canAccessAdminRoute } from '@/lib/roles'
 
 /**
  * Auth middleware (manual token check instead of withAuth).
@@ -27,9 +28,11 @@ export default async function middleware(req: NextRequest) {
 
   const role = token.role as string | undefined
 
-  // Protect /admin route — only admin and superadmin can access
+  // Protect /admin route — only admin and superadmin can access (guard predicate
+  // is the unit-tested canAccessAdminRoute; behavior is identical to the prior
+  // inline check).
   if (pathname.startsWith('/admin')) {
-    if (!role || !['admin', 'superadmin'].includes(role)) {
+    if (!canAccessAdminRoute(role)) {
       return NextResponse.redirect(new URL('/', req.url))
     }
   }

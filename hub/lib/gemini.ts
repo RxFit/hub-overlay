@@ -2,6 +2,7 @@ import { GoogleGenerativeAI, type Content } from '@google/generative-ai'
 import type { ChatMessage } from '@/types'
 import { SKILL_CATALOG_PROMPT } from './skills'
 import { fenceUntrusted, UNTRUSTED_CONTENT_POLICY } from './prompt-safety'
+import { IDLE_TIMEOUT_MS, CONNECT_TIMEOUT_MS } from './timeout-config'
 
 /* Lazy-initialized so the API key is read at runtime, not build time.
    Prevents empty-key 403s when Railway injects env vars after the build step. */
@@ -351,11 +352,13 @@ export function friendlyModelError(err: unknown): string {
 }
 
 /**
- * Wraps an async iterator with a per-step idle watchdog. The existing 60 s
- * connect timeout only covers *opening* the stream; a model that connects then
- * stalls mid-stream would otherwise hang to the route's maxDuration (120 s),
+ * Wraps an async iterator with a per-step idle watchdog. The CONNECT_TIMEOUT_MS
+ * (45 s) connect timeout only covers *opening* the stream; a model that connects
+ * then stalls mid-stream would otherwise hang to the route's maxDuration (120 s),
  * blowing past the client's 45 s abort. This races each `.next()` against an
- * idle timer and tears the underlying stream down on early exit.
+ * IDLE_TIMEOUT_MS (30 s) idle timer and tears the underlying stream down on early
+ * exit. The full timeout ladder (idle < connect <= client < platform cap) and its
+ * ordering rationale live in lib/timeout-config.ts.
  */
 export async function* withIdleWatchdog<T>(
   iterator: AsyncIterator<T>,
@@ -451,7 +454,7 @@ export async function* streamChat(
 
         // Idle watchdog guards against a connected-then-stalled Claude stream.
         const claudeIter = streamClaudeChat(messages, systemPrompt, { model: claudeModel })[Symbol.asyncIterator]()
-        for await (const chunk of withIdleWatchdog(claudeIter, 30_000, claudeModel)) {
+        for await (const chunk of withIdleWatchdog(claudeIter, IDLE_TIMEOUT_MS, claudeModel)) {
           claudeEmitted = true
           yield chunk
         }
@@ -527,13 +530,17 @@ async function* streamGeminiWithFallback(
 
       const chat = model.startChat({ history: contents })
 
-      // HARDENED: 60-second timeout on initial stream connection.
+      // HARDENED: CONNECT_TIMEOUT_MS (45s) ceiling on initial stream connection —
+      // held at/under the client abort so the server never outlives the browser
+      // (see lib/timeout-config.ts). Previously 60s, which exceeded the 45s client
+      // abort and Claude's own 45s per-request ceiling; unified to 45s so both
+      // providers behave identically and the ladder stays monotonic.
       // The timer is cleared once the race settles so a successful connect
-      // doesn't leave a 60 s timer pending (one per call) until it fires.
+      // doesn't leave a timer pending (one per call) until it fires.
       const resultPromise = chat.sendMessageStream(lastMessage.content)
       let connectTimer: ReturnType<typeof setTimeout> | undefined
       const timeoutPromise = new Promise<never>((_, reject) => {
-        connectTimer = setTimeout(() => reject(new Error(`Gemini stream timeout (${modelName})`)), 60_000)
+        connectTimer = setTimeout(() => reject(new Error(`Gemini stream timeout (${modelName})`)), CONNECT_TIMEOUT_MS)
       })
       let result: Awaited<typeof resultPromise>
       try {
@@ -551,7 +558,7 @@ async function* streamGeminiWithFallback(
 
       // Idle watchdog guards against a connected-then-stalled Gemini stream.
       const streamIter = result.stream[Symbol.asyncIterator]()
-      for await (const chunk of withIdleWatchdog(streamIter, 30_000, modelName)) {
+      for await (const chunk of withIdleWatchdog(streamIter, IDLE_TIMEOUT_MS, modelName)) {
         const text = chunk.text()
         if (text) {
           emittedAny = true

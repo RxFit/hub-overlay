@@ -146,3 +146,14 @@ export function canAssignRole(callerRole: string, targetRole: string): boolean {
   if (callerRole === 'admin') return ['staff', 'onboarding'].includes(targetRole)
   return false
 }
+
+/**
+ * The single predicate that decides who may reach the /admin surface: only
+ * `admin` and `superadmin`. Extracted as a pure function so the guard can be
+ * unit-tested directly (middleware.ts and the admin/KPI API routes are otherwise
+ * hard to exercise). Any other role — including `staff`, `onboarding`, unknown
+ * strings, and undefined/null — is denied.
+ */
+export function canAccessAdminRoute(role: string | null | undefined): boolean {
+  return role === 'admin' || role === 'superadmin'
+}

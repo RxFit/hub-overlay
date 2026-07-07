@@ -1,4 +1,5 @@
 import type { ChatMessage } from '@/types'
+import { CONNECT_TIMEOUT_MS } from './timeout-config'
 
 /* ══════════════════════════════════════════════════════════════════════════════
    CLAUDE FABLE 5 API CLIENT
@@ -76,8 +77,10 @@ export async function claudeChat(
   const { model = CLAUDE_PRIMARY_MODEL, maxTokens = 2048, temperature = 0.3 } = options
   const apiKey = getApiKey()
 
+  // Per-request ceiling — shared with the Gemini connect race via timeout-config
+  // so both providers stay at/under the client abort (see lib/timeout-config.ts).
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 45_000)
+  const timeoutId = setTimeout(() => controller.abort(), CONNECT_TIMEOUT_MS)
 
   try {
     const res = await fetch(ANTHROPIC_API_URL, {
@@ -120,8 +123,9 @@ export async function* streamClaudeChat(
   const { model = CLAUDE_PRIMARY_MODEL, maxTokens = 4096, temperature = 0.7 } = options
   const apiKey = getApiKey()
 
+  // Per-request ceiling shared via timeout-config (see lib/timeout-config.ts).
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 45_000)
+  const timeoutId = setTimeout(() => controller.abort(), CONNECT_TIMEOUT_MS)
 
   try {
     const res = await fetch(ANTHROPIC_API_URL, {
