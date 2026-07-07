@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useGmailInbox, parseInboxResponse } from './useGmailInbox'
 
 // React 18 concurrent rendering requires an act environment flag.
@@ -9,13 +10,16 @@ import { useGmailInbox, parseInboxResponse } from './useGmailInbox'
 
 /**
  * Minimal renderHook — @testing-library/react is not a dependency, so we drive
- * the hook through a throwaway component with react-dom/client + act. Enough to
- * assert the refresh path and the poll/visibility effect cleanup without pulling
- * in a new test dep.
+ * the hook through a throwaway component with react-dom/client + act. The hook
+ * is now TanStack Query-backed (NS-6), so the probe is wrapped in a fresh
+ * QueryClientProvider (retries off, no gc) per render.
  */
 function renderHook<T>(useHook: () => T) {
   const result: { current: T } = { current: undefined as unknown as T }
   const container = document.createElement('div')
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  })
   let root: Root
 
   function Probe() {
@@ -25,7 +29,7 @@ function renderHook<T>(useHook: () => T) {
 
   act(() => {
     root = createRoot(container)
-    root.render(createElement(Probe))
+    root.render(createElement(QueryClientProvider, { client }, createElement(Probe)))
   })
 
   return {
@@ -34,9 +38,13 @@ function renderHook<T>(useHook: () => T) {
   }
 }
 
-const flush = () => act(async () => { await Promise.resolve() })
+// Let react-query's async queryFn + the derive-from-data effect settle.
+const settle = () => act(async () => {
+  for (let i = 0; i < 6; i++) await Promise.resolve()
+  await new Promise(r => setTimeout(r, 0))
+})
 
-function inboxResponse(body: unknown) {
+function jsonResponse(body: unknown) {
   return { ok: true, json: async () => body } as unknown as Response
 }
 
@@ -56,31 +64,26 @@ describe('parseInboxResponse (unread mapping)', () => {
   })
 })
 
-describe('useGmailInbox', () => {
+describe('useGmailInbox (TanStack Query-backed)', () => {
   const originalFetch = global.fetch
-
-  beforeEach(() => {
-    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
-  })
 
   afterEach(() => {
     vi.restoreAllMocks()
-    vi.useRealTimers()
     global.fetch = originalFetch
   })
 
-  it('refreshInbox updates threads + unread WITHOUT resetting selectedThread/isComposing/compose (#28)', async () => {
+  it('a background refetch updates threads + unread WITHOUT resetting the compose draft (#28)', async () => {
     const t1 = { id: 't1', subject: 's1', from: 'a@x.com', date: 'd', snippet: '1', isUnread: true, messageCount: 1 }
     const t2 = { id: 't2', subject: 's2', from: 'b@x.com', date: 'd', snippet: '2', isUnread: false, messageCount: 1 }
 
-    const fetchMock = vi.fn().mockResolvedValue(inboxResponse({ threads: [t1], unreadCount: 3 }))
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ threads: [t1], unreadCount: 3 }))
     global.fetch = fetchMock as unknown as typeof fetch
 
     const onUnreadCount = vi.fn()
     const { result, unmount } = renderHook(() => useGmailInbox({ onUnreadCount }))
-    await flush()
+    await settle()
 
-    // Mount refresh landed the initial list + unread count.
+    // Mount query landed the initial list + unread count.
     expect(result.current.threads).toEqual([t1])
     expect(onUnreadCount).toHaveBeenLastCalledWith(3)
     expect(result.current.loading).toBe(false)
@@ -94,9 +97,11 @@ describe('useGmailInbox', () => {
     })
     expect(result.current.isComposing).toBe(true)
 
-    // A background refresh returns a longer list + new unread count.
-    fetchMock.mockResolvedValue(inboxResponse({ threads: [t1, t2], unreadCount: 5 }))
+    // A background refetch (the query's manual refresh path) returns a longer
+    // list + new unread count.
+    fetchMock.mockResolvedValue(jsonResponse({ threads: [t1, t2], unreadCount: 5 }))
     await act(async () => { await result.current.refreshInbox() })
+    await settle()
 
     // List + unread updated…
     expect(result.current.threads).toEqual([t1, t2])
@@ -110,31 +115,55 @@ describe('useGmailInbox', () => {
     unmount()
   })
 
-  it('polls every 60s while visible and cleans up interval + visibility listener on unmount', async () => {
-    vi.useFakeTimers()
-    const fetchMock = vi.fn().mockResolvedValue(inboxResponse({ threads: [], unreadCount: 0 }))
+  it('a background refetch does NOT disturb an open thread (#28)', async () => {
+    const t1 = { id: 't1', subject: 's1', from: 'a@x.com', date: 'd', snippet: '1', isUnread: true, messageCount: 1 }
+    const t2 = { id: 't2', subject: 's2', from: 'b@x.com', date: 'd', snippet: '2', isUnread: false, messageCount: 1 }
+    const openThreadPayload = {
+      thread: {
+        id: 't1',
+        messages: [
+          { id: 'm1', from: 'a@x.com', to: 'me@x.com', subject: 's1', date: 'd', body: 'hi', isUnread: true, inReplyTo: '' },
+        ],
+      },
+    }
+
+    // Route by URL: threadId → the opened thread; otherwise → the inbox list.
+    const fetchMock = vi.fn((url: string) =>
+      Promise.resolve(
+        String(url).includes('threadId=')
+          ? jsonResponse(openThreadPayload)
+          : jsonResponse({ threads: [t1], unreadCount: 3 }),
+      ),
+    )
     global.fetch = fetchMock as unknown as typeof fetch
 
-    const removeSpy = vi.spyOn(document, 'removeEventListener')
     const onUnreadCount = vi.fn()
+    const { result, unmount } = renderHook(() => useGmailInbox({ onUnreadCount }))
+    await settle()
 
-    const { unmount } = renderHook(() => useGmailInbox({ onUnreadCount }))
-    // Mount refresh.
-    await act(async () => { await Promise.resolve() })
-    const afterMount = fetchMock.mock.calls.length
-    expect(afterMount).toBeGreaterThanOrEqual(1)
+    // Open a thread — this is LOCAL state, never in the query cache.
+    await act(async () => { await result.current.openThread('t1') })
+    await settle()
+    expect(result.current.selectedThread?.id).toBe('t1')
+    expect(result.current.selectedThread?.messages).toHaveLength(1)
 
-    // One poll tick fires exactly one refresh while the tab is visible.
-    await act(async () => { vi.advanceTimersByTime(60_000) })
-    expect(fetchMock.mock.calls.length).toBe(afterMount + 1)
+    // A background refetch returns a longer inbox list.
+    fetchMock.mockImplementation((url: string) =>
+      Promise.resolve(
+        String(url).includes('threadId=')
+          ? jsonResponse(openThreadPayload)
+          : jsonResponse({ threads: [t1, t2], unreadCount: 5 }),
+      ),
+    )
+    await act(async () => { await result.current.refreshInbox() })
+    await settle()
 
-    // Unmount tears down the interval and the visibilitychange listener…
+    // List refreshed…
+    expect(result.current.threads).toEqual([t1, t2])
+    // …the open thread is still open and intact (the #28 guarantee).
+    expect(result.current.selectedThread?.id).toBe('t1')
+    expect(result.current.selectedThread?.messages).toHaveLength(1)
+
     unmount()
-    expect(removeSpy).toHaveBeenCalledWith('visibilitychange', expect.any(Function))
-
-    // …so further timer advances trigger no more fetches (no leak).
-    const afterUnmount = fetchMock.mock.calls.length
-    await act(async () => { vi.advanceTimersByTime(180_000) })
-    expect(fetchMock.mock.calls.length).toBe(afterUnmount)
   })
 })
