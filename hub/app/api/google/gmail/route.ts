@@ -11,7 +11,10 @@ import {
 import { clampInt } from '@/lib/num'
 import { extractEmail } from '@/lib/email-address'
 import { GoogleGmailSendSchema } from '@/lib/zod-schemas'
-import { requireAiGate } from '@/lib/requireGate'
+import { requireAiGate, AI_INTENT_HEADER, GATE_TOKEN_HEADER } from '@/lib/requireGate'
+import { recordAiAction } from '@/lib/ai-audit'
+import { checkActionLimit } from '@/lib/rate-limit'
+import { newRequestId } from '@/lib/observability'
 
 export const runtime = 'nodejs'
 
@@ -160,6 +163,34 @@ export async function POST(req: NextRequest) {
   const from = session.user.email ?? ''
   const subjectLine = stripHeader(subject || (cleanInReplyTo ? `Re: ${cleanInReplyTo}` : '(no subject)'))
 
+  // ── AI-action audit trail (NS-2) ──
+  // When the request is AI-originated (X-AI-Intent present), every send writes
+  // exactly one append-only provenance row (success or failure). Manual
+  // composer sends carry no AI marker and are not audited or per-action limited.
+  // `target` holds routing metadata only — never the subject or message body.
+  const aiIntent = req.headers.get(AI_INTENT_HEADER)
+  const isAiAction = aiIntent !== null
+  const auditBase = {
+    userEmail: from || session.user.email || null,
+    actor: 'ai' as const,
+    actionType: 'gmail_send' as const,
+    target: { to: cleanTo, ...(threadId ? { threadId } : {}) },
+    intent: aiIntent,
+    gateToken: req.headers.get(GATE_TOKEN_HEADER),
+    requestId: newRequestId(),
+  }
+
+  if (isAiAction) {
+    const limit = checkActionLimit(from, 'gmail_send')
+    if (!limit.allowed) {
+      await recordAiAction({ ...auditBase, status: 'failed', error: 'rate_limited' })
+      return NextResponse.json(
+        { error: 'Rate limit exceeded for gmail_send. Please try again shortly.' },
+        { status: 429, headers: { 'Retry-After': String(limit.retryAfterSec ?? 60) } }
+      )
+    }
+  }
+
   // Build RFC 2822 email
   const emailLines = [
     `From: ${from}`,
@@ -189,8 +220,16 @@ export async function POST(req: NextRequest) {
       }).catch(() => {})
     }
 
+    if (isAiAction) await recordAiAction({ ...auditBase, status: 'success' })
     return NextResponse.json({ sent: true, messageId: sent.id, threadId: sent.threadId })
   } catch (err) {
+    if (isAiAction) {
+      await recordAiAction({
+        ...auditBase,
+        status: 'failed',
+        error: err instanceof Error ? err.message : 'unknown error',
+      })
+    }
     return googleApiErrorResponse(err)
   }
 }

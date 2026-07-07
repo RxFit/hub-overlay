@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, uniqueIndex, jsonb, integer, vector, index } from 'drizzle-orm/pg-core'
+import { pgTable, text, timestamp, uniqueIndex, jsonb, integer, vector, index, uuid } from 'drizzle-orm/pg-core'
 
 /**
  * Hub database schema — Railway Postgres
@@ -158,3 +158,35 @@ export const toolArtifacts = pgTable('tool_artifacts', {
   createdAt:      timestamp('created_at').defaultNow().notNull(),
   updatedAt:      timestamp('updated_at').defaultNow().notNull(),
 })
+
+/* ── AI Action Log (append-only provenance for AI-initiated actions) ────── */
+/**
+ * Every AI-initiated side-effecting action (gmail_send / chat_post /
+ * task_create / …) writes exactly one append-only row here — success OR
+ * failure — so "the AI sent X / created Y" is accountable after the fact.
+ *
+ * PROVENANCE, NOT CONTENT: `target` holds only routing metadata (recipient /
+ * space / taskId), NEVER message bodies. `gate_token_id` is a non-reversible
+ * fingerprint of the quality-gate token, NEVER the token itself. See
+ * lib/ai-audit.ts (toAuditRow) for the redaction contract this table relies on.
+ */
+export const aiActionLog = pgTable(
+  'ai_action_log',
+  {
+    id:          uuid('id').primaryKey().defaultRandom(),
+    createdAt:   timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    userEmail:   text('user_email'),                    // actor's email (nullable — best-effort)
+    actor:       text('actor').notNull().default('ai'), // 'ai' | 'user'
+    actionType:  text('action_type').notNull(),         // 'gmail_send' | 'chat_post' | 'task_create' | …
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    target:      jsonb('target').$type<Record<string, any>>(), // recipient/space/taskId only — NO bodies
+    intent:      text('intent'),                        // declared x-ai-intent
+    gateTokenId: text('gate_token_id'),                 // token fingerprint ONLY — never the full token
+    requestId:   text('request_id'),                    // correlates with observability telemetry
+    status:      text('status').notNull(),              // 'success' | 'failed'
+    error:       text('error'),                         // failure reason (e.g. 'rate_limited'), nullable
+  },
+  (t) => ({
+    userCreatedIdx: index('ai_action_log_user_created_idx').on(t.userEmail, t.createdAt.desc()),
+  })
+)
