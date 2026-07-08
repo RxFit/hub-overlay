@@ -61,6 +61,7 @@ const FeedCard = memo(function FeedCard({
 }) {
   const typeKey = (item as any).type as FeedItemType | undefined
   const feedType = typeKey ?? 'info'
+  const isAiAction = item.source === 'ai_action'
   const icon = TYPE_ICONS[feedType]
   const label = TYPE_LABELS[feedType]
   const relTime = formatRelativeTimestamp(item.timestamp)
@@ -71,6 +72,7 @@ const FeedCard = memo(function FeedCard({
     <button
       className="feed-card"
       data-feed-type={feedType}
+      data-feed-source={item.source}
       role="listitem"
       onClick={() => onInjectChat(`Tell me more about: ${item.title}`)}
       aria-label={`${label}: ${item.title}. ${truncatedDesc}. ${relTime}`}
@@ -97,9 +99,9 @@ const FeedCard = memo(function FeedCard({
         <div className="feed-card__time">{relTime}</div>
       </div>
 
-      {/* Source badge */}
+      {/* Source badge — AI-initiated actions get a distinct "AI" chip (NS-9) */}
       {item.source && (
-        <span className="feed-card__source">{item.source}</span>
+        <span className="feed-card__source">{isAiAction ? 'AI' : item.source}</span>
       )}
     </button>
   )

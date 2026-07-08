@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { getCompanies, getIssues, getAgents } from '@/lib/paperclip'
+import { listAiActions } from '@/lib/ai-audit'
+import { aiActionToFeedItem } from '@/lib/ai-action-feed'
 import type { FeedItem } from '@/types'
 
 export const runtime = 'nodejs'
@@ -22,6 +24,15 @@ export async function GET() {
   }
 
   const feed: FeedItem[] = []
+
+  // AI-action provenance (NS-9): the caller's OWN recent AI actions, fetched
+  // in parallel with Paperclip. Best-effort — a DB failure must never blank
+  // the feed, matching the route's per-source `.catch(() => [])` resilience.
+  // (listAiActions normalizes the email's case itself.)
+  const email = typeof user.email === 'string' ? user.email : null
+  const aiActionsPromise = email
+    ? listAiActions({ userEmail: email, limit: 15 }).catch(() => [])
+    : Promise.resolve([])
 
   try {
     let companies = await getCompanies()
@@ -92,8 +103,6 @@ export async function GET() {
       })
     }
 
-    // Sort by timestamp descending (newest first)
-    feed.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
   } catch (err) {
     // Paperclip unavailable — return empty feed with system message
     const message = err instanceof Error ? err.message : 'Unknown error'
@@ -108,6 +117,13 @@ export async function GET() {
       icon: 'alert-triangle',
     })
   }
+
+  // Merge the caller's AI actions (already caught → [] on DB failure), then
+  // keep the feed's existing contract: sorted by timestamp descending.
+  for (const action of await aiActionsPromise) {
+    feed.push(aiActionToFeedItem(action))
+  }
+  feed.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
 
   return NextResponse.json({ feed })
 }

@@ -4083,6 +4083,19 @@ a:hover .rx-arrow {
   border-color: rgba(197, 160, 89, 0.2);
 }
 
+/* ── AI-action provenance cards (NS-9) — violet accent on the "AI" chip ── */
+.feed-card[data-feed-source="ai_action"] .feed-card__source {
+  color: #a99bdd;
+  background: rgba(139, 124, 200, 0.1);
+  border-color: rgba(139, 124, 200, 0.25);
+}
+
+[data-theme="light"] .feed-card[data-feed-source="ai_action"] .feed-card__source {
+  color: #5d4ba8;
+  background: rgba(139, 124, 200, 0.12);
+  border-color: rgba(139, 124, 200, 0.3);
+}
+
 /* ── Feed Filter Bar ── */
 .feed-filter-bar {
   display: flex;
