@@ -68,6 +68,26 @@ describeDb('my repository/route — DB-backed', () => {
 | `getSql()` | The raw `postgres` client for direct assertions. |
 | `closeDb()` | Close the shared client (use in `afterAll`). |
 
+## Coverage scope & ratchet (NS-8 / NS-11)
+
+`npm run test:coverage` enforces ratcheting floors in
+[`vitest.config.ts`](../vitest.config.ts). What is measured (NS-11):
+
+- **Included:** `lib/**`, `app/api/**`, and `app/hooks/**` (hooks were added in
+  NS-11 once the NS-5–NS-7 hook suites made them genuinely tested territory).
+- **Excluded:** test files, `lib/schema.ts` (generated shapes),
+  `app/hooks/query-test-utils.ts` (test infrastructure), and exactly one product
+  file — `app/hooks/useChatEngine.ts`, the streaming chat engine (SSE/DOM/abort
+  plumbing, exercised by the Playwright e2e flows; unit-hostile). It is the only
+  documented exclusion; remove it if the engine ever grows a unit seam.
+- **Floors (as of NS-11):** lines/statements **45**, branches **79**, functions
+  **67** — set ~2 points under the measured **local, DB-skipped** run
+  (47.00 / 81.14 / 69.29), which is the binding lower bound: CI runs the DB
+  suites too and always measures higher. Never lower a floor; raise them as
+  real coverage lands.
+- `app/components/**` stays unmeasured on purpose (JSX-heavy, e2e territory) —
+  widening to it would turn the ratchet into noise.
+
 ## Notes
 
 - Route handlers read `DATABASE_URL` lazily via `@/lib/db`, so simply having it
