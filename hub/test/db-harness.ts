@@ -140,18 +140,22 @@ export async function seedAiAction(input: {
   status?: string
   intent?: string | null
   requestId?: string | null
+  target?: Record<string, unknown> | null
+  error?: string | null
   createdAt?: Date
 }): Promise<string> {
   const sql = getSql()
   const rows = await sql<{ id: string }[]>`
-    INSERT INTO ai_action_log (user_email, actor, action_type, intent, request_id, status, created_at)
+    INSERT INTO ai_action_log (user_email, actor, action_type, target, intent, request_id, status, error, created_at)
     VALUES (
       ${input.userEmail.toLowerCase().trim()},
       ${input.actor ?? 'ai'},
       ${input.actionType ?? 'gmail_send'},
+      ${input.target ? JSON.stringify(input.target) : null},
       ${input.intent ?? null},
       ${input.requestId ?? null},
       ${input.status ?? 'success'},
+      ${input.error ?? null},
       ${input.createdAt ?? new Date()}
     )
     RETURNING id

@@ -184,7 +184,7 @@ export interface TenantConfig {
 
 /* ── Activity Feed Types ── */
 
-export type FeedSource = 'paperclip' | 'google-tasks' | 'google-calendar' | 'google-drive' | 'system'
+export type FeedSource = 'paperclip' | 'google-tasks' | 'google-calendar' | 'google-drive' | 'system' | 'ai_action'
 export type FeedItemType = 'completed' | 'in_progress' | 'needs_you' | 'info'
 
 export interface FeedItem {
