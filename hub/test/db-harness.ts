@@ -163,6 +163,33 @@ export async function seedAiAction(input: {
   return rows[0].id
 }
 
+/**
+ * Insert one `event_log` row directly — used to seed persisted telemetry
+ * (`telemetry:*` rows, NS-10) without going through the observability sink.
+ * An explicit `createdAt` makes window-filtering tests deterministic.
+ */
+export async function seedTelemetryEvent(input: {
+  eventType: string
+  payload?: Record<string, unknown> | null
+  actor?: string
+  correlationId?: string | null
+  tenantId?: string
+  createdAt?: Date
+}): Promise<void> {
+  const sql = getSql()
+  await sql`
+    INSERT INTO event_log (tenant_id, event_type, actor, payload, correlation_id, created_at)
+    VALUES (
+      ${input.tenantId ?? 'rxfit'},
+      ${input.eventType},
+      ${input.actor ?? 'system'},
+      ${input.payload ? JSON.stringify(input.payload) : null},
+      ${input.correlationId ?? null},
+      ${input.createdAt ?? new Date()}
+    )
+  `
+}
+
 /* Vitest runs test FILES in parallel workers, but they all share the single
  * test database — one suite's TRUNCATE would race another suite's inserts.
  * A session-level advisory lock serializes DB-backed suites: the first

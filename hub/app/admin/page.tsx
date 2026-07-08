@@ -178,6 +178,34 @@ export default function AdminPage() {
       </header>
 
       <main className="admin-main">
+        {/* Admin tools nav — sub-dashboards live under /admin/* */}
+        <nav aria-label="Admin tools" style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: 'var(--space-4)' }}>
+          {[
+            { href: '/admin/ai-health', label: '⚡ AI Health' },
+            { href: '/admin/auditor', label: '🛡️ Auditor' },
+            { href: '/admin/knowledge', label: '📚 Knowledge' },
+          ].map(tool => (
+            <button
+              key={tool.href}
+              onClick={() => router.push(tool.href)}
+              aria-label={`Open ${tool.label.replace(/^\S+\s/, '')}`}
+              style={{
+                background: 'none',
+                border: '1px solid var(--border)',
+                color: 'var(--text-muted)',
+                borderRadius: '8px',
+                padding: '6px 14px',
+                fontSize: '0.75rem',
+                cursor: 'pointer',
+                fontFamily: 'var(--font-mono)',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              {tool.label}
+            </button>
+          ))}
+        </nav>
+
         {error && (
           <div className="admin-error" role="alert">
             <span>⚠️ {error}</span>

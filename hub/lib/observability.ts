@@ -16,6 +16,13 @@
  * This is a PURE LOGGING SEAM: emitting an event must never alter streaming,
  * timeout, or fallback behavior. Every emit path is guarded and side-effect-free
  * beyond the log line itself.
+ *
+ * NS-10 adds a best-effort DB sink: the operationally-interesting subset of
+ * events (see PERSISTED_EVENT_TYPES) is ALSO copied into the append-only
+ * `event_log` table (eventType `telemetry:<type>`) so /admin/ai-health can
+ * aggregate them. The sink is fire-and-forget — it never makes emit() async,
+ * never throws, and is guarded by TELEMETRY_DB_SINK (default ON outside unit
+ * tests). The stdout line remains the source of truth.
  */
 import crypto from 'crypto'
 
@@ -50,13 +57,91 @@ export function observabilityEnabled(): boolean {
 }
 
 /**
+ * The subset of events worth persisting to Postgres for the AI Health panel:
+ * request-terminal outcomes plus the two mid-flight incidents. start /
+ * provider_selected / first_token stay stdout-only to keep write volume low —
+ * one request yields at most ~2 persisted rows (a terminal event plus possibly
+ * a fallback/timeout on the way there).
+ */
+const PERSISTED_EVENT_TYPES: ReadonlySet<TelemetryEvent['type']> = new Set([
+  'ai_complete',
+  'ai_timeout',
+  'ai_fallback',
+  'ai_error',
+])
+
+/**
+ * Whether the best-effort DB sink is active. Default ON; an explicit
+ * `TELEMETRY_DB_SINK=off` disables it. Under NODE_ENV=test the sink is OFF
+ * unless explicitly opted in with `TELEMETRY_DB_SINK=on`, so unit tests that
+ * exercise emit() never attempt a database write.
+ */
+export function telemetryDbSinkEnabled(): boolean {
+  const flag = process.env.TELEMETRY_DB_SINK
+  if (flag === 'off') return false
+  if (process.env.NODE_ENV === 'test') return flag === 'on'
+  return true
+}
+
+/**
+ * Lazily-loaded event-logger module, resolved AT MOST ONCE. The lazy dynamic
+ * import avoids a static observability → event-logger → db edge (import-cycle
+ * and client-bundle safety); the cached promise means concurrent emits share
+ * one resolution instead of racing N import() calls. A failed load clears the
+ * cache so a later emit can retry.
+ */
+let eventLoggerModule: Promise<typeof import('./event-logger')> | null = null
+function loadEventLogger(): Promise<typeof import('./event-logger')> {
+  if (!eventLoggerModule) {
+    eventLoggerModule = import('./event-logger')
+    eventLoggerModule.catch(() => {
+      eventLoggerModule = null
+    })
+  }
+  return eventLoggerModule
+}
+
+/**
+ * Fire-and-forget copy of one event into `event_log`. Best-effort by
+ * construction: the event-logger module is loaded lazily (no import cycle, no
+ * client-bundle contamination, no crash if the DB layer can't initialize) and
+ * every failure — import, insert, anything — is swallowed. The persisted row
+ * drops `requestId` from the payload (it becomes `correlation_id`) and never
+ * contains message content / emails / tokens because TelemetryEvent itself
+ * never carries them (see the module-level PII note).
+ */
+function persistTelemetryEvent(event: TelemetryEvent): void {
+  try {
+    const { requestId, ...payload } = event
+    void loadEventLogger()
+      .then(({ recordEvent }) =>
+        recordEvent({
+          eventType: `telemetry:${event.type}`,
+          actor: 'system',
+          correlationId: requestId,
+          payload,
+        }),
+      )
+      .catch(() => {
+        /* best-effort — a DB outage must never surface here */
+      })
+  } catch {
+    /* best-effort — even a synchronous failure is swallowed */
+  }
+}
+
+/**
  * Emit one structured telemetry line. `ts` is a normal wall-clock ISO timestamp
  * (fine in app code — the no-Date rule only applies to workflow scripts). One
- * line per lifecycle event, NEVER per chunk.
+ * line per lifecycle event, NEVER per chunk. Stays SYNCHRONOUS for callers —
+ * the optional DB sink below is fire-and-forget.
  */
 export function emit(event: TelemetryEvent): void {
   if (!observabilityEnabled()) return
   console.log(JSON.stringify({ ts: new Date().toISOString(), ...event }))
+  if (PERSISTED_EVENT_TYPES.has(event.type) && telemetryDbSinkEnabled()) {
+    persistTelemetryEvent(event)
+  }
 }
 
 /** Correlation id for a single AI request. Wraps crypto.randomUUID(). */

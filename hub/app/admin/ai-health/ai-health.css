@@ -1,0 +1,169 @@
+/* AI Health dashboard (NS-10) — mirrors the auditor page's glass panels while
+   staying vanilla CSS. Scoped by the aih- prefix. */
+
+.aih-panel {
+  background: rgba(22, 28, 45, 0.6);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: var(--space-6);
+  box-shadow: var(--shadow-lg);
+}
+
+/* ── Window selector ── */
+.aih-window-switch {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+}
+.aih-window-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  padding: 6px 14px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.aih-window-btn:hover { color: var(--text-primary); }
+.aih-window-btn--active {
+  background: var(--accent-glow, rgba(197, 160, 89, 0.15));
+  color: var(--accent, #c5a059);
+}
+
+/* ── Alerts ── */
+.aih-alerts { display: flex; flex-direction: column; gap: var(--space-2); margin-bottom: var(--space-4); }
+.aih-alert {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: var(--text-sm);
+  border: 1px solid;
+}
+.aih-alert--warn {
+  color: hsl(38, 92%, 60%);
+  border-color: rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.1);
+}
+.aih-alert--critical {
+  color: hsl(348, 100%, 65%);
+  border-color: rgba(255, 51, 85, 0.35);
+  background: rgba(255, 51, 85, 0.1);
+}
+.aih-alert__badge {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  flex-shrink: 0;
+}
+.aih-ok {
+  color: hsl(152, 69%, 46%);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  background: rgba(34, 197, 94, 0.08);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: var(--text-sm);
+  margin-bottom: var(--space-4);
+}
+
+/* ── Stat tiles ── */
+.aih-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+.aih-tile {
+  background: rgba(22, 28, 45, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.aih-tile__label {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+.aih-tile__value {
+  font-size: var(--text-xl);
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.aih-tile__value--bad { color: hsl(348, 100%, 60%); }
+.aih-tile__value--warn { color: hsl(38, 92%, 55%); }
+.aih-tile__value--good { color: hsl(152, 69%, 46%); }
+.aih-tile__sub { font-size: 0.7rem; color: var(--text-muted); }
+
+/* ── Breakdown lists / failures table ── */
+.aih-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+.aih-panel h2 {
+  font-size: var(--text-sm);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin: 0 0 var(--space-3);
+  font-weight: 600;
+}
+.aih-kv { display: flex; flex-direction: column; gap: 6px; }
+.aih-kv__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  padding: 4px 0;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.06);
+}
+.aih-kv__row:last-child { border-bottom: none; }
+.aih-kv__key { font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-muted); overflow-wrap: anywhere; }
+.aih-kv__val { font-variant-numeric: tabular-nums; }
+
+.aih-failures { display: flex; flex-direction: column; gap: 6px; }
+.aih-failure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 0.75rem;
+  font-family: var(--font-mono);
+  padding: 6px 0;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.06);
+}
+.aih-failure:last-child { border-bottom: none; }
+.aih-failure__time { color: var(--text-muted); flex-shrink: 0; }
+.aih-failure__kind {
+  color: hsl(348, 100%, 65%);
+  border: 1px solid rgba(255, 51, 85, 0.35);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.aih-failure__code { color: var(--text-primary); overflow-wrap: anywhere; }
+.aih-failure__meta { color: var(--text-muted); }
+
+.aih-empty { color: var(--text-muted); font-size: var(--text-sm); padding: var(--space-2) 0; }
