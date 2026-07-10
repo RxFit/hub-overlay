@@ -44,6 +44,41 @@ export function SectionMessage({ message, type = 'info' }: { message: string; ty
   )
 }
 
+/**
+ * Distinct FETCH-FAILURE state with a Retry affordance — used where an error
+ * must not be conflated with a genuinely-empty section (KPIs, Project Health).
+ * A 401 is left to the app's reauth flow; this covers 5xx / network failures.
+ */
+export function SectionError({ message, onRetry }: { message: string; onRetry?: () => void }) {
+  return (
+    <div
+      role="alert"
+      className={`${styles.sectionMessage} ${styles.sectionMessageError}`}
+      style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '8px' }}
+    >
+      <span>{message}</span>
+      {onRetry && (
+        <button
+          type="button"
+          onClick={onRetry}
+          style={{
+            padding: '4px 12px',
+            background: 'var(--surface-2)',
+            border: '1px solid var(--border)',
+            borderRadius: '6px',
+            color: 'var(--text-primary)',
+            fontSize: '0.72rem',
+            fontWeight: 600,
+            cursor: 'pointer',
+          }}
+        >
+          Retry
+        </button>
+      )}
+    </div>
+  )
+}
+
 /* ══════════════════════════════════════════════════════════════════════════════
    COLLAPSIBLE SECTION — reusable wrapper with animated open/close
    ══════════════════════════════════════════════════════════════════════════════ */

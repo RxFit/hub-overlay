@@ -270,7 +270,7 @@ interface FeedResponse {
  * Refreshes every 30 seconds.
  */
 export function useFeed() {
-  const { data, error, isLoading } = useQuery<FeedResponse>({
+  const { data, error, isLoading, refetch } = useQuery<FeedResponse>({
     queryKey: ['feed'],
     queryFn: () => fetcher<FeedResponse>('/api/feed'),
     refetchInterval: 30_000,
@@ -281,6 +281,9 @@ export function useFeed() {
     items: data?.feed ?? [],
     isLoading,
     error: error ?? undefined,
+    // Exposed so the Retry affordance can revalidate this one query instead of
+    // reloading the whole app (which would discard chat/compose/thread state).
+    refetch,
   }
 }
 

@@ -2,7 +2,7 @@
 
 import type { ProjectKPI } from '@/types'
 import styles from './LeftPanelSections.module.css'
-import { CollapsibleSection, SectionMessage } from './LeftPanelShared'
+import { CollapsibleSection, SectionMessage, SectionError } from './LeftPanelShared'
 
 /* ══════════════════════════════════════════════════════════════════════════════
    PROJECT HEALTH SECTION — Live Paperclip data
@@ -19,11 +19,15 @@ export function ProjectHealthSection({
   onInjectChat,
   userRole,
   isLoading,
+  error,
+  onRetry,
 }: {
   projects?: ProjectKPI[]
   onInjectChat: (msg: string) => void
   userRole?: string
   isLoading?: boolean
+  error?: unknown
+  onRetry?: () => void
 }) {
   if (isLoading) {
     return (
@@ -33,6 +37,16 @@ export function ProjectHealthSection({
             <div key={i} className={styles.lpsSkeletonLine} style={{ width: `${85 - i * 10}%`, height: '38px', marginBottom: '6px', borderRadius: '8px' }} />
           ))}
         </div>
+      </CollapsibleSection>
+    )
+  }
+
+  // A fetch FAILURE is distinct from "no companies / no projects" — never show
+  // the empty copy when the cause is an error.
+  if (error) {
+    return (
+      <CollapsibleSection title="Project Health" protocolNum="05" defaultOpen>
+        <SectionError message="Unable to load project health — try again." onRetry={onRetry} />
       </CollapsibleSection>
     )
   }

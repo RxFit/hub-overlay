@@ -5,7 +5,7 @@ import type { LiveKPI } from '@/types'
 import type { ChatAttachment } from '@/types'
 import { AnimatedNumber } from './AnimatedNumber'
 import styles from './LeftPanelSections.module.css'
-import { CollapsibleSection, SkeletonBlock, SectionMessage } from './LeftPanelShared'
+import { CollapsibleSection, SkeletonBlock, SectionMessage, SectionError } from './LeftPanelShared'
 
 /* ══════════════════════════════════════════════════════════════════════════════
    KPI SECTION — Live Paperclip + Business KPIs
@@ -14,10 +14,14 @@ import { CollapsibleSection, SkeletonBlock, SectionMessage } from './LeftPanelSh
 function KPISectionImpl({
   kpis: allKpis,
   isLoading,
+  error,
+  onRetry,
   onInjectChat,
 }: {
   kpis: LiveKPI[]
   isLoading: boolean
+  error?: unknown
+  onRetry?: () => void
   onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void
 }) {
   // Mandate: Left Panel = Google ecosystem + business metrics only.
@@ -28,6 +32,16 @@ function KPISectionImpl({
     return (
       <CollapsibleSection title="KPIs" protocolNum="01" defaultOpen>
         <SkeletonBlock lines={4} />
+      </CollapsibleSection>
+    )
+  }
+
+  // A fetch FAILURE is distinct from "no KPIs configured" — never show the
+  // "configure in Settings" empty copy when the cause is an error.
+  if (error) {
+    return (
+      <CollapsibleSection title="KPIs" protocolNum="01" defaultOpen>
+        <SectionError message="Unable to load KPIs — try again." onRetry={onRetry} />
       </CollapsibleSection>
     )
   }

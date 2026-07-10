@@ -62,7 +62,7 @@ const ONBOARDING_SUGGESTIONS = [
 // AnimatedNumber is now imported from @/app/components/AnimatedNumber
 
 /* ── Left Panel: Context Layer ── */
-function LeftPanelImpl({ isOpen, onClose, onInjectChat, onInjectAction, panelRef, closeBtnRef, isMobileViewport, style, activeProject, workspaceName, kpis, kpiLoading }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void; onInjectAction: (msg: string, attachments?: ChatAttachment[]) => void; panelRef?: React.Ref<HTMLElement>; closeBtnRef?: React.Ref<HTMLButtonElement>; isMobileViewport?: boolean; style?: React.CSSProperties; activeProject?: string; workspaceName?: string; kpis?: import('@/types').LiveKPI[]; kpiLoading?: boolean }) {
+function LeftPanelImpl({ isOpen, onClose, onInjectChat, onInjectAction, panelRef, closeBtnRef, isMobileViewport, style, activeProject, workspaceName, kpis, kpiLoading, kpiError, onKpiRetry }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void; onInjectAction: (msg: string, attachments?: ChatAttachment[]) => void; panelRef?: React.Ref<HTMLElement>; closeBtnRef?: React.Ref<HTMLButtonElement>; isMobileViewport?: boolean; style?: React.CSSProperties; activeProject?: string; workspaceName?: string; kpis?: import('@/types').LiveKPI[]; kpiLoading?: boolean; kpiError?: unknown; onKpiRetry?: () => void }) {
   const tenant = useTenant()
   return (
     <aside
@@ -87,7 +87,7 @@ function LeftPanelImpl({ isOpen, onClose, onInjectChat, onInjectAction, panelRef
 
       <div className="panel-content">
         <SectionErrorBoundary label="KPIs">
-          <KPISection kpis={kpis ?? []} isLoading={!!kpiLoading} onInjectChat={onInjectChat} />
+          <KPISection kpis={kpis ?? []} isLoading={!!kpiLoading} error={kpiError} onRetry={onKpiRetry} onInjectChat={onInjectChat} />
         </SectionErrorBoundary>
         <SectionErrorBoundary label="Calendar">
           <CalendarSection onInjectChat={onInjectChat} />
@@ -121,6 +121,8 @@ function RightPanel({
   activeProject,
   userRole,
   kpiLoading,
+  kpiError,
+  onKpiRetry,
   onCustomizeCSuite,
 }: {
   isOpen?: boolean
@@ -135,6 +137,8 @@ function RightPanel({
   activeProject?: string
   userRole?: string
   kpiLoading?: boolean
+  kpiError?: unknown
+  onKpiRetry?: () => void
   onCustomizeCSuite: (orgId: string, orgName: string) => void
 }) {
   // Build Paperclip workspace URL from the active project
@@ -184,7 +188,7 @@ function RightPanel({
       </div>
 
       <div className="panel-content">
-        <ProjectHealthSection projects={projects} onInjectChat={onInjectChat} userRole={userRole} isLoading={kpiLoading} />
+        <ProjectHealthSection projects={projects} onInjectChat={onInjectChat} userRole={userRole} isLoading={kpiLoading} error={kpiError} onRetry={onKpiRetry} />
         {/* orgId derives from activeCompany (same projects.find the page used for the
             now-removed activeOrgId prop — both resolved to this exact value). */}
         <ExecutionFeed onInjectChat={onInjectChat} onInjectAction={onInjectAction} onCustomizeCSuite={onCustomizeCSuite} orgId={activeCompany?.companyId} />
@@ -238,7 +242,7 @@ export default function HubPage() {
   const { data: session } = useSession()
   const router = useRouter()
   const [activeProject, setActiveProject] = useState('all')
-  const { projects, kpis, isLoading: kpiLoading } = useKPIData(activeProject)
+  const { projects, kpis, isLoading: kpiLoading, error: kpiError, refetch: kpiRefetch } = useKPIData(activeProject)
   const { companies: allCompanies } = useCompanies()
 
   // Resolve the active workspace company for issue creation and deep links
@@ -630,7 +634,7 @@ export default function HubPage() {
       </div>
 
       <div className="panels-container">
-        <LeftPanel isOpen={mobileLeftOpen} onClose={handleClosePanels} onInjectChat={injectRecall} onInjectAction={injectExecute} panelRef={leftPanelRef} closeBtnRef={leftCloseBtnRef} isMobileViewport={isMobileViewport} activeProject={activeProject} workspaceName={projects?.[0]?.companyName} kpis={kpis} kpiLoading={kpiLoading} />
+        <LeftPanel isOpen={mobileLeftOpen} onClose={handleClosePanels} onInjectChat={injectRecall} onInjectAction={injectExecute} panelRef={leftPanelRef} closeBtnRef={leftCloseBtnRef} isMobileViewport={isMobileViewport} activeProject={activeProject} workspaceName={projects?.[0]?.companyName} kpis={kpis} kpiLoading={kpiLoading} kpiError={kpiError} onKpiRetry={kpiRefetch} />
 
         {/* ── Center Panel: AI Chat (inlined for shared state) ── */}
         <main className="panel-center" aria-label="AI Chat">
@@ -925,6 +929,8 @@ export default function HubPage() {
             activeProject={activeProject}
             userRole={userRole}
             kpiLoading={kpiLoading}
+            kpiError={kpiError}
+            onKpiRetry={kpiRefetch}
             onCustomizeCSuite={(orgId, orgName) => {
               setWizardOrg({ id: orgId, name: orgName })
               setShowWizard(true)
