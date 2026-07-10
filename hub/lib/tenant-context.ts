@@ -1,12 +1,9 @@
 /**
  * Server-side tenant resolution — single source of truth.
  *
- * Phase 0 (current): resolves from the `x-tenant-id` request header when
- * present (set by middleware in Phase 1), falling back to the
- * NEXT_PUBLIC_TENANT_ID env var, then 'rxfit'.
- *
- * Phase 1 will make the header the primary path (derived from the request
- * hostname) and cross-check it against the session's tenantId claim.
+ * Phase 0 (current): single-tenant. Resolves from the NEXT_PUBLIC_TENANT_ID
+ * env var, then 'rxfit'. It deliberately does NOT read a client-supplied
+ * `x-tenant-id` request header (see getTenantId below).
  *
  * IMPORTANT: server-only. Do not import from client components — client
  * code receives tenant config via TenantProvider props.
@@ -18,22 +15,19 @@ export const FALLBACK_TENANT_ID = 'rxfit'
 /**
  * Resolve the active tenant ID for the current request.
  *
- * Safe to call from route handlers and server components. Outside a request
- * scope (build time, scripts, cron), `headers()` throws — we catch and fall
- * back to the env default.
+ * SECURITY: this intentionally does NOT trust the `x-tenant-id` request header.
+ * That header is client-controllable on any request, and middleware — which
+ * strips it — does not cover every route (e.g. /api/chat, /api/webhooks are
+ * excluded from the matcher). Trusting it would let a caller spoof a tenant and
+ * cross tenant-isolation boundaries. Since nothing server-side legitimately
+ * sets the header today, ignoring it is behavior-neutral: the app is
+ * single-tenant and always resolves to the default tenant (rxfit).
+ *
+ * Phase 2 (multi-tenancy) will replace the return below with server-side
+ * resolution derived from the authenticated session's tenantId claim and/or the
+ * request hostname — NOT from an inbound client header.
  */
 export function getTenantId(): string {
-  if (typeof window === 'undefined') {
-    try {
-      const { headers } = require('next/headers')
-      const headerTenant = headers().get('x-tenant-id')
-      if (headerTenant) return headerTenant
-    } catch {
-      // Not in a request scope (build/static generation/script) — use env.
-      // eslint-disable-next-line no-console
-      console.warn('[tenant-context] getTenantId() called outside request scope — falling back to env/default')
-    }
-  }
   return process.env.NEXT_PUBLIC_TENANT_ID || FALLBACK_TENANT_ID
 }
 

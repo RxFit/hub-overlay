@@ -9,6 +9,7 @@ import {
   archiveToolArtifact,
 } from '@/lib/tool-artifacts'
 import { getTenantId } from '@/lib/tenant-context'
+import { canAccessAdminRoute } from '@/lib/roles'
 
 export const runtime = 'nodejs'
 
@@ -110,6 +111,15 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ error: 'Artifact not found' }, { status: 404 })
     }
 
+    // Enforce creator ownership on mutate (matches the GET route's scoping):
+    // admins/superadmins may mutate any artifact in the tenant; everyone else
+    // may only mutate artifacts they created. Without this a staff user could
+    // edit another user's artifact by id (IDOR across users within a tenant).
+    const role = (session.user as Record<string, unknown>)?.role as string | undefined
+    if (!canAccessAdminRoute(role) && existing.createdBy !== (session.user.email ?? '__none__')) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
+
     const artifact = await updateToolArtifact(id, content, title)
 
     if (!artifact) {
@@ -145,6 +155,15 @@ export async function DELETE(req: NextRequest) {
     const existing = await getToolArtifact(id)
     if (!existing || existing.tenantId !== getTenantId()) {
       return NextResponse.json({ error: 'Artifact not found' }, { status: 404 })
+    }
+
+    // Enforce creator ownership on delete (matches the GET route's scoping):
+    // admins/superadmins may archive any artifact in the tenant; everyone else
+    // may only archive artifacts they created. Without this a staff user could
+    // soft-delete another user's artifact by id (IDOR across users in a tenant).
+    const role = (session.user as Record<string, unknown>)?.role as string | undefined
+    if (!canAccessAdminRoute(role) && existing.createdBy !== (session.user.email ?? '__none__')) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 
     const archived = await archiveToolArtifact(id)
