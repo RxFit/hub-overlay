@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect } from 'react'
+import { lastAssistantContent } from '@/lib/panel-artifact'
 import type { ToolPanelContentProps, ToolArtifactSection } from '@/types'
 
 const PROMPTS = [
@@ -51,13 +52,15 @@ function parseMessages(messages: ToolPanelContentProps['messages']): ToolArtifac
 }
 
 export default function PrioritizationPanel({ messages, onInjectChat, onArtifactUpdate, artifacts }: ToolPanelContentProps) {
+  const lastContent = lastAssistantContent(messages)
+
   useEffect(() => {
     const sections = parseMessages(messages)
     if (sections.length > 0) {
       onArtifactUpdate({ toolId: 'prioritization', title: 'Prioritization Matrix', sections })
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages.length, onArtifactUpdate])
+  }, [lastContent, onArtifactUpdate])
 
   const items = artifacts?.sections ?? []
 

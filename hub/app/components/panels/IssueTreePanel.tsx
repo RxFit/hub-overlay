@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+import { lastAssistantContent } from '@/lib/panel-artifact'
 import type { ToolPanelContentProps, ToolArtifactSection } from '@/types'
 
 const PROMPTS = [
@@ -64,13 +65,15 @@ export default function IssueTreePanel({ messages, onInjectChat, onArtifactUpdat
     setCollapsed(prev => ({ ...prev, [id]: !prev[id] }))
   }, [])
 
+  const lastContent = lastAssistantContent(messages)
+
   useEffect(() => {
     const sections = parseMessages(messages)
     if (sections.length > 0) {
       onArtifactUpdate({ toolId: 'issue-tree', title: 'Issue Tree', sections })
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages.length, onArtifactUpdate])
+  }, [lastContent, onArtifactUpdate])
 
   const sections = artifacts?.sections ?? []
   const branches = sections.filter(s => s.type === 'branch')
