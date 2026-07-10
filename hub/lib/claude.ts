@@ -34,6 +34,22 @@ function getApiKey(): string {
   return key
 }
 
+/**
+ * Non-throwing configuration probe: is ANY Anthropic API key present in the
+ * runtime env? Mirrors getApiKey()'s exact fallback list (canonical name plus
+ * the Cloud Run casings). Reports key PRESENCE only — never values, lengths,
+ * or prefixes — so it is safe to surface on the admin AI-health endpoint.
+ * Also consulted by the emergency cross-provider fallback in lib/gemini.ts to
+ * decide whether walking the Claude chain can possibly succeed.
+ */
+export function isClaudeConfigured(): boolean {
+  return Boolean(
+    process.env.ANTHROPIC_API_KEY ||
+    process.env.Anthropic_API_Key ||
+    process.env.anthropic_token
+  )
+}
+
 function buildAnthropicMessages(messages: ChatMessage[]): { role: string; content: string }[] {
   return messages
     .filter(m => m.role !== 'system')

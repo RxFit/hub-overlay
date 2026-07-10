@@ -5,7 +5,7 @@ import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { useQuery } from '@tanstack/react-query'
 import { getTenantConfig } from '@/lib/tenant'
-import type { AiHealth } from '@/lib/ai-health'
+import type { AiHealth, ProviderConfig } from '@/lib/ai-health'
 import './ai-health.css'
 
 const tenant = getTenantConfig()
@@ -17,6 +17,17 @@ type Window = (typeof WINDOWS)[number]
 interface AiHealthResponse extends AiHealth {
   window: string
   generatedAt: string
+  /** Optional so a page deployed ahead of the API degrades gracefully. */
+  providerConfig?: ProviderConfig
+}
+
+/** One provider-key presence badge: configured ✓ / missing ✗ (critical). */
+function ProviderBadge({ name, configured }: { name: string; configured: boolean }) {
+  return (
+    <span className={`aih-provider-badge ${configured ? 'aih-provider-badge--ok' : 'aih-provider-badge--missing'}`}>
+      {name}: {configured ? '✓ configured' : '✗ key missing'}
+    </span>
+  )
 }
 
 async function fetchAiHealth(window: Window): Promise<AiHealthResponse> {
@@ -137,6 +148,18 @@ export default function AiHealthPage() {
 
         {data && (
           <>
+            {/* Provider configuration — API-key PRESENCE on the runtime env
+                (booleans only). A missing key here is the root cause of the
+                chat "provider configuration" error bubble; see
+                docs/runbooks/ai-provider-outage.md. */}
+            {data.providerConfig && (
+              <div className="aih-providers" role="status" aria-label="Provider configuration">
+                <span className="aih-providers__label">Provider configuration</span>
+                <ProviderBadge name="Gemini" configured={data.providerConfig.gemini} />
+                <ProviderBadge name="Claude" configured={data.providerConfig.anthropic} />
+              </div>
+            )}
+
             {/* Alerts banner */}
             {data.alerts.length > 0 ? (
               <div className="aih-alerts" role="alert">
