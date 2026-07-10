@@ -47,11 +47,18 @@ export async function GET(req: NextRequest) {
     // 2. Fetch data from Paperclip
     const companyPromises = targetCompanies.map(async (company) => {
       try {
-        const [issues, runs, agents] = await Promise.all([
+        // Fetch issues + agents once, then hand them to getRuns so it doesn't
+        // re-fetch them internally (call-reduction P1). getRuns previously made
+        // its OWN getIssues(limit:10) + getAgents per company on top of these —
+        // reusing them removes 2 redundant upstream Paperclip calls per company
+        // with no change to KPI/health outputs (the runs aggregated are identical:
+        // getRuns takes the top-8 updated-desc issues, and the first 8 of the
+        // limit-100 list match the first 8 of the old limit-10 list).
+        const [issues, agents] = await Promise.all([
           getIssues(company.id, { limit: 100 }).catch(() => []),
-          getRuns(company.id, { limit: 50 }).catch(() => []),
           getAgents(company.id).catch(() => []),
         ])
+        const runs = await getRuns(company.id, { limit: 50, issues, agents }).catch(() => [])
 
         const kpis = computeOperationalKPIs(issues, runs, agents, company.id, company.name)
         const health = computeProjectHealth(issues, runs, agents, company)
