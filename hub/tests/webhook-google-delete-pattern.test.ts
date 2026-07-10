@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildChunkDeleteLikePattern } from '@/app/api/webhooks/google/route'
+import { buildChunkDeleteLikePattern } from '@/lib/chunk-delete-pattern'
 
 /* ════════════════════════════════════════════════════════════════════════════
    deleteChunksForFile over-deletion guard (P2).
