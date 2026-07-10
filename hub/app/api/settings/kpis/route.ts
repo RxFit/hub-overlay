@@ -27,10 +27,20 @@ export async function GET(_req: NextRequest) {
   const session = await getServerSession(authOptions)
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+  // P1: `onboarding` (and any sub-staff / unknown role) must receive NO KPIs.
+  // Non-admins otherwise get the `visibility='staff'` rows below; onboarding was
+  // never excluded, so — chained with open sign-up — brand-new accounts could
+  // read staff-tier business KPIs. Mirror /api/kpis, which early-returns empty
+  // for onboarding. Only staff/admin/superadmin proceed; everything else (incl.
+  // undefined) is denied data.
+  const role = (session.user as Record<string, unknown>)?.role as string | undefined
+  if (!role || !['staff', 'admin', 'superadmin'].includes(role)) {
+    return NextResponse.json({ rows: [], source: 'db' })
+  }
+
   try {
     const TENANT_ID = getTenantId()
     await ensureTenant(TENANT_ID)
-    const role = (session.user as Record<string, unknown>)?.role as string | undefined
     const isAdmin = role === 'admin' || role === 'superadmin'
 
     // Build the WHERE clause as a single combined condition.

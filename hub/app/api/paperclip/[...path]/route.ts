@@ -106,9 +106,19 @@ async function proxyRequest(
   const segments = pathSegments[0] === 'api' ? pathSegments.slice(1) : pathSegments
   const apiPath = '/api/' + segments.join('/')
 
+  // SECURITY (P0): all authorization decisions below (role tier, company scope,
+  // and issue/agent/project ownership pre-checks) match the path
+  // case-INSENSITIVELY via `matchPath`. Postgres resolves UUIDs
+  // case-insensitively, so `/api/companies/<UPPERCASE-UUID>` hits the same
+  // upstream row as its lowercase form; matching case-sensitively here let an
+  // uppercase-UUID mutation slip past the role gate AND skip the company-scope
+  // check entirely (privilege escalation). The request still forwards the
+  // ORIGINAL-case `apiPath` upstream — only the authz matching is canonicalized.
+  const matchPath = apiPath.toLowerCase()
+
   // Validate path is allowed (boundary-safe: exact match or '/' follows)
   const isAllowed = ALLOWED_PREFIXES.some(
-    prefix => apiPath === prefix || apiPath.startsWith(prefix + '/') || apiPath.startsWith(prefix + '?')
+    prefix => matchPath === prefix || matchPath.startsWith(prefix + '/') || matchPath.startsWith(prefix + '?')
   )
   if (!isAllowed) {
     return NextResponse.json({ error: 'Forbidden path' }, { status: 403 })
@@ -122,7 +132,7 @@ async function proxyRequest(
   // P0-1: Role-tier enforcement for mutations. Mirrors INTENT_PERMISSIONS so a
   // scoped staff user cannot bypass client-side gating by calling the API
   // directly (e.g. PATCH an issue, restart/create an agent).
-  const requiredRank = requiredWriteRank(method, apiPath)
+  const requiredRank = requiredWriteRank(method, matchPath)
   if (requiredRank > 0 && (ROLE_RANK[role] ?? 0) < requiredRank) {
     return NextResponse.json(
       { error: 'Forbidden — insufficient role for this operation' },
@@ -135,8 +145,14 @@ async function proxyRequest(
   // executeAction (high-stakes intents: create issue / send comm / create agent
   // / launch campaign). Without a valid, unexpired, above-threshold token we
   // fail closed — the gate is no longer bypassable from the browser.
-  if (method.toUpperCase() === 'POST' && apiPath === '/api/issues') {
-    const gate = verifyGateToken(req.headers.get('x-gate-token'))
+  if (method.toUpperCase() === 'POST' && matchPath === '/api/issues') {
+    // Single-use (jti) + caller-binding (email): a gate token is consumed on
+    // first use and is bound to the user it was minted for, so it cannot be
+    // replayed within its 5-min TTL or lifted from another user's session.
+    const gate = verifyGateToken(req.headers.get('x-gate-token'), {
+      expectedEmail: session.user.email,
+      consume: true,
+    })
     if (!gate.valid) {
       log.warn({ path: apiPath, reason: gate.reason }, 'Quality-gate token rejected')
       return NextResponse.json(
@@ -148,8 +164,9 @@ async function proxyRequest(
     }
   }
 
-  // If the request targets a specific company, check access
-  const companyMatch = apiPath.match(/\/api\/companies\/([a-f0-9-]+)/)
+  // If the request targets a specific company, check access (case-insensitive —
+  // see the `matchPath` note above; an uppercase UUID must not skip this scope check).
+  const companyMatch = matchPath.match(/\/api\/companies\/([a-f0-9-]+)/)
   if (companyMatch) {
     const requestedCompanyId = companyMatch[1]
     if (
@@ -164,9 +181,9 @@ async function proxyRequest(
     }
   }
 
-  // Block direct lists for scoped users
+  // Block direct lists for scoped users (case-insensitive match)
   if (role !== 'superadmin' && !assignedProjects.includes('*')) {
-    if (isBlockedListAccess(apiPath, method, req.nextUrl.searchParams)) {
+    if (isBlockedListAccess(matchPath, method, req.nextUrl.searchParams)) {
       return NextResponse.json(
         { error: 'Access denied: direct resource listing is restricted' },
         { status: 403 }
@@ -174,7 +191,7 @@ async function proxyRequest(
     }
 
     // For allowed /api/runs?companyId=..., verify the user is assigned to that company
-    if (apiPath.startsWith('/api/runs') && req.nextUrl.searchParams.has('companyId')) {
+    if (matchPath.startsWith('/api/runs') && req.nextUrl.searchParams.has('companyId')) {
       const qCompanyId = req.nextUrl.searchParams.get('companyId')
       if (qCompanyId && !assignedProjects.includes(qCompanyId)) {
         return NextResponse.json(
@@ -190,10 +207,12 @@ async function proxyRequest(
   // between the pre-check GET and the forwarded mutation. Practical risk is
   // near-zero: company reassignment is an admin-only, infrequent operation.
   // Accepted risk per code review 2026-06-13 (R2).
-  // Pre-check for specific resources (issues/agents/projects) on mutation (PATCH/DELETE)
-  const issueMatch = apiPath.match(/\/api\/issues\/([a-f0-9-]+)/)
-  const agentMatch = apiPath.match(/\/api\/agents\/([a-f0-9-]+)/)
-  const projectMatch = apiPath.match(/\/api\/projects\/([a-f0-9-]+)/)
+  // Pre-check for specific resources (issues/agents/projects) on mutation
+  // (PATCH/DELETE). Case-insensitive (`matchPath`) so an uppercase-UUID mutation
+  // cannot bypass the ownership pre-check by failing the matcher.
+  const issueMatch = matchPath.match(/\/api\/issues\/([a-f0-9-]+)/)
+  const agentMatch = matchPath.match(/\/api\/agents\/([a-f0-9-]+)/)
+  const projectMatch = matchPath.match(/\/api\/projects\/([a-f0-9-]+)/)
 
   const needPreCheck = method !== 'GET' && method !== 'HEAD' && (issueMatch || agentMatch || projectMatch)
 
@@ -314,8 +333,8 @@ async function proxyRequest(
     const data = await upstream.text()
 
     // If the user is staff (not admin) and this is a companies list,
-    // filter to only their assigned projects
-    if (apiPath === '/api/companies' && role !== 'superadmin' && !assignedProjects.includes('*')) {
+    // filter to only their assigned projects (case-insensitive match).
+    if (matchPath === '/api/companies' && role !== 'superadmin' && !assignedProjects.includes('*')) {
       try {
         const parsed = JSON.parse(data)
         // Handle both array and wrapped responses

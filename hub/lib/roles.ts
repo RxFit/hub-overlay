@@ -157,3 +157,14 @@ export function canAssignRole(callerRole: string, targetRole: string): boolean {
 export function canAccessAdminRoute(role: string | null | undefined): boolean {
   return role === 'admin' || role === 'superadmin'
 }
+
+/**
+ * Predicate for routes that require an OPERATIONAL tier (staff and above).
+ * Like canAccessAdminRoute, but also admits `staff`. Denies `onboarding`,
+ * unknown strings, and null/undefined. Used to gate agent-facing routes such as
+ * /api/agents/memory so brand-new onboarding accounts cannot read the tenant's
+ * agent memory or POST content that poisons the agent fleet.
+ */
+export function canAccessStaffRoute(role: string | null | undefined): boolean {
+  return role === 'staff' || role === 'admin' || role === 'superadmin'
+}

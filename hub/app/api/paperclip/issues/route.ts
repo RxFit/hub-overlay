@@ -42,7 +42,13 @@ export async function POST(req: Request) {
   // but POST /api/paperclip/issues is served by THIS route — without the check
   // here the gate is bypassed entirely (the token was sent but never verified).
   // Fail closed: a missing/forged/expired/below-threshold token is rejected.
-  const gate = verifyGateToken(req.headers.get('x-gate-token'))
+  // Single-use (jti) + caller-binding: the token is consumed on first use and
+  // bound to the minting user, so it cannot be replayed within its 5-min TTL or
+  // reused from a different user's session.
+  const gate = verifyGateToken(req.headers.get('x-gate-token'), {
+    expectedEmail: user.email,
+    consume: true,
+  })
   if (!gate.valid) {
     log.warn({ reason: gate.reason }, 'Quality-gate token rejected on issue creation')
     return NextResponse.json(
