@@ -56,6 +56,15 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # Production build gate. The prod Docker image runs `next build`, so this
+      # must pass for master to be deployable. It also enforces Next.js App
+      # Router route-export validation (a route.ts may export only HTTP method
+      # handlers + the config allowlist), which `tsc`/`vitest` do NOT catch —
+      # exactly the class of bug that broke a prior deploy. Routes read env
+      # lazily, so the build completes with no secrets/DB; no dummy env needed.
+      - name: Build (next build)
+        run: npm run build
+
       # Runs the full unit suite WITH v8 coverage and the DB harness. The
       # coverage thresholds in vitest.config.ts act as a ratchet: CI fails if
       # coverage drops below the committed baseline. DATABASE_URL points at the
