@@ -54,9 +54,24 @@ export const maxDuration = 30
    }
    ══════════════════════════════════════════════════════════════════════════════ */
 
-const genAI = new GoogleGenerativeAI(
-  process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY || ''
-)
+/* Lazy-initialized so the API key is read at runtime, not module-load time.
+   Prevents an empty-key fallback scorer if Railway injects env vars after
+   import (mirrors detect-intent/route.ts and lib/vector-store.ts getGenAI()). */
+let _genAI: GoogleGenerativeAI | null = null
+function getGenAI(): GoogleGenerativeAI {
+  if (!_genAI) {
+    const key =
+      process.env.GEMINI_API_KEY ||
+      process.env.GOOGLE_API_KEY ||
+      process.env.GOOGLE_GENERATIVE_AI_API_KEY ||
+      ''
+    if (!key) {
+      throw new Error('No Gemini API key found. Set GEMINI_API_KEY, GOOGLE_API_KEY, or GOOGLE_GENERATIVE_AI_API_KEY.')
+    }
+    _genAI = new GoogleGenerativeAI(key)
+  }
+  return _genAI
+}
 
 /* ── Dimension definitions per intent ── */
 
@@ -221,7 +236,7 @@ export async function POST(req: NextRequest) {
       console.warn('[score-context] Claude chain failed, falling back to Gemini 2.5 Pro:', claudeErr)
 
       // Fallback: Gemini 2.5 Pro
-      const model = genAI.getGenerativeModel({
+      const model = getGenAI().getGenerativeModel({
         model: 'gemini-2.5-pro',
         generationConfig: { temperature: 0.1, maxOutputTokens: 256 },
       })

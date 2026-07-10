@@ -119,6 +119,16 @@ async function run() {
   `
   console.log('[migrate] ✓ event_log table')
 
+  // Composite index on (event_type, created_at) — the append-only event_log is
+  // read by ai-health (WHERE event_type LIKE 'telemetry:%' AND created_at >= …)
+  // and pruned by retention (WHERE tenant_id AND created_at < cutoff); without
+  // this it seq-scans. Idempotent — safe to re-run on every cold start.
+  await sql`
+    CREATE INDEX IF NOT EXISTS event_log_type_created_idx
+    ON event_log (event_type, created_at)
+  `
+  console.log('[migrate] ✓ event_log (event_type, created_at) index')
+
   // Agent Memory Table
   await sql`
     CREATE TABLE IF NOT EXISTS agent_memory (
