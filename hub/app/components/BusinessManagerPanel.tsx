@@ -199,7 +199,7 @@ export function BusinessManagerPanel({
   stalledCount?: number
   onCustomizeCSuite: (orgId: string, orgName: string) => void
 }) {
-  const { pulse, globalHealthPct, orgName, isLoading } = useBusinessManager(orgId)
+  const { pulse, globalHealthPct, orgName, isLoading, error, mutate } = useBusinessManager(orgId)
   const [selectedRole, setSelectedRole] = useState<string | null>(null)
   const [showScorecard, setShowScorecard] = useState(false)
 
@@ -214,6 +214,12 @@ export function BusinessManagerPanel({
   }, [selectedRole, showScorecard])
 
   const selectedDept = pulse?.departments.find(d => d.role === selectedRole)
+
+  // A fetch FAILURE with no data is NOT a 0%/Critical org — it's "unknown".
+  // Distinguish it so we never paint a red "0% · Critical" ring (or the
+  // "Your Organization" placeholder) when we simply couldn't reach the API.
+  // A genuine API-returned 0 still renders the real ring below.
+  const hasError = !!error && !pulse
 
   const healthLabel = globalHealthPct >= 80 ? 'Healthy'
     : globalHealthPct >= 50 ? 'Needs Attention'
@@ -234,14 +240,14 @@ export function BusinessManagerPanel({
               Business Manager
             </div>
             <div className="bm-header__org">
-              {isLoading ? '—' : (orgName || 'Your Organization')}
+              {isLoading || hasError ? '—' : (orgName || 'Your Organization')}
             </div>
           </div>
 
           <div className="bm-header__right">
             {isLoading ? (
               <div className="bm-health-skeleton" aria-label="Loading health data" />
-            ) : (
+            ) : hasError ? null : (
               <div className="bm-health-block">
                 <HealthRing pct={globalHealthPct} />
                 <span
@@ -255,6 +261,24 @@ export function BusinessManagerPanel({
             )}
           </div>
         </div>
+
+        {/* ── Error / retry card — replaces the health ring + dept status when the
+            fetch failed and we have no data (never a fake "0% · Critical"). ── */}
+        {hasError && (
+          <div className="bm-error" role="alert" style={{ padding: '14px 16px', textAlign: 'center' }}>
+            <div style={{ fontSize: '1.3rem', marginBottom: '6px' }} aria-hidden="true">⚠️</div>
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '10px' }}>
+              Couldn’t load business health — the data service may be temporarily unavailable.
+            </div>
+            <button
+              className="bm-cta bm-cta--secondary"
+              onClick={() => mutate()}
+              aria-label="Retry loading business health"
+            >
+              Retry
+            </button>
+          </div>
+        )}
 
         {/* ── C-Suite status row ── */}
         {!isLoading && pulse && pulse.departments.length > 0 && (

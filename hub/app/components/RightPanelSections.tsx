@@ -199,7 +199,7 @@ export function ExecutionFeed({
   orgId?: string
   onCustomizeCSuite: (orgId: string, orgName: string) => void
 }) {
-  const { items, isLoading, error } = useFeed()
+  const { items, isLoading, error, refetch } = useFeed()
   const [activeFilter, setActiveFilter] = useState<FilterTab>('all')
   const [retrying, setRetrying] = useState(false)
 
@@ -251,11 +251,17 @@ export function ExecutionFeed({
     return groups
   }, [filteredItems])
 
-  // Retry handler
-  const handleRetry = useCallback(() => {
+  // Retry handler — revalidate ONLY the feed query. A full window.location.reload()
+  // would discard in-progress chat/compose/thread state (#28 / NS6), so refetch
+  // the feed in place instead.
+  const handleRetry = useCallback(async () => {
     setRetrying(true)
-    window.location.reload()
-  }, [])
+    try {
+      await refetch()
+    } finally {
+      setRetrying(false)
+    }
+  }, [refetch])
 
   return (
     <>

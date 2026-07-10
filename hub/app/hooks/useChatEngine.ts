@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { signIn } from 'next-auth/react'
 import {
   detectIntent,
   startInterview,
@@ -28,6 +29,36 @@ import type { InterviewState, ActionSpec, ChatAttachment, ActiveSkill, Company }
 export type ChatMsg = { id: string; role: 'user' | 'assistant'; content: string; kind?: ChatMsgKind; timestamp?: string; attachments?: ChatAttachment[] }
 
 export type MobileTab = 'chat' | 'command' | 'execution' | 'google_chat' | 'tool_panel'
+
+/**
+ * Maps a caught /api/chat error onto the user-facing bubble content plus a
+ * `reauth` flag. A 401 sets `reauth: true` so the caller triggers the same
+ * `signIn('google')` reauth flow as the other data hooks (useKPIData /
+ * useWriteFetch) — a stale bubble that never re-authenticates leaves the user
+ * stuck. Timeouts and 5xx/network get their own copy (the raw detail suffix is
+ * dev-only). Extracted as a pure function so the reauth decision is unit-tested
+ * without driving the SSE-streaming hook.
+ */
+export function resolveChatError(err: unknown): { content: string; reauth: boolean } {
+  const isTimeout = err instanceof DOMException && err.name === 'AbortError'
+  const status = (err as { status?: number } | undefined)?.status
+  const detail = err instanceof Error ? err.message : ''
+
+  if (isTimeout) {
+    return { content: "⏱️ That took longer than expected. Try asking again — things usually speed up quickly.", reauth: false }
+  }
+  if (status === 401) {
+    return { content: "Your session expired. Please sign in again to continue.", reauth: true }
+  }
+  // 5xx / network / unknown. The raw detail/status suffix is dev-only —
+  // production users must never see internal error text in the bubble.
+  const diag = process.env.NODE_ENV === 'development'
+    ? (detail
+        ? `\n\n\`${detail}\``
+        : (status ? `\n\n\`HTTP ${status}\`` : '\n\n`no response (network/timeout)`'))
+    : ''
+  return { content: `Something went wrong on my end. Give it another try in a moment.${diag}`, reauth: false }
+}
 
 /**
  * useChatEngine — the chat / interview / skill engine extracted from page.tsx.
@@ -244,27 +275,15 @@ export function useChatEngine(options: UseChatEngineOptions) {
 
       return // Success — no fallback needed
     } catch (err) {
-      const isTimeout = err instanceof DOMException && err.name === 'AbortError'
       const status = (err as { status?: number } | undefined)?.status
       const detail = err instanceof Error ? err.message : ''
       console.error('Chat API Error:', { status, detail, err });
       setIsTyping(false);
 
-      let content: string
-      if (isTimeout) {
-        content = "⏱️ That took longer than expected. Try asking again — things usually speed up quickly."
-      } else if (status === 401) {
-        content = "Your session expired. Please sign in again to continue."
-      } else {
-        // 5xx / network / unknown. The raw detail/status suffix is dev-only —
-        // production users must never see internal error text in the bubble.
-        const diag = process.env.NODE_ENV === 'development'
-          ? (detail
-              ? `\n\n\`${detail}\``
-              : (status ? `\n\n\`HTTP ${status}\`` : '\n\n`no response (network/timeout)`'))
-          : ''
-        content = `Something went wrong on my end. Give it another try in a moment.${diag}`
-      }
+      const { content, reauth } = resolveChatError(err)
+      // Route a chat 401 through the same reauth flow as the other hooks so an
+      // expired session re-authenticates instead of just showing a dead bubble.
+      if (reauth) signIn('google')
 
       setMessages(prev => [...prev, {
         id: crypto.randomUUID(),

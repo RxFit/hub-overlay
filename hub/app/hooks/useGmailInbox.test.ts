@@ -3,6 +3,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+
+const signInMock = vi.fn()
+vi.mock('next-auth/react', () => ({
+  signIn: (...args: unknown[]) => signInMock(...args),
+}))
+
 import { useGmailInbox, parseInboxResponse } from './useGmailInbox'
 
 // React 18 concurrent rendering requires an act environment flag.
@@ -45,7 +51,11 @@ const settle = () => act(async () => {
 })
 
 function jsonResponse(body: unknown) {
-  return { ok: true, json: async () => body } as unknown as Response
+  return { ok: true, status: 200, json: async () => body } as unknown as Response
+}
+
+function errorResponse(status: number, body: unknown = {}) {
+  return { ok: false, status, json: async () => body } as unknown as Response
 }
 
 describe('parseInboxResponse (unread mapping)', () => {
@@ -69,7 +79,62 @@ describe('useGmailInbox (TanStack Query-backed)', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
+    signInMock.mockClear()
     global.fetch = originalFetch
+  })
+
+  it('surfaces a fetch FAILURE as isError and does NOT zero the unread badge (error ≠ empty)', async () => {
+    global.fetch = vi.fn().mockResolvedValue(errorResponse(500, { error: 'boom' })) as unknown as typeof fetch
+
+    const onUnreadCount = vi.fn()
+    const { result, unmount } = renderHook(() => useGmailInbox({ onUnreadCount }))
+    await settle()
+
+    // Distinct error state — not an empty inbox.
+    expect(result.current.isError).toBe(true)
+    expect(result.current.threads).toEqual([])
+    // The unread badge is only emitted on a SUCCESSFUL fetch, never reset to 0
+    // on failure.
+    expect(onUnreadCount).not.toHaveBeenCalled()
+
+    unmount()
+  })
+
+  it('routes an inbox 401 through signIn(google) reauth (sibling-hook contract)', async () => {
+    global.fetch = vi.fn().mockResolvedValue(errorResponse(401, { error: 'expired' })) as unknown as typeof fetch
+
+    const onUnreadCount = vi.fn()
+    const { result, unmount } = renderHook(() => useGmailInbox({ onUnreadCount }))
+    await settle()
+
+    expect(signInMock).toHaveBeenCalledWith('google')
+    expect(result.current.isError).toBe(true)
+    expect(onUnreadCount).not.toHaveBeenCalled()
+
+    unmount()
+  })
+
+  it('a failed thread-open sets threadError (feedback + retry, not a blank pane)', async () => {
+    const t1 = { id: 't1', subject: 's1', from: 'a@x.com', date: 'd', snippet: '1', isUnread: true, messageCount: 1 }
+    const fetchMock = vi.fn((url: string) =>
+      Promise.resolve(
+        String(url).includes('threadId=')
+          ? errorResponse(500)
+          : jsonResponse({ threads: [t1], unreadCount: 1 }),
+      ),
+    )
+    global.fetch = fetchMock as unknown as typeof fetch
+
+    const { result, unmount } = renderHook(() => useGmailInbox({ onUnreadCount: vi.fn() }))
+    await settle()
+
+    await act(async () => { await result.current.openThread('t1') })
+    await settle()
+
+    expect(result.current.threadError).toBeTruthy()
+    expect(result.current.selectedThread).toBeNull()
+
+    unmount()
   })
 
   it('a background refetch updates threads + unread WITHOUT resetting the compose draft (#28)', async () => {

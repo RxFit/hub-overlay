@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { signIn } from 'next-auth/react'
 import { extractEmail, replySubject } from '@/lib/email-address'
 
 /**
@@ -80,6 +81,10 @@ export function useGmailInbox({ onUnreadCount }: UseGmailInboxOptions) {
   const [threads, setThreads] = useState<GmailThread[]>([])
   const [selectedThread, setSelectedThread] = useState<SelectedThread | null>(null)
   const [threadLoading, setThreadLoading] = useState(false)
+  // Distinct thread-open error so a failed open surfaces feedback + retry
+  // instead of silently falling back to the blank "Select a thread" stub.
+  const [threadError, setThreadError] = useState<string | null>(null)
+  const lastThreadIdRef = useRef<string | null>(null)
   const [reply, setReply] = useState('')
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
@@ -94,10 +99,29 @@ export function useGmailInbox({ onUnreadCount }: UseGmailInboxOptions) {
   // The queryFn only reads the list + unread count — it never touches
   // selectedThread/compose/reply, so a background refetch cannot disturb an open
   // thread or an in-progress draft (the #28 guarantee).
-  const { data, isLoading: loading, refetch } = useQuery({
+  const { data, isLoading: loading, error, isError, refetch } = useQuery({
     queryKey: ['gmail', 'inbox'],
     queryFn: async () => {
       const r = await fetch('/api/google/gmail?view=inbox&maxResults=20')
+      // Route 401 through reauth like the sibling Google hooks
+      // (useKPIData / useWriteFetch) so an expired token re-authenticates
+      // instead of parsing an error body into an empty inbox + a 0 badge.
+      if (r.status === 401) {
+        const body = await r.json().catch(() => ({}))
+        if (body?.reauth !== false) signIn('google')
+        const err = new Error(body?.error || 'Session expired — please sign in again')
+        ;(err as any).status = 401
+        throw err
+      }
+      // A non-ok response is a FAILURE, not an empty inbox — throw a
+      // status-tagged error so `isError` is set and the unread badge is not
+      // zeroed (the derive-from-`data` effect only runs on success).
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}))
+        const err = new Error(body?.error || `Failed to load inbox (${r.status})`)
+        ;(err as any).status = r.status
+        throw err
+      }
       return parseInboxResponse(await r.json())
     },
     refetchInterval: 60_000,
@@ -118,17 +142,34 @@ export function useGmailInbox({ onUnreadCount }: UseGmailInboxOptions) {
   const refreshInbox = () => refetch()
 
   const openThread = async (id: string) => {
+    lastThreadIdRef.current = id
     setIsComposing(false)
+    setThreadError(null)
     setThreadLoading(true)
     setMobileView('thread')
     try {
-      const d = await fetch(`/api/google/gmail?threadId=${id}`).then(r => r.json())
+      const r = await fetch(`/api/google/gmail?threadId=${id}`)
+      if (r.status === 401) {
+        const body = await r.json().catch(() => ({}))
+        if (body?.reauth !== false) signIn('google')
+        throw new Error(body?.error || 'Session expired — please sign in again')
+      }
+      if (!r.ok) throw new Error('Unable to open this conversation')
+      const d = await r.json()
       setSelectedThread(d.thread ?? null)
       // Mark as read locally
       setThreads(prev => prev.map(t => t.id === id ? { ...t, isUnread: false } : t))
       setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
-    } catch {}
+    } catch (err) {
+      // Surface a thread-level error (with retry) instead of a blank pane.
+      setThreadError(err instanceof Error ? err.message : 'Unable to open this conversation')
+    }
     setThreadLoading(false)
+  }
+
+  // Retry the last attempted thread-open (used by the thread-error block).
+  const retryOpenThread = () => {
+    if (lastThreadIdRef.current) openThread(lastThreadIdRef.current)
   }
 
   const handleComposeNew = () => {
@@ -226,7 +267,13 @@ export function useGmailInbox({ onUnreadCount }: UseGmailInboxOptions) {
     threads,
     selectedThread,
     loading,
+    // Inbox-list fetch failure (distinct from an empty inbox).
+    error: (error as Error | undefined) ?? undefined,
+    isError,
+    refetch,
     threadLoading,
+    threadError,
+    retryOpenThread,
     reply,
     sending,
     sendError,
