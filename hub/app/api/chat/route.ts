@@ -418,10 +418,18 @@ async function handleChat(req: NextRequest): Promise<Response> {
   const encoder = new TextEncoder()
   const stream = new ReadableStream({
     async start(controller) {
+      // Client abort (CLIENT_ABORT_MS): the browser gives up at 45s but the
+      // rotation would otherwise churn model + Paperclip compute up to
+      // maxDuration (120s). Thread req.signal into the rotation (which checks it
+      // between attempts) AND check it in this pump so we stop enqueuing the
+      // moment the client is gone. Bailing on abort is a clean stop — it must
+      // never surface a user-visible error into an already-abandoned response.
+      const signal = req.signal
       try {
         let fullText = ''
         const hasActiveSkill = Boolean(activeSkill)
-        for await (const chunk of streamChat(boundedMessages, systemPrompt, effectiveUseCase, hasActiveSkill, requestId)) {
+        for await (const chunk of streamChat(boundedMessages, systemPrompt, effectiveUseCase, hasActiveSkill, requestId, signal)) {
+          if (signal.aborted) break
           if (typeof chunk === 'object' && 'modelUsed' in chunk) {
             // Emit model identification event to the UI
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ modelUsed: chunk.modelUsed })}\n\n`))
@@ -430,6 +438,9 @@ async function handleChat(req: NextRequest): Promise<Response> {
           fullText += chunk
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: chunk })}\n\n`))
         }
+
+        // If the client went away, stop here — no suggestedTools, no [DONE].
+        if (signal.aborted) return
 
         // Parse suggestedTools metadata from AI response.
         // P1-1: validate every id against the real skill catalog before emitting,
@@ -451,13 +462,28 @@ async function handleChat(req: NextRequest): Promise<Response> {
 
         controller.enqueue(encoder.encode('data: [DONE]\n\n'))
       } catch (err) {
-        // Keep the REAL provider error in Cloud Run logs for operators...
-        log.error({ err }, 'Chat stream failed')
-        // ...but only ever send a clean, non-leaky message to the user.
-        const message = friendlyModelError(err)
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: message })}\n\n`))
+        // A client abort can surface as a thrown error from the rotation or from
+        // enqueue on a torn-down stream — that's not a real failure, so stop
+        // quietly without emitting an error frame to a client that is gone.
+        if (signal.aborted) {
+          log.info('Chat stream aborted by client — stopping early')
+        } else {
+          // Keep the REAL provider error in Cloud Run logs for operators...
+          log.error({ err }, 'Chat stream failed')
+          // ...but only ever send a clean, non-leaky message to the user.
+          const message = friendlyModelError(err)
+          try {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: message })}\n\n`))
+          } catch {
+            // Stream already torn down (e.g. late abort) — nothing to send.
+          }
+        }
       } finally {
-        controller.close()
+        try {
+          controller.close()
+        } catch {
+          // Controller already closed/errored by the platform after a client abort.
+        }
       }
     },
   })
