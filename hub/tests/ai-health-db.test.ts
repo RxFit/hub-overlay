@@ -184,6 +184,35 @@ describeDb('GET /api/admin/ai-health — DB-backed', () => {
     expect(wide.actions.total).toBe(1)
   })
 
+  it('reports providerConfig key PRESENCE booleans (never key material) for both env states', async () => {
+    const VARS = [
+      'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY',
+      'ANTHROPIC_API_KEY', 'Anthropic_API_Key', 'anthropic_token',
+    ] as const
+    const saved = Object.fromEntries(VARS.map(k => [k, process.env[k]]))
+    try {
+      // Absence: both providers report missing.
+      for (const k of VARS) delete process.env[k]
+      let body = await (await GET(req())).json()
+      expect(body.providerConfig).toEqual({ gemini: false, anthropic: false })
+
+      // Presence (case-variant fallbacks included): booleans flip, and the
+      // key VALUE never appears anywhere in the response.
+      process.env.GOOGLE_API_KEY = 'gem-secret-value'
+      process.env.anthropic_token = 'claude-secret-value'
+      body = await (await GET(req())).json()
+      expect(body.providerConfig).toEqual({ gemini: true, anthropic: true })
+      const raw = JSON.stringify(body)
+      expect(raw).not.toContain('gem-secret-value')
+      expect(raw).not.toContain('claude-secret-value')
+    } finally {
+      for (const k of VARS) {
+        if (saved[k] === undefined) delete process.env[k]
+        else process.env[k] = saved[k]
+      }
+    }
+  })
+
   it('returns a clean empty aggregate (nulls, no NaN, no alerts) for an empty window', async () => {
     const res = await GET(req('?window=7d'))
     expect(res.status).toBe(200)

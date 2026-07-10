@@ -20,6 +20,20 @@ function getGenAI(): GoogleGenerativeAI {
   return _genAI
 }
 
+/**
+ * Non-throwing configuration probe: is ANY Gemini API key present in the
+ * runtime env? Mirrors getGenAI()'s exact fallback list. Reports key PRESENCE
+ * only — never values, lengths, or prefixes — so it is safe to surface on the
+ * admin AI-health endpoint.
+ */
+export function isGeminiConfigured(): boolean {
+  return Boolean(
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    process.env.GOOGLE_GENERATIVE_AI_API_KEY
+  )
+}
+
 const HUB_SYSTEM_PROMPT = `You are the AI assistant for the RxFit operations hub.
 You help team members understand project status, take action on tasks, and coordinate work across departments.
 RxFit is an elite concierge executive advisory firm serving Austin's top founders and operators.
@@ -519,10 +533,86 @@ export async function* streamChat(
 }
 
 /**
+ * Walks the Claude chain (Fable 5 → Sonnet 4.6): honors per-model cooldowns,
+ * propagates mid-stream failures (partial answer already on the wire),
+ * fast-breaks on auth failures (the shared credential dooms the whole chain),
+ * and otherwise rotates to the next model. Moved verbatim out of
+ * streamChatRotation so BOTH the normal Claude-first path and the emergency
+ * cross-provider fallback (Gemini chain down) can walk it.
+ *
+ * Generator RETURN value (read via `yield*` or `.next().done`):
+ *   'served'      — a Claude model completed the answer; the request is done.
+ *   'fallthrough' — no Claude model served and NOTHING was emitted; the caller
+ *                   may continue to another provider.
+ * A thrown error always means a model failed MID-STREAM (tokens on the wire).
+ */
+async function* walkClaudeChain(
+  messages: ChatMessage[],
+  systemPrompt: string,
+  obs: ObsCtx,
+): AsyncGenerator<string | { modelUsed: string }, 'served' | 'fallthrough'> {
+  const { streamClaudeChat } = await import('@/lib/claude')
+
+  // Walk the Claude chain (Fable 5 → Sonnet 4.6) before handing off to Gemini.
+  for (let i = 0; i < CLAUDE_MODEL_CHAIN.length; i++) {
+    const claudeModel = CLAUDE_MODEL_CHAIN[i]
+    if (isModelInCooldown(claudeModel)) continue
+
+    let claudeEmitted = false
+    try {
+      // Emit modelUsed event BEFORE streaming
+      obs.provider = 'claude'
+      obs.model = claudeModel
+      obs.attempt += 1
+      emit({ type: 'ai_provider_selected', requestId: obs.requestId, provider: 'claude', model: claudeModel, attempt: obs.attempt })
+      yield { modelUsed: getModelDisplayName(claudeModel) }
+
+      // Idle watchdog guards against a connected-then-stalled Claude stream.
+      const claudeIter = streamClaudeChat(messages, systemPrompt, { model: claudeModel })[Symbol.asyncIterator]()
+      for await (const chunk of withIdleWatchdog(claudeIter, IDLE_TIMEOUT_MS, claudeModel, () =>
+        emit({ type: 'ai_timeout', requestId: obs.requestId, layer: 'idle', provider: 'claude', model: claudeModel }))) {
+        claudeEmitted = true
+        yield chunk
+      }
+      return 'served' // Claude success — done
+    } catch (err: unknown) {
+      // W-2 FIX: Classify error to determine cooldown behavior
+      const claudeErr = (err as { claudeError?: { type: string } })?.claudeError
+      const isRateLimit = claudeErr?.type === 'rate_limit'
+      recordModelFailure(claudeModel, isRateLimit)
+
+      // CRITICAL: if this model already streamed tokens before failing, those
+      // tokens are on the wire. Rotating would restart the answer and
+      // duplicate/garble it. Propagate the error instead.
+      if (claudeEmitted) {
+        throw err
+      }
+
+      // Auth/key/billing failures share the credential across the whole Claude
+      // chain — the backup can't succeed either, so skip straight to Gemini.
+      if (claudeErr?.type === 'auth') {
+        emit({ type: 'ai_fallback', requestId: obs.requestId, from: claudeModel, to: 'gemini-2.5-flash', reason: 'auth' })
+        console.warn(`[streamChat] Claude ${claudeModel} auth failure — skipping Claude chain, falling back to Gemini:`, err)
+        break
+      }
+
+      // Otherwise try the next Claude model (backup), then Gemini.
+      const claudeFallbackTo = CLAUDE_MODEL_CHAIN[i + 1] ?? 'gemini-2.5-flash'
+      emit({ type: 'ai_fallback', requestId: obs.requestId, from: claudeModel, to: claudeFallbackTo, reason: isRateLimit ? 'rate_limit' : 'error' })
+      console.warn(`[streamChat] Claude ${claudeModel} failed pre-stream (${isRateLimit ? 'rate_limit' : 'error'}), trying next model:`, err)
+    }
+  }
+  return 'fallthrough'
+}
+
+/**
  * The Claude→Gemini rotation. Emits per-attempt telemetry (provider_selected,
  * timeout, fallback) through `obs`; the streamChat wrapper above emits the
  * terminal events. Behavior (rotation, cooldown, timeouts) is unchanged from
- * before the telemetry seam was added.
+ * before the telemetry seam was added, PLUS the P0 emergency cross-provider
+ * fallback: a Gemini chain that dies PRE-STREAM (e.g. a broken/missing
+ * GEMINI_API_KEY) no longer takes default chat down when a configured Claude
+ * chain could serve instead.
  */
 async function* streamChatRotation(
   messages: ChatMessage[],
@@ -531,62 +621,99 @@ async function* streamChatRotation(
   hasActiveSkill: boolean,
   obs: ObsCtx,
 ): AsyncGenerator<string | { modelUsed: string }> {
+  // Loop guard for the emergency fallback below: once the Claude chain has
+  // been walked for this request it is never re-entered (no Claude → Gemini →
+  // Claude cycle; a request walks each provider chain at most once).
+  let claudeTried = false
+
   if (shouldUseClaude(useCase, hasActiveSkill)) {
-    const { streamClaudeChat } = await import('@/lib/claude')
-
-    // Walk the Claude chain (Fable 5 → Sonnet 4.6) before handing off to Gemini.
-    for (let i = 0; i < CLAUDE_MODEL_CHAIN.length; i++) {
-      const claudeModel = CLAUDE_MODEL_CHAIN[i]
-      if (isModelInCooldown(claudeModel)) continue
-
-      let claudeEmitted = false
-      try {
-        // Emit modelUsed event BEFORE streaming
-        obs.provider = 'claude'
-        obs.model = claudeModel
-        obs.attempt += 1
-        emit({ type: 'ai_provider_selected', requestId: obs.requestId, provider: 'claude', model: claudeModel, attempt: obs.attempt })
-        yield { modelUsed: getModelDisplayName(claudeModel) }
-
-        // Idle watchdog guards against a connected-then-stalled Claude stream.
-        const claudeIter = streamClaudeChat(messages, systemPrompt, { model: claudeModel })[Symbol.asyncIterator]()
-        for await (const chunk of withIdleWatchdog(claudeIter, IDLE_TIMEOUT_MS, claudeModel, () =>
-          emit({ type: 'ai_timeout', requestId: obs.requestId, layer: 'idle', provider: 'claude', model: claudeModel }))) {
-          claudeEmitted = true
-          yield chunk
-        }
-        return // Claude success — done
-      } catch (err: unknown) {
-        // W-2 FIX: Classify error to determine cooldown behavior
-        const claudeErr = (err as { claudeError?: { type: string } })?.claudeError
-        const isRateLimit = claudeErr?.type === 'rate_limit'
-        recordModelFailure(claudeModel, isRateLimit)
-
-        // CRITICAL: if this model already streamed tokens before failing, those
-        // tokens are on the wire. Rotating would restart the answer and
-        // duplicate/garble it. Propagate the error instead.
-        if (claudeEmitted) {
-          throw err
-        }
-
-        // Auth/key/billing failures share the credential across the whole Claude
-        // chain — the backup can't succeed either, so skip straight to Gemini.
-        if (claudeErr?.type === 'auth') {
-          emit({ type: 'ai_fallback', requestId: obs.requestId, from: claudeModel, to: 'gemini-2.5-flash', reason: 'auth' })
-          console.warn(`[streamChat] Claude ${claudeModel} auth failure — skipping Claude chain, falling back to Gemini:`, err)
-          break
-        }
-
-        // Otherwise try the next Claude model (backup), then Gemini.
-        const claudeFallbackTo = CLAUDE_MODEL_CHAIN[i + 1] ?? 'gemini-2.5-flash'
-        emit({ type: 'ai_fallback', requestId: obs.requestId, from: claudeModel, to: claudeFallbackTo, reason: isRateLimit ? 'rate_limit' : 'error' })
-        console.warn(`[streamChat] Claude ${claudeModel} failed pre-stream (${isRateLimit ? 'rate_limit' : 'error'}), trying next model:`, err)
-      }
-    }
+    claudeTried = true
+    if ((yield* walkClaudeChain(messages, systemPrompt, obs)) === 'served') return
   }
 
   // Fallback: Gemini 2.5 Flash → Gemini 2.5 Pro
-  yield* streamGeminiWithFallback(messages, systemPrompt, obs)
+  //
+  // Emission tracking for the cross-provider fallback: re-yield everything the
+  // Gemini chain produces, remembering whether any PLAIN STRING went out.
+  // Strings are user-visible wire content (answer text or the degraded-mode
+  // banner); `modelUsed` events are NOT counted — they are cosmetic badge
+  // switches the UI supersedes cleanly. If the chain throws with no string
+  // emitted, the wire holds no answer and restarting on Claude is safe.
+  let geminiEmittedText = false
+  try {
+    for await (const chunk of streamGeminiWithFallback(messages, systemPrompt, obs)) {
+      if (typeof chunk === 'string' && chunk.length > 0) geminiEmittedText = true
+      yield chunk
+    }
+    return
+  } catch (err) {
+    // Mid-stream failure: part of the answer is already on the wire —
+    // restarting on Claude would duplicate/garble it. Propagate (unchanged).
+    if (geminiEmittedText) throw err
+
+    // P0 EMERGENCY CROSS-PROVIDER FALLBACK — one broken provider credential
+    // must not be a total AI outage. The Gemini chain failed PRE-STREAM; if
+    // the Claude chain was not already walked this request AND an Anthropic
+    // key is configured, try it before surfacing the error. Routing economics
+    // are unchanged: default chat still tries Gemini FIRST — Claude engages
+    // only here, when Gemini is already down.
+    const { isClaudeConfigured } = await import('@/lib/claude')
+    if (claudeTried || !isClaudeConfigured()) throw err
+    claudeTried = true
+
+    emit({
+      type: 'ai_fallback',
+      requestId: obs.requestId,
+      // obs.model is only (re)assigned by a Gemini model that got past the
+      // connect race; when the chain dies before any connect it is still
+      // unset (Claude was not walked on this path), so name the chain head.
+      from: obs.model ?? 'gemini-2.5-flash',
+      to: CLAUDE_MODEL_CHAIN[0],
+      reason: isAuthOrKeyError(err) ? 'auth' : 'error',
+    })
+    console.warn('[streamChat] Gemini chain failed pre-stream — attempting Claude chain as emergency cross-provider fallback:', err)
+
+    // Walk the Claude chain, injecting the degraded-mode notice (same style as
+    // the intra-Gemini i>0 banner) before the FIRST text chunk only — i.e.
+    // only once a Claude model has demonstrably connected and started
+    // answering. A Claude pre-stream failure therefore leaves the wire
+    // untouched, so the original error can still surface cleanly below.
+    let claudeServed = false
+    let noticeYielded = false
+    let modelDisplay = getModelDisplayName(CLAUDE_MODEL_CHAIN[0])
+    const walk = walkClaudeChain(messages, systemPrompt, obs)
+    try {
+      while (true) {
+        const step = await walk.next()
+        if (step.done) {
+          claudeServed = step.value === 'served'
+          break
+        }
+        const chunk = step.value
+        if (typeof chunk === 'object' && 'modelUsed' in chunk) {
+          modelDisplay = chunk.modelUsed
+        } else if (!noticeYielded && typeof chunk === 'string' && chunk.length > 0) {
+          noticeYielded = true
+          yield `⚠️ *Primary model unavailable — using ${modelDisplay}*\n\n`
+        }
+        yield chunk
+      }
+    } finally {
+      // Early consumer teardown (e.g. client abort) must still close the
+      // inner walk. `for await` would do this automatically but discards the
+      // generator's return value, which distinguishes served vs fell-through.
+      await walk.return('fallthrough')
+    }
+    if (claudeServed) return
+
+    // The Claude chain ALSO failed pre-stream (or was fully in cooldown).
+    // Surface the ORIGINAL Gemini error so friendlyModelError classifies the
+    // PRIMARY failure; the Claude attempts were already console.warn'ed and
+    // counted in telemetry by walkClaudeChain. (A Claude MID-stream failure
+    // propagates its own error out of the loop above instead — those tokens
+    // are on the wire.)
+    throw err
+  }
 }
 
 /**

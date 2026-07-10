@@ -15,9 +15,13 @@ const hoisted = vi.hoisted(() => ({
   geminiBehavior: null as null | ((model: string) => Promise<{ stream: AsyncIterable<{ text(): string }> }>),
   claudeCalls: [] as string[],
   geminiCalls: [] as string[],
+  // False = the emergency cross-provider fallback (P0) stays disengaged, so
+  // every assertion below exercises the same terminal paths as pre-P0.
+  claudeConfigured: false,
 }))
 
 vi.mock('@/lib/claude', () => ({
+  isClaudeConfigured: () => hoisted.claudeConfigured,
   streamClaudeChat: (_msgs: unknown, _sys: unknown, opts?: { model?: string }) => {
     const model = opts?.model ?? 'claude-fable-5'
     hoisted.claudeCalls.push(model)
@@ -78,6 +82,7 @@ beforeEach(() => {
   hoisted.geminiBehavior = null
   hoisted.claudeCalls.length = 0
   hoisted.geminiCalls.length = 0
+  hoisted.claudeConfigured = false
   __resetModelCooldownsForTest()
   vi.useFakeTimers()
   vi.spyOn(console, 'warn').mockImplementation(() => {})
