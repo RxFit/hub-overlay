@@ -5,9 +5,9 @@ import { authOptions } from '@/lib/auth'
 import { createLogger } from '@/lib/logger'
 import { streamChat, buildSystemPrompt, friendlyModelError } from '@/lib/gemini'
 import { getCompanies, getIssues, getAgents, getRuns } from '@/lib/paperclip'
-import { fetchUrlContent, fetchDriveDocContent } from '@/lib/content-fetch'
 import { searchSemanticBrain } from '@/lib/vertex'
-import { searchWeb, fetchUrlWithExa } from '@/lib/exa'
+import { searchWeb } from '@/lib/exa'
+import { resolveAttachmentContext } from '@/lib/attachment-resolver'
 import { loadSkillContent } from '@/lib/skills-loader'
 import { SKILL_MAP } from '@/lib/skills'
 import { needsInternalSearch, needsExternalSearch, isTrivialMessage } from '@/lib/search-routing'
@@ -379,88 +379,12 @@ async function handleChat(req: NextRequest): Promise<Response> {
   const searchResults = await searchPromise
   const searchContext = searchResults.join('')
 
-  // Resolve attachments into text context
-  let attachmentContext = ''
-  if (attachments && attachments.length > 0) {
-    const accessToken = googleAccessToken
-
-    const resolvedParts: string[] = []
-
-    for (const att of attachments.slice(0, 5)) {  // Cap at 5
-      try {
-        if (att.type === 'text' && att.content) {
-          // Direct text — use as-is
-          resolvedParts.push(
-            `### Attached Text: "${att.label}"\n\n${att.content.slice(0, 16_000)}`
-          )
-        } else if (att.type === 'url' && att.url) {
-          // Try Exa.AI first (handles JS-heavy pages), fall back to raw fetch
-          let urlText: string | undefined
-          try {
-            urlText = await fetchUrlWithExa(att.url)
-          } catch {
-            // Exa unavailable or failed
-          }
-          if (!urlText?.trim()) {
-            urlText = await fetchUrlContent(att.url)
-          }
-          resolvedParts.push(
-            `### Attached URL: ${att.url}\n\n${urlText}`
-          )
-        } else if (att.type === 'document' && att.fileId) {
-          // Vertex AI semantic search first (token-efficient), Drive API fallback
-          let docText: string | null = null
-
-          // Attempt Vertex AI semantic search for the document.
-          // Datastore is env-configurable (P0-4); should become tenant-derived
-          // with the per-tenant work (P0-3) rather than a single shared store.
-          if (lastUserMsg) {
-            const vertexResults = await withTimeout(
-              searchSemanticBrain(
-                `${lastUserMsg.content} ${att.label}`,
-                process.env.VERTEX_DATA_STORE_ID || 'rxfit-gdrive'
-              ),
-              6_000,
-              null,
-              'attachment-vertex',
-            )
-            if (vertexResults && vertexResults.length > 0) {
-              docText = vertexResults
-                .map(r => `**${r.title}**\n${r.snippet}`)
-                .join('\n\n---\n\n')
-              docText = `[Retrieved via Semantic Brain]\n\n${docText}`
-            }
-          }
-
-          // Fallback: direct Drive API export
-          if (!docText && accessToken) {
-            docText = await fetchDriveDocContent(accessToken, att.fileId, att.mimeType)
-          }
-
-          if (!docText && !accessToken) {
-            log.warn({ label: att.label, fileId: att.fileId }, 'Document attachment unresolved: no Google access token')
-          }
-
-          const docFallback = !accessToken
-            ? '[Unable to retrieve document content: your Google session has no valid access token (it may be missing or expired). Ask the user to sign out and sign back in to re-grant Google Drive access.]'
-            : '[Unable to retrieve document content]'
-
-          resolvedParts.push(
-            `### Attached Document: "${att.label}"\n\n${docText ?? docFallback}`
-          )
-        }
-      } catch (err) {
-        log.error({ err, label: att.label }, 'Failed to resolve attachment')
-        resolvedParts.push(
-          `### Attached: "${att.label}"\n\n[Failed to load content]`
-        )
-      }
-    }
-
-    if (resolvedParts.length > 0) {
-      attachmentContext = `## User-Attached Context\n\nThe user has attached the following ${resolvedParts.length} item(s) to their message. Use this content to inform your response.\n\n${resolvedParts.join('\n\n---\n\n')}`
-    }
-  }
+  // Resolve attachments into text context. Extracted to resolveAttachmentContext
+  // (lib/attachment-resolver.ts), which resolves the (independent) attachments
+  // CONCURRENTLY — preserving the .slice(0,5) cap, input order of the injected
+  // blocks, per-attachment error isolation, and every existing timeout. This cuts
+  // worst-case time-to-first-token from serial (~30-40s for 3-5 items) to parallel.
+  const attachmentContext = await resolveAttachmentContext(attachments, lastUserMsg, googleAccessToken)
 
   // Combine all injected context
   const allInjectedContext = [searchContext, attachmentContext].filter(Boolean).join('\n\n')
