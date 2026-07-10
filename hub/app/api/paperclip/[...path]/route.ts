@@ -10,6 +10,7 @@ import { withRetry } from '@/lib/retry'
 import { getTenantId } from '@/lib/tenant-context'
 import { verifyGateToken } from '@/lib/gateToken'
 import { requiredWriteRank, ROLE_RANK } from '@/lib/proxyAuthz'
+import { isProtectedCompany } from '@/lib/protected-workspaces'
 import crypto from 'crypto'
 
 const log = createLogger('paperclip/proxy')
@@ -122,6 +123,31 @@ async function proxyRequest(
   )
   if (!isAllowed) {
     return NextResponse.json({ error: 'Forbidden path' }, { status: 403 })
+  }
+
+  // SAFETY: protected workspaces can NEVER be deleted, by ANY role (including
+  // superadmin) and regardless of how the request was constructed (chat, direct
+  // fetch). This is the real enforcement boundary — checked BEFORE and
+  // INDEPENDENT of the admin role gate below. Match the company id
+  // case-INSENSITIVELY against `matchPath` (already lowercased), so an
+  // uppercase-UUID delete cannot bypass the guard the way an uppercase UUID
+  // once bypassed the role gate. Exact `/api/companies/<id>` only — nested
+  // deletes (agents/issues) and non-company deletes are unaffected.
+  if (method.toUpperCase() === 'DELETE') {
+    const protectedCompanyMatch = matchPath.match(/^\/api\/companies\/([a-f0-9-]+)$/)
+    if (protectedCompanyMatch && isProtectedCompany(protectedCompanyMatch[1])) {
+      log.warn(
+        { path: apiPath, companyId: protectedCompanyMatch[1] },
+        'Refused delete of protected workspace',
+      )
+      return NextResponse.json(
+        {
+          error: 'This workspace is protected and cannot be deleted.',
+          code: 'PROTECTED_WORKSPACE',
+        },
+        { status: 403 }
+      )
+    }
   }
 
   // Project-scoped access control
