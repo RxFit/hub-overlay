@@ -35,6 +35,7 @@ import {
   getIssues,
   getAgents,
   getRuns,
+  deleteCompany,
   PaperclipSchemaError,
   isAgentMemberOfCompany,
 } from '@/lib/paperclip'
@@ -200,5 +201,34 @@ describe('P1-6b: isAgentMemberOfCompany', () => {
 
   it('returns false when the company has no agents', () => {
     expect(isAgentMemberOfCompany([], 'a1')).toBe(false)
+  })
+})
+
+describe('deleteCompany — protected-workspace guard (defense in depth)', () => {
+  const PROTECTED = 'dddddddd-0000-0000-0000-00000000000d'
+  const original = process.env.PROTECTED_COMPANY_IDS
+
+  beforeEach(() => {
+    process.env.PROTECTED_COMPANY_IDS = PROTECTED
+  })
+  afterEach(() => {
+    if (original === undefined) delete process.env.PROTECTED_COMPANY_IDS
+    else process.env.PROTECTED_COMPANY_IDS = original
+  })
+
+  it('throws for a protected id and never issues the DELETE', async () => {
+    await expect(deleteCompany(PROTECTED)).rejects.toThrow(/protected/i)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('throws for a protected id regardless of UUID case', async () => {
+    await expect(deleteCompany(PROTECTED.toUpperCase())).rejects.toThrow(/protected/i)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('proceeds (issues the DELETE) for a non-protected id', async () => {
+    fetchMock.mockResolvedValueOnce(res({}))
+    await deleteCompany('eeeeeeee-0000-0000-0000-00000000000e')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })

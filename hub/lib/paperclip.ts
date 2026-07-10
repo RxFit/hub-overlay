@@ -6,6 +6,7 @@ import { breaker } from '@/lib/circuit-breaker'
 import { withRetry } from '@/lib/retry'
 import { loopDetector } from '@/lib/loop-detector'
 import { getTenantId } from './tenant-context'
+import { isProtectedCompany } from '@/lib/protected-workspaces'
 import crypto from 'crypto'
 import {
   CompaniesResponseSchema,
@@ -322,6 +323,12 @@ export async function createCompany(data: {
 }
 
 export async function deleteCompany(companyId: string, scope?: string): Promise<void> {
+  // SAFETY (defense in depth): protected workspaces are load-bearing and must
+  // never be deleted. The proxy DELETE handler is the primary guard; this throw
+  // protects any server-side caller of the helper too.
+  if (isProtectedCompany(companyId)) {
+    throw new Error('This workspace is protected and cannot be deleted.')
+  }
   await paperclipFetch<unknown>(`/api/companies/${companyId}`, { method: 'DELETE' }, undefined, scope)
 }
 
