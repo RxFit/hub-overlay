@@ -56,7 +56,21 @@ jobs:
     runs-on: ubuntu-latest
     # Gate: run ONLY when the triggering CI run succeeded (workflow_run) or on a
     # manual dispatch. This is what blocks a red CI from deploying.
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    #
+    # SECURITY: the workflow_run path additionally requires the CI run to have
+    # been a `push` on THIS repo. Without these clauses, a fork PR from a branch
+    # literally named "master" spoofs the `on.workflow_run.branches: [master]`
+    # filter — since ci.yml runs `on: pull_request`, the fork's CI completion
+    # would trigger this deploy, checking out the attacker's head_sha and running
+    # `gcloud run deploy` with secrets.GCP_SA_KEY (classic workflow_run
+    # untrusted-checkout). event=='push' + head_repository==this-repo close it.
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' ||
+        (github.event.workflow_run.conclusion == 'success' &&
+         github.event.workflow_run.event == 'push' &&
+         github.event.workflow_run.head_repository.full_name == github.repository)
+      }}
     permissions:
       contents: read
       id-token: write   # needed if you switch to Workload Identity Federation
