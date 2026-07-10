@@ -32,6 +32,7 @@ export const hubUsers = pgTable(
     assignedBy:        text('assigned_by'),
     assignedAt:        timestamp('assigned_at').defaultNow(),
     lastLogin:         timestamp('last_login'),
+    googleRefreshToken: text('google_refresh_token'), // Google OAuth offline refresh token
     createdAt:         timestamp('created_at').defaultNow(),
     updatedAt:         timestamp('updated_at').defaultNow(),
   },

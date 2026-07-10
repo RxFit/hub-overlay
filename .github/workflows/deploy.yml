@@ -27,11 +27,17 @@ name: Deploy to Cloud Run
 # across `gcloud run deploy --source` deploys. Only non-secret config is set below.
 
 on:
-  push:
+  # Deploy ONLY after the "CI" workflow (ci.yml) completes SUCCESSFULLY on
+  # master. Previously this triggered on `push: master` independently of CI, so
+  # a red typecheck/lint/unit/e2e run could still ship. Now the deploy job's
+  # `if:` below requires `conclusion == 'success'` — a failed or cancelled CI
+  # can no longer deploy. workflow_run cannot filter by path, so every
+  # successful master CI run is eligible; the job checks out the exact commit CI
+  # validated (workflow_run.head_sha), not just the branch tip.
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [master]
-    paths:
-      - 'hub/**'
-      - '.github/workflows/deploy.yml'
   workflow_dispatch: {}   # allow manual "Run workflow" from the Actions tab
 
 # Never run two deploys of the same service at once; let an in-flight deploy finish.
@@ -48,12 +54,19 @@ jobs:
   deploy:
     name: Build & deploy
     runs-on: ubuntu-latest
+    # Gate: run ONLY when the triggering CI run succeeded (workflow_run) or on a
+    # manual dispatch. This is what blocks a red CI from deploying.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     permissions:
       contents: read
       id-token: write   # needed if you switch to Workload Identity Federation
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Deploy the EXACT commit CI validated (workflow_run.head_sha); fall
+          # back to the dispatch ref for manual runs.
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -94,10 +107,23 @@ jobs:
             --project="$GCP_PROJECT" --region="$REGION" \
             --format='value(status.url)')
           echo "Service URL: $URL"
-          CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$URL")
-          echo "HTTP $CODE"
-          # Accept any non-5xx (login redirects, auth walls, etc. are fine)
-          if [ "$CODE" -ge 500 ] || [ "$CODE" = "000" ]; then
-            echo "::error::Smoke test failed — service returned $CODE"
+
+          # Informational only: the root path 302s to /login (auth wall) and
+          # never touches AI/DB — kept purely as an "is the socket up" signal.
+          ROOT=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$URL" || echo 000)
+          echo "GET /            -> HTTP $ROOT"
+
+          # GATING assertion: /api/healthz returns 200 ONLY when the DB answers
+          # SELECT 1 AND at least one AI provider key is present. A 503 means the
+          # revision is up but NOT serviceable (missing AI key / DB down) — fail
+          # the deploy so a broken revision does not stay live. (The old check
+          # curled `/` and accepted any non-5xx, which 302s to /login and never
+          # exercises AI or the DB — it would pass an AI-provider outage.)
+          CODE=$(curl -s -o /tmp/healthz.json -w '%{http_code}' --max-time 30 "$URL/api/healthz" || echo 000)
+          echo "GET /api/healthz -> HTTP $CODE"
+          echo "Body: $(cat /tmp/healthz.json 2>/dev/null || true)"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::Smoke test failed — /api/healthz returned $CODE (expected 200). Revision is not serviceable."
             exit 1
           fi
+          echo "Smoke test passed — /api/healthz == 200."
