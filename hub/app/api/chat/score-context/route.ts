@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth'
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import type { ContextScoreResult, InterviewIntent } from '@/types'
 import { issueGateToken, GATE_PASS_THRESHOLD } from '@/lib/gateToken'
+import { stripSuggestedTools } from '@/lib/model-output'
 
 /**
  * Attach a server-signed gate token to a genuinely passing result (P0-2). This
@@ -140,10 +141,9 @@ Rules:
 
 function parseScoreResponse(raw: string): ContextScoreResult {
   // Strip any markdown fencing or extra text
-  const clean = raw
+  const clean = stripSuggestedTools(raw)
     .replace(/```json\n?/g, '')
     .replace(/```\n?/g, '')
-    .replace(/<!--suggestedTools:\[.*?\]-->/g, '')
     .trim()
 
   // Find the JSON object

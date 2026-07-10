@@ -1,6 +1,7 @@
 import React, { Fragment } from 'react'
 import { EmailPreviewCard } from '@/app/components/EmailPreviewCard'
 import { SKILL_MAP } from '@/lib/skills'
+import { stripSuggestedTools, stripTrailingPartialSuggestedTools } from '@/lib/model-output'
 
 /* ── Safe Markdown-like renderer (no dangerouslySetInnerHTML) ── */
 export function parseInlineMarkdown(text: string, onToolActivate?: (toolId: string) => void): React.ReactNode[] {
@@ -53,8 +54,11 @@ interface MessageContentProps {
 }
 
 export function MessageContent({ content, onToolActivate }: MessageContentProps) {
-  // Strip suggestedTools metadata from visible content
-  const cleanContent = content.replace(/<!--suggestedTools:\[.*?\]-->/g, '').trimEnd()
+  // Strip suggestedTools metadata from visible content. The tolerant shared
+  // regex survives whitespace/newline drift in the model's comment formatting,
+  // and the partial-tail strip hides a comment that is still streaming in
+  // (an unterminated "<!--suggestedTools:[…" at the end of the content).
+  const cleanContent = stripTrailingPartialSuggestedTools(stripSuggestedTools(content)).trimEnd()
   
   // Custom parser to split by HTML code blocks and generic code blocks
   const parts: { type: 'text' | 'html' | 'code', content: string, lang?: string }[] = []

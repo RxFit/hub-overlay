@@ -56,6 +56,17 @@ describe('resolvePreCogVerdict (high-stakes briefing eval → outcome)', () => {
     expect(resolvePreCogVerdict(raw, true)).toEqual({ outcome: 'sufficient' })
   })
 
+  it('strips the degraded-mode banner so it never leaks into a follow-up question', () => {
+    const q = 'What should we do if the client has no email on file?'
+    const raw = `⚠️ *Primary model unavailable — using Claude Sonnet 4.6*\n\n${q}`
+    expect(resolvePreCogVerdict(raw, true)).toEqual({ outcome: 'insufficient', question: q })
+  })
+
+  it('fails OPEN when the eval produced ONLY a banner (no verdict text)', () => {
+    const raw = '⚠️ *Primary model unavailable — using Claude Sonnet 4.6*\n\n'
+    expect(resolvePreCogVerdict(raw, true)).toEqual({ outcome: 'unavailable' })
+  })
+
   it('fails OPEN (unavailable, NOT a silent insufficient) when the eval response is not ok', () => {
     // A 429/5xx yields an empty/opaque stream — must never read as insufficient
     // with a blank reason. evalOk=false → proceed.
