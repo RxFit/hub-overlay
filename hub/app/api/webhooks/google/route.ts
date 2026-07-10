@@ -127,18 +127,37 @@ async function processGoogleDelta(resourceId: string, resourceUri: string) {
   console.log(`[Google Webhook] Successfully indexed document ${fileId} with ${result.chunkIds.length} chunks`);
 }
 
+/**
+ * Build the escaped, anchored SQL-LIKE pattern that matches exactly the chunks
+ * ingested for a single Drive file.
+ *
+ * The sourceUrl stored on ingest is the Drive file's webViewLink (or a
+ * `.../document/d/<fileId>/edit` fallback) — both embed the id as `/d/<fileId>/`.
+ * A bare `LIKE '%<fileId>%'` over-deletes: Drive ids can contain `_`, which is a
+ * single-char LIKE wildcard, and an unanchored substring can collide with
+ * unrelated URLs. Anchor on the `/d/<fileId>/` path segment and escape the LIKE
+ * metacharacters (`\`, `%`, `_`) so the id is matched literally. Use with
+ * `ESCAPE '\'`.
+ */
+export function buildChunkDeleteLikePattern(fileId: string): string {
+  const escapedFileId = fileId.replace(/([\\%_])/g, '\\$1');
+  return `%/d/${escapedFileId}/%`;
+}
+
 async function deleteChunksForFile(fileId: string) {
   const { db } = await import('@/lib/db');
   const { documentChunks } = await import('@/lib/schema');
-  const { like, and, eq } = await import('drizzle-orm');
+  const { and, eq, sql } = await import('drizzle-orm');
   const { getDefaultTenantId } = await import('@/lib/tenant-context');
   const tenantId = getDefaultTenantId(); // deliberate use of @deprecated helper (see PHASE 2 TODO)
   // PHASE 2 TODO: derive tenant from the webhook channel metadata.
 
+  const pattern = buildChunkDeleteLikePattern(fileId);
+
   const deleted = await db.delete(documentChunks).where(
     and(
       eq(documentChunks.tenantId, tenantId),
-      like(documentChunks.sourceUrl, `%${fileId}%`)
+      sql`${documentChunks.sourceUrl} LIKE ${pattern} ESCAPE '\\'`
     )
   ).returning();
 

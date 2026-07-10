@@ -191,9 +191,23 @@ export async function POST(req: NextRequest) {
       },
     })
 
-    // Trigger background database pruning asynchronously
-    pruneExpiredMemories(TENANT_ID).catch((e) => log.error({ err: e }, 'Failed to prune expired memories'))
-    pruneOldEventLogs(TENANT_ID).catch((e) => log.error({ err: e }, 'Failed to prune old event logs'))
+    // Run retention pruning to completion BEFORE responding. These are bounded
+    // deletes and the sync route isn't latency-critical; a fire-and-forget
+    // launch can be frozen by scale-to-zero serverless (Cloud Run) after the
+    // response returns, so the prune may never run. allSettled ensures a prune
+    // failure is logged but never fails the sync.
+    const pruneResults = await Promise.allSettled([
+      pruneExpiredMemories(TENANT_ID),
+      pruneOldEventLogs(TENANT_ID),
+    ])
+    pruneResults.forEach((r, i) => {
+      if (r.status === 'rejected') {
+        log.error(
+          { err: r.reason },
+          i === 0 ? 'Failed to prune expired memories' : 'Failed to prune old event logs',
+        )
+      }
+    })
 
     return NextResponse.json({
       synced: upserted,

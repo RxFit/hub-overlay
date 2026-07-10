@@ -91,22 +91,47 @@ export async function searchSimilarDocuments(tenantId: string, query: string, li
 }
 
 /**
- * Embed a chunk of text and insert it into the pgvector database
+ * Embed a chunk of text and store it in the pgvector database, idempotently.
+ *
+ * The name promises upsert semantics, but a plain INSERT let repeated ingests
+ * of the same (tenantId, sourceUrl, content) accumulate duplicate chunks that
+ * all surface in search. We can't clear every chunk for the sourceUrl here —
+ * a single document is stored as many chunks sharing one sourceUrl (see
+ * ingest-client), so a blanket delete would wipe sibling chunks. Instead we
+ * dedupe on the exact chunk: delete any prior row with identical
+ * (tenantId, sourceUrl, content) and re-insert with a fresh embedding, in one
+ * transaction. Re-ingesting an unchanged chunk stays a single row; distinct
+ * chunks of the same document are untouched. First-ingest behaviour is
+ * unchanged (nothing to delete).
  */
 export async function upsertDocumentChunk(tenantId: string, sourceUrl: string, content: string) {
   try {
     const embedding = await generateEmbedding(content)
-    
-    const [inserted] = await db
-      .insert(documentChunks)
-      .values({
-        tenantId,
-        sourceUrl,
-        content,
-        embedding,
-      })
-      .returning()
-      
+
+    const inserted = await db.transaction(async (tx) => {
+      await tx
+        .delete(documentChunks)
+        .where(
+          and(
+            eq(documentChunks.tenantId, tenantId),
+            eq(documentChunks.sourceUrl, sourceUrl),
+            eq(documentChunks.content, content)
+          )
+        )
+
+      const [row] = await tx
+        .insert(documentChunks)
+        .values({
+          tenantId,
+          sourceUrl,
+          content,
+          embedding,
+        })
+        .returning()
+
+      return row
+    })
+
     return inserted
   } catch (err) {
     log.error({ err }, 'Failed to upsert document chunk')
