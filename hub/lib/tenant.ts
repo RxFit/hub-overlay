@@ -38,6 +38,10 @@ export interface TenantConfig {
   /** Google Drive folder id holding this tenant's meeting transcripts.
    *  When unset, the Transcripts tab returns an empty list (no cross-tenant leakage). */
   transcriptsFolderId?: string
+  /** Workspace admin contact surfaced in "request access" affordances (access
+   *  dead-ends, onboarding placeholder). Optional — left unset means the
+   *  mailto opens with a blank recipient the user addresses themselves. */
+  adminContactEmail?: string
   roles: Record<string, RoleConfig>
 }
 

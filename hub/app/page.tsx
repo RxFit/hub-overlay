@@ -17,6 +17,7 @@ import { AnimatedNumber } from '@/app/components/AnimatedNumber'
 import { OnboardingCard, shouldShowOnboardingCard } from '@/app/components/OnboardingCard'
 import { OnboardingBanner } from '@/app/components/OnboardingBanner'
 import { GoogleChatPanel } from '@/app/components/GoogleChatPanel'
+import { RequestAccessLink } from '@/app/components/RequestAccessLink'
 import { InfoPopover } from '@/app/components/InfoPopover'
 import { FounderLensWizard } from '@/app/components/FounderLensWizard'
 import { useTenant } from '@/app/components/TenantProvider'
@@ -960,6 +961,9 @@ export default function HubPage() {
                       <p style={{ fontWeight: 600, color: 'var(--accent)' }}>⚡ Locked Panel Information</p>
                       <p style={{ marginTop: '6px' }}>The <b>Execution Feed</b> displays running tasks, background operations, and AI agent output in real time.</p>
                       <p><b>How to unlock:</b> Contact your hub administrator to assign your operational role (Staff/Admin) in the Hub Roles configuration.</p>
+                      <p style={{ marginTop: '6px' }}>
+                        <RequestAccessLink role={userRole} reason="Requesting operational role assignment (Execution Feed locked)" label="Request role assignment →" />
+                      </p>
                     </>
                   }
                 />

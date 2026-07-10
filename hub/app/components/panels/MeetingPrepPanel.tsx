@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { lastAssistantContent } from '@/lib/panel-artifact'
 import type { ToolPanelContentProps, ToolArtifactSection } from '@/types'
 
 const PROMPTS = [
@@ -44,13 +45,15 @@ function parseMessages(messages: ToolPanelContentProps['messages']): ToolArtifac
 export default function MeetingPrepPanel({ messages, onInjectChat, onArtifactUpdate, artifacts }: ToolPanelContentProps) {
   const [checked, setChecked] = useState<Record<string, boolean>>({})
 
+  const lastContent = lastAssistantContent(messages)
+
   useEffect(() => {
     const sections = parseMessages(messages)
     if (sections.length > 0) {
       onArtifactUpdate({ toolId: 'meeting-prep', title: 'Meeting Prep', sections })
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages.length, onArtifactUpdate])
+  }, [lastContent, onArtifactUpdate])
 
   const sections = artifacts?.sections ?? []
   const agendaItems = sections.filter(s => s.type === 'step')

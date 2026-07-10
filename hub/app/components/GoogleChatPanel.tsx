@@ -6,6 +6,7 @@ import type { ChatSpace, ChatMessage, SpaceMember } from '@/app/hooks/useGoogleC
 import { MentionPicker, useMentionTrigger } from '@/app/components/MentionPicker'
 import { InfoPopover } from '@/app/components/InfoPopover'
 import { GmailView } from '@/app/components/gmail/GmailView'
+import { useModalA11y } from '@/app/hooks/useModalA11y'
 
 
 /* ══════════════════════════════════════════
@@ -208,16 +209,37 @@ function MessageThread({
   const [draft, setDraft] = useState('')
   const [cursorPos, setCursorPos] = useState(0)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const threadRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const composerRef = useRef<HTMLDivElement>(null)
+  // Whether the user is pinned near the bottom of the thread. Starts true so the
+  // initial load and a freshly-opened space scroll down. Flipped false once the
+  // user scrolls up so the 30s poll no longer yanks them back to the bottom.
+  const nearBottomRef = useRef(true)
+  const prevSpaceRef = useRef(spaceId)
 
   // Mention trigger detection
   const mention = useMentionTrigger(draft, cursorPos)
 
-  // Scroll to bottom when messages change
+  const handleThreadScroll = useCallback(() => {
+    const el = threadRef.current
+    if (!el) return
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    nearBottomRef.current = distFromBottom < 120
+  }, [])
+
+  // Auto-scroll only when appropriate: on a space switch (treated as initial
+  // load) or when the user is already near the bottom. A user reading scrollback
+  // is left in place on each poll instead of being force-scrolled down.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+    if (prevSpaceRef.current !== spaceId) {
+      prevSpaceRef.current = spaceId
+      nearBottomRef.current = true
+    }
+    if (nearBottomRef.current) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [messages, spaceId])
 
   const handleMentionSelect = useCallback((member: SpaceMember) => {
     if (mention.atIndex === -1) return
@@ -247,6 +269,9 @@ function MessageThread({
     setDraft('')
     setCursorPos(0)
     if (inputRef.current) inputRef.current.style.height = 'auto'
+    // The user's own send should always scroll them to the newest message, even
+    // if they had scrolled up to read history.
+    nearBottomRef.current = true
     await send(spaceId, text)
   }, [draft, spaceId, send, isSending])
 
@@ -292,7 +317,7 @@ function MessageThread({
       </div>
 
       {/* Messages */}
-      <div className="chat-thread" role="log" aria-label={`Messages in ${spaceName}`} aria-live="polite">
+      <div ref={threadRef} onScroll={handleThreadScroll} className="chat-thread" role="log" aria-label={`Messages in ${spaceName}`} aria-live="polite">
         {messages.length === 0 ? (
           <div className="chat-thread__empty">No messages yet</div>
         ) : (
@@ -385,38 +410,78 @@ export function GoogleChatPanel({
   const [mobileView, setMobileView] = useState<'spaces' | 'thread'>('spaces')
   const [activeTab, setActiveTab] = useState<'chat' | 'gmail'>('chat')
   const [gmailUnread, setGmailUnread] = useState(0)
-  const panelRef = useRef<HTMLDivElement>(null)
 
-  // Auto-select first space on desktop
+  // Auto-select first space on desktop. Kept in the parent (which stays mounted)
+  // so the selection persists across open/close and the space list keeps
+  // prefetching while the panel is closed.
   useEffect(() => {
     if (!selectedSpace && visibleSpaces.length > 0) {
       setSelectedSpace(visibleSpaces[0])
     }
   }, [visibleSpaces, selectedSpace])
 
-  // Keyboard close on Escape
-  useEffect(() => {
-    if (!isOpen) return
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', handler)
-    return () => document.removeEventListener('keydown', handler)
-  }, [isOpen, onClose])
-
-  // Trap focus
-  useEffect(() => {
-    if (isOpen) {
-      panelRef.current?.focus()
-    }
-  }, [isOpen])
-
   const handleSelectSpace = (space: ChatSpace) => {
     setSelectedSpace(space)
     setMobileView('thread')
   }
 
+  // Mount the dialog ONLY while open so useModalA11y (Tab-trap + return-focus +
+  // Escape-to-close) runs its open/close lifecycle correctly — mirroring the
+  // CalendarSection create/delete modals, which are likewise gated on render.
   if (!isOpen) return null
+
+  return (
+    <GoogleChatPanelDialog
+      onClose={onClose}
+      visibleSpaces={visibleSpaces}
+      isLoading={isLoading}
+      missingScope={missingScope}
+      unreadMap={unreadMap}
+      selectedSpace={selectedSpace}
+      onSelectSpace={handleSelectSpace}
+      mobileView={mobileView}
+      setMobileView={setMobileView}
+      activeTab={activeTab}
+      setActiveTab={setActiveTab}
+      gmailUnread={gmailUnread}
+      setGmailUnread={setGmailUnread}
+    />
+  )
+}
+
+function GoogleChatPanelDialog({
+  onClose,
+  visibleSpaces,
+  isLoading,
+  missingScope,
+  unreadMap,
+  selectedSpace,
+  onSelectSpace,
+  mobileView,
+  setMobileView,
+  activeTab,
+  setActiveTab,
+  gmailUnread,
+  setGmailUnread,
+}: {
+  onClose: () => void
+  visibleSpaces: ChatSpace[]
+  isLoading: boolean
+  missingScope: boolean
+  unreadMap: Map<string, number>
+  selectedSpace: ChatSpace | null
+  onSelectSpace: (space: ChatSpace) => void
+  mobileView: 'spaces' | 'thread'
+  setMobileView: (v: 'spaces' | 'thread') => void
+  activeTab: 'chat' | 'gmail'
+  setActiveTab: (v: 'chat' | 'gmail') => void
+  gmailUnread: number
+  setGmailUnread: (v: number) => void
+}) {
+  const panelRef = useRef<HTMLDivElement>(null)
+  // Focus trap + return-focus-to-opener + Escape-to-close, shared with the
+  // calendar modals. Replaces the ad-hoc focus()/Escape handlers this panel had.
+  useModalA11y(panelRef, onClose)
 
   return (
     <>
@@ -464,7 +529,7 @@ export function GoogleChatPanel({
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
-                aria-selected={activeTab === tab}
+                aria-pressed={activeTab === tab}
                 style={{
                   flex: 1,
                   padding: '4px 8px',
@@ -525,7 +590,7 @@ export function GoogleChatPanel({
                 <SpacesList
                   spaces={visibleSpaces}
                   selectedId={selectedSpace?.name ?? null}
-                  onSelect={handleSelectSpace}
+                  onSelect={onSelectSpace}
                   isLoading={isLoading}
                   missingScope={missingScope}
                   unreadMap={unreadMap}
