@@ -18,7 +18,7 @@ vi.mock('next-auth', () => ({
 vi.mock('@/lib/auth', () => ({ authOptions: {} }))
 
 import { GET as kpisGET } from '@/app/api/kpis/route'
-import { POST as settingsKpisPOST } from '@/app/api/settings/kpis/route'
+import { GET as settingsKpisGET, POST as settingsKpisPOST } from '@/app/api/settings/kpis/route'
 
 function sessionWithRole(role: string) {
   return { user: { email: 'u@example.com', role } }
@@ -77,5 +77,32 @@ describe('POST /api/settings/kpis — admin-only guard', () => {
     expect(res.status).toBe(400)
     const json = await res.json()
     expect(json.error).toMatch(/label/i)
+  })
+})
+
+describe('GET /api/settings/kpis — onboarding disclosure guard (P1)', () => {
+  function getReq() {
+    return new NextRequest('http://localhost/api/settings/kpis')
+  }
+
+  it('401s when unauthenticated', async () => {
+    state.session = null
+    expect((await settingsKpisGET(getReq())).status).toBe(401)
+  })
+
+  it('returns an empty set for onboarding — parity with /api/kpis, no staff-KPI leak', async () => {
+    // The bug: non-admins got visibility='staff' rows and onboarding was never
+    // excluded — chained with open sign-up this disclosed business KPIs.
+    state.session = sessionWithRole('onboarding')
+    const res = await settingsKpisGET(getReq())
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ rows: [], source: 'db' })
+  })
+
+  it('returns an empty set for an unknown/sub-staff role (fail closed)', async () => {
+    state.session = sessionWithRole('guest')
+    const res = await settingsKpisGET(getReq())
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ rows: [], source: 'db' })
   })
 })
