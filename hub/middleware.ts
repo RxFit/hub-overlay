@@ -57,6 +57,15 @@ export default async function middleware(req: NextRequest) {
   `.replace(/\s{2,}/g, ' ').trim()
 
   const requestHeaders = new Headers(req.headers)
+  // SECURITY: strip any client-supplied x-tenant-id so a caller cannot inject a
+  // tenant and cross tenant-isolation boundaries. Tenant identity is a
+  // server-side signal only; nothing legitimately sets this header today, so
+  // getTenantId() falls back to the default tenant (behavior-neutral). Note
+  // getTenantId() also ignores this header directly, which covers routes not
+  // matched by this middleware (e.g. /api/chat). Phase 2 (multi-tenancy) will
+  // set tenant identity from the authenticated session / hostname here — never
+  // from an inbound client header.
+  requestHeaders.delete('x-tenant-id')
   requestHeaders.set('x-nonce', nonce)
   requestHeaders.set('Content-Security-Policy', cspHeader)
 

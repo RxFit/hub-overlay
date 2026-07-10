@@ -5,6 +5,9 @@
  * - fetchDriveDocContent: exports a Google Doc/Sheet/Slide as plain text via Drive API
  */
 
+import { Agent } from 'undici'
+import type { LookupAddress } from 'node:dns'
+
 const MAX_TEXT_LENGTH = 16_000  // ~4K tokens
 
 /* ── HTML → plain text (lightweight, no npm dep) ── */
@@ -66,26 +69,36 @@ export function isPrivateAddress(addr: string): boolean {
 const BLOCKED_HOSTNAMES = new Set(['localhost', 'metadata.google.internal'])
 
 /**
+ * Result of the SSRF assessment. When `blocked` is set the URL must not be
+ * fetched. When it is null the URL is safe, and `addresses` carries the exact
+ * IPs the hostname resolved to (null for literal-IP hosts, which need no pin).
+ */
+type SsrfAssessment =
+  | { blocked: string }
+  | { blocked: null; addresses: LookupAddress[] | null }
+
+/**
  * Resolve the URL's hostname and confirm none of its IPs are private.
  * Defends against DNS-rebinding and IP-encoding bypasses that a regex
- * on the raw URL string cannot catch. Returns null if safe, or a reason.
+ * on the raw URL string cannot catch. Returns the vetted addresses so the
+ * caller can pin the connection to them (closing the resolve→connect TOCTOU).
  */
-async function ssrfReason(url: string): Promise<string | null> {
+async function assessUrl(url: string): Promise<SsrfAssessment> {
   let parsed: URL
   try {
     parsed = new URL(url)
   } catch {
-    return 'malformed URL'
+    return { blocked: 'malformed URL' }
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    return 'only http(s) URLs are allowed'
+    return { blocked: 'only http(s) URLs are allowed' }
   }
   const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '')
-  if (BLOCKED_HOSTNAMES.has(host)) return 'blocked hostname'
+  if (BLOCKED_HOSTNAMES.has(host)) return { blocked: 'blocked hostname' }
 
-  // Literal IP in the host — check directly.
+  // Literal IP in the host — check directly. No DNS, so no rebind window.
   if (/^[\d.]+$/.test(host) || host.includes(':')) {
-    return isPrivateAddress(host) ? 'private IP address' : null
+    return isPrivateAddress(host) ? { blocked: 'private IP address' } : { blocked: null, addresses: null }
   }
 
   // Hostname — resolve to IPs and reject if ANY is private.
@@ -93,22 +106,64 @@ async function ssrfReason(url: string): Promise<string | null> {
     const { lookup } = await import('dns/promises')
     const records = await lookup(host, { all: true })
     if (records.some(r => isPrivateAddress(r.address))) {
-      return 'hostname resolves to a private IP'
+      return { blocked: 'hostname resolves to a private IP' }
     }
+    return { blocked: null, addresses: records }
   } catch {
-    return 'DNS resolution failed'
+    return { blocked: 'DNS resolution failed' }
   }
-  return null
+}
+
+/**
+ * Build a DNS lookup that returns ONLY the pre-vetted addresses and re-checks
+ * them at connect time. Fed to an undici dispatcher so fetch() connects to the
+ * exact IPs we validated instead of re-resolving the hostname independently —
+ * closing the DNS-rebinding TOCTOU where a low-TTL record could flip to a
+ * private IP between the SSRF check and the socket connect. Exported for tests.
+ */
+export function createPinnedLookup(addresses: LookupAddress[]) {
+  return function pinnedLookup(
+    _hostname: string,
+    options: { all?: boolean } | number | undefined,
+    callback: (
+      err: NodeJS.ErrnoException | null,
+      address: string | LookupAddress[],
+      family?: number,
+    ) => void,
+  ): void {
+    // Defense in depth: re-validate the pinned IPs and drop any private one.
+    const safe = addresses.filter((a) => !isPrivateAddress(a.address))
+    if (safe.length === 0) {
+      callback(new Error('SSRF: pinned address is in a private range'), '', 0)
+      return
+    }
+    if (typeof options === 'object' && options?.all) {
+      callback(null, safe)
+    } else {
+      callback(null, safe[0].address, safe[0].family)
+    }
+  }
+}
+
+function createPinnedDispatcher(addresses: LookupAddress[]): Agent {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return new Agent({ connect: { lookup: createPinnedLookup(addresses) as any } })
 }
 
 /* ── Fetch URL content (server-side only) ── */
 
 export async function fetchUrlContent(url: string): Promise<string> {
   // Block internal/private URLs to prevent SSRF (resolves DNS, blocks redirects)
-  const blocked = await ssrfReason(url)
-  if (blocked) {
+  const assessment = await assessUrl(url)
+  if (assessment.blocked !== null) {
     return '[Blocked: requests to internal or private network addresses are not allowed]'
   }
+
+  // DNS-rebinding TOCTOU defense: for hostnames we resolved and vetted above,
+  // pin the connection to those exact IPs via an undici dispatcher. TLS SNI and
+  // certificate validation still use the original hostname. Literal-IP hosts
+  // need no pin (there is nothing to re-resolve).
+  const dispatcher = assessment.addresses ? createPinnedDispatcher(assessment.addresses) : undefined
 
   try {
     const controller = new AbortController()
@@ -121,7 +176,9 @@ export async function fetchUrlContent(url: string): Promise<string> {
         'User-Agent': 'HubBot/1.0 (context-fetch)',
         'Accept': 'text/html, text/plain, application/json',
       },
-    })
+      // `dispatcher` is an undici-specific fetch option not in the DOM types.
+      ...(dispatcher ? { dispatcher } : {}),
+    } as RequestInit)
     clearTimeout(timeout)
 
     if (!res.ok) {
@@ -155,6 +212,9 @@ export async function fetchUrlContent(url: string): Promise<string> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error'
     return `[Failed to fetch URL: ${msg}]`
+  } finally {
+    // Release the pinned-dispatcher's sockets.
+    if (dispatcher) await dispatcher.close().catch(() => {})
   }
 }
 
