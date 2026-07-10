@@ -83,8 +83,10 @@ export const config = {
      * Match all request paths except:
      * - /login (auth page)
      * - /api/auth (NextAuth endpoints)
+     * - /api/healthz (unauthenticated Cloud Run startup/health probe — must be
+     *   reachable without a session so the probe never 401s or redirects)
      * - /_next (Next.js internals)
      */
-    '/((?!login|api/auth|api/chat|api/embeddings|api/webhooks|_next|favicon\\.svg|static).*)',
+    '/((?!login|api/auth|api/chat|api/embeddings|api/webhooks|api/healthz|_next|favicon\\.svg|static).*)',
   ],
 }

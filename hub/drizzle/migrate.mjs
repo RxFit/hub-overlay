@@ -64,6 +64,15 @@ async function run() {
   `
   console.log('[migrate] ✓ hub_users updated_at column check')
 
+  // Migration patch — Google OAuth refresh token (folds in the previously
+  // ad-hoc run-migration.js so this column is created idempotently on every
+  // cold start, in sync with lib/schema.ts). Was never in migrate.mjs or the
+  // ORM schema, so a fresh DB was missing it.
+  await sql`
+    ALTER TABLE hub_users ADD COLUMN IF NOT EXISTS google_refresh_token TEXT
+  `
+  console.log('[migrate] ✓ hub_users google_refresh_token column check')
+
   await sql`
     CREATE TABLE IF NOT EXISTS kpis (
       id              TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
