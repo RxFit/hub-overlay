@@ -256,8 +256,13 @@ export function filterByRole(
   if (role === 'onboarding') return []
   if (role === 'superadmin' || role === 'admin') return kpis
 
-  // Staff: only global KPIs or KPIs for assigned projects
+  // Below admin (staff and any lower/unknown role): enforce BOTH visibility and
+  // scope. A caller below admin must never receive an `admin`-visibility KPI —
+  // mirrors the tiering in app/api/settings/kpis (non-admins see only
+  // 'staff'/'public' visibility). `public`/`staff` KPIs (and legacy rows with
+  // no visibility set) stay visible, gated only by scope/assignment.
   return kpis.filter(kpi => {
+    if (kpi.visibility === 'admin') return false
     if (kpi.scope === 'global') return true
     if (kpi.companyId && assignedProjects.includes(kpi.companyId)) return true
     if (assignedProjects.includes('*')) return true

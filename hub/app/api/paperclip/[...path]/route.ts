@@ -277,6 +277,22 @@ async function proxyRequest(
     }
   }
 
+  // Compute ONE idempotency key per logical write request and reuse it across
+  // EVERY attempt — the initial call, the 401 re-auth retry, and each withRetry
+  // retry. withRetry retries on 500/502/503/504 + AbortError/timeout, so a write
+  // that commits upstream but returns a retryable error (or exceeds the 10s
+  // abort) would previously retry with a FRESH key and duplicate the write.
+  // The key is a DETERMINISTIC sha256 of method + canonical path (incl. query) +
+  // body, so even client-level retries of the same logical request dedupe
+  // upstream. GET/HEAD carry no idempotency key.
+  const isWrite = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method.toUpperCase())
+  const idempotencyKey = isWrite
+    ? crypto
+        .createHash('sha256')
+        .update(`${method.toUpperCase()}\n${apiPath}${req.nextUrl.search}\n${requestBody ?? ''}`)
+        .digest('hex')
+    : undefined
+
   /** Build fetch options with current auth headers */
   async function buildFetchOpts(): Promise<RequestInit> {
     let authHeaders: Record<string, string>
@@ -292,11 +308,11 @@ async function proxyRequest(
       ...authHeaders,
     })
 
-    // 2. Idempotency headers: Attach unique key for writes to prevent duplicate execution on retry
-    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method.toUpperCase())) {
-      if (!headers.has('Idempotency-Key')) {
-        headers.set('Idempotency-Key', crypto.randomUUID())
-      }
+    // 2. Idempotency header: reuse the SINGLE key computed once above so every
+    // attempt (initial, 401 re-auth, and each retry) sends an identical value,
+    // letting Paperclip dedupe a write that already committed upstream.
+    if (idempotencyKey && !headers.has('Idempotency-Key')) {
+      headers.set('Idempotency-Key', idempotencyKey)
     }
 
     const opts: RequestInit = {

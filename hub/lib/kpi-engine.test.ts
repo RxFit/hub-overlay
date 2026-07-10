@@ -193,4 +193,39 @@ describe('filterByRole', () => {
     const visible = filterByRole(kpis, 'contractor', [])
     expect(visible.map(k => k.id)).toEqual(['g'])
   })
+
+  // -- visibility gating (P1: admin-only KPIs must not leak to staff) --
+  const visKpis = [
+    { id: 'pub', scope: 'global', visibility: 'public' },
+    { id: 'stf', scope: 'global', visibility: 'staff' },
+    { id: 'adm', scope: 'global', visibility: 'admin' },
+    { id: 'adm-proj', scope: 'project', companyId: 'c1', visibility: 'admin' },
+  ] as unknown as LiveKPI[]
+
+  it('hides admin-visibility KPIs from staff but keeps public/staff ones', () => {
+    const visible = filterByRole(visKpis, 'staff', ['c1'])
+    // 'adm' (global) and 'adm-proj' (assigned project) are admin-visibility → dropped.
+    expect(visible.map(k => k.id).sort()).toEqual(['pub', 'stf'])
+  })
+
+  it('hides admin-visibility KPIs even from wildcard-assigned staff', () => {
+    const visible = filterByRole(visKpis, 'staff', ['*'])
+    expect(visible.map(k => k.id).sort()).toEqual(['pub', 'stf'])
+  })
+
+  it('drops admin-visibility KPIs for any below-admin (unknown) role', () => {
+    const visible = filterByRole(visKpis, 'contractor', ['*'])
+    expect(visible.every(k => k.visibility !== 'admin')).toBe(true)
+  })
+
+  it('lets admins and superadmins see admin-visibility KPIs', () => {
+    expect(filterByRole(visKpis, 'admin', [])).toHaveLength(4)
+    expect(filterByRole(visKpis, 'superadmin', [])).toHaveLength(4)
+  })
+
+  it('keeps legacy KPIs with no visibility set visible to staff', () => {
+    // kpis fixture has no `visibility` field → must not be treated as admin-only.
+    const visible = filterByRole(kpis, 'staff', ['*'])
+    expect(visible.map(k => k.id).sort()).toEqual(['g', 'p1', 'p2'])
+  })
 })
