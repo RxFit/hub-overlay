@@ -13,6 +13,7 @@ import { SKILL_MAP } from '@/lib/skills'
 import { needsInternalSearch, needsExternalSearch, isTrivialMessage } from '@/lib/search-routing'
 import { ChatRequestSchema } from '@/lib/zod-schemas'
 import { boundHistory, MAX_HISTORY_MESSAGES } from '@/lib/history-window'
+import { extractSuggestedToolsJson, sanitizeAssistantHistoryContent } from '@/lib/model-output'
 import { buildGoogleWorkspaceContext } from '@/lib/google-context'
 import { withTimeout } from '@/lib/timeout'
 import { chatErrorBody } from '@/lib/chat-error'
@@ -223,13 +224,23 @@ async function handleChat(req: NextRequest): Promise<Response> {
   // The full `messages` array above is still what gets Zod-validated; only what's
   // forwarded downstream is bounded. Since we keep the tail, the latest user
   // message is always retained (lastUserMsg is derived from boundedMessages below).
-  const boundedMessages = boundHistory(messages)
-  if (boundedMessages.length < messages.length) {
+  // Sanitize assistant history before it goes back to a model: strip the
+  // degraded-mode banner and the suggestedTools metadata comment. Both are
+  // harness artifacts stored inside the visible bubble content — echoing them
+  // back as history teaches the model to reproduce them (the doubled
+  // "⚠️ Primary model unavailable" banner seen during provider outages).
+  // A bubble that was ONLY a banner sanitizes to empty — drop it entirely so
+  // no provider sees an empty assistant turn.
+  const recentMessages = boundHistory(messages)
+  if (recentMessages.length < messages.length) {
     log.info(
-      { total: messages.length, forwarded: boundedMessages.length, dropped: messages.length - boundedMessages.length, max: MAX_HISTORY_MESSAGES },
+      { total: messages.length, forwarded: recentMessages.length, dropped: messages.length - recentMessages.length, max: MAX_HISTORY_MESSAGES },
       'Chat history truncated to recency window',
     )
   }
+  const boundedMessages = recentMessages
+    .map(m => (m.role === 'assistant' ? { ...m, content: sanitizeAssistantHistoryContent(m.content) } : m))
+    .filter(m => m.role !== 'assistant' || m.content.length > 0)
 
   // ── Parallel pre-stream context assembly ──
   // Paperclip context (8s timeout) and Google Workspace context (6s timeout)
@@ -445,10 +456,10 @@ async function handleChat(req: NextRequest): Promise<Response> {
         // Parse suggestedTools metadata from AI response.
         // P1-1: validate every id against the real skill catalog before emitting,
         // so injected/hallucinated content can't surface bogus or unsafe tool ids.
-        const toolMatch = fullText.match(/<!--suggestedTools:(\[.*?\])-->/)
-        if (toolMatch) {
+        const toolsJson = extractSuggestedToolsJson(fullText)
+        if (toolsJson) {
           try {
-            const parsed = JSON.parse(toolMatch[1])
+            const parsed = JSON.parse(toolsJson)
             const tools = Array.isArray(parsed)
               ? parsed.filter((id: unknown): id is string => typeof id === 'string' && id in SKILL_MAP).slice(0, 5)
               : []

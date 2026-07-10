@@ -12,6 +12,7 @@ import type { ToolArtifactData } from '@/types'
 import { ContextAttachMenu, AttachmentChips } from '@/app/components/ContextAttachMenu'
 import { SkillsPopover } from '@/app/components/SkillsPopover'
 import { SKILL_CATALOG, SKILL_MAP } from '@/lib/skills'
+import { stripSuggestedTools } from '@/lib/model-output'
 import { BrandedHeader } from '@/app/components/BrandedHeader'
 import { AnimatedNumber } from '@/app/components/AnimatedNumber'
 import { OnboardingCard, shouldShowOnboardingCard } from '@/app/components/OnboardingCard'
@@ -208,7 +209,9 @@ function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
   
   const handleCopy = () => {
-    navigator.clipboard.writeText(text)
+    // Copy what the bubble SHOWS — the raw content still carries the hidden
+    // <!--suggestedTools--> metadata comment, which must not leak into pastes.
+    navigator.clipboard.writeText(stripSuggestedTools(text).trimEnd())
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
@@ -758,7 +761,7 @@ export default function HubPage() {
                         <CopyButton text={msg.content} />
                         <button
                           className="chat-reply-btn"
-                          onClick={() => setQuotedReply({ id: msg.id, content: msg.content.slice(0, 200) })}
+                          onClick={() => setQuotedReply({ id: msg.id, content: stripSuggestedTools(msg.content).trimEnd().slice(0, 200) })}
                           aria-label="Reply to this message"
                         >
                           ↩️ Reply

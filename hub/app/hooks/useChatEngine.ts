@@ -16,6 +16,7 @@ import {
 } from '@/lib/interview'
 import { INTERVIEW_SCAFFOLD_KIND, isInterviewScaffold, type ChatMsgKind } from '@/lib/interview-scaffold'
 import { shouldRouteThroughSend } from '@/lib/inject-routing'
+import { stripDegradedBanner, stripSuggestedTools } from '@/lib/model-output'
 import { CLIENT_ABORT_MS } from '@/lib/timeout-config'
 import { getAdminContactEmail } from '@/lib/access-request'
 import { executeAction } from '@/lib/actions/executeAction'
@@ -86,7 +87,12 @@ export type PreCogVerdict =
  */
 export function resolvePreCogVerdict(rawText: string, evalOk: boolean): PreCogVerdict {
   if (!evalOk) return { outcome: 'unavailable' }
-  const clean = rawText.replace(/<!--suggestedTools:\[.*?\]-->/g, '').trim()
+  // Strip harness artifacts before judging: the suggestedTools metadata comment
+  // AND the degraded-mode banner ("⚠️ *Primary model unavailable — using …*"),
+  // which the rotation layer prepends when the eval ran on a fallback model.
+  // Without the banner strip, a degraded follow-up question surfaces the raw
+  // banner inside the AI Quality Gate message.
+  const clean = stripDegradedBanner(stripSuggestedTools(rawText)).trim()
   if (!clean) return { outcome: 'unavailable' }
   if (clean.toUpperCase().includes('SUFFICIENT')) return { outcome: 'sufficient' }
   return { outcome: 'insufficient', question: clean }
