@@ -149,6 +149,45 @@ describe('cooldown re-entry (Claude chain)', () => {
   })
 })
 
+describe('Claude auth-failure cooldown tier (P2 FIX2)', () => {
+  it('records the 30-min AUTH cooldown (not the 5-min real-failure tier) on a Claude auth failure', async () => {
+    process.env.GEMINI_API_KEY = 'test-key'
+    let fableAuthFails = true
+    hoisted.claudeBehavior = (model) => {
+      if (model === 'claude-fable-5' && fableAuthFails) {
+        // Auth-class failure (shared-credential problem): must get the long tier.
+        throw Object.assign(new Error('401 unauthorized'), { claudeError: { type: 'auth' } })
+      }
+      return claudeYield([`${model} says hi`])
+    }
+    hoisted.geminiBehavior = () => geminiStream(['gem'])
+
+    // Call 1: Fable auth-fails → the shared-credential break skips Sonnet and
+    // hands off to Gemini. Fable is now recorded in the AUTH cooldown tier.
+    const r1 = await collect(streamChat(MESSAGES, 'sys', 'interview'))
+    expect(hoisted.claudeCalls).toEqual(['claude-fable-5']) // Sonnet skipped (auth break)
+    expect(r1.text).toBe('gem')
+
+    // Fable "recovers" upstream, but advance PAST the 5-min real-failure tier
+    // (301s) and stay UNDER the 30-min auth tier. If FIX2 is correct, Fable is
+    // still cooling and is skipped; Sonnet serves. (Pre-fix it would be the
+    // 5-min tier and Fable would be retried first here.)
+    fableAuthFails = false
+    hoisted.claudeCalls.length = 0
+    vi.advanceTimersByTime(301_000)
+    const r2 = await collect(streamChat(MESSAGES, 'sys', 'interview'))
+    expect(hoisted.claudeCalls).toEqual(['claude-sonnet-4-6']) // Fable STILL cooling → skipped
+    expect(r2.text).toBe('claude-sonnet-4-6 says hi')
+
+    // Past the full 30-min auth cooldown, Fable is tried FIRST again.
+    hoisted.claudeCalls.length = 0
+    vi.advanceTimersByTime(1_800_000)
+    const r3 = await collect(streamChat(MESSAGES, 'sys', 'interview'))
+    expect(hoisted.claudeCalls[0]).toBe('claude-fable-5')
+    expect(r3.text).toBe('claude-fable-5 says hi')
+  })
+})
+
 describe('all models in cooldown (Gemini chain)', () => {
   it('throws the terminal cooldown error without touching either model, and maps it to the "busy" user message', async () => {
     process.env.GEMINI_API_KEY = 'test-key'

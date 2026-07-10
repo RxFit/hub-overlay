@@ -182,15 +182,20 @@ export function buildSystemPrompt(context: {
     prompt += `## Live Google Workspace (real-time, the user's actual data)\n${fenceUntrusted('Live Google Workspace', context.googleWorkspaceDetail)}\n\nThis is the user's REAL current Tasks, Calendar, Drive, Gmail, and Chat data. Use it directly to answer any question about their tasks, schedule, files, email, or conversations — including when they tap an item like "Tell me about task: …". Cite specific titles, dates, and notes from this section. When answering email questions, cite the exact subjects and senders shown in the Gmail section; if a message the user asks about is not in this snapshot, say so and point them to the Gmail panel — NEVER invent mail. If a specific item they asked about is not listed here, say you don't see it in their current pending items and offer to look another way — do NOT blame Paperclip or claim a system is "warming up".\n\n`
   }
 
-  /* ── Project / activity context ── */
+  /* ── Project / activity context ──
+   * projects + agentActivity are built from Paperclip issue titles and agent
+   * names, which staff-tier users can author — so a crafted title ("Ignore
+   * prior instructions…") is untrusted input and MUST be fenced, exactly like
+   * the Google Workspace / search / attachment blocks above and below. The
+   * model still sees the content; the fence just delimits it as data. */
   if (context.projects) {
-    prompt += `Active projects:\n${context.projects}\n\n`
+    prompt += `Active projects:\n${fenceUntrusted('Active projects', context.projects)}\n\n`
   }
   if (context.summary) {
     prompt += `Today's summary:\n${context.summary}\n\n`
   }
   if (context.agentActivity) {
-    prompt += `Recent agent activity:\n${context.agentActivity}\n\n`
+    prompt += `Recent agent activity:\n${fenceUntrusted('Recent agent activity', context.agentActivity)}\n\n`
   }
 
   /* ── Interview Mode instructions ── */
@@ -502,11 +507,12 @@ export async function* streamChat(
   useCase: string = 'deep_dive',
   hasActiveSkill: boolean = false,
   requestId: string = newRequestId(),
+  signal?: AbortSignal,
 ): AsyncGenerator<string | { modelUsed: string }> {
   const obs: ObsCtx = { requestId, timer: startTimer(), attempt: 0 }
   let firstTokenEmitted = false
   try {
-    for await (const chunk of streamChatRotation(messages, systemPrompt, useCase, hasActiveSkill, obs)) {
+    for await (const chunk of streamChatRotation(messages, systemPrompt, useCase, hasActiveSkill, obs, signal)) {
       if (typeof chunk === 'string' && chunk.length > 0 && !firstTokenEmitted) {
         firstTokenEmitted = true
         emit({ type: 'ai_first_token', requestId, ms: obs.timer() })
@@ -550,11 +556,17 @@ async function* walkClaudeChain(
   messages: ChatMessage[],
   systemPrompt: string,
   obs: ObsCtx,
+  signal?: AbortSignal,
 ): AsyncGenerator<string | { modelUsed: string }, 'served' | 'fallthrough'> {
   const { streamClaudeChat } = await import('@/lib/claude')
 
   // Walk the Claude chain (Fable 5 → Sonnet 4.6) before handing off to Gemini.
   for (let i = 0; i < CLAUDE_MODEL_CHAIN.length; i++) {
+    // Cooperative cancellation (FIX4): the client aborted (CLIENT_ABORT_MS) —
+    // stop before starting another attempt so we don't burn model compute on a
+    // request nobody is listening to. Return 'served' (terminal) so the caller
+    // does NOT fall through to Gemini; streamChatRotation re-checks the signal.
+    if (signal?.aborted) return 'served'
     const claudeModel = CLAUDE_MODEL_CHAIN[i]
     if (isModelInCooldown(claudeModel)) continue
 
@@ -571,6 +583,10 @@ async function* walkClaudeChain(
       const claudeIter = streamClaudeChat(messages, systemPrompt, { model: claudeModel })[Symbol.asyncIterator]()
       for await (const chunk of withIdleWatchdog(claudeIter, IDLE_TIMEOUT_MS, claudeModel, () =>
         emit({ type: 'ai_timeout', requestId: obs.requestId, layer: 'idle', provider: 'claude', model: claudeModel }))) {
+        // Client aborted mid-stream (FIX4): stop quietly. Returning tears down
+        // the watchdog (its finally closes the upstream reader). No error is
+        // surfaced and nothing is restarted, so no-duplicate-answer holds.
+        if (signal?.aborted) return 'served'
         claudeEmitted = true
         yield chunk
       }
@@ -579,7 +595,10 @@ async function* walkClaudeChain(
       // W-2 FIX: Classify error to determine cooldown behavior
       const claudeErr = (err as { claudeError?: { type: string } })?.claudeError
       const isRateLimit = claudeErr?.type === 'rate_limit'
-      recordModelFailure(claudeModel, isRateLimit)
+      // W-2/P2 FIX: a shared-credential auth failure isn't transient — pass the
+      // auth flag so it gets the 30-min auth cooldown (matching the Gemini
+      // branch), not the 5-min real-failure tier that re-probes a dead key.
+      recordModelFailure(claudeModel, isRateLimit, claudeErr?.type === 'auth')
 
       // CRITICAL: if this model already streamed tokens before failing, those
       // tokens are on the wire. Rotating would restart the answer and
@@ -620,7 +639,11 @@ async function* streamChatRotation(
   useCase: string,
   hasActiveSkill: boolean,
   obs: ObsCtx,
+  signal?: AbortSignal,
 ): AsyncGenerator<string | { modelUsed: string }> {
+  // Cooperative cancellation (FIX4): if the client is already gone, do no work.
+  if (signal?.aborted) return
+
   // Loop guard for the emergency fallback below: once the Claude chain has
   // been walked for this request it is never re-entered (no Claude → Gemini →
   // Claude cycle; a request walks each provider chain at most once).
@@ -628,8 +651,11 @@ async function* streamChatRotation(
 
   if (shouldUseClaude(useCase, hasActiveSkill)) {
     claudeTried = true
-    if ((yield* walkClaudeChain(messages, systemPrompt, obs)) === 'served') return
+    if ((yield* walkClaudeChain(messages, systemPrompt, obs, signal)) === 'served') return
   }
+
+  // Bail before the Gemini leg if the client aborted while Claude was walked.
+  if (signal?.aborted) return
 
   // Fallback: Gemini 2.5 Flash → Gemini 2.5 Pro
   //
@@ -641,12 +667,16 @@ async function* streamChatRotation(
   // emitted, the wire holds no answer and restarting on Claude is safe.
   let geminiEmittedText = false
   try {
-    for await (const chunk of streamGeminiWithFallback(messages, systemPrompt, obs)) {
+    for await (const chunk of streamGeminiWithFallback(messages, systemPrompt, obs, signal)) {
       if (typeof chunk === 'string' && chunk.length > 0) geminiEmittedText = true
       yield chunk
     }
     return
   } catch (err) {
+    // Client aborted (FIX4): the Gemini leg failed only because the request was
+    // cancelled — stop quietly rather than launching the emergency Claude leg.
+    if (signal?.aborted) return
+
     // Mid-stream failure: part of the answer is already on the wire —
     // restarting on Claude would duplicate/garble it. Propagate (unchanged).
     if (geminiEmittedText) throw err
@@ -681,7 +711,7 @@ async function* streamChatRotation(
     let claudeServed = false
     let noticeYielded = false
     let modelDisplay = getModelDisplayName(CLAUDE_MODEL_CHAIN[0])
-    const walk = walkClaudeChain(messages, systemPrompt, obs)
+    const walk = walkClaudeChain(messages, systemPrompt, obs, signal)
     try {
       while (true) {
         const step = await walk.next()
@@ -724,6 +754,7 @@ async function* streamGeminiWithFallback(
   messages: ChatMessage[],
   systemPrompt: string,
   obs: ObsCtx,
+  signal?: AbortSignal,
 ): AsyncGenerator<string | { modelUsed: string }> {
   const modelsToTry = ['gemini-2.5-flash', 'gemini-2.5-pro'] as const
   modelsToTry.forEach(assertApprovedGeminiModel)
@@ -740,6 +771,8 @@ async function* streamGeminiWithFallback(
   let emittedAny = false
 
   for (let i = 0; i < modelsToTry.length; i++) {
+    // Cooperative cancellation (FIX4): client aborted between attempts — stop.
+    if (signal?.aborted) return
     const modelName = modelsToTry[i]
     const isLastAttempt = i === modelsToTry.length - 1
 
@@ -765,20 +798,43 @@ async function* streamGeminiWithFallback(
       // providers behave identically and the ladder stays monotonic.
       // The timer is cleared once the race settles so a successful connect
       // doesn't leave a timer pending (one per call) until it fires.
-      const resultPromise = chat.sendMessageStream(lastMessage.content)
+      //
+      // FIX3: the connect race previously only stopped WAITING on timeout; the
+      // upstream request was never aborted and the losing promise was abandoned
+      // unconsumed (Claude aborts via AbortController — lib/claude.ts). Now a
+      // connect timeout (or a client abort) actually aborts the upstream request
+      // via the SDK's SingleRequestOptions.signal, mirroring the Claude pattern.
+      const connectController = new AbortController()
+      const onClientAbort = () => connectController.abort()
+      if (signal) {
+        if (signal.aborted) connectController.abort()
+        else signal.addEventListener('abort', onClientAbort, { once: true })
+      }
+      const resultPromise = chat.sendMessageStream(lastMessage.content, { signal: connectController.signal })
       let connectTimer: ReturnType<typeof setTimeout> | undefined
       const timeoutPromise = new Promise<never>((_, reject) => {
         connectTimer = setTimeout(() => {
           // Pure logging seam — record the connect-layer trip, then reject as before.
           emit({ type: 'ai_timeout', requestId: obs.requestId, layer: 'connect', provider: 'gemini', model: modelName })
+          // Abort the upstream request so a slow connect can't linger after the
+          // server has already given up waiting on it.
+          connectController.abort()
           reject(new Error(`Gemini stream timeout (${modelName})`))
         }, CONNECT_TIMEOUT_MS)
       })
       let result: Awaited<typeof resultPromise>
       try {
         result = await Promise.race([resultPromise, timeoutPromise])
+      } catch (raceErr) {
+        // The abandoned resultPromise is now unconsumed (it will reject once the
+        // abort propagates); swallow that rejection so it can't surface as an
+        // unhandledRejection. This is the safety net regardless of whether the
+        // SDK honors the abort in-flight.
+        void Promise.resolve(resultPromise).catch(() => {})
+        throw raceErr
       } finally {
         if (connectTimer) clearTimeout(connectTimer)
+        if (signal) signal.removeEventListener('abort', onClientAbort)
       }
 
       // Emit modelUsed event
@@ -796,6 +852,10 @@ async function* streamGeminiWithFallback(
       const streamIter = result.stream[Symbol.asyncIterator]()
       for await (const chunk of withIdleWatchdog(streamIter, IDLE_TIMEOUT_MS, modelName, () =>
         emit({ type: 'ai_timeout', requestId: obs.requestId, layer: 'idle', provider: 'gemini', model: modelName }))) {
+        // Client aborted mid-stream (FIX4): stop quietly. Returning tears down
+        // the watchdog (its finally closes the upstream reader); nothing is
+        // restarted, so no-duplicate-answer holds and no error is surfaced.
+        if (signal?.aborted) return
         const text = chunk.text()
         if (text) {
           emittedAny = true
@@ -805,6 +865,9 @@ async function* streamGeminiWithFallback(
 
       return // Success
     } catch (err) {
+      // Client aborted (FIX4): the failure is just the cancellation — stop
+      // quietly without rotating or surfacing an error to a gone client.
+      if (signal?.aborted) return
       const isRateLimit = isRateLimitError(err)
       const isAuth = isAuthOrKeyError(err)
       // Auth-failed models get a longer "unavailable" skip (see recordModelFailure):
