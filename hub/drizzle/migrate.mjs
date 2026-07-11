@@ -10,15 +10,44 @@ if (!DATABASE_URL) {
   process.exit(1)
 }
 
-const sql = postgres(DATABASE_URL, { max: 1 })
+// Watchdog (2026-07-10 deploy outage): this script runs inside the container
+// entrypoint, BEFORE the server binds :3000. postgres-js waits 30s per connect
+// attempt by default, and a hung/unroutable DB endpoint would otherwise stall
+// startup until Cloud Run's probe budget expires — with no log line saying why.
+// Bound the whole run; exit code 2 distinguishes "timed out" from "SQL failed".
+// unref() lets a successful run exit naturally without waiting on the timer.
+const WATCHDOG_MS = Number(process.env.MIGRATE_WATCHDOG_MS || 90_000)
+const watchdog = setTimeout(() => {
+  console.error(`[migrate] ❌ Watchdog: still running after ${WATCHDOG_MS}ms (DB connect hang?) — aborting. Raise MIGRATE_WATCHDOG_MS if migrations legitimately need longer.`)
+  process.exit(2)
+}, WATCHDOG_MS)
+watchdog.unref()
+
+// connect_timeout (seconds): fail a dead endpoint in 15s with a real error
+// instead of postgres-js' 30s default per attempt.
+const sql = postgres(DATABASE_URL, { max: 1, connect_timeout: 15 })
 
 async function run() {
-  console.log('[migrate] Connecting to Railway Postgres...')
+  console.log('[migrate] Connecting to Postgres...')
 
-  await sql`
-    CREATE EXTENSION IF NOT EXISTS vector;
-  `
-  console.log('[migrate] ✓ vector extension')
+  // ── pgvector (NON-FATAL) ──
+  // CREATE EXTENSION needs superuser-ish privileges (on Cloud SQL:
+  // cloudsqlsuperuser). This script was written against Railway Postgres where
+  // the app user could do it; on other hosts it may be denied, or the extension
+  // may not be installed at all. Semantic search already degrades gracefully at
+  // runtime (lib/vector-store callers try/catch), so a missing extension must
+  // not abort the rest of the schema — and, via the entrypoint, brick deploys.
+  // The dependent table + index below live in the same guarded block.
+  let vectorOk = true
+  try {
+    await sql`
+      CREATE EXTENSION IF NOT EXISTS vector;
+    `
+    console.log('[migrate] ✓ vector extension')
+  } catch (err) {
+    vectorOk = false
+    console.warn(`[migrate] ⚠️ vector extension unavailable (${err.code ?? ''} ${err.message}) — skipping pgvector schema. Semantic search will be degraded until an admin runs CREATE EXTENSION vector as a privileged user.`)
+  }
 
   await sql`
     CREATE TABLE IF NOT EXISTS tenants (
@@ -161,25 +190,37 @@ async function run() {
   `
   console.log('[migrate] ✓ entity_links table')
 
-  // Document Chunks Table (for pgvector semantic search)
-  await sql`
-    CREATE TABLE IF NOT EXISTS document_chunks (
-      id          TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
-      tenant_id   TEXT NOT NULL REFERENCES tenants(id),
-      source_url  TEXT NOT NULL,
-      content     TEXT NOT NULL,
-      embedding   VECTOR(768),
-      created_at  TIMESTAMPTZ DEFAULT now() NOT NULL
-    )
-  `
-  console.log('[migrate] ✓ document_chunks table')
+  // Document Chunks Table (for pgvector semantic search) — depends on the
+  // vector extension, so it shares the NON-FATAL guard above: without the
+  // extension the VECTOR(768) column type doesn't exist and these statements
+  // can only fail. Skipping (with a loud warning) keeps the rest of the schema
+  // applying and the container bootable.
+  if (vectorOk) {
+    try {
+      await sql`
+        CREATE TABLE IF NOT EXISTS document_chunks (
+          id          TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
+          tenant_id   TEXT NOT NULL REFERENCES tenants(id),
+          source_url  TEXT NOT NULL,
+          content     TEXT NOT NULL,
+          embedding   VECTOR(768),
+          created_at  TIMESTAMPTZ DEFAULT now() NOT NULL
+        )
+      `
+      console.log('[migrate] ✓ document_chunks table')
 
-  // Create HNSW index for pgvector search
-  await sql`
-    CREATE INDEX IF NOT EXISTS document_chunks_embedding_hnsw_idx 
-    ON document_chunks USING hnsw (embedding vector_cosine_ops);
-  `
-  console.log('[migrate] ✓ document_chunks HNSW index')
+      // Create HNSW index for pgvector search
+      await sql`
+        CREATE INDEX IF NOT EXISTS document_chunks_embedding_hnsw_idx
+        ON document_chunks USING hnsw (embedding vector_cosine_ops);
+      `
+      console.log('[migrate] ✓ document_chunks HNSW index')
+    } catch (err) {
+      console.warn(`[migrate] ⚠️ pgvector schema failed (${err.code ?? ''} ${err.message}) — skipping document_chunks. Semantic search degraded; rest of schema continues.`)
+    }
+  } else {
+    console.warn('[migrate] ⚠️ Skipping document_chunks table/index (vector extension unavailable).')
+  }
 
   // Create tool_artifacts table
   await sql`
@@ -254,6 +295,10 @@ async function run() {
 }
 
 run().catch(err => {
-  console.error('[migrate] ❌ Failed:', err.message)
+  // Include the Postgres error code (e.g. 42501 insufficient_privilege,
+  // 28P01 bad password, ECONNREFUSED) — the message alone is often ambiguous
+  // in Cloud Run logs, and this line is the primary diagnostic when the
+  // entrypoint reports a failed migration.
+  console.error(`[migrate] ❌ Failed (${err.code ?? 'no-code'}):`, err.message)
   process.exit(1)
 })
