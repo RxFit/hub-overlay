@@ -17,7 +17,18 @@ function getDb() {
   if (_db) return _db
   const url = process.env.DATABASE_URL
   if (!url) throw new Error('[db] DATABASE_URL is not set. Add it to Railway hub service env vars.')
-  const client = postgres(url, { max: 10, idle_timeout: 20 })
+  
+  // Node 22 strict URL parsing breaks on Unix domain sockets in connection strings.
+  // We use `localhost` in the URL to satisfy the parser, and manually extract the `host`
+  // query param (used for Cloud SQL sockets) to override the postgres.js connection options.
+  const hostMatch = url.match(/[?&]host=([^&]+)/)
+  const explicitHost = hostMatch ? decodeURIComponent(hostMatch[1]) : undefined
+  
+  const client = postgres(url, { 
+    max: 10, 
+    idle_timeout: 20,
+    ...(explicitHost && { host: explicitHost })
+  })
   _db = drizzle(client, { schema })
   log.info('Database connection initialized')
   return _db
