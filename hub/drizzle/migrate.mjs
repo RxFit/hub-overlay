@@ -13,6 +13,8 @@ if (!DATABASE_URL) {
 const hostMatch = DATABASE_URL.match(/[?&]host=([^&\s]+)/)
 const explicitHost = hostMatch ? decodeURIComponent(hostMatch[1]) : undefined
 
+const cleanUrl = DATABASE_URL.replace(/[?&]host=[^&\s]+/, '').replace(/\?$/, '')
+
 // Watchdog (2026-07-10 deploy outage): this script runs inside the container
 // entrypoint, BEFORE the server binds :3000. postgres-js waits 30s per connect
 // attempt by default, and a hung/unroutable DB endpoint would otherwise stall
@@ -28,7 +30,7 @@ watchdog.unref()
 
 // connect_timeout (seconds): fail a dead endpoint in 15s with a real error
 // instead of postgres-js' 30s default per attempt.
-const sql = postgres(DATABASE_URL, { 
+const sql = postgres(cleanUrl, { 
   max: 1, 
   connect_timeout: 15,
   ...(explicitHost && { host: explicitHost })

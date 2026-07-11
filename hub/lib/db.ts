@@ -24,7 +24,10 @@ function getDb() {
   const hostMatch = url.match(/[?&]host=([^&\s]+)/)
   const explicitHost = hostMatch ? decodeURIComponent(hostMatch[1]) : undefined
   
-  const client = postgres(url, { 
+  // Strip the ?host= parameter from the URL so postgres.js doesn't send it to the DB as a config parameter
+  const cleanUrl = url.replace(/[?&]host=[^&\s]+/, '').replace(/\?$/, '')
+  
+  const client = postgres(cleanUrl, { 
     max: 10, 
     idle_timeout: 20,
     ...(explicitHost && { host: explicitHost })
