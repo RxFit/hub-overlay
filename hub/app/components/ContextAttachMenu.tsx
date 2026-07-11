@@ -415,6 +415,10 @@ function DocumentSubView({
             <button
               key={file.id}
               role="option"
+              // These rows attach-and-close on click — there is no persistent
+              // selected state — so `aria-selected` is always false. Required by
+              // the listbox/option contract (clears role-has-required-aria-props).
+              aria-selected={false}
               className="context-attach-file-row"
               onClick={() =>
                 onAttach({

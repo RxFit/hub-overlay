@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { signIn } from 'next-auth/react'
 import {
   detectIntent,
   startInterview,
@@ -15,7 +16,9 @@ import {
 } from '@/lib/interview'
 import { INTERVIEW_SCAFFOLD_KIND, isInterviewScaffold, type ChatMsgKind } from '@/lib/interview-scaffold'
 import { shouldRouteThroughSend } from '@/lib/inject-routing'
+import { stripDegradedBanner, stripSuggestedTools } from '@/lib/model-output'
 import { CLIENT_ABORT_MS } from '@/lib/timeout-config'
+import { getAdminContactEmail } from '@/lib/access-request'
 import { executeAction } from '@/lib/actions/executeAction'
 import type { InterviewState, ActionSpec, ChatAttachment, ActiveSkill, Company } from '@/types'
 
@@ -28,6 +31,72 @@ import type { InterviewState, ActionSpec, ChatAttachment, ActiveSkill, Company }
 export type ChatMsg = { id: string; role: 'user' | 'assistant'; content: string; kind?: ChatMsgKind; timestamp?: string; attachments?: ChatAttachment[] }
 
 export type MobileTab = 'chat' | 'command' | 'execution' | 'google_chat' | 'tool_panel'
+
+/**
+ * Maps a caught /api/chat error onto the user-facing bubble content plus a
+ * `reauth` flag. A 401 sets `reauth: true` so the caller triggers the same
+ * `signIn('google')` reauth flow as the other data hooks (useKPIData /
+ * useWriteFetch) — a stale bubble that never re-authenticates leaves the user
+ * stuck. Timeouts and 5xx/network get their own copy (the raw detail suffix is
+ * dev-only). Extracted as a pure function so the reauth decision is unit-tested
+ * without driving the SSE-streaming hook.
+ */
+export function resolveChatError(err: unknown): { content: string; reauth: boolean } {
+  const isTimeout = err instanceof DOMException && err.name === 'AbortError'
+  const status = (err as { status?: number } | undefined)?.status
+  const detail = err instanceof Error ? err.message : ''
+
+  if (isTimeout) {
+    return { content: "⏱️ That took longer than expected. Try asking again — things usually speed up quickly.", reauth: false }
+  }
+  if (status === 401) {
+    return { content: "Your session expired. Please sign in again to continue.", reauth: true }
+  }
+  // 5xx / network / unknown. The raw detail/status suffix is dev-only —
+  // production users must never see internal error text in the bubble.
+  const diag = process.env.NODE_ENV === 'development'
+    ? (detail
+        ? `\n\n\`${detail}\``
+        : (status ? `\n\n\`HTTP ${status}\`` : '\n\n`no response (network/timeout)`'))
+    : ''
+  return { content: `Something went wrong on my end. Give it another try in a moment.${diag}`, reauth: false }
+}
+
+/**
+ * Outcome of the high-stakes Pre-Cog briefing-quality evaluation.
+ *  - `sufficient`  — a genuine SUFFICIENT verdict from the validator (proceed
+ *                    to the Confirm Card via the "approved by AI quality gate" path).
+ *  - `insufficient`— a genuine follow-up question the user must answer (block).
+ *  - `unavailable` — the eval could NOT be performed (non-2xx response, aborted
+ *                    timeout, network error, or an empty stream). This must fail
+ *                    OPEN (proceed) rather than be misread as a silent
+ *                    "insufficient" with a blank reason.
+ */
+export type PreCogVerdict =
+  | { outcome: 'sufficient' }
+  | { outcome: 'insufficient'; question: string }
+  | { outcome: 'unavailable' }
+
+/**
+ * Pure resolver for the Pre-Cog verdict, extracted so the fail-open behavior is
+ * unit-tested without driving the SSE stream. `evalOk` is the eval fetch's
+ * `res.ok`; `rawText` is the accumulated stream text. A non-ok response or an
+ * empty/whitespace verdict resolves to `unavailable` (proceed), NOT a silent
+ * insufficient. A real SUFFICIENT (case-insensitive) proceeds; anything else is
+ * treated as the validator's follow-up question and blocks.
+ */
+export function resolvePreCogVerdict(rawText: string, evalOk: boolean): PreCogVerdict {
+  if (!evalOk) return { outcome: 'unavailable' }
+  // Strip harness artifacts before judging: the suggestedTools metadata comment
+  // AND the degraded-mode banner ("⚠️ *Primary model unavailable — using …*"),
+  // which the rotation layer prepends when the eval ran on a fallback model.
+  // Without the banner strip, a degraded follow-up question surfaces the raw
+  // banner inside the AI Quality Gate message.
+  const clean = stripDegradedBanner(stripSuggestedTools(rawText)).trim()
+  if (!clean) return { outcome: 'unavailable' }
+  if (clean.toUpperCase().includes('SUFFICIENT')) return { outcome: 'sufficient' }
+  return { outcome: 'insufficient', question: clean }
+}
 
 /**
  * useChatEngine — the chat / interview / skill engine extracted from page.tsx.
@@ -244,27 +313,15 @@ export function useChatEngine(options: UseChatEngineOptions) {
 
       return // Success — no fallback needed
     } catch (err) {
-      const isTimeout = err instanceof DOMException && err.name === 'AbortError'
       const status = (err as { status?: number } | undefined)?.status
       const detail = err instanceof Error ? err.message : ''
       console.error('Chat API Error:', { status, detail, err });
       setIsTyping(false);
 
-      let content: string
-      if (isTimeout) {
-        content = "⏱️ That took longer than expected. Try asking again — things usually speed up quickly."
-      } else if (status === 401) {
-        content = "Your session expired. Please sign in again to continue."
-      } else {
-        // 5xx / network / unknown. The raw detail/status suffix is dev-only —
-        // production users must never see internal error text in the bubble.
-        const diag = process.env.NODE_ENV === 'development'
-          ? (detail
-              ? `\n\n\`${detail}\``
-              : (status ? `\n\n\`HTTP ${status}\`` : '\n\n`no response (network/timeout)`'))
-          : ''
-        content = `Something went wrong on my end. Give it another try in a moment.${diag}`
-      }
+      const { content, reauth } = resolveChatError(err)
+      // Route a chat 401 through the same reauth flow as the other hooks so an
+      // expired session re-authenticates instead of just showing a dead bubble.
+      if (reauth) signIn('google')
 
       setMessages(prev => [...prev, {
         id: crypto.randomUUID(),
@@ -313,10 +370,18 @@ export function useChatEngine(options: UseChatEngineOptions) {
             // Role gating: check if user has permission for this intent
             if (!hasPermission(userRole, intent)) {
               const required = getRequiredPermission(intent)
+              // Give the dead-end an actionable path: surface the workspace admin
+              // contact when the tenant configures one, else point the user at
+              // their workspace admin explicitly. (The chat bubble renders plain
+              // text — no markdown links — so the email is shown inline.)
+              const adminEmail = getAdminContactEmail()
+              const reachAdmin = adminEmail
+                ? `To request elevated access, contact your workspace admin at **${adminEmail}**.`
+                : `To request elevated access, ask your workspace admin to update your Hub role.`
               const deniedMsg: ChatMsg = {
                 id: crypto.randomUUID(),
                 role: 'assistant' as const,
-                content: `🔒 **Permission Denied**\n\nThis action requires **${required}** privileges. Your current role is **${userRole}**.\n\nPlease contact an administrator if you need elevated access.`,
+                content: `🔒 **Permission Denied**\n\nThis action requires **${required}** privileges. Your current role is **${userRole}**.\n\n${reachAdmin}`,
                 timestamp: new Date().toISOString(),
               }
               setMessages(prevMsgs => [...prevMsgs, deniedMsg])
@@ -486,16 +551,44 @@ Respond with EXACTLY one of:
                 timestamp: new Date().toISOString(),
               }])
 
+              // Local helpers so the three exits (approve / block / fail-open)
+              // stay consistent. `clearThinking` drops the "Evaluating…" bubble.
+              const clearThinking = (prev: ChatMsg[]) => prev.filter(m => m.id !== thinkingId)
+              // Fail-OPEN fallback — used when the eval could not be performed
+              // (non-2xx, timeout/abort, network error, or an empty verdict).
+              // Proceeds to the Confirm Card rather than stranding the user on a
+              // silent "insufficient" with a blank reason, mirroring the prior
+              // network-error catch. The server still re-verifies the gateToken.
+              const proceedFallback = () => {
+                setActionSpec({ ...spec, gateToken })
+                setMessages(prev => [...clearThinking(prev), {
+                  id: crypto.randomUUID(), role: 'assistant' as const,
+                  kind: INTERVIEW_SCAFFOLD_KIND,
+                  content: '✅ Interview complete! Please review the action below and approve, edit, or cancel.',
+                  timestamp: new Date().toISOString(),
+                }])
+              }
+
+              // HARDENED: bound the eval fetch with the same AbortController/
+              // timeout ladder as the main chat fetch (CLIENT_ABORT_MS) so a hung
+              // eval can no longer strand the UI on "Evaluating briefing quality…".
+              const evalController = new AbortController()
+              const evalTimeoutId = setTimeout(() => evalController.abort(), CLIENT_ABORT_MS)
+
               fetch('/api/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                signal: evalController.signal,
                 body: JSON.stringify({
                   messages: [{ role: 'user', content: evalPrompt }],
                   useCase: 'execute',
                 }),
               }).then(async (res) => {
+                // A 429/5xx yields an empty/opaque stream — never let that be
+                // misread as an insufficient verdict. Fail open instead.
+                if (!res.ok) { proceedFallback(); return }
                 const reader = res.body?.getReader()
-                if (!reader) return
+                if (!reader) { proceedFallback(); return }
                 let fullText = ''
                 const decoder = new TextDecoder()
                 let buffer = ''
@@ -531,41 +624,30 @@ Respond with EXACTLY one of:
                     }
                   } catch { /* skip */ }
                 }
-                const cleanResponse = fullText.replace(/<!--suggestedTools:\[.*?\]-->/g, '').trim()
-                if (cleanResponse.toUpperCase().includes('SUFFICIENT')) {
+                const verdict = resolvePreCogVerdict(fullText, res.ok)
+                if (verdict.outcome === 'sufficient') {
                   setActionSpec({ ...spec, gateToken })
-                  setMessages(prev => {
-                    const filtered = prev.filter(m => m.id !== thinkingId)
-                    return [...filtered, {
-                      id: crypto.randomUUID(), role: 'assistant' as const,
-                      kind: INTERVIEW_SCAFFOLD_KIND,
-                      content: '✅ Briefing approved by AI quality gate. Please review the action below and approve, edit, or cancel.',
-                      timestamp: new Date().toISOString(),
-                    }]
-                  })
-                } else {
-                  setInterviewState({ ...nextState, active: true, spec: null })
-                  setMessages(prev => {
-                    const filtered = prev.filter(m => m.id !== thinkingId)
-                    return [...filtered, {
-                      id: crypto.randomUUID(), role: 'assistant' as const,
-                      content: `🧠 **AI Quality Gate** — The briefing needs more detail before handing off to the CEO:\n\n**${cleanResponse}**`,
-                      timestamp: new Date().toISOString(),
-                    }]
-                  })
-                }
-              }).catch(() => {
-                setActionSpec({ ...spec, gateToken })
-                setMessages(prev => {
-                  const filtered = prev.filter(m => m.id !== thinkingId)
-                  return [...filtered, {
+                  setMessages(prev => [...clearThinking(prev), {
                     id: crypto.randomUUID(), role: 'assistant' as const,
                     kind: INTERVIEW_SCAFFOLD_KIND,
-                    content: '✅ Interview complete! Please review the action below and approve, edit, or cancel.',
+                    content: '✅ Briefing approved by AI quality gate. Please review the action below and approve, edit, or cancel.',
                     timestamp: new Date().toISOString(),
-                  }]
-                })
-              })
+                  }])
+                } else if (verdict.outcome === 'insufficient') {
+                  setInterviewState({ ...nextState, active: true, spec: null })
+                  setMessages(prev => [...clearThinking(prev), {
+                    id: crypto.randomUUID(), role: 'assistant' as const,
+                    content: `🧠 **AI Quality Gate** — The briefing needs more detail before handing off to the CEO:\n\n**${verdict.question}**`,
+                    timestamp: new Date().toISOString(),
+                  }])
+                } else {
+                  // unavailable (empty verdict) — fail open.
+                  proceedFallback()
+                }
+              }).catch(() => {
+                // Abort/timeout or network error — fail open.
+                proceedFallback()
+              }).finally(() => clearTimeout(evalTimeoutId))
               return
             }
 

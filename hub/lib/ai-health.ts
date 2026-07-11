@@ -45,6 +45,19 @@ export interface ActionRow {
 
 /* ── Output shape ─────────────────────────────────────────────────────────── */
 
+/**
+ * Provider API-key PRESENCE on the runtime env (booleans only — NEVER key
+ * values, lengths, or prefixes). Lets an admin answer the chat bubble's
+ * "provider configuration" error in one glance at /admin/ai-health. Computed
+ * by the API route from the non-throwing probes (lib/gemini isGeminiConfigured
+ * / lib/claude isClaudeConfigured) — this module stays pure, so only the TYPE
+ * lives here. See docs/runbooks/ai-provider-outage.md.
+ */
+export interface ProviderConfig {
+  gemini: boolean
+  anthropic: boolean
+}
+
 export type AlertSeverity = 'warn' | 'critical'
 
 export interface AiHealthAlert {

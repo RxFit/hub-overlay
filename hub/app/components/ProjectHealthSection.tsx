@@ -2,7 +2,8 @@
 
 import type { ProjectKPI } from '@/types'
 import styles from './LeftPanelSections.module.css'
-import { CollapsibleSection, SectionMessage } from './LeftPanelShared'
+import { CollapsibleSection, SectionMessage, SectionError } from './LeftPanelShared'
+import { RequestAccessLink } from './RequestAccessLink'
 
 /* ══════════════════════════════════════════════════════════════════════════════
    PROJECT HEALTH SECTION — Live Paperclip data
@@ -19,11 +20,15 @@ export function ProjectHealthSection({
   onInjectChat,
   userRole,
   isLoading,
+  error,
+  onRetry,
 }: {
   projects?: ProjectKPI[]
   onInjectChat: (msg: string) => void
   userRole?: string
   isLoading?: boolean
+  error?: unknown
+  onRetry?: () => void
 }) {
   if (isLoading) {
     return (
@@ -37,16 +42,32 @@ export function ProjectHealthSection({
     )
   }
 
+  // A fetch FAILURE is distinct from "no companies / no projects" — never show
+  // the empty copy when the cause is an error.
+  if (error) {
+    return (
+      <CollapsibleSection title="Project Health" protocolNum="05" defaultOpen>
+        <SectionError message="Unable to load project health — try again." onRetry={onRetry} />
+      </CollapsibleSection>
+    )
+  }
+
   if (!projects || projects.length === 0) {
+    const isStaff = userRole === 'staff'
     const emptyMsg =
       userRole === 'superadmin' || userRole === 'admin'
         ? 'No companies in Paperclip yet.'
-        : userRole === 'staff'
+        : isStaff
           ? 'No projects assigned — contact your admin to get access.'
           : 'No project data'
     return (
       <CollapsibleSection title="Project Health" protocolNum="05" defaultOpen>
         <SectionMessage message={emptyMsg} type="empty" />
+        {isStaff && (
+          <div style={{ marginTop: '6px', paddingLeft: '2px', fontSize: '0.72rem' }}>
+            <RequestAccessLink role={userRole} reason="No projects assigned in Project Health" />
+          </div>
+        )}
       </CollapsibleSection>
     )
   }

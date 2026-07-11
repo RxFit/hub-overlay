@@ -1,5 +1,6 @@
 import { ActionSpec } from '@/types'
 import { PAPERCLIP_BASE_URL } from '@/lib/paperclipConfig'
+import { isProtectedCompany } from '@/lib/protected-workspaces'
 
 interface ExecuteActionDeps {
   activeCompany: { id: string; name: string; identifier: string } | null
@@ -645,6 +646,15 @@ export async function executeAction(
         c.name.toLowerCase() === spec.details.name?.toLowerCase()
       )
       if (!dwMatch) throw new Error(`Workspace "${spec.details.name}" not found`)
+
+      // SAFETY (UX): short-circuit protected workspaces with immediate feedback
+      // instead of a 403 round-trip. The server proxy is the authoritative guard
+      // (and also blocks env-added ids the client can't see); this client check
+      // covers the config-pinned ids the browser knows about.
+      if (isProtectedCompany(dwMatch.id)) {
+        resultMsg = `🛡️ **Protected workspace.** "${spec.details.name}" is protected and can't be deleted.`
+        break
+      }
 
       const dwRes = await fetch(`/api/paperclip/companies/${dwMatch.id}`, {
         method: 'DELETE',

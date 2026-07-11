@@ -114,6 +114,27 @@ describe('useHubData hooks (TanStack Query-backed)', () => {
     unmount()
   })
 
+  it('useFeed exposes refetch and revalidates in place (no full-app reload on Retry)', async () => {
+    const i1 = { id: 'f1', source: 's', type: 'info', title: 't1', description: 'd', timestamp: 'now' }
+    const i2 = { id: 'f2', source: 's', type: 'info', title: 't2', description: 'd', timestamp: 'now' }
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ feed: [i1] }))
+    global.fetch = fetchMock as unknown as typeof fetch
+
+    const { result, unmount } = renderQueryHook(() => useFeed())
+    await settle()
+
+    expect(result.current.items).toEqual([i1])
+    expect(typeof result.current.refetch).toBe('function')
+
+    // Retry path: refetch() lands new data WITHOUT a window reload.
+    fetchMock.mockResolvedValue(jsonResponse({ feed: [i1, i2] }))
+    await act(async () => { await result.current.refetch() })
+    await settle()
+    expect(result.current.items).toEqual([i1, i2])
+
+    unmount()
+  })
+
   it('useAuthErrorRecovery routes a 401 error into signIn(google) (reauth contract)', async () => {
     const err = Object.assign(new Error('Unauthorized'), { status: 401 })
 

@@ -77,6 +77,44 @@
   margin-bottom: var(--space-4);
 }
 
+/* ── Provider configuration (API-key presence badges) ── */
+.aih-providers {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: var(--space-4);
+}
+.aih-providers__label {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+.aih-provider-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid;
+}
+.aih-provider-badge--ok {
+  color: hsl(152, 69%, 46%);
+  border-color: rgba(34, 197, 94, 0.3);
+  background: rgba(34, 197, 94, 0.08);
+}
+/* Missing key = critical: this is exactly the "provider configuration" chat
+   error's root cause (see docs/runbooks/ai-provider-outage.md). */
+.aih-provider-badge--missing {
+  color: hsl(348, 100%, 65%);
+  border-color: rgba(255, 51, 85, 0.35);
+  background: rgba(255, 51, 85, 0.1);
+}
+
 /* ── Stat tiles ── */
 .aih-tiles {
   display: grid;

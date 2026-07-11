@@ -5,7 +5,9 @@ import { canAccessAdminRoute } from '@/lib/roles'
 import { db } from '@/lib/db'
 import { eventLog, aiActionLog } from '@/lib/schema'
 import { and, gte, like } from 'drizzle-orm'
-import { computeAiHealth, type TelemetryRow, type ActionRow } from '@/lib/ai-health'
+import { computeAiHealth, type TelemetryRow, type ActionRow, type ProviderConfig } from '@/lib/ai-health'
+import { isGeminiConfigured } from '@/lib/gemini'
+import { isClaudeConfigured } from '@/lib/claude'
 
 export const runtime = 'nodejs'
 
@@ -81,9 +83,17 @@ export async function GET(req: NextRequest) {
       actionRows as ActionRow[],
       windowMs,
     )
+    // Key PRESENCE booleans only (never values/lengths/prefixes) — the
+    // one-glance answer to the chat bubble's "provider configuration" error.
+    // See docs/runbooks/ai-provider-outage.md.
+    const providerConfig: ProviderConfig = {
+      gemini: isGeminiConfigured(),
+      anthropic: isClaudeConfigured(),
+    }
     return NextResponse.json({
       window: windowParam,
       generatedAt: new Date().toISOString(),
+      providerConfig,
       ...health,
     })
   } catch (err) {

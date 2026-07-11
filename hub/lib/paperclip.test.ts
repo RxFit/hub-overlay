@@ -33,10 +33,13 @@ vi.mock('@/lib/logger', () => ({
 import {
   getCompanies,
   getIssues,
+  getAgents,
+  getRuns,
+  deleteCompany,
   PaperclipSchemaError,
   isAgentMemberOfCompany,
 } from '@/lib/paperclip'
-import type { Agent } from '@/types'
+import type { Agent, Issue } from '@/types'
 
 function res(body: unknown) {
   return {
@@ -117,6 +120,71 @@ describe('P1-4: list-endpoint schema validation', () => {
   })
 })
 
+describe('P1-perf: getRuns pre-fetched issues/agents reuse (call-reduction)', () => {
+  const rawIssues = [
+    { id: 'i1', identifier: 'RXF-1', title: 'One', companyId: 'c1', status: 'todo', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-03T00:00:00Z' },
+    { id: 'i2', identifier: 'RXF-2', title: 'Two', companyId: 'c1', status: 'todo', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-02T00:00:00Z' },
+  ]
+  const rawAgents = [
+    { id: 'a1', name: 'CEO', status: 'active', companyId: 'c1', createdAt: '2026-01-01T00:00:00Z' },
+  ]
+  const runsByIssue: Record<string, unknown[]> = {
+    i1: [{ id: 'r1', status: 'completed', agentId: 'a1', startedAt: '2026-01-03T00:00:00Z', completedAt: '2026-01-03T00:00:05Z', durationMs: 5000 }],
+    i2: [{ id: 'r2', status: 'failed', agentId: 'a1', startedAt: '2026-01-02T00:00:00Z', completedAt: '2026-01-02T00:00:01Z', durationMs: 1000 }],
+  }
+
+  function routeFetch(url: string) {
+    const runsMatch = url.match(/\/api\/issues\/([^/]+)\/runs/)
+    if (runsMatch) return Promise.resolve(res({ runs: runsByIssue[runsMatch[1]] ?? [] }))
+    if (/\/api\/companies\/[^/]+\/issues/.test(url)) return Promise.resolve(res({ issues: rawIssues }))
+    if (/\/api\/companies\/[^/]+\/agents/.test(url)) return Promise.resolve(res({ agents: rawAgents }))
+    return Promise.resolve(res({}))
+  }
+
+  it('does NOT re-fetch issues/agents when the caller passes them in', async () => {
+    fetchMock.mockImplementation((url: string) => routeFetch(url))
+
+    const preIssues = [
+      { id: 'i1', identifier: 'RXF-1' },
+      { id: 'i2', identifier: 'RXF-2' },
+    ] as unknown as Issue[]
+    const preAgents = [{ id: 'a1', name: 'CEO' }] as unknown as Agent[]
+
+    const runs = await getRuns('c1', { limit: 50, issues: preIssues, agents: preAgents })
+
+    const urls = fetchMock.mock.calls.map(c => c[0] as string)
+    // No issues/agents list fetch — only the per-issue /runs calls remain.
+    expect(urls.some(u => /\/api\/companies\/[^/]+\/issues/.test(u))).toBe(false)
+    expect(urls.some(u => /\/api\/companies\/[^/]+\/agents/.test(u))).toBe(false)
+    expect(urls.filter(u => /\/runs/.test(u))).toHaveLength(2) // one per passed issue
+    expect(runs).toHaveLength(2)
+  })
+
+  it('fetches issues/agents itself when they are omitted (backward-compatible)', async () => {
+    fetchMock.mockImplementation((url: string) => routeFetch(url))
+
+    await getRuns('c1', { limit: 50 })
+
+    const urls = fetchMock.mock.calls.map(c => c[0] as string)
+    expect(urls.some(u => /\/api\/companies\/[^/]+\/issues/.test(u))).toBe(true)
+    expect(urls.some(u => /\/api\/companies\/[^/]+\/agents/.test(u))).toBe(true)
+  })
+
+  it('produces IDENTICAL aggregation output with or without pre-fetched issues/agents', async () => {
+    fetchMock.mockImplementation((url: string) => routeFetch(url))
+
+    // Fetch exactly what the KPI route would hold, then reuse it.
+    const issues = await getIssues('c1', { limit: 100 })
+    const agents = await getAgents('c1')
+
+    const withPrefetch = await getRuns('c1', { limit: 50, issues, agents })
+    const withoutPrefetch = await getRuns('c1', { limit: 50 })
+
+    // Behavior-neutral: the reuse path is a pure call-reduction refactor.
+    expect(withPrefetch).toEqual(withoutPrefetch)
+  })
+})
+
 describe('P1-6b: isAgentMemberOfCompany', () => {
   const agents = [
     { id: 'a1', name: 'CEO' },
@@ -133,5 +201,34 @@ describe('P1-6b: isAgentMemberOfCompany', () => {
 
   it('returns false when the company has no agents', () => {
     expect(isAgentMemberOfCompany([], 'a1')).toBe(false)
+  })
+})
+
+describe('deleteCompany — protected-workspace guard (defense in depth)', () => {
+  const PROTECTED = 'dddddddd-0000-0000-0000-00000000000d'
+  const original = process.env.PROTECTED_COMPANY_IDS
+
+  beforeEach(() => {
+    process.env.PROTECTED_COMPANY_IDS = PROTECTED
+  })
+  afterEach(() => {
+    if (original === undefined) delete process.env.PROTECTED_COMPANY_IDS
+    else process.env.PROTECTED_COMPANY_IDS = original
+  })
+
+  it('throws for a protected id and never issues the DELETE', async () => {
+    await expect(deleteCompany(PROTECTED)).rejects.toThrow(/protected/i)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('throws for a protected id regardless of UUID case', async () => {
+    await expect(deleteCompany(PROTECTED.toUpperCase())).rejects.toThrow(/protected/i)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('proceeds (issues the DELETE) for a non-protected id', async () => {
+    fetchMock.mockResolvedValueOnce(res({}))
+    await deleteCompany('eeeeeeee-0000-0000-0000-00000000000e')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })

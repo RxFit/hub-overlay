@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getServiceAccountAccessToken } from '@/lib/google-auth';
 import { fetchDriveDocContent } from '@/lib/content-fetch';
+import { buildChunkDeleteLikePattern } from '@/lib/chunk-delete-pattern';
 
 /**
  * Google Workspace Webhook Receiver
@@ -130,15 +131,17 @@ async function processGoogleDelta(resourceId: string, resourceUri: string) {
 async function deleteChunksForFile(fileId: string) {
   const { db } = await import('@/lib/db');
   const { documentChunks } = await import('@/lib/schema');
-  const { like, and, eq } = await import('drizzle-orm');
+  const { and, eq, sql } = await import('drizzle-orm');
   const { getDefaultTenantId } = await import('@/lib/tenant-context');
   const tenantId = getDefaultTenantId(); // deliberate use of @deprecated helper (see PHASE 2 TODO)
   // PHASE 2 TODO: derive tenant from the webhook channel metadata.
 
+  const pattern = buildChunkDeleteLikePattern(fileId);
+
   const deleted = await db.delete(documentChunks).where(
     and(
       eq(documentChunks.tenantId, tenantId),
-      like(documentChunks.sourceUrl, `%${fileId}%`)
+      sql`${documentChunks.sourceUrl} LIKE ${pattern} ESCAPE '\\'`
     )
   ).returning();
 

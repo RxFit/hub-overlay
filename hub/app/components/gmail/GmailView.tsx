@@ -12,7 +12,11 @@ export function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => voi
     threads,
     selectedThread,
     loading,
+    isError,
+    refetch,
     threadLoading,
+    threadError,
+    retryOpenThread,
     reply,
     sending,
     sendError,
@@ -86,6 +90,21 @@ export function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => voi
               <div style={{ height: '8px', background: 'var(--surface-2)', borderRadius: '4px', width: '90%' }} />
             </div>
           ))
+        ) : isError && threads.length === 0 ? (
+          // A fetch FAILURE — distinct from an empty inbox. Show a recoverable
+          // error with Retry instead of the misleading "No messages" copy. When
+          // a background refetch fails but we already have threads, we keep the
+          // stale list rather than replacing it with this block.
+          <div role="alert" style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+            <div style={{ fontSize: '1.3rem', marginBottom: '6px' }} aria-hidden="true">⚠️</div>
+            <div style={{ marginBottom: '10px' }}>Couldn’t load your inbox.</div>
+            <button
+              onClick={() => refetch()}
+              style={{ padding: '5px 14px', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '0.72rem', fontWeight: 600, cursor: 'pointer' }}
+            >
+              Retry
+            </button>
+          </div>
         ) : threads.length === 0 ? (
           <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
             No messages
@@ -170,6 +189,18 @@ export function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => voi
         {threadLoading ? (
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
             Loading…
+          </div>
+        ) : threadError && !selectedThread ? (
+          // A failed thread-open surfaces feedback + Retry instead of a blank pane.
+          <div role="alert" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '10px', color: 'var(--text-muted)', fontSize: '0.8rem', padding: '20px', textAlign: 'center' }}>
+            <span aria-hidden="true" style={{ fontSize: '1.3rem' }}>⚠️</span>
+            <span>{threadError}</span>
+            <button
+              onClick={retryOpenThread}
+              style={{ padding: '5px 14px', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '0.72rem', fontWeight: 600, cursor: 'pointer' }}
+            >
+              Retry
+            </button>
           </div>
         ) : isComposing ? (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '12px', gap: '12px' }}>

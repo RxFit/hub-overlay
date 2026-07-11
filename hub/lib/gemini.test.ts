@@ -20,11 +20,15 @@ const hoisted = vi.hoisted(() => ({
   geminiBehavior: null as null | ((model: string) => { stream: AsyncIterable<{ text(): string }> }),
   claudeCalls: [] as string[],
   geminiCalls: [] as string[],
+  // Consulted ONLY by the emergency cross-provider fallback. Default false =
+  // pre-fallback behavior for every legacy test; the P0 suite flips it.
+  claudeConfigured: false,
 }))
 
 vi.mock('@/lib/claude', () => ({
   CLAUDE_PRIMARY_MODEL: 'claude-fable-5',
   CLAUDE_BACKUP_MODEL: 'claude-sonnet-4-6',
+  isClaudeConfigured: () => hoisted.claudeConfigured,
   streamClaudeChat: (_msgs: unknown, _sys: unknown, opts?: { model?: string }) => {
     const model = opts?.model ?? 'claude-fable-5'
     hoisted.claudeCalls.push(model)
@@ -103,6 +107,7 @@ describe('streamChat — Claude → Gemini rotation', () => {
     hoisted.geminiCalls.length = 0
     hoisted.claudeBehavior = null
     hoisted.geminiBehavior = null
+    hoisted.claudeConfigured = false
     // The per-model cooldown Map is a module-level singleton. Clear it before
     // each test so a cooldown recorded by one case can't leak into the next —
     // this is what made the suite flaky under the full parallel run. Reset
@@ -279,6 +284,7 @@ describe('streamChat — observability telemetry', () => {
     hoisted.geminiCalls.length = 0
     hoisted.claudeBehavior = null
     hoisted.geminiBehavior = null
+    hoisted.claudeConfigured = false
     __resetModelCooldownsForTest()
     events = []
     logSpy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
@@ -348,6 +354,150 @@ describe('streamChat — observability telemetry', () => {
     expect(errs).toHaveLength(1)
     expect(errs[0].requestId).toBe('req-err')
     expect(typeof errs[0].code).toBe('string')
+  })
+})
+
+/* ──────────────────────────────────────────────────────────────────────────── */
+
+describe('streamChat — P0 emergency cross-provider fallback (Gemini → Claude)', () => {
+  /* One broken provider credential must not be a total AI outage: when the
+     Gemini chain dies PRE-STREAM on default chat, a configured Claude chain
+     serves the answer instead. Guards proven here: mid-stream failures never
+     restart, the Claude chain is walked at most once per request, and with
+     Claude unconfigured the pre-P0 behavior (incl. the exact user-facing
+     string) is byte-identical. */
+  type Emitted = Record<string, unknown> & { type: string }
+  let events: Emitted[]
+  let logSpy: ReturnType<typeof vi.spyOn>
+
+  const AUTH_MSG = '[GoogleGenerativeAI Error]: [400 Bad Request] API key not valid. Please pass a valid API key.'
+
+  beforeEach(() => {
+    hoisted.claudeCalls.length = 0
+    hoisted.geminiCalls.length = 0
+    hoisted.claudeBehavior = null
+    hoisted.geminiBehavior = null
+    hoisted.claudeConfigured = false
+    __resetModelCooldownsForTest()
+    events = []
+    logSpy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      const line = args[0]
+      if (typeof line !== 'string') return
+      try {
+        const parsed = JSON.parse(line)
+        if (parsed && typeof parsed.type === 'string' && parsed.type.startsWith('ai_')) events.push(parsed)
+      } catch { /* non-telemetry log line — ignore */ }
+    })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    __resetModelCooldownsForTest()
+  })
+
+  const byType = (t: string) => events.filter(e => e.type === t)
+
+  it('serves default chat from Claude when Gemini auth-fails pre-stream (reason: auth, subtle notice, badge switch)', async () => {
+    hoisted.claudeConfigured = true
+    hoisted.claudeBehavior = () => claudeYield(['claude answer'])
+    hoisted.geminiBehavior = () => { throw new Error(AUTH_MSG) }
+
+    const r = await collect(streamChat(MESSAGES, 'sys', 'recall', false, 'req-x'))
+
+    expect(r.error).toBeNull()
+    // Auth fast-fail: flash only, pro never burned; then the Claude chain head.
+    expect(hoisted.geminiCalls).toEqual(['gemini-2.5-flash'])
+    expect(hoisted.claudeCalls).toEqual(['claude-fable-5'])
+    expect(r.models).toEqual(['Claude Fable 5'])
+    // The user sees the graceful degraded-mode note, then the real answer.
+    expect(r.text).toBe('⚠️ *Primary model unavailable — using Claude Fable 5*\n\nclaude answer')
+
+    const fallbacks = byType('ai_fallback')
+    expect(fallbacks).toHaveLength(1)
+    expect(fallbacks[0]).toMatchObject({ from: 'gemini-2.5-flash', to: 'claude-fable-5', reason: 'auth' })
+    expect(byType('ai_complete')[0]).toMatchObject({ provider: 'claude', model: 'claude-fable-5' })
+    expect(byType('ai_error')).toHaveLength(0)
+  })
+
+  it('falls back with reason "error" when the Gemini chain is exhausted pre-stream by non-auth failures', async () => {
+    hoisted.claudeConfigured = true
+    hoisted.claudeBehavior = () => claudeYield(['rescued'])
+    hoisted.geminiBehavior = () => { throw new Error('gemini 500 internal') }
+
+    vi.useFakeTimers()
+    try {
+      const p = collect(streamChat(MESSAGES, 'sys', 'recall', false, 'req-y'))
+      await vi.advanceTimersByTimeAsync(2_500) // flash fails → 2s inter-model delay → pro fails
+      const r = await p
+
+      expect(r.error).toBeNull()
+      expect(hoisted.geminiCalls).toEqual(['gemini-2.5-flash', 'gemini-2.5-pro'])
+      expect(r.text).toContain('rescued')
+      // Intra-Gemini fallback event, then the cross-provider one.
+      const fallbacks = byType('ai_fallback')
+      expect(fallbacks.at(-1)).toMatchObject({ to: 'claude-fable-5', reason: 'error' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('preserves the exact pre-P0 dead-end when Claude is NOT configured (fast-fail + "provider configuration" string)', async () => {
+    hoisted.claudeConfigured = false
+    hoisted.geminiBehavior = () => { throw new Error(AUTH_MSG) }
+
+    const r = await collect(streamChat(MESSAGES, 'sys', 'recall', false))
+
+    expect(r.text).toBe('')
+    expect(hoisted.claudeCalls).toEqual([])            // Claude never walked
+    expect(hoisted.geminiCalls).toEqual(['gemini-2.5-flash']) // auth fast-fail, no pro retry
+    expect(r.error?.message).toBe(AUTH_MSG)            // original error surfaces
+    expect(friendlyModelError(r.error)).toBe(
+      'The AI service is temporarily unavailable (provider configuration). '
+      + 'Please try again shortly — if it persists, contact an administrator.',
+    )
+  })
+
+  it('loop guard: a Claude-first request whose Gemini leg auth-fails does NOT re-enter Claude', async () => {
+    hoisted.claudeConfigured = true // config alone must not defeat the guard
+    hoisted.claudeBehavior = () => claudeYieldThenThrow([], new Error('claude down'))
+    hoisted.geminiBehavior = () => { throw new Error(AUTH_MSG) }
+
+    const r = await collect(streamChat(MESSAGES, 'sys', 'interview', false))
+
+    // Claude chain walked exactly once (both models), never a second time.
+    expect(hoisted.claudeCalls).toEqual(['claude-fable-5', 'claude-sonnet-4-6'])
+    expect(r.error?.message).toBe(AUTH_MSG) // the Gemini failure surfaces
+  })
+
+  it('mid-stream Gemini failure (text already on the wire) still propagates — no cross-provider restart', async () => {
+    hoisted.claudeConfigured = true
+    hoisted.claudeBehavior = () => claudeYield(['SHOULD-NOT-RUN'])
+    hoisted.geminiBehavior = () => geminiStreamThenThrow(['X'], new Error(AUTH_MSG))
+
+    const r = await collect(streamChat(MESSAGES, 'sys', 'recall', false))
+
+    expect(r.text).toBe('X')                 // partial answer preserved, not restarted
+    expect(r.error).toBeInstanceOf(Error)
+    expect(hoisted.claudeCalls).toEqual([])  // Claude never engaged
+  })
+
+  it('both providers broken: throws the ORIGINAL Gemini error so the user message classifies the primary failure', async () => {
+    hoisted.claudeConfigured = true
+    hoisted.claudeBehavior = () => claudeYieldThenThrow([], new Error('anthropic exploded'))
+    hoisted.geminiBehavior = () => { throw new Error(AUTH_MSG) }
+
+    const r = await collect(streamChat(MESSAGES, 'sys', 'recall', false))
+
+    // Claude WAS attempted (both models, pre-stream failures)...
+    expect(hoisted.claudeCalls).toEqual(['claude-fable-5', 'claude-sonnet-4-6'])
+    // ...but nothing reached the wire and the ORIGINAL Gemini error surfaced.
+    expect(r.text).toBe('')
+    expect(r.error?.message).toBe(AUTH_MSG)
+    expect(friendlyModelError(r.error)).toContain('provider configuration')
+    // Terminal telemetry reflects the primary failure class.
+    expect(byType('ai_error')).toHaveLength(1)
+    expect(byType('ai_error')[0]).toMatchObject({ code: 'auth' })
+    expect(byType('ai_complete')).toHaveLength(0)
   })
 })
 

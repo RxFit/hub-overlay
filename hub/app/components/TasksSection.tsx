@@ -1,8 +1,9 @@
 'use client'
 
-import { useState, useEffect, memo } from 'react'
+import { useState, useEffect, useRef, memo } from 'react'
 import { useTasks } from '@/app/hooks/useHubData'
 import { writeFetch } from '@/app/hooks/useWriteFetch'
+import { createHideTimers } from '@/lib/hide-timers'
 import type { TaskItem } from '@/app/hooks/useHubData'
 import type { ChatAttachment } from '@/types'
 import styles from './LeftPanelSections.module.css'
@@ -41,15 +42,26 @@ function TasksSectionImpl({ onInjectChat, onInjectAction }: { onInjectChat: (msg
   // Just-completed tasks kept locally so the panel can offer an "Undo" affordance
   // even though the fetch (showCompleted=false) has dropped them from the list.
   const [recentlyCompleted, setRecentlyCompleted] = useState<CompletedTaskEntry[]>([])
+  // Pending "hide after fade" timers, keyed by task id. Captured so a sub-1.5s
+  // write failure can cancel the timer before it re-hides a rolled-back row.
+  const hideTimersRef = useRef(createHideTimers())
 
   // Clear all optimistic state when switching lists — prevents hidden/fading
   // tasks from one list bleeding into another tab's view
   useEffect(() => {
+    hideTimersRef.current.clearAll()
     setFadingIds(new Set())
     setHiddenIds(new Set())
     setTogglingIds(new Set())
     setRecentlyCompleted([])
   }, [resolvedListId])
+
+  // Cancel any in-flight hide timers on unmount so they can't fire into an
+  // unmounted tree.
+  useEffect(() => {
+    const timers = hideTimersRef.current
+    return () => timers.clearAll()
+  }, [])
 
   if (isLoading) {
     return (
@@ -96,9 +108,12 @@ function TasksSectionImpl({ onInjectChat, onInjectAction }: { onInjectChat: (msg
     const newAction = wasCompleted ? 'uncomplete' : 'complete'
 
     if (!wasCompleted) {
-      // Mark as fading immediately for optimistic UX
+      // Mark as fading immediately for optimistic UX, then hide after the fade.
+      // The timer handle is captured (keyed by task id) so the failure path can
+      // cancel it — otherwise a fast write failure rolls the row back and this
+      // timer then re-hides it 1.5s later, defeating the rollback.
       setFadingIds(prev => new Set(prev).add(task.id))
-      setTimeout(() => {
+      hideTimersRef.current.schedule(task.id, () => {
         setHiddenIds(prev => new Set(prev).add(task.id))
         setFadingIds(prev => { const s = new Set(prev); s.delete(task.id); return s })
       }, 1500)
@@ -118,6 +133,9 @@ function TasksSectionImpl({ onInjectChat, onInjectAction }: { onInjectChat: (msg
     } catch {
       // Rollback optimistic UI on ANY failure (HTTP error or network).
       // writeFetch already routed a 401 into signIn('google').
+      // Cancel the pending hide timer FIRST so it can't re-hide the row after
+      // we restore it (the sub-1.5s failure race).
+      hideTimersRef.current.cancel(task.id)
       setFadingIds(prev => { const s = new Set(prev); s.delete(task.id); return s })
       setHiddenIds(prev => { const s = new Set(prev); s.delete(task.id); return s })
     } finally {

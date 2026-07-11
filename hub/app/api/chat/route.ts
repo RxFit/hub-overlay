@@ -5,14 +5,15 @@ import { authOptions } from '@/lib/auth'
 import { createLogger } from '@/lib/logger'
 import { streamChat, buildSystemPrompt, friendlyModelError } from '@/lib/gemini'
 import { getCompanies, getIssues, getAgents, getRuns } from '@/lib/paperclip'
-import { fetchUrlContent, fetchDriveDocContent } from '@/lib/content-fetch'
 import { searchSemanticBrain } from '@/lib/vertex'
-import { searchWeb, fetchUrlWithExa } from '@/lib/exa'
+import { searchWeb } from '@/lib/exa'
+import { resolveAttachmentContext } from '@/lib/attachment-resolver'
 import { loadSkillContent } from '@/lib/skills-loader'
 import { SKILL_MAP } from '@/lib/skills'
 import { needsInternalSearch, needsExternalSearch, isTrivialMessage } from '@/lib/search-routing'
 import { ChatRequestSchema } from '@/lib/zod-schemas'
 import { boundHistory, MAX_HISTORY_MESSAGES } from '@/lib/history-window'
+import { extractSuggestedToolsJson, sanitizeAssistantHistoryContent } from '@/lib/model-output'
 import { buildGoogleWorkspaceContext } from '@/lib/google-context'
 import { withTimeout } from '@/lib/timeout'
 import { chatErrorBody } from '@/lib/chat-error'
@@ -223,13 +224,23 @@ async function handleChat(req: NextRequest): Promise<Response> {
   // The full `messages` array above is still what gets Zod-validated; only what's
   // forwarded downstream is bounded. Since we keep the tail, the latest user
   // message is always retained (lastUserMsg is derived from boundedMessages below).
-  const boundedMessages = boundHistory(messages)
-  if (boundedMessages.length < messages.length) {
+  // Sanitize assistant history before it goes back to a model: strip the
+  // degraded-mode banner and the suggestedTools metadata comment. Both are
+  // harness artifacts stored inside the visible bubble content — echoing them
+  // back as history teaches the model to reproduce them (the doubled
+  // "⚠️ Primary model unavailable" banner seen during provider outages).
+  // A bubble that was ONLY a banner sanitizes to empty — drop it entirely so
+  // no provider sees an empty assistant turn.
+  const recentMessages = boundHistory(messages)
+  if (recentMessages.length < messages.length) {
     log.info(
-      { total: messages.length, forwarded: boundedMessages.length, dropped: messages.length - boundedMessages.length, max: MAX_HISTORY_MESSAGES },
+      { total: messages.length, forwarded: recentMessages.length, dropped: messages.length - recentMessages.length, max: MAX_HISTORY_MESSAGES },
       'Chat history truncated to recency window',
     )
   }
+  const boundedMessages = recentMessages
+    .map(m => (m.role === 'assistant' ? { ...m, content: sanitizeAssistantHistoryContent(m.content) } : m))
+    .filter(m => m.role !== 'assistant' || m.content.length > 0)
 
   // ── Parallel pre-stream context assembly ──
   // Paperclip context (8s timeout) and Google Workspace context (6s timeout)
@@ -379,88 +390,12 @@ async function handleChat(req: NextRequest): Promise<Response> {
   const searchResults = await searchPromise
   const searchContext = searchResults.join('')
 
-  // Resolve attachments into text context
-  let attachmentContext = ''
-  if (attachments && attachments.length > 0) {
-    const accessToken = googleAccessToken
-
-    const resolvedParts: string[] = []
-
-    for (const att of attachments.slice(0, 5)) {  // Cap at 5
-      try {
-        if (att.type === 'text' && att.content) {
-          // Direct text — use as-is
-          resolvedParts.push(
-            `### Attached Text: "${att.label}"\n\n${att.content.slice(0, 16_000)}`
-          )
-        } else if (att.type === 'url' && att.url) {
-          // Try Exa.AI first (handles JS-heavy pages), fall back to raw fetch
-          let urlText: string | undefined
-          try {
-            urlText = await fetchUrlWithExa(att.url)
-          } catch {
-            // Exa unavailable or failed
-          }
-          if (!urlText?.trim()) {
-            urlText = await fetchUrlContent(att.url)
-          }
-          resolvedParts.push(
-            `### Attached URL: ${att.url}\n\n${urlText}`
-          )
-        } else if (att.type === 'document' && att.fileId) {
-          // Vertex AI semantic search first (token-efficient), Drive API fallback
-          let docText: string | null = null
-
-          // Attempt Vertex AI semantic search for the document.
-          // Datastore is env-configurable (P0-4); should become tenant-derived
-          // with the per-tenant work (P0-3) rather than a single shared store.
-          if (lastUserMsg) {
-            const vertexResults = await withTimeout(
-              searchSemanticBrain(
-                `${lastUserMsg.content} ${att.label}`,
-                process.env.VERTEX_DATA_STORE_ID || 'rxfit-gdrive'
-              ),
-              6_000,
-              null,
-              'attachment-vertex',
-            )
-            if (vertexResults && vertexResults.length > 0) {
-              docText = vertexResults
-                .map(r => `**${r.title}**\n${r.snippet}`)
-                .join('\n\n---\n\n')
-              docText = `[Retrieved via Semantic Brain]\n\n${docText}`
-            }
-          }
-
-          // Fallback: direct Drive API export
-          if (!docText && accessToken) {
-            docText = await fetchDriveDocContent(accessToken, att.fileId, att.mimeType)
-          }
-
-          if (!docText && !accessToken) {
-            log.warn({ label: att.label, fileId: att.fileId }, 'Document attachment unresolved: no Google access token')
-          }
-
-          const docFallback = !accessToken
-            ? '[Unable to retrieve document content: your Google session has no valid access token (it may be missing or expired). Ask the user to sign out and sign back in to re-grant Google Drive access.]'
-            : '[Unable to retrieve document content]'
-
-          resolvedParts.push(
-            `### Attached Document: "${att.label}"\n\n${docText ?? docFallback}`
-          )
-        }
-      } catch (err) {
-        log.error({ err, label: att.label }, 'Failed to resolve attachment')
-        resolvedParts.push(
-          `### Attached: "${att.label}"\n\n[Failed to load content]`
-        )
-      }
-    }
-
-    if (resolvedParts.length > 0) {
-      attachmentContext = `## User-Attached Context\n\nThe user has attached the following ${resolvedParts.length} item(s) to their message. Use this content to inform your response.\n\n${resolvedParts.join('\n\n---\n\n')}`
-    }
-  }
+  // Resolve attachments into text context. Extracted to resolveAttachmentContext
+  // (lib/attachment-resolver.ts), which resolves the (independent) attachments
+  // CONCURRENTLY — preserving the .slice(0,5) cap, input order of the injected
+  // blocks, per-attachment error isolation, and every existing timeout. This cuts
+  // worst-case time-to-first-token from serial (~30-40s for 3-5 items) to parallel.
+  const attachmentContext = await resolveAttachmentContext(attachments, lastUserMsg, googleAccessToken)
 
   // Combine all injected context
   const allInjectedContext = [searchContext, attachmentContext].filter(Boolean).join('\n\n')
@@ -494,10 +429,18 @@ async function handleChat(req: NextRequest): Promise<Response> {
   const encoder = new TextEncoder()
   const stream = new ReadableStream({
     async start(controller) {
+      // Client abort (CLIENT_ABORT_MS): the browser gives up at 45s but the
+      // rotation would otherwise churn model + Paperclip compute up to
+      // maxDuration (120s). Thread req.signal into the rotation (which checks it
+      // between attempts) AND check it in this pump so we stop enqueuing the
+      // moment the client is gone. Bailing on abort is a clean stop — it must
+      // never surface a user-visible error into an already-abandoned response.
+      const signal = req.signal
       try {
         let fullText = ''
         const hasActiveSkill = Boolean(activeSkill)
-        for await (const chunk of streamChat(boundedMessages, systemPrompt, effectiveUseCase, hasActiveSkill, requestId)) {
+        for await (const chunk of streamChat(boundedMessages, systemPrompt, effectiveUseCase, hasActiveSkill, requestId, signal)) {
+          if (signal.aborted) break
           if (typeof chunk === 'object' && 'modelUsed' in chunk) {
             // Emit model identification event to the UI
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ modelUsed: chunk.modelUsed })}\n\n`))
@@ -507,13 +450,16 @@ async function handleChat(req: NextRequest): Promise<Response> {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: chunk })}\n\n`))
         }
 
+        // If the client went away, stop here — no suggestedTools, no [DONE].
+        if (signal.aborted) return
+
         // Parse suggestedTools metadata from AI response.
         // P1-1: validate every id against the real skill catalog before emitting,
         // so injected/hallucinated content can't surface bogus or unsafe tool ids.
-        const toolMatch = fullText.match(/<!--suggestedTools:(\[.*?\])-->/)
-        if (toolMatch) {
+        const toolsJson = extractSuggestedToolsJson(fullText)
+        if (toolsJson) {
           try {
-            const parsed = JSON.parse(toolMatch[1])
+            const parsed = JSON.parse(toolsJson)
             const tools = Array.isArray(parsed)
               ? parsed.filter((id: unknown): id is string => typeof id === 'string' && id in SKILL_MAP).slice(0, 5)
               : []
@@ -527,13 +473,28 @@ async function handleChat(req: NextRequest): Promise<Response> {
 
         controller.enqueue(encoder.encode('data: [DONE]\n\n'))
       } catch (err) {
-        // Keep the REAL provider error in Cloud Run logs for operators...
-        log.error({ err }, 'Chat stream failed')
-        // ...but only ever send a clean, non-leaky message to the user.
-        const message = friendlyModelError(err)
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: message })}\n\n`))
+        // A client abort can surface as a thrown error from the rotation or from
+        // enqueue on a torn-down stream — that's not a real failure, so stop
+        // quietly without emitting an error frame to a client that is gone.
+        if (signal.aborted) {
+          log.info('Chat stream aborted by client — stopping early')
+        } else {
+          // Keep the REAL provider error in Cloud Run logs for operators...
+          log.error({ err }, 'Chat stream failed')
+          // ...but only ever send a clean, non-leaky message to the user.
+          const message = friendlyModelError(err)
+          try {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: message })}\n\n`))
+          } catch {
+            // Stream already torn down (e.g. late abort) — nothing to send.
+          }
+        }
       } finally {
-        controller.close()
+        try {
+          controller.close()
+        } catch {
+          // Controller already closed/errored by the platform after a client abort.
+        }
       }
     },
   })

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect } from 'react'
+import { lastAssistantContent } from '@/lib/panel-artifact'
 import type { ToolPanelContentProps, ToolArtifactSection } from '@/types'
 
 const PROMPTS = [
@@ -51,13 +52,15 @@ const STATUS_CONFIG: Record<ExportStatus, { label: string; color: string; icon: 
 }
 
 export default function GammaDeckPanel({ messages, onInjectChat, onArtifactUpdate, artifacts }: ToolPanelContentProps) {
+  const lastContent = lastAssistantContent(messages)
+
   useEffect(() => {
     const sections = parseMessages(messages)
     if (sections.length > 0) {
       onArtifactUpdate({ toolId: 'gamma-deck', title: 'Gamma Deck', sections })
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages.length, onArtifactUpdate])
+  }, [lastContent, onArtifactUpdate])
 
   const sections = artifacts?.sections ?? []
   const slides = sections.filter(s => s.type === 'slide')

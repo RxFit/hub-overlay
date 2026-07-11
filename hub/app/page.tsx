@@ -12,11 +12,13 @@ import type { ToolArtifactData } from '@/types'
 import { ContextAttachMenu, AttachmentChips } from '@/app/components/ContextAttachMenu'
 import { SkillsPopover } from '@/app/components/SkillsPopover'
 import { SKILL_CATALOG, SKILL_MAP } from '@/lib/skills'
+import { stripSuggestedTools } from '@/lib/model-output'
 import { BrandedHeader } from '@/app/components/BrandedHeader'
 import { AnimatedNumber } from '@/app/components/AnimatedNumber'
 import { OnboardingCard, shouldShowOnboardingCard } from '@/app/components/OnboardingCard'
 import { OnboardingBanner } from '@/app/components/OnboardingBanner'
 import { GoogleChatPanel } from '@/app/components/GoogleChatPanel'
+import { RequestAccessLink } from '@/app/components/RequestAccessLink'
 import { InfoPopover } from '@/app/components/InfoPopover'
 import { FounderLensWizard } from '@/app/components/FounderLensWizard'
 import { useTenant } from '@/app/components/TenantProvider'
@@ -62,7 +64,7 @@ const ONBOARDING_SUGGESTIONS = [
 // AnimatedNumber is now imported from @/app/components/AnimatedNumber
 
 /* ── Left Panel: Context Layer ── */
-function LeftPanelImpl({ isOpen, onClose, onInjectChat, onInjectAction, panelRef, closeBtnRef, isMobileViewport, style, activeProject, workspaceName, kpis, kpiLoading }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void; onInjectAction: (msg: string, attachments?: ChatAttachment[]) => void; panelRef?: React.Ref<HTMLElement>; closeBtnRef?: React.Ref<HTMLButtonElement>; isMobileViewport?: boolean; style?: React.CSSProperties; activeProject?: string; workspaceName?: string; kpis?: import('@/types').LiveKPI[]; kpiLoading?: boolean }) {
+function LeftPanelImpl({ isOpen, onClose, onInjectChat, onInjectAction, panelRef, closeBtnRef, isMobileViewport, style, activeProject, workspaceName, kpis, kpiLoading, kpiError, onKpiRetry }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void; onInjectAction: (msg: string, attachments?: ChatAttachment[]) => void; panelRef?: React.Ref<HTMLElement>; closeBtnRef?: React.Ref<HTMLButtonElement>; isMobileViewport?: boolean; style?: React.CSSProperties; activeProject?: string; workspaceName?: string; kpis?: import('@/types').LiveKPI[]; kpiLoading?: boolean; kpiError?: unknown; onKpiRetry?: () => void }) {
   const tenant = useTenant()
   return (
     <aside
@@ -87,7 +89,7 @@ function LeftPanelImpl({ isOpen, onClose, onInjectChat, onInjectAction, panelRef
 
       <div className="panel-content">
         <SectionErrorBoundary label="KPIs">
-          <KPISection kpis={kpis ?? []} isLoading={!!kpiLoading} onInjectChat={onInjectChat} />
+          <KPISection kpis={kpis ?? []} isLoading={!!kpiLoading} error={kpiError} onRetry={onKpiRetry} onInjectChat={onInjectChat} />
         </SectionErrorBoundary>
         <SectionErrorBoundary label="Calendar">
           <CalendarSection onInjectChat={onInjectChat} />
@@ -121,6 +123,8 @@ function RightPanel({
   activeProject,
   userRole,
   kpiLoading,
+  kpiError,
+  onKpiRetry,
   onCustomizeCSuite,
 }: {
   isOpen?: boolean
@@ -135,6 +139,8 @@ function RightPanel({
   activeProject?: string
   userRole?: string
   kpiLoading?: boolean
+  kpiError?: unknown
+  onKpiRetry?: () => void
   onCustomizeCSuite: (orgId: string, orgName: string) => void
 }) {
   // Build Paperclip workspace URL from the active project
@@ -184,7 +190,7 @@ function RightPanel({
       </div>
 
       <div className="panel-content">
-        <ProjectHealthSection projects={projects} onInjectChat={onInjectChat} userRole={userRole} isLoading={kpiLoading} />
+        <ProjectHealthSection projects={projects} onInjectChat={onInjectChat} userRole={userRole} isLoading={kpiLoading} error={kpiError} onRetry={onKpiRetry} />
         {/* orgId derives from activeCompany (same projects.find the page used for the
             now-removed activeOrgId prop — both resolved to this exact value). */}
         <ExecutionFeed onInjectChat={onInjectChat} onInjectAction={onInjectAction} onCustomizeCSuite={onCustomizeCSuite} orgId={activeCompany?.companyId} />
@@ -203,7 +209,9 @@ function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
   
   const handleCopy = () => {
-    navigator.clipboard.writeText(text)
+    // Copy what the bubble SHOWS — the raw content still carries the hidden
+    // <!--suggestedTools--> metadata comment, which must not leak into pastes.
+    navigator.clipboard.writeText(stripSuggestedTools(text).trimEnd())
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
@@ -238,7 +246,7 @@ export default function HubPage() {
   const { data: session } = useSession()
   const router = useRouter()
   const [activeProject, setActiveProject] = useState('all')
-  const { projects, kpis, isLoading: kpiLoading } = useKPIData(activeProject)
+  const { projects, kpis, isLoading: kpiLoading, error: kpiError, refetch: kpiRefetch } = useKPIData(activeProject)
   const { companies: allCompanies } = useCompanies()
 
   // Resolve the active workspace company for issue creation and deep links
@@ -630,7 +638,7 @@ export default function HubPage() {
       </div>
 
       <div className="panels-container">
-        <LeftPanel isOpen={mobileLeftOpen} onClose={handleClosePanels} onInjectChat={injectRecall} onInjectAction={injectExecute} panelRef={leftPanelRef} closeBtnRef={leftCloseBtnRef} isMobileViewport={isMobileViewport} activeProject={activeProject} workspaceName={projects?.[0]?.companyName} kpis={kpis} kpiLoading={kpiLoading} />
+        <LeftPanel isOpen={mobileLeftOpen} onClose={handleClosePanels} onInjectChat={injectRecall} onInjectAction={injectExecute} panelRef={leftPanelRef} closeBtnRef={leftCloseBtnRef} isMobileViewport={isMobileViewport} activeProject={activeProject} workspaceName={projects?.[0]?.companyName} kpis={kpis} kpiLoading={kpiLoading} kpiError={kpiError} onKpiRetry={kpiRefetch} />
 
         {/* ── Center Panel: AI Chat (inlined for shared state) ── */}
         <main className="panel-center" aria-label="AI Chat">
@@ -753,7 +761,7 @@ export default function HubPage() {
                         <CopyButton text={msg.content} />
                         <button
                           className="chat-reply-btn"
-                          onClick={() => setQuotedReply({ id: msg.id, content: msg.content.slice(0, 200) })}
+                          onClick={() => setQuotedReply({ id: msg.id, content: stripSuggestedTools(msg.content).trimEnd().slice(0, 200) })}
                           aria-label="Reply to this message"
                         >
                           ↩️ Reply
@@ -925,6 +933,8 @@ export default function HubPage() {
             activeProject={activeProject}
             userRole={userRole}
             kpiLoading={kpiLoading}
+            kpiError={kpiError}
+            onKpiRetry={kpiRefetch}
             onCustomizeCSuite={(orgId, orgName) => {
               setWizardOrg({ id: orgId, name: orgName })
               setShowWizard(true)
@@ -954,6 +964,9 @@ export default function HubPage() {
                       <p style={{ fontWeight: 600, color: 'var(--accent)' }}>⚡ Locked Panel Information</p>
                       <p style={{ marginTop: '6px' }}>The <b>Execution Feed</b> displays running tasks, background operations, and AI agent output in real time.</p>
                       <p><b>How to unlock:</b> Contact your hub administrator to assign your operational role (Staff/Admin) in the Hub Roles configuration.</p>
+                      <p style={{ marginTop: '6px' }}>
+                        <RequestAccessLink role={userRole} reason="Requesting operational role assignment (Execution Feed locked)" label="Request role assignment →" />
+                      </p>
                     </>
                   }
                 />

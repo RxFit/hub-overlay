@@ -6,6 +6,7 @@ import { breaker } from '@/lib/circuit-breaker'
 import { withRetry } from '@/lib/retry'
 import { loopDetector } from '@/lib/loop-detector'
 import { getTenantId } from './tenant-context'
+import { isProtectedCompany } from '@/lib/protected-workspaces'
 import crypto from 'crypto'
 import {
   CompaniesResponseSchema,
@@ -322,6 +323,12 @@ export async function createCompany(data: {
 }
 
 export async function deleteCompany(companyId: string, scope?: string): Promise<void> {
+  // SAFETY (defense in depth): protected workspaces are load-bearing and must
+  // never be deleted. The proxy DELETE handler is the primary guard; this throw
+  // protects any server-side caller of the helper too.
+  if (isProtectedCompany(companyId)) {
+    throw new Error('This workspace is protected and cannot be deleted.')
+  }
   await paperclipFetch<unknown>(`/api/companies/${companyId}`, { method: 'DELETE' }, undefined, scope)
 }
 
@@ -418,14 +425,21 @@ export async function updateIssue(
  */
 export async function getRuns(
   companyId: string,
-  opts?: { limit?: number }
+  opts?: { limit?: number; issues?: Issue[]; agents?: Agent[] }
 ): Promise<Run[]> {
   const limit = opts?.limit ?? 20
 
-  // Recent issues first (the API sorts by updated desc by default)
+  // Recent issues first (the API sorts by updated desc by default).
+  //
+  // Call-reduction (P1): a caller that already holds the company's issues/agents
+  // (e.g. the KPI route fetches getIssues(limit:100) + getAgents) can pass them in
+  // so getRuns doesn't re-fetch — cutting two redundant upstream Paperclip calls
+  // per company. When omitted we fetch exactly as before (backward-compatible).
+  // The top-8 slice below is unaffected: both a 100- and a 10-limit issue list are
+  // sorted updated-desc, so their first 8 issues are identical → same runs.
   const [issues, agents] = await Promise.all([
-    getIssues(companyId, { limit: 10 }),
-    getAgents(companyId).catch(() => [] as Agent[]),
+    opts?.issues ?? getIssues(companyId, { limit: 10 }),
+    opts?.agents ?? getAgents(companyId).catch(() => [] as Agent[]),
   ])
   if (issues.length === 0) return []
 

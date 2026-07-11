@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect } from 'react'
+import { lastAssistantContent } from '@/lib/panel-artifact'
 import type { ToolPanelContentProps, ToolArtifactSection } from '@/types'
 
 const PROMPTS = [
@@ -38,13 +39,15 @@ function parseMessages(messages: ToolPanelContentProps['messages']): ToolArtifac
 }
 
 export default function SCPRPanel({ messages, onInjectChat, onArtifactUpdate, artifacts }: ToolPanelContentProps) {
+  const lastContent = lastAssistantContent(messages)
+
   useEffect(() => {
     const sections = parseMessages(messages)
     if (sections.length > 0) {
       onArtifactUpdate({ toolId: 'scpr', title: 'SCPR Framework', sections })
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages.length, onArtifactUpdate])
+  }, [lastContent, onArtifactUpdate])
 
   const sections = artifacts?.sections ?? []
   const quadrants = sections.filter(s => s.type === 'narrative')

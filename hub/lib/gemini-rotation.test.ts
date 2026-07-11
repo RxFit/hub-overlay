@@ -15,9 +15,13 @@ const hoisted = vi.hoisted(() => ({
   geminiBehavior: null as null | ((model: string) => Promise<{ stream: AsyncIterable<{ text(): string }> }>),
   claudeCalls: [] as string[],
   geminiCalls: [] as string[],
+  // False = the emergency cross-provider fallback (P0) stays disengaged, so
+  // every assertion below exercises the same terminal paths as pre-P0.
+  claudeConfigured: false,
 }))
 
 vi.mock('@/lib/claude', () => ({
+  isClaudeConfigured: () => hoisted.claudeConfigured,
   streamClaudeChat: (_msgs: unknown, _sys: unknown, opts?: { model?: string }) => {
     const model = opts?.model ?? 'claude-fable-5'
     hoisted.claudeCalls.push(model)
@@ -78,6 +82,7 @@ beforeEach(() => {
   hoisted.geminiBehavior = null
   hoisted.claudeCalls.length = 0
   hoisted.geminiCalls.length = 0
+  hoisted.claudeConfigured = false
   __resetModelCooldownsForTest()
   vi.useFakeTimers()
   vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -140,6 +145,45 @@ describe('cooldown re-entry (Claude chain)', () => {
     const r3 = await collect(streamChat(MESSAGES, 'sys', 'interview'))
     expect(r3.error).toBeNull()
     expect(hoisted.claudeCalls.at(-1)).toBe('claude-fable-5')
+    expect(r3.text).toBe('claude-fable-5 says hi')
+  })
+})
+
+describe('Claude auth-failure cooldown tier (P2 FIX2)', () => {
+  it('records the 30-min AUTH cooldown (not the 5-min real-failure tier) on a Claude auth failure', async () => {
+    process.env.GEMINI_API_KEY = 'test-key'
+    let fableAuthFails = true
+    hoisted.claudeBehavior = (model) => {
+      if (model === 'claude-fable-5' && fableAuthFails) {
+        // Auth-class failure (shared-credential problem): must get the long tier.
+        throw Object.assign(new Error('401 unauthorized'), { claudeError: { type: 'auth' } })
+      }
+      return claudeYield([`${model} says hi`])
+    }
+    hoisted.geminiBehavior = () => geminiStream(['gem'])
+
+    // Call 1: Fable auth-fails → the shared-credential break skips Sonnet and
+    // hands off to Gemini. Fable is now recorded in the AUTH cooldown tier.
+    const r1 = await collect(streamChat(MESSAGES, 'sys', 'interview'))
+    expect(hoisted.claudeCalls).toEqual(['claude-fable-5']) // Sonnet skipped (auth break)
+    expect(r1.text).toBe('gem')
+
+    // Fable "recovers" upstream, but advance PAST the 5-min real-failure tier
+    // (301s) and stay UNDER the 30-min auth tier. If FIX2 is correct, Fable is
+    // still cooling and is skipped; Sonnet serves. (Pre-fix it would be the
+    // 5-min tier and Fable would be retried first here.)
+    fableAuthFails = false
+    hoisted.claudeCalls.length = 0
+    vi.advanceTimersByTime(301_000)
+    const r2 = await collect(streamChat(MESSAGES, 'sys', 'interview'))
+    expect(hoisted.claudeCalls).toEqual(['claude-sonnet-4-6']) // Fable STILL cooling → skipped
+    expect(r2.text).toBe('claude-sonnet-4-6 says hi')
+
+    // Past the full 30-min auth cooldown, Fable is tried FIRST again.
+    hoisted.claudeCalls.length = 0
+    vi.advanceTimersByTime(1_800_000)
+    const r3 = await collect(streamChat(MESSAGES, 'sys', 'interview'))
+    expect(hoisted.claudeCalls[0]).toBe('claude-fable-5')
     expect(r3.text).toBe('claude-fable-5 says hi')
   })
 })

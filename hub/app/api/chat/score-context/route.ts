@@ -4,17 +4,24 @@ import { authOptions } from '@/lib/auth'
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import type { ContextScoreResult, InterviewIntent } from '@/types'
 import { issueGateToken, GATE_PASS_THRESHOLD } from '@/lib/gateToken'
+import { stripSuggestedTools } from '@/lib/model-output'
 
 /**
  * Attach a server-signed gate token to a genuinely passing result (P0-2). This
  * is the only place a token is minted; the write boundary trusts nothing else.
- * If signing is misconfigured we return the result without a token, which makes
- * downstream high-stakes writes fail closed rather than slip through.
+ * The token is bound to `email` (caller binding) and carries a one-time jti, so
+ * the write route can enforce single-use + same-user consumption. If signing is
+ * misconfigured we return the result without a token, which makes downstream
+ * high-stakes writes fail closed rather than slip through.
  */
-function withGateToken(result: ContextScoreResult, intent: string): ContextScoreResult {
+function withGateToken(
+  result: ContextScoreResult,
+  intent: string,
+  email: string | null | undefined,
+): ContextScoreResult {
   if (!result.passed || result.score < GATE_PASS_THRESHOLD) return result
   try {
-    return { ...result, gateToken: issueGateToken(intent, result.score) }
+    return { ...result, gateToken: issueGateToken(intent, result.score, Date.now(), { email }) }
   } catch {
     return result
   }
@@ -48,9 +55,24 @@ export const maxDuration = 30
    }
    ══════════════════════════════════════════════════════════════════════════════ */
 
-const genAI = new GoogleGenerativeAI(
-  process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY || ''
-)
+/* Lazy-initialized so the API key is read at runtime, not module-load time.
+   Prevents an empty-key fallback scorer if Railway injects env vars after
+   import (mirrors detect-intent/route.ts and lib/vector-store.ts getGenAI()). */
+let _genAI: GoogleGenerativeAI | null = null
+function getGenAI(): GoogleGenerativeAI {
+  if (!_genAI) {
+    const key =
+      process.env.GEMINI_API_KEY ||
+      process.env.GOOGLE_API_KEY ||
+      process.env.GOOGLE_GENERATIVE_AI_API_KEY ||
+      ''
+    if (!key) {
+      throw new Error('No Gemini API key found. Set GEMINI_API_KEY, GOOGLE_API_KEY, or GOOGLE_GENERATIVE_AI_API_KEY.')
+    }
+    _genAI = new GoogleGenerativeAI(key)
+  }
+  return _genAI
+}
 
 /* ── Dimension definitions per intent ── */
 
@@ -119,10 +141,9 @@ Rules:
 
 function parseScoreResponse(raw: string): ContextScoreResult {
   // Strip any markdown fencing or extra text
-  const clean = raw
+  const clean = stripSuggestedTools(raw)
     .replace(/```json\n?/g, '')
     .replace(/```\n?/g, '')
-    .replace(/<!--suggestedTools:\[.*?\]-->/g, '')
     .trim()
 
   // Find the JSON object
@@ -144,6 +165,9 @@ export async function POST(req: NextRequest) {
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+  // Bind minted tokens to this caller so the write route can enforce single-use
+  // + same-user consumption (see withGateToken / verifyGateToken).
+  const callerEmail = session.user.email ?? null
 
   let body: {
     intent: InterviewIntent
@@ -173,7 +197,7 @@ export async function POST(req: NextRequest) {
       weakDimension: null,
       followUpQuestion: null,
     }
-    return NextResponse.json(withGateToken(result, intent))
+    return NextResponse.json(withGateToken(result, intent, callerEmail))
   }
 
   const dimensions = INTENT_DIMENSIONS[intent] ?? ['outcome', 'timeline', 'constraints']
@@ -207,19 +231,19 @@ export async function POST(req: NextRequest) {
         rawText = await claudeChat(scorerMessages, scorerSystem, { model: CLAUDE_BACKUP_MODEL, maxTokens: 256, temperature: 0.1 })
       }
       const scoreResult = parseScoreResponse(rawText)
-      return NextResponse.json(withGateToken(scoreResult, intent))
+      return NextResponse.json(withGateToken(scoreResult, intent, callerEmail))
     } catch (claudeErr) {
       console.warn('[score-context] Claude chain failed, falling back to Gemini 2.5 Pro:', claudeErr)
 
       // Fallback: Gemini 2.5 Pro
-      const model = genAI.getGenerativeModel({
+      const model = getGenAI().getGenerativeModel({
         model: 'gemini-2.5-pro',
         generationConfig: { temperature: 0.1, maxOutputTokens: 256 },
       })
       const result = await model.generateContent(prompt)
       const rawText = result.response.text()
       const scoreResult = parseScoreResponse(rawText)
-      return NextResponse.json(withGateToken(scoreResult, intent))
+      return NextResponse.json(withGateToken(scoreResult, intent, callerEmail))
     }
 
   } catch (err) {

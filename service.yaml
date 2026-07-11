@@ -113,12 +113,21 @@ spec:
           limits:
             cpu: 1000m
             memory: 1Gi
+        # Startup gate: HTTP GET /api/healthz (was a bare TCP open on :3000,
+        # which went "ready" as soon as the socket bound — even with no AI key
+        # or an unreachable DB). /api/healthz returns 503 until the DB answers
+        # SELECT 1 AND ≥1 AI provider key is present, so a broken revision now
+        # fails startup instead of taking traffic. Budget: 20s × 12 = 240s
+        # (unchanged from before), timeout 5s > the route's 2.5s DB check.
+        # NOTE: no livenessProbe on purpose — a liveness check on /api/healthz
+        # would restart every instance during a transient DB blip. Startup-only.
         startupProbe:
-          failureThreshold: 1
-          periodSeconds: 240
-          tcpSocket:
+          httpGet:
+            path: /api/healthz
             port: 3000
-          timeoutSeconds: 240
+          periodSeconds: 20
+          failureThreshold: 12
+          timeoutSeconds: 5
       serviceAccountName: 11747747730-compute@developer.gserviceaccount.com
       timeoutSeconds: 300
   traffic:

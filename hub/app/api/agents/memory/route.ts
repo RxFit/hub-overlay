@@ -5,10 +5,28 @@ import { createLogger } from '@/lib/logger'
 import { StoreMemoryRequestSchema, QueryMemoryRequestSchema } from '@/lib/zod-schemas'
 import { storeMemory, queryMemories } from '@/lib/agent-memory'
 import { recordEvent } from '@/lib/event-logger'
+import { canAccessStaffRoute } from '@/lib/roles'
 
 const log = createLogger('api/agents/memory')
 
 export const runtime = 'nodejs'
+
+/**
+ * Role gate (P1/P2): agent memory is the agent fleet's shared knowledge — any
+ * authenticated user (incl. `onboarding`) could previously read ALL tenant
+ * memory and POST arbitrary content for any agentId (memory-poisoning). Require
+ * `staff` or above. This route has no service/bearer path (it is only ever
+ * called from an authenticated Hub session), so gating the session path is
+ * sufficient.
+ *
+ * RESIDUAL SCOPING GAP: agent memory rows are tenant-scoped only — there is no
+ * clean agentId→project mapping at this layer — so staff are NOT further
+ * restricted to their assignedProjects here. Admins/superadmin already see all;
+ * for staff this remains tenant-wide. Tracked as follow-up (see PR body).
+ */
+function memoryRole(session: { user?: unknown } | null): string | undefined {
+  return (session?.user as Record<string, unknown> | undefined)?.role as string | undefined
+}
 
 /**
  * GET /api/agents/memory
@@ -18,6 +36,9 @@ export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+  if (!canAccessStaffRoute(memoryRole(session))) {
+    return NextResponse.json({ error: 'Forbidden — staff access required' }, { status: 403 })
   }
 
   const { searchParams } = new URL(req.url)
@@ -64,6 +85,9 @@ export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+  if (!canAccessStaffRoute(memoryRole(session))) {
+    return NextResponse.json({ error: 'Forbidden — staff access required' }, { status: 403 })
   }
 
   const actorEmail = session.user.email || 'unknown-user'

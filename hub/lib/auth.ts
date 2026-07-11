@@ -1,7 +1,7 @@
 import type { NextAuthOptions } from 'next-auth'
 import type { JWT } from 'next-auth/jwt'
 import GoogleProvider from 'next-auth/providers/google'
-import { getAllRoleEntries } from '@/lib/userRoles'
+import { getAllRoleEntries, getUserRole } from '@/lib/userRoles'
 
 /* ── Admin email lists (comma-separated env vars) ── */
 const SUPERADMIN_EMAILS = (process.env.SUPERADMIN_EMAILS || '')
@@ -9,6 +9,35 @@ const SUPERADMIN_EMAILS = (process.env.SUPERADMIN_EMAILS || '')
 
 const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || '')
   .split(',').map(e => e.trim().toLowerCase()).filter(Boolean)
+
+/* ── Sign-in domain allowlist (P1) ──
+ * Extract the domain portion of an email, lowercased. Returns '' if malformed. */
+function emailDomain(email: string): string {
+  const at = email.lastIndexOf('@')
+  return at >= 0 ? email.slice(at + 1).trim().toLowerCase() : ''
+}
+
+/**
+ * Domains permitted to sign in even without a pre-assigned role.
+ *
+ * From `ALLOWED_EMAIL_DOMAINS` (comma-separated, a leading '@' is tolerated).
+ * When UNSET we DERIVE the default from the domains of the configured
+ * superadmin/admin emails — so the real operators' company domain keeps working
+ * out of the box without hardcoding any company domain here. If nothing is
+ * configured at all, this is empty and only explicitly-listed/DB-assigned users
+ * may sign in (fail closed).
+ */
+const CONFIGURED_ADMIN_DOMAINS = Array.from(
+  new Set([...SUPERADMIN_EMAILS, ...ADMIN_EMAILS].map(emailDomain).filter(Boolean)),
+)
+
+const ALLOWED_EMAIL_DOMAINS: string[] = (() => {
+  const explicit = (process.env.ALLOWED_EMAIL_DOMAINS || '')
+    .split(',')
+    .map(d => d.trim().toLowerCase().replace(/^@/, ''))
+    .filter(Boolean)
+  return explicit.length > 0 ? explicit : CONFIGURED_ADMIN_DOMAINS
+})()
 
 /* ── Google Workspace OAuth scopes ── */
 const GOOGLE_SCOPES = [
@@ -142,6 +171,47 @@ export const authOptions: NextAuthOptions = {
     maxAge: 30 * 24 * 60 * 60, // 30 days
   },
   callbacks: {
+    // ── Sign-in allowlist (P1: fail closed for unknown external accounts) ──
+    // Google is an OPEN identity provider — without this gate ANY Google account
+    // could complete OAuth, be auto-provisioned as `onboarding`, and reach every
+    // session-gated route. We admit a sign-in ONLY when the email is:
+    //   (a) an env-configured superadmin/admin, OR
+    //   (b) an already-provisioned user with a non-onboarding role in the DB
+    //       (covers off-domain staff/contractors an admin explicitly added), OR
+    //   (c) on an allowed domain (ALLOWED_EMAIL_DOMAINS, defaulting to the
+    //       superadmin/admin domains) — covers real employees / new hires.
+    // Everything else is DENIED. This preserves access for every email that
+    // resolveUserRole would grant a non-onboarding role, plus the company domain,
+    // so no currently-legitimate user is locked out; only anonymous external
+    // Google accounts are turned away. The DB lookup is READ-ONLY (never
+    // auto-creates a row for an account we are about to reject), and a DB outage
+    // still lets env-admin + allowed-domain users in via (a)/(c).
+    async signIn({ user }) {
+      const email = (user?.email || '').toLowerCase().trim()
+      if (!email) return false // no verified email → deny
+
+      // (a) env-configured superadmin/admin always allowed.
+      if (SUPERADMIN_EMAILS.includes(email) || ADMIN_EMAILS.includes(email)) return true
+
+      // (c) allowed sign-in domain (default: the configured admins' domains).
+      const domain = emailDomain(email)
+      if (domain && ALLOWED_EMAIL_DOMAINS.includes(domain)) return true
+
+      // (b) explicitly-provisioned, non-onboarding user (read-only lookup — no
+      // side-effecting auto-create for a rejected account). getUserRole never
+      // throws (returns 'onboarding' on any DB error), so a DB outage falls
+      // through to deny here while (a)/(c) above keep the core population in.
+      try {
+        const { role } = await getUserRole(email)
+        if (role && role !== 'onboarding') return true
+      } catch {
+        // defensive — getUserRole is already catch-wrapped; fail closed.
+      }
+
+      console.warn('[auth] sign-in denied for non-allowlisted account:', email)
+      return false
+    },
+
     // ── Redirect confinement ──
     // Pin every post-auth redirect to THIS app's own origin (baseUrl === NEXTAUTH_URL).
     // Defense-in-depth against a contaminated/stale callbackUrl bouncing the user to

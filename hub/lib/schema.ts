@@ -32,6 +32,7 @@ export const hubUsers = pgTable(
     assignedBy:        text('assigned_by'),
     assignedAt:        timestamp('assigned_at').defaultNow(),
     lastLogin:         timestamp('last_login'),
+    googleRefreshToken: text('google_refresh_token'), // Google OAuth offline refresh token
     createdAt:         timestamp('created_at').defaultNow(),
     updatedAt:         timestamp('updated_at').defaultNow(),
   },
@@ -66,17 +67,26 @@ export const kpis = pgTable('kpis', {
 
 /* ── Event Log (append-only — captures every significant system action) ── */
 
-export const eventLog = pgTable('event_log', {
-  id:             text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
-  tenantId:       text('tenant_id').notNull().references(() => tenants.id),
-  eventType:      text('event_type').notNull(),     // 'issue.created', 'kpi.synced', 'circuit.tripped', 'auth.failed'
-  actor:          text('actor').notNull(),           // 'hub-user:email', 'paperclip-agent:id', 'system:cron'
-  resourceType:   text('resource_type'),            // 'issue', 'kpi', 'agent', 'run'
-  resourceId:     text('resource_id'),              // ID of the affected resource
-  payload:        jsonb('payload'),                 // Event-specific data (flexible schema)
-  correlationId:  text('correlation_id'),           // Links related events across a request chain
-  createdAt:      timestamp('created_at').defaultNow().notNull(),
-})
+export const eventLog = pgTable(
+  'event_log',
+  {
+    id:             text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+    tenantId:       text('tenant_id').notNull().references(() => tenants.id),
+    eventType:      text('event_type').notNull(),     // 'issue.created', 'kpi.synced', 'circuit.tripped', 'auth.failed'
+    actor:          text('actor').notNull(),           // 'hub-user:email', 'paperclip-agent:id', 'system:cron'
+    resourceType:   text('resource_type'),            // 'issue', 'kpi', 'agent', 'run'
+    resourceId:     text('resource_id'),              // ID of the affected resource
+    payload:        jsonb('payload'),                 // Event-specific data (flexible schema)
+    correlationId:  text('correlation_id'),           // Links related events across a request chain
+    createdAt:      timestamp('created_at').defaultNow().notNull(),
+  },
+  (t) => ({
+    // Speeds the ai-health read (WHERE event_type LIKE 'telemetry:%' AND
+    // created_at >= …) and the retention prune (WHERE tenant_id AND
+    // created_at < cutoff) — both otherwise seq-scan an append-only table.
+    typeCreatedIdx: index('event_log_type_created_idx').on(t.eventType, t.createdAt),
+  }),
+)
 
 /* ── Agent Memory (structured knowledge that Paperclip agents can query) ── */
 

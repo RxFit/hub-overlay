@@ -5,6 +5,11 @@ const AGENT = '/api/agents/abc12345-0000-0000-0000-000000000000'
 const COMPANY = '/api/companies/abc12345-0000-0000-0000-000000000000'
 const ISSUE = '/api/issues/abc12345-0000-0000-0000-000000000000'
 
+// Same UUIDs, UPPERCASE hex — Postgres resolves these to the identical rows.
+const AGENT_UPPER = '/api/agents/ABC12345-0000-0000-0000-00000000000A'
+const COMPANY_UPPER = '/api/companies/ABC12345-0000-0000-0000-00000000000A'
+const ISSUE_UPPER = '/api/issues/ABC12345-0000-0000-0000-00000000000A'
+
 describe('requiredWriteRank', () => {
   it('treats reads as unrestricted by role tier', () => {
     expect(requiredWriteRank('GET', '/api/issues')).toBe(0)
@@ -68,5 +73,56 @@ describe('canWrite', () => {
 
   it('treats an unknown role as the lowest rank', () => {
     expect(canWrite('mystery', 'POST', '/api/issues')).toBe(false)
+  })
+})
+
+/* ════════════════════════════════════════════════════════════════════════════
+   P0 — uppercase-UUID must NOT defeat the role gate, and unrecognized writes
+   must fail CLOSED (not silently default to staff). This was a live privilege
+   escalation: a case-sensitive matcher let `DELETE /api/companies/<UPPERCASE>`
+   fall through to the old staff default while Postgres still resolved the row.
+   ════════════════════════════════════════════════════════════════════════════ */
+describe('requiredWriteRank — case-insensitive matching (P0 escalation fix)', () => {
+  it('requires the SAME rank for an uppercase-UUID path as its lowercase form', () => {
+    expect(requiredWriteRank('DELETE', COMPANY_UPPER)).toBe(requiredWriteRank('DELETE', COMPANY))
+    expect(requiredWriteRank('DELETE', COMPANY_UPPER)).toBe(ROLE_RANK.admin)
+    expect(requiredWriteRank('DELETE', AGENT_UPPER)).toBe(ROLE_RANK.superadmin)
+    expect(requiredWriteRank('DELETE', ISSUE_UPPER)).toBe(ROLE_RANK.admin)
+    expect(requiredWriteRank('PATCH', ISSUE_UPPER)).toBe(ROLE_RANK.admin)
+    expect(requiredWriteRank('PATCH', AGENT_UPPER)).toBe(ROLE_RANK.admin)
+  })
+
+  it('still treats POST /api/issues as a staff write regardless of path case', () => {
+    expect(requiredWriteRank('POST', '/api/issues')).toBe(ROLE_RANK.staff)
+    expect(requiredWriteRank('POST', '/API/ISSUES')).toBe(ROLE_RANK.staff)
+  })
+
+  it('fails CLOSED (admin, never staff) for an unrecognized write path', () => {
+    // Previously these fell through to the staff default — the escalation vector.
+    expect(requiredWriteRank('POST', '/api/runs')).toBe(ROLE_RANK.admin)
+    expect(requiredWriteRank('PATCH', '/api/companies/abc/settings')).toBe(ROLE_RANK.admin)
+    expect(requiredWriteRank('PUT', '/api/agents')).toBe(ROLE_RANK.admin)
+  })
+})
+
+describe('canWrite — uppercase-UUID escalation is blocked, legit access preserved', () => {
+  it('blocks a staff user from an uppercase-UUID DELETE/PATCH exactly as the lowercase path', () => {
+    expect(canWrite('staff', 'DELETE', COMPANY_UPPER)).toBe(false)
+    expect(canWrite('staff', 'DELETE', COMPANY)).toBe(false)
+    expect(canWrite('staff', 'DELETE', ISSUE_UPPER)).toBe(false)
+    expect(canWrite('staff', 'PATCH', ISSUE_UPPER)).toBe(false)
+    expect(canWrite('staff', 'DELETE', AGENT_UPPER)).toBe(false)
+  })
+
+  it('still allows a legitimate admin/superadmin on the uppercase-UUID path', () => {
+    expect(canWrite('admin', 'DELETE', COMPANY_UPPER)).toBe(true)
+    expect(canWrite('admin', 'DELETE', ISSUE_UPPER)).toBe(true)
+    expect(canWrite('admin', 'DELETE', AGENT_UPPER)).toBe(false) // agent delete = superadmin
+    expect(canWrite('superadmin', 'DELETE', AGENT_UPPER)).toBe(true)
+  })
+
+  it('blocks staff from an unrecognized (fail-closed) write', () => {
+    expect(canWrite('staff', 'POST', '/api/runs')).toBe(false)
+    expect(canWrite('admin', 'POST', '/api/runs')).toBe(true)
   })
 })
