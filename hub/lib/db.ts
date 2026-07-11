@@ -21,7 +21,7 @@ function getDb() {
   // Node 22 strict URL parsing breaks on Unix domain sockets in connection strings.
   // We use `localhost` in the URL to satisfy the parser, and manually extract the `host`
   // query param (used for Cloud SQL sockets) to override the postgres.js connection options.
-  const hostMatch = url.match(/[?&]host=([^&]+)/)
+  const hostMatch = url.match(/[?&]host=([^&\s]+)/)
   const explicitHost = hostMatch ? decodeURIComponent(hostMatch[1]) : undefined
   
   const client = postgres(url, { 
