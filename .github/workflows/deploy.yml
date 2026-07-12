@@ -103,6 +103,12 @@ jobs:
           ENV_VARS="$ENV_VARS,VERTEX_ENGINE_ID=semanticbrain_1779229063037"
           ENV_VARS="$ENV_VARS,VERTEX_GCP_PROJECT=semantic-brain-desktop"
 
+          # --add-cloudsql-instances pins the documented DB attachment
+          # (service.yaml / scripts/gcp-migrate-hub.ps1) on EVERY deploy.
+          # Idempotent when already attached; restores it if any past deploy
+          # dropped it. The smoke test's healthz db:false (2026-07-11/12) means
+          # fresh revisions can't reach Postgres — a missing Cloud SQL socket
+          # attachment is the most likely cause, and this makes it impossible.
           gcloud run deploy "$SERVICE" \
             --source ./hub \
             --project="$GCP_PROJECT" \
@@ -112,6 +118,7 @@ jobs:
             --timeout=120 \
             --min-instances=0 \
             --max-instances=3 \
+            --add-cloudsql-instances="$GCP_PROJECT:$REGION:hub-pg" \
             --update-env-vars="$ENV_VARS"
 
       - name: Smoke test
@@ -141,3 +148,17 @@ jobs:
             exit 1
           fi
           echo "Smoke test passed — /api/healthz == 200."
+
+      # On failure, surface the revision's own startup diagnostics in the
+      # Actions log. The container entrypoint logs "[migrate]"/"[entrypoint]"
+      # lines including the exact Postgres error code (ENOENT missing socket,
+      # ECONNREFUSED, 28P01 bad password, …) on every cold start — this step
+      # saves a trip to the Cloud Logging console when the smoke test fails.
+      - name: Dump revision startup logs (on failure)
+        if: failure()
+        run: |
+          gcloud logging read \
+            'resource.type="cloud_run_revision" AND resource.labels.service_name="hub" AND (textPayload:"[migrate]" OR textPayload:"[entrypoint]" OR severity>=ERROR)' \
+            --project="$GCP_PROJECT" --freshness=30m --limit=200 --order=asc \
+            --format='value(timestamp,resource.labels.revision_name,textPayload)' \
+            || echo "::warning::Could not read revision logs — deploy SA likely needs roles/logging.viewer."
