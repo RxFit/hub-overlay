@@ -140,11 +140,22 @@ jobs:
           # the deploy so a broken revision does not stay live. (The old check
           # curled `/` and accepted any non-5xx, which 302s to /login and never
           # exercises AI or the DB — it would pass an AI-provider outage.)
-          CODE=$(curl -s -o /tmp/healthz.json -w '%{http_code}' --max-time 30 "$URL/api/healthz" || echo 000)
-          echo "GET /api/healthz -> HTTP $CODE"
-          echo "Body: $(cat /tmp/healthz.json 2>/dev/null || true)"
+          #
+          # RETRY over ~40s before failing: the probe runs seconds after traffic
+          # routing, and healthz bounds its DB check at 2.5s — a cold instance's
+          # FIRST-ever Cloud SQL socket connect routinely loses that race, which
+          # made every smoke test report db:false against a revision whose DB is
+          # fine once warm (2026-07-11/12). A persistent DB outage still fails
+          # all attempts.
+          CODE=000
+          for attempt in 1 2 3 4 5 6 7 8; do
+            CODE=$(curl -s -o /tmp/healthz.json -w '%{http_code}' --max-time 30 "$URL/api/healthz" || echo 000)
+            echo "GET /api/healthz (attempt $attempt) -> HTTP $CODE  body: $(cat /tmp/healthz.json 2>/dev/null || true)"
+            [ "$CODE" = "200" ] && break
+            sleep 5
+          done
           if [ "$CODE" != "200" ]; then
-            echo "::error::Smoke test failed — /api/healthz returned $CODE (expected 200). Revision is not serviceable."
+            echo "::error::Smoke test failed — /api/healthz returned $CODE after 8 attempts (expected 200). Revision is not serviceable."
             exit 1
           fi
           echo "Smoke test passed — /api/healthz == 200."
@@ -154,11 +165,16 @@ jobs:
       # lines including the exact Postgres error code (ENOENT missing socket,
       # ECONNREFUSED, 28P01 bad password, …) on every cold start — this step
       # saves a trip to the Cloud Logging console when the smoke test fails.
+      # NOTE: order must stay desc (the default) — gcloud only applies
+      # --freshness with descending order, so asc walks from the 30-day
+      # retention boundary and returns month-old junk (observed 2026-07-12).
+      # `tac` restores chronological order for reading.
       - name: Dump revision startup logs (on failure)
         if: failure()
         run: |
           gcloud logging read \
-            'resource.type="cloud_run_revision" AND resource.labels.service_name="hub" AND (textPayload:"[migrate]" OR textPayload:"[entrypoint]" OR severity>=ERROR)' \
-            --project="$GCP_PROJECT" --freshness=30m --limit=200 --order=asc \
+            'resource.type="cloud_run_revision" AND resource.labels.service_name="hub" AND (textPayload:"[migrate]" OR textPayload:"[entrypoint]")' \
+            --project="$GCP_PROJECT" --freshness=30m --limit=80 \
             --format='value(timestamp,resource.labels.revision_name,textPayload)' \
+            | tac \
             || echo "::warning::Could not read revision logs — deploy SA likely needs roles/logging.viewer."
