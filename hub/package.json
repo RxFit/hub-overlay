@@ -7,7 +7,7 @@
   },
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build && node scripts/assert-dynamic-rendering.mjs",
     "start": "next start",
     "lint": "next lint",
     "test": "vitest run",
