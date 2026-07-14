@@ -238,8 +238,12 @@ export async function fetchDriveDocContent(
     let text: string
 
     if (isGoogleDoc) {
-      // Export as plain text
-      const exportMime = 'text/plain'
+      // Export in a type the Drive API actually supports for this format:
+      // Sheets have NO text/plain export (Google returns "400: The requested
+      // conversion is not supported") — they export as text/csv (first sheet).
+      // Docs and Slides both support text/plain.
+      const exportMime =
+        mimeType === 'application/vnd.google-apps.spreadsheet' ? 'text/csv' : 'text/plain'
       const res = await fetch(
         `${DRIVE_EXPORT_BASE}/${fileId}/export?mimeType=${encodeURIComponent(exportMime)}`,
         {
