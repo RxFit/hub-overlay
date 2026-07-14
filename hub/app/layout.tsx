@@ -37,6 +37,17 @@ import { TenantProvider } from './components/TenantProvider'
 import { Providers } from './components/Providers'
 import { QueryProvider } from './providers'
 
+/* ── Dynamic rendering is REQUIRED by the CSP nonce (do not remove) ──
+ * middleware.ts sends `script-src 'nonce-…' 'strict-dynamic'` with a fresh
+ * nonce per request, and Next only stamps that nonce onto its <script> tags
+ * when the page is rendered per-request. A statically prerendered page is
+ * served from the build-time cache WITHOUT nonces, so the browser blocks
+ * every script — the app ships as a dead shell (no hydration, no session,
+ * no working buttons; hub outage of 2026-07-13). `next dev` always renders
+ * dynamically, which is why Playwright e2e cannot catch this; the
+ * assert-dynamic-rendering build gate does. */
+export const dynamic = 'force-dynamic'
+
 /* Static metadata — uses default tenant at build time.
    TenantProvider updates document.title at runtime for white-label. */
 const defaultTenant = getTenantConfig()
