@@ -7,8 +7,14 @@
 # Orchestration configs (agent SOULs, KPIs, etc.)
 orchestration/
 
-# Scripts (PowerShell/JS admin tools)
-scripts/
+# Scripts (PowerShell/JS admin tools) — but the CSP build gate MUST ship:
+# package.json `build` runs scripts/assert-dynamic-rendering.mjs inside the
+# container image build, so excluding it breaks `gcloud run deploy` (Cloud
+# Build failure 2026-07-14). Uses `scripts/*` rather than `scripts/` because
+# gitignore semantics cannot re-include a file whose parent DIRECTORY is
+# excluded — only sibling files matched by `*` can be negated back in.
+scripts/*
+!scripts/assert-dynamic-rendering.mjs
 
 # Memory (local agent memory, untracked)
 Memory/
@@ -16,9 +22,12 @@ Memory/
 # Railway (legacy migration data)
 railway/
 
-# Docs and audit reports at repo root
+# Docs and audit reports — but each skill's SKILL.md is READ AT RUNTIME by
+# lib/skills-loader.ts and must ship in the image. The previous negation
+# (`!hub/**/*.md`) never matched anything: this ignore file applies INSIDE
+# hub/ (the --source dir), where no upload path starts with `hub/`.
 *.md
-!hub/**/*.md
+!skills/**/SKILL.md
 
 # Service reference (not used by deploy)
 service.yaml
