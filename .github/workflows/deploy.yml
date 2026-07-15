@@ -109,6 +109,11 @@ jobs:
           # dropped it. The smoke test's healthz db:false (2026-07-11/12) means
           # fresh revisions can't reach Postgres — a missing Cloud SQL socket
           # attachment is the most likely cause, and this makes it impossible.
+          #
+          # --min-instances=1 keeps ONE instance warm so a cold Cloud SQL socket
+          # connect can't race the healthz DB timeout and degrade the first user
+          # sessions after a deploy (user-facing service). Was 0; matches
+          # service.yaml's autoscaling.knative.dev/minScale: '1'.
           gcloud run deploy "$SERVICE" \
             --source ./hub \
             --project="$GCP_PROJECT" \
@@ -116,7 +121,7 @@ jobs:
             --allow-unauthenticated \
             --memory=1Gi \
             --timeout=120 \
-            --min-instances=0 \
+            --min-instances=1 \
             --max-instances=3 \
             --add-cloudsql-instances="$GCP_PROJECT:$REGION:hub-pg" \
             --update-env-vars="$ENV_VARS"
@@ -142,8 +147,8 @@ jobs:
           # exercises AI or the DB — it would pass an AI-provider outage.)
           #
           # RETRY over ~40s before failing: the probe runs seconds after traffic
-          # routing, and healthz bounds its DB check at 2.5s — a cold instance's
-          # FIRST-ever Cloud SQL socket connect routinely loses that race, which
+          # routing, and healthz bounds its DB check at 5s — a cold instance's
+          # FIRST-ever Cloud SQL socket connect could still lose that race, which
           # made every smoke test report db:false against a revision whose DB is
           # fine once warm (2026-07-11/12). A persistent DB outage still fails
           # all attempts.
@@ -159,6 +164,34 @@ jobs:
             exit 1
           fi
           echo "Smoke test passed — /api/healthz == 200."
+
+      # NON-GATING custom-domain check. hub.casatrejo.com is the URL real users
+      # hit; the gating smoke test above only proves the .run.app revision is
+      # healthy, NOT that the custom domain resolves to it. This surfaces a stale
+      # Cloud Run domain-mapping / DNS / Cloudflare-cache mismatch as a WARNING
+      # without failing the deploy.
+      #
+      # WHY warning-only (never ::error::, never exit 1): hub.casatrejo.com sits
+      # behind Cloudflare, which 403s / issues a JS challenge to non-browser
+      # clients like this CI curl even when the app is perfectly healthy. A hard
+      # gate here would brick EVERY deploy on a CDN artifact — the exact
+      # false-failure class behind the 3-day outage. The .run.app healthz above
+      # stays the REAL gate; this step is advisory signal only.
+      - name: Custom-domain smoke test (non-gating)
+        run: |
+          set +e   # override GitHub's default `bash -eo pipefail`: a non-zero
+                   # curl or a non-200 body must NEVER fail this advisory step.
+          DOMAIN_URL="https://hub.casatrejo.com/api/healthz"
+          CODE=$(curl -sL -o /tmp/dom.json -w '%{http_code}' --max-time 20 "$DOMAIN_URL" || true)
+          [ -z "$CODE" ] && CODE=000
+          BODY=$(head -c 300 /tmp/dom.json 2>/dev/null || true)
+          echo "GET $DOMAIN_URL -> HTTP $CODE"
+          echo "body: $BODY"
+          if [ "$CODE" = "200" ]; then
+            echo "✓ custom domain serves a healthy revision"
+          else
+            echo "::warning::custom domain hub.casatrejo.com returned HTTP $CODE from /api/healthz — the .run.app revision is healthy but the domain may be pointing at a stale target (verify the Cloud Run domain-mapping + DNS; a Cloudflare orange-cloud proxy can cache/challenge). Users may be hitting a broken deploy."
+          fi
 
       # On failure, surface the revision's own startup diagnostics in the
       # Actions log. The container entrypoint logs "[migrate]"/"[entrypoint]"

@@ -34,9 +34,15 @@ export const dynamic = 'force-dynamic'
  * hub/middleware.ts) so the probe is reachable unauthenticated (no 401/redirect).
  */
 
-// Short bound so a hung/unreachable DB fails the probe fast rather than blocking
-// the startupProbe until its own timeout.
-const DB_TIMEOUT_MS = 2500
+// Bound the DB check so a genuinely hung/unreachable DB fails the probe fast
+// (503, never a hang) rather than blocking the startupProbe until its own
+// timeout. Widened 2.5s → 5s: a cold instance's FIRST-ever Cloud SQL socket
+// connect routinely took >2.5s, so the probe false-reported db:false against a
+// revision whose DB is fine once warm — the exact race that blocked deploys for
+// days (2026-07-11/12). 5s absorbs the cold connect while still failing fast on
+// a real outage. (The .run.app smoke test curls with --max-time 30, and
+// service.yaml's startupProbe timeoutSeconds sits above this bound.)
+const DB_TIMEOUT_MS = 5000
 
 /** Cheap `SELECT 1` with a hard timeout. Never throws — returns false on any error/timeout. */
 async function isDbHealthy(): Promise<boolean> {
