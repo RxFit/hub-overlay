@@ -522,6 +522,18 @@ export default function HubPage() {
   /* ── Scroll to bottom of chat ── */
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    // iOS Safari cancels an in-flight smooth scrollIntoView when the layout
+    // shifts mid-animation — exactly what happens when the ActionConfirmCard
+    // mounts right after the "Interview complete" bubble. The view then
+    // strands at the card's header with the Approve/Edit/Cancel buttons below
+    // the fold and no retry. Verify once things settle and force-finish.
+    window.setTimeout(() => {
+      const el = chatMessagesRef.current
+      if (!el) return
+      if (el.scrollHeight - el.scrollTop - el.clientHeight > 24) {
+        el.scrollTop = el.scrollHeight
+      }
+    }, 600)
   }, [])
 
   useEffect(() => { scrollToBottom() }, [messages, actionSpec, scrollToBottom])
