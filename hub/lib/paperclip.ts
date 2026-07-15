@@ -240,9 +240,23 @@ export async function paperclipFetch<T>(
     // First attempt
     let res = await doPaperclipFetch(url, finalOpts)
 
-    // F4 fix: On 401, clear session, re-authenticate, and retry once
-    if (res.status === 401) {
-      log.warn({ path, status: 401 }, 'Auth expired, re-authenticating')
+    // F4 fix: On a stale-credential response, clear the cached session,
+    // re-authenticate, and retry once.
+    //
+    // 403 matters as much as 401 here: the Paperclip server returns **403
+    // Forbidden** (not 401) for an invalid/expired session cookie. The Hub
+    // caches that cookie for ~6 days, so once it goes stale on Paperclip's
+    // side (secret rotation, server restart, expiry) every call 403s. Handling
+    // only 401 meant the stale cookie was never cleared: withRetry re-ran with
+    // the SAME cached cookie, the failures tripped the circuit breaker, and
+    // each half-open probe reused the stale cookie and re-opened it — a
+    // permanent circuit-open outage across the whole right panel. Clearing on
+    // 403 forces getPaperclipAuthHeaders()/signIn() to mint a fresh cookie on
+    // the retry, so a stale-but-recoverable session self-heals. A genuine
+    // permission-denied 403 simply 403s again after one re-auth and throws
+    // (no loop — the retry runs at most once).
+    if (res.status === 401 || res.status === 403) {
+      log.warn({ path, status: res.status }, 'Auth expired or forbidden, re-authenticating')
       clearPaperclipSession()
       res = await doPaperclipFetch(url, finalOpts)
     }
