@@ -138,6 +138,7 @@ jobs:
             --timeout=120 \
             --min-instances=1 \
             --max-instances=3 \
+            --startup-probe="timeoutSeconds=8,periodSeconds=20,failureThreshold=12,httpGet.path=/api/healthz,httpGet.port=3000" \
             --add-cloudsql-instances="$GCP_PROJECT:$REGION:hub-pg" \
             --update-env-vars="$ENV_VARS"
 
