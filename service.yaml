@@ -118,7 +118,10 @@ spec:
         # or an unreachable DB). /api/healthz returns 503 until the DB answers
         # SELECT 1 AND ≥1 AI provider key is present, so a broken revision now
         # fails startup instead of taking traffic. Budget: 20s × 12 = 240s
-        # (unchanged from before), timeout 5s > the route's 2.5s DB check.
+        # (unchanged from before), timeout 8s > the route's 5s DB check (the
+        # route's DB bound was widened 2.5s → 5s to absorb a cold Cloud SQL
+        # socket connect; the probe timeout stays above it so the probe reads the
+        # route's own 503 instead of timing out first).
         # NOTE: no livenessProbe on purpose — a liveness check on /api/healthz
         # would restart every instance during a transient DB blip. Startup-only.
         startupProbe:
@@ -127,7 +130,7 @@ spec:
             port: 3000
           periodSeconds: 20
           failureThreshold: 12
-          timeoutSeconds: 5
+          timeoutSeconds: 8
       serviceAccountName: 11747747730-compute@developer.gserviceaccount.com
       timeoutSeconds: 300
   traffic:
