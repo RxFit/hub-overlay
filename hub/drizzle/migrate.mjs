@@ -15,6 +15,37 @@ const explicitHost = hostMatch ? decodeURIComponent(hostMatch[1]) : undefined
 
 const cleanUrl = DATABASE_URL.replace(/[?&]host=[^&\s]+/, '').replace(/\?$/, '')
 
+// SOCKET-INVARIANT GUARD (P1) — fail early, fail loud. Mirrors lib/db.ts'
+// resolveDbConnection (this plain-ESM script runs under `node` before the build
+// and can't import the TS module, so the small guard is duplicated). A malformed
+// DATABASE_URL would otherwise fall through to a `localhost` TCP connect that
+// reaches nothing in Cloud Run and ECONNREFUSEs at the first query instead of
+// failing at boot. Refuse to run — matching the missing-DATABASE_URL exit above —
+// BEFORE arming the watchdog or opening a connection.
+// SECURITY: never log DATABASE_URL / cleanUrl (they carry the DB password); only
+// explicitHost (a non-secret /cloudsql/… path) and the loopback host token appear.
+if (explicitHost !== undefined) {
+  // A ?host= override is always a Cloud SQL Unix socket → must be absolute.
+  if (!explicitHost.startsWith('/')) {
+    console.error(`[migrate] ❌ DATABASE_URL ?host= override must be an absolute Cloud SQL socket path (e.g. /cloudsql/PROJECT:REGION:INSTANCE), got a non-absolute value: "${explicitHost}".`)
+    process.exit(1)
+  }
+} else if (process.env.NODE_ENV === 'production') {
+  // No socket override in production — a loopback/empty host can't reach Cloud
+  // SQL. Parse defensively: an unparseable URL is treated as a real host we
+  // can't classify, never a guard failure.
+  let hostname
+  try {
+    hostname = new URL(cleanUrl).hostname
+  } catch {
+    // Unparseable → leave hostname undefined → do not exit.
+  }
+  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '') {
+    console.error(`[migrate] ❌ DATABASE_URL resolves to the "${hostname || 'localhost'}" host in production but has no ?host= Cloud SQL socket override — this cannot reach Cloud SQL and will ECONNREFUSE at the first query. Set ?host=/cloudsql/PROJECT:REGION:INSTANCE for the Cloud Run deployment.`)
+    process.exit(1)
+  }
+}
+
 // Watchdog (2026-07-10 deploy outage): this script runs inside the container
 // entrypoint, BEFORE the server binds :3000. postgres-js waits 30s per connect
 // attempt by default, and a hung/unroutable DB endpoint would otherwise stall

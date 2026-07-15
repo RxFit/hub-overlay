@@ -114,11 +114,26 @@ jobs:
           # connect can't race the healthz DB timeout and degrade the first user
           # sessions after a deploy (user-facing service). Was 0; matches
           # service.yaml's autoscaling.knative.dev/minScale: '1'.
+          #
+          # BLUE-GREEN TRAFFIC GATE (--no-traffic + --tag=candidate): the new
+          # revision is deployed with 0% traffic under the `candidate` tag. The
+          # existing (last-good) revision keeps serving 100% of users while we
+          # validate the candidate's /api/healthz below; traffic is promoted to
+          # the candidate ONLY after the smoke test passes (next steps). So a
+          # revision that can't reach Postgres never takes a single user request —
+          # true zero-downtime, fail-closed. This is the structural fix for the
+          # prior multi-day outage where `gcloud run deploy` shifted 100% traffic
+          # to a DB-unreachable revision the instant it deployed, with no rollback.
+          # (service.yaml's startupProbe is reference-only — `--source` deploys
+          # ignore it — and `gcloud run deploy` has no HTTP-startup-probe flag, so
+          # a canary tag + validate + promote is the correct gate.)
           gcloud run deploy "$SERVICE" \
             --source ./hub \
             --project="$GCP_PROJECT" \
             --region="$REGION" \
             --allow-unauthenticated \
+            --no-traffic \
+            --tag=candidate \
             --memory=1Gi \
             --timeout=120 \
             --min-instances=1 \
@@ -129,14 +144,25 @@ jobs:
       - name: Smoke test
         run: |
           set -euo pipefail
-          URL=$(gcloud run services describe "$SERVICE" \
-            --project="$GCP_PROJECT" --region="$REGION" \
-            --format='value(status.url)')
-          echo "Service URL: $URL"
+          # Validate the CANDIDATE revision, NOT status.url. status.url is the
+          # currently-serving (old, last-good) revision — it still has 100% of
+          # traffic and would trivially pass, telling us nothing about the new
+          # revision. The candidate was deployed --no-traffic under the
+          # `candidate` tag, which mints its own stable URL in the traffic list;
+          # resolve that tagged URL and probe it directly. jq is preinstalled on
+          # ubuntu-latest.
+          CANDIDATE_URL=$(gcloud run services describe "$SERVICE" \
+            --project="$GCP_PROJECT" --region="$REGION" --format=json \
+            | jq -r '.status.traffic[] | select(.tag=="candidate") | .url')
+          if [ -z "$CANDIDATE_URL" ] || [ "$CANDIDATE_URL" = "null" ]; then
+            echo "::error::Could not resolve the candidate tag URL — cannot validate the new revision before promoting."
+            exit 1
+          fi
+          echo "Candidate URL: $CANDIDATE_URL"
 
           # Informational only: the root path 302s to /login (auth wall) and
           # never touches AI/DB — kept purely as an "is the socket up" signal.
-          ROOT=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$URL" || echo 000)
+          ROOT=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$CANDIDATE_URL" || echo 000)
           echo "GET /            -> HTTP $ROOT"
 
           # GATING assertion: /api/healthz returns 200 ONLY when the DB answers
@@ -154,7 +180,7 @@ jobs:
           # all attempts.
           CODE=000
           for attempt in 1 2 3 4 5 6 7 8; do
-            CODE=$(curl -s -o /tmp/healthz.json -w '%{http_code}' --max-time 30 "$URL/api/healthz" || echo 000)
+            CODE=$(curl -s -o /tmp/healthz.json -w '%{http_code}' --max-time 30 "$CANDIDATE_URL/api/healthz" || echo 000)
             echo "GET /api/healthz (attempt $attempt) -> HTTP $CODE  body: $(cat /tmp/healthz.json 2>/dev/null || true)"
             [ "$CODE" = "200" ] && break
             sleep 5
@@ -164,6 +190,27 @@ jobs:
             exit 1
           fi
           echo "Smoke test passed — /api/healthz == 200."
+
+      # Promote the just-validated candidate to 100% traffic. `--to-latest`
+      # shifts all traffic to the latest revision (the candidate we deployed and
+      # smoke-tested above). This step runs ONLY if the smoke test passed — a
+      # failed earlier step short-circuits the job (GitHub skips later steps
+      # without an explicit `if:`), so on smoke failure this is SKIPPED and the
+      # last-good revision keeps serving 100% of users. That is the fail-closed,
+      # zero-downtime guarantee: users only ever move to a revision proven to
+      # reach Postgres and hold an AI key.
+      - name: Promote candidate to 100% traffic
+        run: |
+          set -euo pipefail
+          gcloud run services update-traffic "$SERVICE" \
+            --project="$GCP_PROJECT" --region="$REGION" \
+            --to-latest
+          echo "Promoted candidate revision to 100% traffic."
+          # Best-effort tag cleanup — a leftover 'candidate' tag is harmless
+          # (an extra URL onto the now-live revision), so never fail on it.
+          gcloud run services update-traffic "$SERVICE" \
+            --project="$GCP_PROJECT" --region="$REGION" \
+            --remove-tags=candidate || echo "::warning::could not remove candidate tag (non-fatal)."
 
       # NON-GATING custom-domain check. hub.casatrejo.com is the URL real users
       # hit; the gating smoke test above only proves the .run.app revision is
@@ -184,7 +231,7 @@ jobs:
           DOMAIN_URL="https://hub.casatrejo.com/api/healthz"
           CODE=$(curl -sL -o /tmp/dom.json -w '%{http_code}' --max-time 20 "$DOMAIN_URL" || true)
           [ -z "$CODE" ] && CODE=000
-          BODY=$(head -c 300 /tmp/dom.json 2>/dev/null || true)
+          BODY=$(head -c 300 /tmp/dom.json 2>/dev/null | tr -d '\n\r' || true)
           echo "GET $DOMAIN_URL -> HTTP $CODE"
           echo "body: $BODY"
           if [ "$CODE" = "200" ]; then
