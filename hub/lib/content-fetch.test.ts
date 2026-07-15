@@ -140,3 +140,36 @@ describe('fetchDriveDocContent (F4 — abort timeout)', () => {
     vi.unstubAllGlobals()
   })
 })
+
+describe('fetchDriveDocContent (export mime by Google file type)', () => {
+  const stubExport = () => {
+    const fetchSpy = vi.fn((_input: RequestInfo | URL, _init?: RequestInit) =>
+      Promise.resolve(new Response('exported', {
+        status: 200, headers: { 'content-type': 'text/plain' },
+      }))
+    )
+    vi.stubGlobal('fetch', fetchSpy)
+    return fetchSpy
+  }
+
+  it('exports Google Sheets as text/csv (text/plain is an unsupported conversion → 400)', async () => {
+    const fetchSpy = stubExport()
+    await fetchDriveDocContent('tok', 'sheetId', 'application/vnd.google-apps.spreadsheet')
+    expect(String(fetchSpy.mock.calls[0][0])).toContain(`mimeType=${encodeURIComponent('text/csv')}`)
+    vi.unstubAllGlobals()
+  })
+
+  it('exports Google Docs as text/plain', async () => {
+    const fetchSpy = stubExport()
+    await fetchDriveDocContent('tok', 'docId', 'application/vnd.google-apps.document')
+    expect(String(fetchSpy.mock.calls[0][0])).toContain(`mimeType=${encodeURIComponent('text/plain')}`)
+    vi.unstubAllGlobals()
+  })
+
+  it('exports Google Slides as text/plain', async () => {
+    const fetchSpy = stubExport()
+    await fetchDriveDocContent('tok', 'slidesId', 'application/vnd.google-apps.presentation')
+    expect(String(fetchSpy.mock.calls[0][0])).toContain(`mimeType=${encodeURIComponent('text/plain')}`)
+    vi.unstubAllGlobals()
+  })
+})
