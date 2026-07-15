@@ -461,7 +461,10 @@ export function useChatEngine(options: UseChatEngineOptions) {
           // Interview answers collected — show confirm card immediately to prevent latency.
           // The background Context Sufficiency Score check may still be running (isScoring=true).
           // If it resolves <80%, the UI will handle it asynchronously.
-          const runQualityGate = async (spec: typeof nextState.spec) => {
+          // `scoringMsgId` is the "🧠 Scoring context quality…" bubble appended
+          // below — every exit removes it, otherwise it lingers forever above
+          // the outcome and reads as a stuck evaluation.
+          const runQualityGate = async (spec: typeof nextState.spec, scoringMsgId?: string) => {
             if (!spec) return
 
             // Fetch a FRESH context-sufficiency score. Reading the async badge
@@ -509,7 +512,7 @@ export function useChatEngine(options: UseChatEngineOptions) {
                 active: true,
                 spec: null,
               })
-              setMessages(prev => [...prev, {
+              setMessages(prev => [...prev.filter(m => m.id !== scoringMsgId), {
                 id: crypto.randomUUID(),
                 role: 'assistant' as const,
                 content: `🧠 **Context Score: ${finalScore}% — Below the 80% threshold**
@@ -544,7 +547,7 @@ Respond with EXACTLY one of:
 2. A single follow-up question if you identify an edge case, risk, or missing detail that the user MUST address before execution (e.g., "What should we do if the client doesn't have an email on file?"). Do not include any other text.`
 
               const thinkingId = crypto.randomUUID()
-              setMessages(prev => [...prev, {
+              setMessages(prev => [...prev.filter(m => m.id !== scoringMsgId), {
                 id: thinkingId,
                 role: 'assistant' as const,
                 content: '🧠 Evaluating briefing quality for CEO handoff...',
@@ -653,7 +656,7 @@ Respond with EXACTLY one of:
 
             // Non-CEO-routed: show confirm card directly
             setActionSpec({ ...spec, gateToken })
-            setMessages(prev => [...prev, {
+            setMessages(prev => [...prev.filter(m => m.id !== scoringMsgId), {
               id: crypto.randomUUID(),
               role: 'assistant' as const,
               kind: INTERVIEW_SCAFFOLD_KIND,
@@ -677,8 +680,9 @@ Respond with EXACTLY one of:
             setInterviewState(nextState)
             setActiveModel('Claude Fable 5')
             fireScoreGate()
-            // Run the async gate — it updates state on its own.
-            runQualityGate(confirmedSpec)
+            // Run the async gate — it updates state on its own and removes the
+            // "Scoring context quality…" bubble when it resolves.
+            runQualityGate(confirmedSpec, thinkingMsg.id)
           }
         } else {
           const question = getCurrentQuestionWithDefaults(nextState)
