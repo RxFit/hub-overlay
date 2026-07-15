@@ -39,6 +39,7 @@ import {
   PaperclipSchemaError,
   isAgentMemberOfCompany,
 } from '@/lib/paperclip'
+import { clearPaperclipSession } from '@/lib/paperclipSession'
 import type { Agent, Issue } from '@/types'
 
 function res(body: unknown) {
@@ -47,6 +48,16 @@ function res(body: unknown) {
     status: 200,
     json: async () => body,
     text: async () => JSON.stringify(body),
+  } as unknown as Response
+}
+
+/** A non-ok Paperclip response with the given HTTP status (e.g. 401/403). */
+function errRes(status: number, body = 'Forbidden') {
+  return {
+    ok: false,
+    status,
+    json: async () => ({ error: body }),
+    text: async () => body,
   } as unknown as Response
 }
 
@@ -77,6 +88,42 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+})
+
+describe('stale-credential re-auth (401/403 clear session + retry once)', () => {
+  beforeEach(() => vi.mocked(clearPaperclipSession).mockClear())
+
+  it('clears the session and retries on 403 (stale Paperclip cookie), then succeeds', async () => {
+    // Stale cached cookie → Paperclip 403 → must clear + re-auth + retry.
+    fetchMock.mockResolvedValueOnce(errRes(403))
+    fetchMock.mockResolvedValueOnce(res([validCompany]))
+
+    const out = await getCompanies()
+
+    expect(clearPaperclipSession).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(out).toHaveLength(1)
+    expect(out[0].id).toBe('c1')
+  })
+
+  it('also clears + retries on 401 (unchanged behavior)', async () => {
+    fetchMock.mockResolvedValueOnce(errRes(401, 'Unauthorized'))
+    fetchMock.mockResolvedValueOnce(res([validCompany]))
+
+    const out = await getCompanies()
+
+    expect(clearPaperclipSession).toHaveBeenCalledTimes(1)
+    expect(out).toHaveLength(1)
+  })
+
+  it('retries at most once — a persistent 403 throws instead of looping', async () => {
+    // Genuine permission-denied (fresh cookie still 403s): one re-auth, then error.
+    fetchMock.mockResolvedValue(errRes(403))
+
+    await expect(getCompanies()).rejects.toThrow(/Paperclip API error 403/)
+    expect(clearPaperclipSession).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledTimes(2) // initial + one retry, no more
+  })
 })
 
 describe('P1-4: list-endpoint schema validation', () => {
