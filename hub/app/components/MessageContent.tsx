@@ -110,17 +110,21 @@ export function MessageContent({ content, onToolActivate }: MessageContentProps)
         return (
           <Fragment key={pIndex}>
             {lines.map((line, i) => {
-              // Heading lines (## Header or ### Header)
+              // Heading lines (## Header or ### Header).
+              // Sizes step ≥6% per level with clear weight contrast — headings
+              // that barely differ from body text give long answers no visual
+              // rhythm, which is what makes them read as walls of text.
               if (/^#{1,3} /.test(line)) {
                 const level = line.match(/^(#+)/)?.[1].length || 2
                 const text = line.replace(/^#+\s*/, '')
                 return (
                   <div key={`${pIndex}-${i}`} style={{
                     fontFamily: 'var(--font-heading)',
-                    fontWeight: 600,
-                    fontSize: level === 1 ? '1.05em' : level === 2 ? '0.95em' : '0.9em',
-                    marginTop: '0.75em',
-                    marginBottom: '0.25em',
+                    fontWeight: 700,
+                    fontSize: level === 1 ? '1.18em' : level === 2 ? '1.1em' : '1.02em',
+                    lineHeight: 1.35,
+                    marginTop: '1em',
+                    marginBottom: '0.3em',
                     color: 'var(--text-primary)',
                     letterSpacing: '-0.01em',
                   }}>
@@ -128,17 +132,18 @@ export function MessageContent({ content, onToolActivate }: MessageContentProps)
                   </div>
                 )
               }
-              // Numbered list items (1. or 1) style)
+              // Numbered list items (1. or 1) style) — hanging indent so
+              // wrapped lines align with the text, not the number.
               if (/^\d+[.)\s]/.test(line.trim())) {
                 return (
-                  <div key={`${pIndex}-${i}`} style={{ paddingLeft: '16px', position: 'relative' }}>
+                  <div key={`${pIndex}-${i}`} style={{ paddingLeft: '1.6em', textIndent: '-1.6em', margin: '0.15em 0' }}>
                     {parseInlineMarkdown(line, onToolActivate)}
                   </div>
                 )
               }
-              // Bullet points — proper indentation
+              // Bullet points — hanging indent (wrapped lines align past the marker)
               if (line.startsWith('• ') || line.startsWith('- ')) {
-                return <div key={`${pIndex}-${i}`} style={{ paddingLeft: '16px', position: 'relative' }}>{parseInlineMarkdown(line, onToolActivate)}</div>
+                return <div key={`${pIndex}-${i}`} style={{ paddingLeft: '1.1em', textIndent: '-1.1em', margin: '0.15em 0' }}>{parseInlineMarkdown(line, onToolActivate)}</div>
               }
               // Blockquote lines (> text)
               if (line.startsWith('> ')) {
@@ -173,9 +178,11 @@ export function MessageContent({ content, onToolActivate }: MessageContentProps)
                   </div>
                 )
               }
-              // Empty line → visible paragraph break
+              // Empty line → visible paragraph break. ~0.7em ≈ paragraph
+              // spacing near the font size, which chunks long answers into
+              // scannable paragraphs instead of one continuous block.
               if (!line.trim()) {
-                return <div key={`${pIndex}-${i}`} style={{ height: '0.5em' }} aria-hidden="true" />
+                return <div key={`${pIndex}-${i}`} style={{ height: '0.7em' }} aria-hidden="true" />
               }
               return <div key={`${pIndex}-${i}`}>{parseInlineMarkdown(line, onToolActivate)}</div>
             })}
