@@ -69,8 +69,9 @@ test.beforeEach(async ({ page, context, baseURL }) => {
 test('a tap on a non-panel control does not leave the backdrop stuck over the screen', async ({ page }) => {
   expect(await backdropDisplay(page)).toBe('none')
 
-  // Tap the theme toggle — a control that must NOT open any panel.
-  await page.getByRole('button', { name: /Switch to (light|dark) mode/ }).first().tap()
+  // Tap the EXA Search toggle — a header control that must NOT open any panel.
+  // (It occupies the slot the old dark/light toggle used.)
+  await page.getByRole('button', { name: /Turn EXA web search (on|off)/ }).first().tap()
   await page.waitForTimeout(300)
 
   // Backdrop must remain hidden — the bug made it display:block and cover everything.

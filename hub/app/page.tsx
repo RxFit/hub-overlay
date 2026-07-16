@@ -265,7 +265,6 @@ export default function HubPage() {
   const [mobileLeftOpen, setMobileLeftOpen] = useState(false)
   const [mobileRightOpen, setMobileRightOpen] = useState(false)
   const [mobileTab, setMobileTab] = useState<MobileTab>('chat')
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark')
   const [showOnboardingCard, setShowOnboardingCard] = useState(false)
   const [chatPanelOpen, setChatPanelOpen] = useState(false)
   const [showWizard, setShowWizard] = useState(false)
@@ -337,12 +336,12 @@ export default function HubPage() {
     return '??' 
   })()
 
-  // Initialize theme from localStorage and apply to <html>
+  // Apply the theme to <html> on mount. The in-app dark/light TOGGLE was removed
+  // (its header slot now hosts the EXA Search toggle), but we still honor any
+  // previously-saved preference and default to dark so styling is unaffected.
   useEffect(() => {
     const saved = (typeof window !== 'undefined' && localStorage.getItem('rx-hub-theme')) as 'dark' | 'light' | null
-    const initial = saved || 'dark'
-    setTheme(initial)
-    document.documentElement.setAttribute('data-theme', initial)
+    document.documentElement.setAttribute('data-theme', saved || 'dark')
   }, [])
 
   // Show onboarding card on first sign-in (localStorage check)
@@ -351,13 +350,6 @@ export default function HubPage() {
       setShowOnboardingCard(true)
     }
   }, [isOnboarding])
-
-  const handleThemeToggle = () => {
-    const next = theme === 'dark' ? 'light' : 'dark'
-    setTheme(next)
-    document.documentElement.setAttribute('data-theme', next)
-    localStorage.setItem('rx-hub-theme', next)
-  }
 
   /* ── E1: Haptic feedback utility ── */
   const haptic = useCallback((ms = 10) => {
@@ -391,6 +383,7 @@ export default function HubPage() {
     quotedReply,
     activeSkill,
     suggestedTools,
+    exaMode,
     setInput,
     setMessages,
     setInterviewState,
@@ -399,6 +392,7 @@ export default function HubPage() {
     setContextWeakDim,
     setQuotedReply,
     setActiveSkill,
+    setExaMode,
     handleAddAttachment,
     handleRemoveAttachment,
     handleSend,
@@ -610,8 +604,8 @@ export default function HubPage() {
       <BrandedHeader
         activeProject={activeProject}
         onProjectChange={setActiveProject}
-        theme={theme}
-        onThemeToggle={handleThemeToggle}
+        exaMode={exaMode}
+        onExaToggle={() => { haptic(); setExaMode(prev => !prev) }}
         onOpenGoogleChat={() => setChatPanelOpen(true)}
         chatUnreadCount={chatTotalUnread}
       />
@@ -864,6 +858,22 @@ export default function HubPage() {
 
             {/* Input */}
             <div className="chat-input-area">
+              {/* EXA Search mode indicator — reminds the user the chat is a pure
+                  web-search tool and no other Hub tool will fire while it's on. */}
+              {exaMode && (
+                <div className="exa-mode-banner" role="status">
+                  <span className="exa-mode-banner__dot" aria-hidden="true" />
+                  <span className="exa-mode-banner__label">EXA Search</span>
+                  <span className="exa-mode-banner__hint">Semantic web search — other assistant tools are paused</span>
+                  <button
+                    className="exa-mode-banner__off"
+                    onClick={() => { haptic(); setExaMode(false) }}
+                    aria-label="Turn EXA Search off"
+                  >
+                    Turn off
+                  </button>
+                </div>
+              )}
               {/* Attachment chips (shown above textarea when items are attached) */}
               {quotedReply && (
                 <div className="quoted-reply-chip">
@@ -892,7 +902,7 @@ export default function HubPage() {
                   ref={textareaRef}
                   className="chat-input"
                   aria-label="Chat message input"
-                  placeholder={interviewState?.active ? "Answer the interview question..." : "Ask about your projects, create tasks, check status..."}
+                  placeholder={exaMode ? "Search the web with EXA — papers, companies, market research..." : interviewState?.active ? "Answer the interview question..." : "Ask about your projects, create tasks, check status..."}
                   value={input}
                   onChange={handleTextareaInput}
                   onKeyDown={handleKeyDown}

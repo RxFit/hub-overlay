@@ -122,6 +122,27 @@ You are the master orchestrator for the Paperclip AI platform. Through Interview
 When a user requests any of these, activate Interview Mode to collect the details.
 If they lack the required role, politely tell them what permission level is needed.`
 
+/* ── EXA Search Mode system prompt ──
+   Used when the user toggles the EXA search button in the header. In this mode
+   the assistant is a pure semantic-search summarizer over Exa.AI results — none
+   of the Hub orchestration, Interview Mode, skill, or internal-search behavior
+   applies. Kept deliberately narrow so the model does not drift into Hub actions
+   or invent tool suggestions while the toggle is on. */
+const EXA_SEARCH_SYSTEM_PROMPT = `You are the Hub's EXA Search assistant. The user has toggled EXA Search mode ON, turning this chat into a semantic web-search tool powered by Exa.AI. This is a research-only mode.
+
+Your job:
+- Answer the user's query using ONLY the "Web Search Results (Exa.AI)" provided in your context below.
+- Synthesize the results into a clear, well-organized answer (great for pulling academic papers, business details, market/competitor research, or documentation).
+- ALWAYS cite your sources inline as markdown links using the exact URLs from the results, e.g. [source](https://example.com). End with a short "Sources" list of the links you used.
+- Lead with the direct answer, then supporting detail. Use bullet points where it aids scanning.
+
+Hard rules for this mode:
+- Do NOT fabricate facts, URLs, publication dates, or citations. If the results don't cover the query, say so plainly and suggest a refined search query.
+- Do NOT attempt any Hub action: no Interview Mode, no task/issue creation, no Confirm Cards, no skill protocols. Those tools are disabled while EXA Search is on.
+- Do NOT emit skill-suggestion metadata comments.
+- If no results were returned, tell the user the search came back empty and suggest rephrasing.
+The user can keep chatting about these results — later turns in this mode continue to summarize whatever new results are provided.`
+
 export function buildSystemPrompt(context: {
   projects?: string
   summary?: string
@@ -141,6 +162,8 @@ export function buildSystemPrompt(context: {
   interviewMode?: boolean
   activeSkill?: string
   activeSkillContent?: string
+  /** EXA Search mode — pure Exa.AI search summarizer; bypasses all Hub tooling. */
+  exaMode?: boolean
 }): string {
   // Always inject the real current date so the model never guesses
   const now = new Date()
@@ -151,6 +174,23 @@ export function buildSystemPrompt(context: {
   const timeStr = now.toLocaleTimeString('en-US', {
     hour: '2-digit', minute: '2-digit', timeZone: 'America/Chicago', timeZoneName: 'short',
   })
+
+  /* ── EXA Search Mode — short-circuit ──
+     Return a lean, search-only prompt. Deliberately skips the Hub base prompt,
+     project/workspace context, Interview Mode, the skill catalog, and the
+     suggestedTools instruction so no other "tool" can be triggered while the
+     EXA toggle is on (the user's explicit requirement). */
+  if (context.exaMode) {
+    let p = EXA_SEARCH_SYSTEM_PROMPT + '\n\n'
+    p += UNTRUSTED_CONTENT_POLICY + '\n\n'
+    p += `Current date and time: ${dateStr}, ${timeStr}\n\n`
+    if (context.injectedContext) {
+      p += `## Web Search Results (Exa.AI)\n${fenceUntrusted('Exa results', context.injectedContext)}\n\nSummarize and cite these results to answer the user's query.\n\n`
+    } else {
+      p += `## Web Search Results (Exa.AI)\n\n[No results were returned for this query — tell the user the search came back empty and suggest they rephrase.]\n\n`
+    }
+    return p
+  }
 
   let prompt = HUB_SYSTEM_PROMPT + '\n\n'
   prompt += UNTRUSTED_CONTENT_POLICY + '\n\n'

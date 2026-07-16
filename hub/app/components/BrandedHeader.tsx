@@ -12,8 +12,9 @@ import { useProjects } from '@/app/hooks/useProjects'
 interface BrandedHeaderProps {
   activeProject: string
   onProjectChange: (id: string) => void
-  theme: 'dark' | 'light'
-  onThemeToggle: () => void
+  /** EXA Search mode toggle — occupies the slot the (non-functional) dark/light toggle used to. */
+  exaMode: boolean
+  onExaToggle: () => void
   onOpenGoogleChat?: () => void
   chatUnreadCount?: number
 }
@@ -21,8 +22,8 @@ interface BrandedHeaderProps {
 export function BrandedHeader({
   activeProject,
   onProjectChange,
-  theme,
-  onThemeToggle,
+  exaMode,
+  onExaToggle,
   onOpenGoogleChat,
   chatUnreadCount = 0,
 }: BrandedHeaderProps) {
@@ -199,13 +200,19 @@ export function BrandedHeader({
           </button>
         )}
 
+        {/* EXA Search toggle — turns the AI Assistant chat into a semantic
+            web-search tool (Exa.AI). Occupies the header slot the old dark/light
+            toggle used. When on, sends bypass every other Hub tool. */}
         <button
-          className="theme-toggle-btn"
-          onClick={onThemeToggle}
-          aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
-          title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+          className={`theme-toggle-btn exa-toggle-btn${exaMode ? ' exa-toggle-btn--active' : ''}`}
+          onClick={onExaToggle}
+          aria-pressed={exaMode}
+          aria-label={exaMode ? 'Turn EXA web search off' : 'Turn EXA web search on'}
+          title={exaMode ? 'EXA Search: ON — chat is a web-search tool' : 'EXA Search: OFF — tap to search the web'}
         >
-          {theme === 'dark' ? '☀️' : '🌙'}
+          <span style={{ fontSize: '0.72rem', fontWeight: 800, letterSpacing: '0.03em', lineHeight: 1 }}>
+            EXA
+          </span>
         </button>
 
         {/* User menu with dropdown */}
