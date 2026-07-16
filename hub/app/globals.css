@@ -65,7 +65,11 @@
   --font-display: var(--font-syne), var(--font-space-grotesk), 'Syne', 'Space Grotesk', system-ui, -apple-system, sans-serif;
   --font-heading: var(--font-space-grotesk), 'Space Grotesk', system-ui, -apple-system, sans-serif;
   --font-body:    var(--font-space-grotesk), 'Space Grotesk', system-ui, -apple-system, sans-serif;
-  --font-chat:    var(--font-dm-sans), var(--font-space-grotesk), 'DM Sans', 'Space Grotesk', system-ui, -apple-system, sans-serif;
+  /* Chat body = system-first stack. Native UI fonts (SF Pro / Roboto / Segoe)
+     have larger x-heights and hinting tuned for small screens, which measurably
+     improves long-form readability on phones vs. geometric display fonts.
+     DM Sans stays as a late fallback; brand fonts remain on display/headers. */
+  --font-chat:    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', var(--font-dm-sans), 'DM Sans', Arial, sans-serif;
   --font-mono:    var(--font-jetbrains-mono), 'JetBrains Mono', 'Fira Code', monospace;
 
   /* Fluid type scale — clamp(min, preferred, max) */
@@ -807,13 +811,35 @@ a:hover {
   border: 1px solid var(--border);
 }
 
+/* ── Message column (width owner) ──
+   The column, not the bubble, constrains message width so media queries can
+   tune it per role. AI replies follow the Claude/ChatGPT pattern: a readable
+   measure (~70ch ≈ 65–72 chars/line) on desktop, near-full width on mobile —
+   narrow SMS-style bubbles waste small screens and make answers feel endless. */
+.chat-message-col {
+  display: flex;
+  flex-direction: column;
+  max-width: 78%;
+}
+
+.chat-message-col--ai {
+  align-items: flex-start;
+  max-width: min(88%, 70ch);
+}
+
+.chat-message-col--user {
+  align-items: flex-end;
+}
+
 .chat-bubble {
   max-width: 78%;
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-xl);
   font-family: var(--font-chat);
   font-size: clamp(0.9375rem, 0.88rem + 0.28vw, 1rem); /* 15–16px fluid */
-  line-height: 1.7;
+  /* 1.5–1.6 is the readability sweet spot; 1.7 stretched long answers taller
+     without aiding line tracking. */
+  line-height: 1.6;
   letter-spacing: 0.005em;
 }
 
@@ -2250,9 +2276,38 @@ a:hover .rx-arrow {
     gap: var(--space-2);
   }
 
-  /* Smaller bubbles */
+  /* ── Mobile chat readability (research-backed) ──
+     16px floor (WCAG-friendly + prevents iOS input auto-zoom heuristics from
+     kicking in), full-width AI replies, compact avatar/padding so the text
+     column gets the screen, not the chrome. On a 375px phone this widens the
+     AI text column from ~235px (~30 chars/line) to ~305px (~42 chars/line). */
   .chat-bubble {
+    max-width: 100%;
+    font-size: 1rem; /* 16px floor on phones */
+    padding: var(--space-3);
+  }
+
+  .chat-message-col--ai {
+    max-width: 100%;
+    /* Bubble + reply/copy row can use every available pixel */
+    flex: 1;
+    min-width: 0;
+  }
+
+  .chat-message-col--user {
     max-width: 88%;
+  }
+
+  /* Compact AI avatar on phones — frees ~10px of text column per line while
+     staying recognizable. (User avatar keeps its size; user bubbles are short.) */
+  .chat-message .chat-message-avatar-ai {
+    width: 26px;
+    height: 26px;
+    font-size: 0.65rem;
+  }
+
+  .chat-message {
+    gap: var(--space-2);
   }
 
   /* Hide username and power view button */

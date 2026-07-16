@@ -750,7 +750,7 @@ export default function HubPage() {
                       {userInitials}
                     </div>
                   )}
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '78%' }}>
+                  <div className={`chat-message-col ${msg.role === 'user' ? 'chat-message-col--user' : 'chat-message-col--ai'}`}>
                     <div className={`chat-bubble ${msg.role === 'user' ? 'chat-bubble-user' : 'chat-bubble-ai'}`} style={{ maxWidth: '100%' }}>
                       <MessageContent content={msg.content} onToolActivate={handleSkillActivate} />
                     </div>
