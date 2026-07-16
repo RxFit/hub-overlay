@@ -191,6 +191,12 @@ export function useChatEngine(options: UseChatEngineOptions) {
   const [activeSkill, setActiveSkill] = useState<ActiveSkill | null>(null)
   const [suggestedTools, setSuggestedTools] = useState<string[]>([])
 
+  // EXA Search mode — header toggle. When ON, every send bypasses Interview
+  // Mode, intent detection, skills, and internal search, and runs a pure Exa.AI
+  // web-search summarizer instead (see the exaMode branch in doSend + the
+  // `exaMode` flag threaded into sendToApi's request body).
+  const [exaMode, setExaMode] = useState(false)
+
   const handleAddAttachment = useCallback((att: Omit<ChatAttachment, 'id'>) => {
     if (attachments.length >= 5) return  // Cap at 5
     setAttachments(prev => [...prev, { ...att, id: crypto.randomUUID() }])
@@ -226,7 +232,9 @@ export function useChatEngine(options: UseChatEngineOptions) {
           })),
           useCase,
           attachments: msgAttachments && msgAttachments.length > 0 ? msgAttachments : undefined,
-          activeSkill: activeSkill?.id || undefined,
+          // EXA mode ignores skills server-side; don't advertise one either.
+          activeSkill: exaMode ? undefined : (activeSkill?.id || undefined),
+          exaMode: exaMode || undefined,
         }),
       })
 
@@ -331,7 +339,7 @@ export function useChatEngine(options: UseChatEngineOptions) {
     } finally {
       clearTimeout(timeoutId)
     }
-  }, [activeSkill])
+  }, [activeSkill, exaMode])
 
   const doSend = useCallback((message: string, msgAttachments?: ChatAttachment[]) => {
     haptic()
@@ -350,6 +358,21 @@ export function useChatEngine(options: UseChatEngineOptions) {
       content: fullMessage,
       timestamp: new Date().toISOString(),
       attachments: msgAttachments,
+    }
+
+    // ── EXA Search mode — hard bypass ──
+    // When the header EXA toggle is on, skip Interview Mode / intent detection /
+    // scoring entirely and send straight to the Exa-only search summarizer. Read
+    // the outgoing history from the always-current ref (not the setMessages
+    // updater, which React does not run synchronously) so the request carries the
+    // just-appended user turn. This mirrors the read-style inject path.
+    if (exaMode) {
+      const committedExa: ChatMsg[] = [...messagesRef.current, newMessage]
+      setMessages(prev => [...prev, newMessage])
+      setContextScore(undefined)
+      setContextWeakDim(null)
+      sendToApi(fullMessage, committedExa, 'deep_dive', msgAttachments)
+      return
     }
 
     // ── P7 (E1): keep the setMessages updater PURE ──
@@ -721,7 +744,7 @@ Respond with EXACTLY one of:
 
     // Side effects run exactly once, AFTER the commit (P7/E1).
     runAfter?.()
-  }, [interviewState, sendToApi, canUseInterviewMode, quotedReply, userRole])
+  }, [interviewState, sendToApi, canUseInterviewMode, quotedReply, userRole, exaMode])
 
   /* ── Handle manual send from input ── */
   const handleSend = useCallback(() => {
@@ -857,6 +880,7 @@ Respond with EXACTLY one of:
     quotedReply,
     activeSkill,
     suggestedTools,
+    exaMode,
     // ── Setters page JSX wires into events ──
     setInput,
     setMessages,
@@ -866,6 +890,7 @@ Respond with EXACTLY one of:
     setContextWeakDim,
     setQuotedReply,
     setActiveSkill,
+    setExaMode,
     // ── Handlers ──
     handleAddAttachment,
     handleRemoveAttachment,

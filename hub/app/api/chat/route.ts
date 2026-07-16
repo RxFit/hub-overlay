@@ -175,6 +175,143 @@ async function runSearchPipeline(query: string, effectiveUseCase: string): Promi
   )
 }
 
+/**
+ * EXA Search mode — forced Exa.AI web search, independent of the query-routing
+ * heuristics used by the normal pipeline. Runs ONLY Exa (no Vertex, no pgvector,
+ * no internal context) so the header toggle can never trigger another tool.
+ * Returns a formatted results block for injection, or '' on empty/failure.
+ */
+async function runExaOnlySearch(query: string): Promise<string> {
+  return withTimeout(
+    (async () => {
+      try {
+        const exaResults = await breaker.execute('exa-search', () => searchWeb(query, {
+          numResults: 8,
+          useAutoprompt: true,
+        }))
+        if (exaResults.length === 0) return ''
+        return exaResults
+          .map(r => {
+            let entry = `**${r.title ?? 'Untitled'}** — [${r.url}]`
+            if (r.publishedDate) entry += ` (${r.publishedDate.split('T')[0]})`
+            if (r.snippet) entry += `\n${r.snippet}`
+            return entry
+          })
+          .join('\n\n---\n\n')
+      } catch (err) {
+        if (err instanceof CircuitOpenError) {
+          log.warn({ key: 'exa-search' }, 'Exa circuit is OPEN — EXA search mode returning empty')
+          return ''
+        }
+        log.warn({ err }, 'EXA search mode Exa.AI query failed')
+        return ''
+      }
+    })(),
+    10_000,
+    '',
+    'exa-only-search',
+  )
+}
+
+/**
+ * Streams a model response as an SSE Response. Extracted so both the normal chat
+ * path and the EXA Search path share the exact same streaming/abort/error and
+ * suggestedTools handling. In EXA mode the system prompt does not request
+ * suggestedTools, so the extract below simply yields nothing.
+ */
+function streamModelResponse(
+  boundedMessages: ChatMessage[],
+  systemPrompt: string,
+  effectiveUseCase: string,
+  hasActiveSkill: boolean,
+  req: NextRequest,
+): Response {
+  // Correlation id for the whole AI request lifecycle. `ai_request_start` here
+  // pairs with the terminal `ai_complete`/`ai_error` emitted inside streamChat.
+  const requestId = newRequestId()
+  emit({ type: 'ai_request_start', requestId, route: '/api/chat' })
+
+  const encoder = new TextEncoder()
+  const stream = new ReadableStream({
+    async start(controller) {
+      // Client abort (CLIENT_ABORT_MS): the browser gives up at 45s but the
+      // rotation would otherwise churn model + Paperclip compute up to
+      // maxDuration (120s). Thread req.signal into the rotation (which checks it
+      // between attempts) AND check it in this pump so we stop enqueuing the
+      // moment the client is gone. Bailing on abort is a clean stop — it must
+      // never surface a user-visible error into an already-abandoned response.
+      const signal = req.signal
+      try {
+        let fullText = ''
+        for await (const chunk of streamChat(boundedMessages, systemPrompt, effectiveUseCase, hasActiveSkill, requestId, signal)) {
+          if (signal.aborted) break
+          if (typeof chunk === 'object' && 'modelUsed' in chunk) {
+            // Emit model identification event to the UI
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ modelUsed: chunk.modelUsed })}\n\n`))
+            continue
+          }
+          fullText += chunk
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: chunk })}\n\n`))
+        }
+
+        // If the client went away, stop here — no suggestedTools, no [DONE].
+        if (signal.aborted) return
+
+        // Parse suggestedTools metadata from AI response.
+        // P1-1: validate every id against the real skill catalog before emitting,
+        // so injected/hallucinated content can't surface bogus or unsafe tool ids.
+        const toolsJson = extractSuggestedToolsJson(fullText)
+        if (toolsJson) {
+          try {
+            const parsed = JSON.parse(toolsJson)
+            const tools = Array.isArray(parsed)
+              ? parsed.filter((id: unknown): id is string => typeof id === 'string' && id in SKILL_MAP).slice(0, 5)
+              : []
+            if (tools.length > 0) {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ suggestedTools: tools })}\n\n`))
+            }
+          } catch {
+            // Skip malformed suggestedTools
+          }
+        }
+
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+      } catch (err) {
+        // A client abort can surface as a thrown error from the rotation or from
+        // enqueue on a torn-down stream — that's not a real failure, so stop
+        // quietly without emitting an error frame to a client that is gone.
+        if (signal.aborted) {
+          log.info('Chat stream aborted by client — stopping early')
+        } else {
+          // Keep the REAL provider error in Cloud Run logs for operators...
+          log.error({ err }, 'Chat stream failed')
+          // ...but only ever send a clean, non-leaky message to the user.
+          const message = friendlyModelError(err)
+          try {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: message })}\n\n`))
+          } catch {
+            // Stream already torn down (e.g. late abort) — nothing to send.
+          }
+        }
+      } finally {
+        try {
+          controller.close()
+        } catch {
+          // Controller already closed/errored by the platform after a client abort.
+        }
+      }
+    },
+  })
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    },
+  })
+}
+
 async function handleChat(req: NextRequest): Promise<Response> {
   // Auth check
   const session = await getServerSession(authOptions)
@@ -199,7 +336,7 @@ async function handleChat(req: NextRequest): Promise<Response> {
     return NextResponse.json({ error: 'Request too large' }, { status: 413 })
   }
 
-  let body: { messages: ChatMessage[]; useCase?: string; attachments?: ChatAttachment[]; activeSkill?: string }
+  let body: { messages: ChatMessage[]; useCase?: string; attachments?: ChatAttachment[]; activeSkill?: string; exaMode?: boolean }
   try {
     const rawBody = await req.text()
     if (rawBody.length > MAX_BODY_BYTES) {
@@ -210,7 +347,7 @@ async function handleChat(req: NextRequest): Promise<Response> {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
-  const { messages, useCase = 'deep_dive', attachments, activeSkill } = body
+  const { messages, useCase = 'deep_dive', attachments, activeSkill, exaMode = false } = body
 
   // Validate core message structure — always validate the FULL incoming array.
   const msgValidation = ChatRequestSchema.pick({ messages: true }).safeParse({ messages })
@@ -241,6 +378,24 @@ async function handleChat(req: NextRequest): Promise<Response> {
   const boundedMessages = recentMessages
     .map(m => (m.role === 'assistant' ? { ...m, content: sanitizeAssistantHistoryContent(m.content) } : m))
     .filter(m => m.role !== 'assistant' || m.content.length > 0)
+
+  // ── EXA Search mode — short-circuit before ANY other tool/context runs ──
+  // The header EXA toggle turns this chat into a pure Exa.AI web-search
+  // summarizer. Per the feature's contract, no other tool may fire while it's
+  // on: skip Vertex, pgvector, Paperclip, Google Workspace context, attachments,
+  // and skills entirely. Run only a forced Exa search, then let the model
+  // synthesize + cite from those results.
+  if (exaMode) {
+    const exaLastUserMsg = boundedMessages.filter(m => m.role === 'user').pop()
+    const exaQuery = exaLastUserMsg?.content ?? ''
+    log.info({ hasQuery: Boolean(exaQuery) }, 'EXA Search mode active — running Exa-only pipeline')
+    const exaContext = exaQuery ? await runExaOnlySearch(exaQuery) : ''
+    const exaSystemPrompt = buildSystemPrompt({
+      injectedContext: exaContext || undefined,
+      exaMode: true,
+    })
+    return streamModelResponse(boundedMessages, exaSystemPrompt, 'deep_dive', false, req)
+  }
 
   // ── Parallel pre-stream context assembly ──
   // Paperclip context (8s timeout) and Google Workspace context (6s timeout)
@@ -419,93 +574,8 @@ async function handleChat(req: NextRequest): Promise<Response> {
 
   // effectiveUseCase already computed above (before search routing) for consistency
 
-  // Correlation id for the whole AI request lifecycle. `ai_request_start` here
-  // pairs with the terminal `ai_complete`/`ai_error` emitted inside streamChat,
-  // all sharing this requestId (see lib/observability.ts). Pure logging seam.
-  const requestId = newRequestId()
-  emit({ type: 'ai_request_start', requestId, route: '/api/chat' })
-
-  // Stream response
-  const encoder = new TextEncoder()
-  const stream = new ReadableStream({
-    async start(controller) {
-      // Client abort (CLIENT_ABORT_MS): the browser gives up at 45s but the
-      // rotation would otherwise churn model + Paperclip compute up to
-      // maxDuration (120s). Thread req.signal into the rotation (which checks it
-      // between attempts) AND check it in this pump so we stop enqueuing the
-      // moment the client is gone. Bailing on abort is a clean stop — it must
-      // never surface a user-visible error into an already-abandoned response.
-      const signal = req.signal
-      try {
-        let fullText = ''
-        const hasActiveSkill = Boolean(activeSkill)
-        for await (const chunk of streamChat(boundedMessages, systemPrompt, effectiveUseCase, hasActiveSkill, requestId, signal)) {
-          if (signal.aborted) break
-          if (typeof chunk === 'object' && 'modelUsed' in chunk) {
-            // Emit model identification event to the UI
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ modelUsed: chunk.modelUsed })}\n\n`))
-            continue
-          }
-          fullText += chunk
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: chunk })}\n\n`))
-        }
-
-        // If the client went away, stop here — no suggestedTools, no [DONE].
-        if (signal.aborted) return
-
-        // Parse suggestedTools metadata from AI response.
-        // P1-1: validate every id against the real skill catalog before emitting,
-        // so injected/hallucinated content can't surface bogus or unsafe tool ids.
-        const toolsJson = extractSuggestedToolsJson(fullText)
-        if (toolsJson) {
-          try {
-            const parsed = JSON.parse(toolsJson)
-            const tools = Array.isArray(parsed)
-              ? parsed.filter((id: unknown): id is string => typeof id === 'string' && id in SKILL_MAP).slice(0, 5)
-              : []
-            if (tools.length > 0) {
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ suggestedTools: tools })}\n\n`))
-            }
-          } catch {
-            // Skip malformed suggestedTools
-          }
-        }
-
-        controller.enqueue(encoder.encode('data: [DONE]\n\n'))
-      } catch (err) {
-        // A client abort can surface as a thrown error from the rotation or from
-        // enqueue on a torn-down stream — that's not a real failure, so stop
-        // quietly without emitting an error frame to a client that is gone.
-        if (signal.aborted) {
-          log.info('Chat stream aborted by client — stopping early')
-        } else {
-          // Keep the REAL provider error in Cloud Run logs for operators...
-          log.error({ err }, 'Chat stream failed')
-          // ...but only ever send a clean, non-leaky message to the user.
-          const message = friendlyModelError(err)
-          try {
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: message })}\n\n`))
-          } catch {
-            // Stream already torn down (e.g. late abort) — nothing to send.
-          }
-        }
-      } finally {
-        try {
-          controller.close()
-        } catch {
-          // Controller already closed/errored by the platform after a client abort.
-        }
-      }
-    },
-  })
-
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-    },
-  })
+  // Stream response (shared with the EXA Search path — see streamModelResponse).
+  return streamModelResponse(boundedMessages, systemPrompt, effectiveUseCase, Boolean(activeSkill), req)
 }
 
 export async function POST(req: NextRequest) {

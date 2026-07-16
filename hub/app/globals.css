@@ -1737,6 +1737,80 @@ a:hover .rx-arrow {
   transform: rotate(12deg) scale(1.05);
 }
 
+/* ── EXA Search toggle (header) ──
+   Reuses .theme-toggle-btn sizing but drops the playful rotate (it's a text
+   label, not an icon) and gains a clear ON state so the search mode is obvious. */
+.exa-toggle-btn:hover {
+  transform: scale(1.05);
+}
+
+.exa-toggle-btn--active,
+.exa-toggle-btn--active:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--btn-text, #0b0b0f);
+  transform: none;
+  box-shadow: 0 0 0 3px var(--accent-border);
+}
+
+/* ── EXA Search mode banner (above the chat composer) ── */
+.exa-mode-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  margin-bottom: 8px;
+  border-radius: var(--radius-md, 8px);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid var(--accent-border);
+  font-family: var(--font-chat);
+  font-size: var(--text-xs, 0.75rem);
+  color: var(--text-primary);
+}
+
+.exa-mode-banner__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  flex-shrink: 0;
+  animation: sparkle-breathe 2.4s ease-in-out infinite;
+}
+
+.exa-mode-banner__label {
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.exa-mode-banner__hint {
+  color: var(--text-muted);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.exa-mode-banner__off {
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  color: var(--text-muted);
+  font-size: var(--text-xs, 0.75rem);
+  font-weight: 600;
+  padding: 3px 8px;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.exa-mode-banner__off:hover {
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
 /* KPI count-up animation on initial mount */
 .kpi-value.count-animating {
   animation: countUp 0.5s var(--ease-spring) forwards;

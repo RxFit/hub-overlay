@@ -150,6 +150,9 @@ export const ChatRequestSchema = z.object({
   messages: ChatMessageSchema.array().min(1),
   useCase: z.enum(['recall', 'deep_dive', 'execute', 'interview']).optional(),
   skillContext: z.string().optional(),
+  // EXA Search mode — when true, the chat route bypasses all internal tools and
+  // context assembly and runs a pure Exa.AI web search summarizer (header toggle).
+  exaMode: z.boolean().optional(),
   attachments: z.array(z.object({
     id: z.string(),
     type: z.enum(['document', 'url', 'text']),
