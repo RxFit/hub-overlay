@@ -394,7 +394,10 @@ async function handleChat(req: NextRequest): Promise<Response> {
       injectedContext: exaContext || undefined,
       exaMode: true,
     })
-    return streamModelResponse(boundedMessages, exaSystemPrompt, 'deep_dive', false, req)
+    // 'exa_search' routes to the Claude chain (Fable 5 → Sonnet 4.6 → Gemini
+    // fallbacks) — research synthesis with citations needs the strongest model,
+    // not the Gemini Flash default that plain no-skill deep_dive falls to.
+    return streamModelResponse(boundedMessages, exaSystemPrompt, 'exa_search', false, req)
   }
 
   // ── Parallel pre-stream context assembly ──
