@@ -209,6 +209,12 @@ export function useChatEngine(options: UseChatEngineOptions) {
   /* ── Send to Gemini API ── */
   const sendToApi = useCallback(async (userMessage: string, allMessages: ChatMsg[], useCase: string = 'deep_dive', msgAttachments?: ChatAttachment[]) => {
     setIsTyping(true)
+    // Badge hardening: clear the model badge at the start of every request so a
+    // stale value from the previous turn can never display as the current
+    // model. The badge shows the neutral "AI" until the server's authoritative
+    // `modelUsed` SSE frame (emitted by whichever provider actually connects,
+    // including mid-stream fallback rotations) names the real model.
+    setActiveModel(null)
 
     // HARDENED: AbortController with client-side timeout (CLIENT_ABORT_MS) — the
     // outermost user-facing bound in the timeout ladder (see lib/timeout-config.ts).

@@ -109,7 +109,7 @@ describe('missing Gemini API key', () => {
       const { error, text } = await collect(streamChat(MESSAGES, 'sys', 'recall'))
       expect(text).toBe('')
       expect(error?.message).toContain('No Gemini API key found')
-      // Auth-class failure: gemini-2.5-pro was never attempted.
+      // Auth-class failure: the rest of the Gemini chain was never attempted.
       expect(hoisted.geminiCalls).toEqual([])
       // The user-facing string frames it as provider configuration, not leak.
       expect(friendlyModelError(error)).toContain('provider configuration')
@@ -193,17 +193,18 @@ describe('all models in cooldown (Gemini chain)', () => {
     process.env.GEMINI_API_KEY = 'test-key'
     hoisted.geminiBehavior = () => Promise.reject(new Error('gemini 500 internal'))
 
-    // Call 1: flash fails, 2s inter-model delay, pro fails → both cool down.
+    // Call 1: each chain model fails with a 2s inter-model delay between
+    // attempts → all three cool down.
     const p1 = collect(streamChat(MESSAGES, 'sys', 'recall'))
-    await vi.advanceTimersByTimeAsync(2_500)
+    await vi.advanceTimersByTimeAsync(5_000)
     const r1 = await p1
     expect(r1.error?.message).toContain('gemini 500 internal')
-    expect(hoisted.geminiCalls).toEqual(['gemini-2.5-flash', 'gemini-2.5-pro'])
+    expect(hoisted.geminiCalls).toEqual(['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'])
 
-    // Call 2, still inside both cooldowns: terminal error, zero upstream calls.
+    // Call 2, still inside every cooldown: terminal error, zero upstream calls.
     const r2 = await collect(streamChat(MESSAGES, 'sys', 'recall'))
     expect(r2.error?.message).toBe('All models are in cooldown')
-    expect(hoisted.geminiCalls).toHaveLength(2) // unchanged
+    expect(hoisted.geminiCalls).toHaveLength(3) // unchanged
     expect(friendlyModelError(r2.error)).toBe('The AI is busy right now. Please try again in a moment.')
   })
 })
@@ -212,7 +213,7 @@ describe('Gemini connect-race timeout', () => {
   it('times out a never-connecting primary at CONNECT_TIMEOUT_MS and serves from the backup with the degraded banner', async () => {
     process.env.GEMINI_API_KEY = 'test-key'
     hoisted.geminiBehavior = (model) =>
-      model === 'gemini-2.5-flash'
+      model === 'gemini-3.5-flash'
         ? new Promise(() => {}) // connects never
         : geminiStream(['pro answer'])
 
@@ -222,10 +223,10 @@ describe('Gemini connect-race timeout', () => {
     const { text, models, error } = await p
 
     expect(error).toBeNull()
-    expect(models).toEqual(['Gemini 2.5 Pro'])
+    expect(models).toEqual(['Gemini 2.5 Flash'])
     // The i>0 degraded-mode banner is part of the user-visible contract.
-    expect(text).toBe('⚠️ *Primary model unavailable — using gemini-2.5-pro*\n\npro answer')
-    expect(hoisted.geminiCalls).toEqual(['gemini-2.5-flash', 'gemini-2.5-pro'])
+    expect(text).toBe('⚠️ *Primary model unavailable — using gemini-2.5-flash*\n\npro answer')
+    expect(hoisted.geminiCalls).toEqual(['gemini-3.5-flash', 'gemini-2.5-flash'])
   })
 })
 

@@ -311,9 +311,16 @@ export function chatMessagesToContents(messages: ChatMessage[]): Content[] {
  * hub/lib/claude.ts, not the Google SDK — see hub/lib/claude.ts.
  */
 const APPROVED_GEMINI_MODELS: readonly string[] = [
-  'gemini-2.5-flash',    // Primary — fast, 1M context
-  'gemini-2.5-pro',      // Fallback — proven reasoning model
+  'gemini-3.5-flash',    // Primary — GA May 2026, frontier-level at flash speed/cost
+  'gemini-2.5-flash',    // Fallback — fast, 1M context, proven on this key
+  'gemini-2.5-pro',      // Last resort — proven reasoning model
 ] as const
+
+/* Gemini rotation chain, strongest-fast-first. 3.5 Flash serves the routine
+   app functionality (tasks, documents, calendar, Gmail, Google Chat
+   interactions via recall/deep_dive); if it errors on this key the rotation
+   self-heals down to the proven 2.5 models rather than failing the request. */
+const GEMINI_MODEL_CHAIN = ['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'] as const
 
 function assertApprovedGeminiModel(model: string): void {
   if (!APPROVED_GEMINI_MODELS.includes(model)) {
@@ -334,6 +341,7 @@ function getModelDisplayName(model: string): string {
   switch (model) {
     case 'claude-fable-5': return 'Claude Fable 5'
     case 'claude-sonnet-4-6': return 'Claude Sonnet 4.6'
+    case 'gemini-3.5-flash': return 'Gemini 3.5 Flash'
     case 'gemini-2.5-flash': return 'Gemini 2.5 Flash'
     case 'gemini-2.5-pro': return 'Gemini 2.5 Pro'
     default: return model
@@ -344,13 +352,13 @@ function getModelDisplayName(model: string): string {
  * UseCase-based routing: decides whether to try Claude first.
  *
  * Model priority by use case (Claude chain = Fable 5 → Sonnet 4.6):
- *   interview  → Claude Fable 5 → Claude Sonnet 4.6 → Gemini 2.5 Flash → Gemini 2.5 Pro
- *   deep_dive (with skill active) → Claude Fable 5 → Claude Sonnet 4.6 → Gemini Flash → Gemini Pro
- *   execute (Pre-Cog quality gate) → Claude Fable 5 → Claude Sonnet 4.6 → Gemini Flash → Gemini Pro
- *   exa_search (EXA toggle) → Claude Fable 5 → Claude Sonnet 4.6 → Gemini Flash → Gemini Pro
+ *   interview  → Claude Fable 5 → Claude Sonnet 4.6 → Gemini chain
+ *   deep_dive (with skill active) → Claude Fable 5 → Claude Sonnet 4.6 → Gemini chain
+ *   execute (Pre-Cog quality gate) → Claude Fable 5 → Claude Sonnet 4.6 → Gemini chain
+ *   exa_search (EXA toggle) → Claude Fable 5 → Claude Sonnet 4.6 → Gemini chain
  *
- *   recall     → Gemini 2.5 Flash → Gemini 2.5 Pro
- *   deep_dive (no skill) → Gemini 2.5 Flash → Gemini 2.5 Pro
+ *   recall     → Gemini chain (3.5 Flash → 2.5 Flash → 2.5 Pro)
+ *   deep_dive (no skill) → Gemini chain (3.5 Flash → 2.5 Flash → 2.5 Pro)
  *
  * exa_search is a server-side-only useCase (the client never sends it): the
  * chat route sets it for EXA Search mode so research synthesis + citation gets
@@ -658,13 +666,13 @@ async function* walkClaudeChain(
       // Auth/key/billing failures share the credential across the whole Claude
       // chain — the backup can't succeed either, so skip straight to Gemini.
       if (claudeErr?.type === 'auth') {
-        emit({ type: 'ai_fallback', requestId: obs.requestId, from: claudeModel, to: 'gemini-2.5-flash', reason: 'auth' })
+        emit({ type: 'ai_fallback', requestId: obs.requestId, from: claudeModel, to: GEMINI_MODEL_CHAIN[0], reason: 'auth' })
         console.warn(`[streamChat] Claude ${claudeModel} auth failure — skipping Claude chain, falling back to Gemini:`, err)
         break
       }
 
       // Otherwise try the next Claude model (backup), then Gemini.
-      const claudeFallbackTo = CLAUDE_MODEL_CHAIN[i + 1] ?? 'gemini-2.5-flash'
+      const claudeFallbackTo = CLAUDE_MODEL_CHAIN[i + 1] ?? GEMINI_MODEL_CHAIN[0]
       emit({ type: 'ai_fallback', requestId: obs.requestId, from: claudeModel, to: claudeFallbackTo, reason: isRateLimit ? 'rate_limit' : 'error' })
       console.warn(`[streamChat] Claude ${claudeModel} failed pre-stream (${isRateLimit ? 'rate_limit' : 'error'}), trying next model:`, err)
     }
@@ -745,7 +753,7 @@ async function* streamChatRotation(
       // obs.model is only (re)assigned by a Gemini model that got past the
       // connect race; when the chain dies before any connect it is still
       // unset (Claude was not walked on this path), so name the chain head.
-      from: obs.model ?? 'gemini-2.5-flash',
+      from: obs.model ?? GEMINI_MODEL_CHAIN[0],
       to: CLAUDE_MODEL_CHAIN[0],
       reason: isAuthOrKeyError(err) ? 'auth' : 'error',
     })
@@ -796,7 +804,7 @@ async function* streamChatRotation(
 
 /**
  * Gemini streaming with fallback chain.
- * Gemini 2.5 Flash → Gemini 2.5 Pro
+ * Gemini 3.5 Flash → Gemini 2.5 Flash → Gemini 2.5 Pro
  */
 async function* streamGeminiWithFallback(
   messages: ChatMessage[],
@@ -804,7 +812,7 @@ async function* streamGeminiWithFallback(
   obs: ObsCtx,
   signal?: AbortSignal,
 ): AsyncGenerator<string | { modelUsed: string }> {
-  const modelsToTry = ['gemini-2.5-flash', 'gemini-2.5-pro'] as const
+  const modelsToTry = GEMINI_MODEL_CHAIN
   modelsToTry.forEach(assertApprovedGeminiModel)
 
   const contents = chatMessagesToContents(messages.slice(0, -1))

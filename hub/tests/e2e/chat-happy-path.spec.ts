@@ -122,3 +122,38 @@ test('a streamed multi-frame SSE answer renders in the assistant bubble', async 
   const aiBubble = page.locator('.chat-bubble-ai').last()
   await expect(aiBubble).toContainText('Hello world', { timeout: 15_000 })
 })
+
+test('the header model badge shows the SSE-announced model and updates per turn', async ({ page }) => {
+  // Turn 1: the server announces Gemini 2.5 Flash via the modelUsed frame —
+  // the exact frame streamModelResponse emits before the first text chunk.
+  await page.route('**/api/chat', route =>
+    route.fulfill({
+      contentType: 'text/event-stream',
+      body: 'data: {"modelUsed":"Gemini 2.5 Flash"}\n\ndata: {"text":"answer one"}\n\ndata: [DONE]\n\n',
+    }),
+  )
+
+  const badge = page.locator('.chat-header-model-badge')
+  await expect(badge).toHaveText('AI') // neutral before any request
+
+  const row = page.getByText('Pay the vendor invoice')
+  await expect(row).toBeVisible({ timeout: 30_000 })
+  await row.click()
+
+  await expect(badge).toHaveText('Gemini 2.5 Flash', { timeout: 15_000 })
+
+  // Turn 2: a different provider answers — the badge must FOLLOW the new
+  // frame, not stick to the previous turn's model (the staleness bug class:
+  // sendToApi resets the badge on every request; only server frames set it).
+  await page.route('**/api/chat', route =>
+    route.fulfill({
+      contentType: 'text/event-stream',
+      body: 'data: {"modelUsed":"Claude Fable 5"}\n\ndata: {"text":"answer two"}\n\ndata: [DONE]\n\n',
+    }),
+  )
+  const input = page.getByLabel('Chat message input')
+  await input.fill('follow up question')
+  await page.getByLabel('Send message').click()
+
+  await expect(badge).toHaveText('Claude Fable 5', { timeout: 15_000 })
+})

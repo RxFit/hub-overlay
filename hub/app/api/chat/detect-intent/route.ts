@@ -136,10 +136,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
   }
 
-  // Primary: Gemini 2.5 Flash with a structured-output schema.
+  // Primary: Gemini 3.5 Flash with a structured-output schema.
   try {
     const model = getGenAI().getGenerativeModel({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3.5-flash',
       systemInstruction: buildClassifierInstruction(availableIntents),
       generationConfig: {
         responseMimeType: 'application/json',
