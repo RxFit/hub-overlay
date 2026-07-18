@@ -321,6 +321,7 @@ export interface GmailMessage {
   labelIds?: string[]
   snippet?: string
   payload?: {
+    mimeType?: string
     headers?: { name: string; value: string }[]
     body?: { data?: string }
     parts?: { mimeType: string; body?: { data?: string } }[]
