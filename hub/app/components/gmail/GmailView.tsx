@@ -52,30 +52,26 @@ export function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => voi
     return match ? match[1].trim() : fromStr.split('@')[0]
   }
 
+  const threadSubject = selectedThread?.messages[0]?.subject
+
   return (
-    <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
-      {/* Thread list */}
-      <div style={{
-        width: '220px',
-        flexShrink: 0,
-        borderRight: '1px solid var(--border)',
-        overflowY: 'auto',
-        display: mobileView === 'thread' ? 'none' : 'flex',
-        flexDirection: 'column',
-      }}
-        className="chat-panel-spaces"
-      >
-        <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
+    <div style={{ display: 'flex', height: '100%', width: '100%', overflow: 'hidden' }}>
+      {/* Thread list — full-width single pane on mobile (hidden while a thread
+          is open), fixed-width column beside the thread on desktop. Visibility
+          is class-driven (same pattern as GoogleChatPanel) so the mobile
+          media query isn't fought by inline styles. */}
+      <div className={`chat-panel-spaces gmail-list${mobileView === 'thread' ? ' chat-panel-spaces--mobile-hidden' : ''}`}>
+        <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
           <button
             onClick={handleComposeNew}
             style={{
               width: '100%',
-              padding: '6px 12px',
+              padding: '10px 12px',
               background: 'var(--accent)',
               color: '#000',
               border: 'none',
-              borderRadius: '6px',
-              fontSize: '0.75rem',
+              borderRadius: '8px',
+              fontSize: '0.85rem',
               fontWeight: 700,
               cursor: 'pointer'
             }}
@@ -114,76 +110,36 @@ export function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => voi
             <button
               key={t.id}
               onClick={() => openThread(t.id)}
-              style={{
-                display: 'block',
-                width: '100%',
-                textAlign: 'left',
-                padding: '10px 12px',
-                border: 'none',
-                borderBottom: '1px solid var(--border)',
-                background: selectedThread?.id === t.id ? 'var(--surface-2)' : 'transparent',
-                cursor: 'pointer',
-                transition: 'background 0.1s ease',
-              }}
+              className={`gmail-list-item${t.isUnread ? ' gmail-list-item--unread' : ''}${selectedThread?.id === t.id ? ' gmail-list-item--selected' : ''}`}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '3px' }}>
-                <span style={{
-                  fontSize: '0.72rem',
-                  fontWeight: t.isUnread ? 700 : 400,
-                  color: t.isUnread ? 'var(--text-primary)' : 'var(--text-secondary)',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  maxWidth: '130px',
-                }}>
-                  {extractName(t.from)}
-                </span>
-                <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', flexShrink: 0 }}>
-                  {formatDate(t.date)}
-                </span>
+              <div className="gmail-list-item__top">
+                <span className="gmail-list-item__from">{extractName(t.from)}</span>
+                <span className="gmail-list-item__date">{formatDate(t.date)}</span>
               </div>
-              <div style={{
-                fontSize: '0.68rem',
-                color: t.isUnread ? 'var(--text-primary)' : 'var(--text-muted)',
-                fontWeight: t.isUnread ? 600 : 400,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}>
-                {t.subject}
-              </div>
-              <div style={{
-                fontSize: '0.62rem',
-                color: 'var(--text-muted)',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                marginTop: '2px',
-              }}>
-                {t.snippet}
-              </div>
+              <div className="gmail-list-item__subject">{t.subject}</div>
+              <div className="gmail-list-item__snippet">{t.snippet}</div>
             </button>
           ))
         )}
       </div>
 
-      {/* Thread detail */}
-      <div style={{
-        flex: 1,
-        display: mobileView === 'list' ? 'none' : 'flex',
-        flexDirection: 'column',
-        overflow: 'hidden',
-      }}
-        className="chat-panel-thread"
-      >
-        {/* Mobile back */}
-        {mobileView === 'thread' && (
-          <button
-            onClick={() => setMobileView('list')}
-            style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '8px 12px', textAlign: 'left', fontSize: '0.8rem' }}
-          >
-            ‹ Back
-          </button>
+      {/* Thread detail — hidden on mobile while the list is showing; always
+          visible beside the list on desktop. */}
+      <div className={`chat-panel-thread${mobileView === 'list' ? ' chat-panel-thread--mobile-hidden' : ''}`}>
+        {/* Thread header: mobile back + subject */}
+        {(selectedThread || isComposing || threadLoading || threadError) && (
+          <div className="gmail-thread-header">
+            <button
+              className="chat-panel-back"
+              onClick={() => setMobileView('list')}
+              aria-label="Back to inbox"
+            >
+              ‹
+            </button>
+            <span className="gmail-thread-header__subject">
+              {isComposing ? 'New Message' : threadSubject ?? ''}
+            </span>
+          </div>
         )}
 
         {threadLoading ? (
@@ -204,9 +160,6 @@ export function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => voi
           </div>
         ) : isComposing ? (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '12px', gap: '12px' }}>
-            <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '8px' }}>
-              New Message
-            </div>
             {sendError && (
               <div style={{ padding: '6px 12px', color: 'var(--danger)', fontSize: '0.72rem', background: 'rgba(255,50,50,0.1)', borderRadius: '6px' }}>
                 ⚠️ {sendError}
@@ -218,7 +171,7 @@ export function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => voi
               placeholder="To: email@address.com"
               style={{
                 background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: '6px',
-                padding: '8px 12px', color: 'var(--text-primary)', fontSize: '0.8rem', outline: 'none'
+                padding: '8px 12px', color: 'var(--text-primary)', fontSize: '1rem', outline: 'none'
               }}
             />
             <input
@@ -227,7 +180,7 @@ export function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => voi
               placeholder="Subject"
               style={{
                 background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: '6px',
-                padding: '8px 12px', color: 'var(--text-primary)', fontSize: '0.8rem', outline: 'none'
+                padding: '8px 12px', color: 'var(--text-primary)', fontSize: '1rem', outline: 'none'
               }}
             />
             <textarea
@@ -236,7 +189,7 @@ export function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => voi
               placeholder="Write your message..."
               style={{
                 background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: '6px',
-                padding: '12px', color: 'var(--text-primary)', fontSize: '0.8rem', outline: 'none',
+                padding: '12px', color: 'var(--text-primary)', fontSize: '1rem', outline: 'none',
                 flex: 1, resize: 'none'
               }}
             />
@@ -258,20 +211,17 @@ export function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => voi
           </div>
         ) : selectedThread ? (
           <>
-            {/* Messages */}
-            <div style={{ flex: 1, overflowY: 'auto', padding: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            {/* Messages — the EmailPreviewCard is the card; a slim meta row
+                above it replaces the old double-bordered wrapper so the email
+                body gets the full pane width. */}
+            <div style={{ flex: 1, overflowY: 'auto', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
               {selectedThread.messages.map(msg => (
-                <div key={msg.id} style={{
-                  padding: '10px 12px',
-                  background: 'var(--surface-2, rgba(255,255,255,0.04))',
-                  borderRadius: '8px',
-                  border: '1px solid var(--border)',
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-                    <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                <div key={msg.id}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '8px', marginBottom: '6px', padding: '0 2px' }}>
+                    <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {extractName(msg.from)}
                     </span>
-                    <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', flexShrink: 0 }}>
                       {formatDate(msg.date)}
                     </span>
                   </div>
@@ -298,7 +248,7 @@ export function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => voi
                 placeholder="Reply…"
                 rows={1}
                 disabled={sending}
-                style={{ fontSize: '0.8rem' }}
+                style={{ fontSize: '1rem' }}
               />
               <button
                 className="chat-composer__send"
