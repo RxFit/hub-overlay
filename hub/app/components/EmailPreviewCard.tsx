@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { sanitizeEmailHtml } from '@/lib/sanitize-email'
 
 interface EmailPreviewCardProps {
@@ -9,36 +9,27 @@ interface EmailPreviewCardProps {
   recipient?: string
 }
 
-// Trusted script appended to the srcDoc (after sanitization) to report the
-// content height back to the parent for iframe auto-resize.
-const scriptToInject = `
-  <script>
-    window.onload = () => {
-      const height = document.documentElement.scrollHeight;
-      window.parent.postMessage({ type: 'resize', height }, '*');
-    };
-    // Observe subsequent height changes (e.g. images loading)
-    new ResizeObserver(() => {
-      const height = document.documentElement.scrollHeight;
-      window.parent.postMessage({ type: 'resize', height }, '*');
-    }).observe(document.body);
-  </script>
-`
-
 // Emails arrive as bare HTML fragments with no document scaffold, so the
 // iframe falls back to browser defaults: Times serif, no viewport meta (iOS
 // renders at 980px and shrinks), and images that overflow the phone width.
 // Wrap the sanitized fragment in a minimal document that pins the viewport,
 // applies readable base typography, constrains images/tables to the frame,
 // and opens every link in a new tab (the iframe must never navigate).
+//
+// SECURITY MODEL (the Close.com pattern): sandbox WITHOUT allow-scripts —
+// nothing in the email document can execute, which makes allow-same-origin
+// safe and lets the PARENT measure content height directly instead of
+// injecting a reporter script. A CSP meta of script-src 'none' backs the
+// sandbox up as defense in depth. DOMPurify sanitization still runs first.
 const buildSrcDoc = (sanitizedHtml: string) => `<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="script-src 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <base target="_blank">
 <style>
-  html, body { margin: 0; padding: 0; }
+  html, body { margin: 0; padding: 0; height: auto !important; }
   body {
     padding: 14px 16px;
     font: 15px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
@@ -58,32 +49,57 @@ const buildSrcDoc = (sanitizedHtml: string) => `<!doctype html>
   pre { white-space: pre-wrap; }
 </style>
 </head>
-<body>${sanitizedHtml}${scriptToInject}</body>
+<body>${sanitizedHtml}</body>
 </html>`
+
+const MAX_IFRAME_HEIGHT = 2400
+const MIN_IFRAME_HEIGHT = 48
 
 export function EmailPreviewCard({ htmlContent, subject, recipient }: EmailPreviewCardProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null)
-  const [height, setHeight] = useState('120px')
+  const observerRef = useRef<ResizeObserver | null>(null)
+  const [height, setHeight] = useState(MIN_IFRAME_HEIGHT)
 
-  // Auto-resize iframe based on content height
-  useEffect(() => {
-    const handleMessage = (e: MessageEvent) => {
-      // Validate the message came from our iframe
-      if (e.source !== iframeRef.current?.contentWindow) return
-      if (e.data && e.data.type === 'resize' && e.data.height) {
-        // Generous cap: the surrounding pane scrolls, so let all but
-        // pathologically tall emails render fully instead of clipping at 600px.
-        const capped = Math.min(e.data.height + 8, 2400)
-        setHeight(`${capped}px`)
-      }
+  // Parent-side measurement (enabled by allow-same-origin + no scripts).
+  // Reading both body and documentElement scrollHeight avoids the classic
+  // iframe pitfall where one of the two reports the frame's own viewport
+  // height instead of the content height.
+  const measure = useCallback(() => {
+    const doc = iframeRef.current?.contentDocument
+    if (!doc?.body) return
+    const h = Math.max(doc.body.scrollHeight, doc.documentElement?.scrollHeight ?? 0)
+    if (h > 0) {
+      setHeight(Math.min(Math.max(h, MIN_IFRAME_HEIGHT), MAX_IFRAME_HEIGHT))
     }
-    window.addEventListener('message', handleMessage)
-    return () => window.removeEventListener('message', handleMessage)
   }, [])
 
+  // Track content growth after load: images decoding, fonts, and width
+  // changes (rotation) all reflow the body — a ResizeObserver from the
+  // parent realm on the iframe's body catches every case.
+  const handleLoad = useCallback(() => {
+    measure()
+    const doc = iframeRef.current?.contentDocument
+    if (!doc?.body || typeof ResizeObserver === 'undefined') return
+    observerRef.current?.disconnect()
+    const ro = new ResizeObserver(measure)
+    ro.observe(doc.body)
+    observerRef.current = ro
+    // Re-measure once everything (images included) has finished loading.
+    doc.defaultView?.addEventListener('load', measure)
+  }, [measure])
+
+  useEffect(() => {
+    // Rotation / pane resize changes the iframe width → content reflows.
+    window.addEventListener('resize', measure)
+    return () => {
+      window.removeEventListener('resize', measure)
+      observerRef.current?.disconnect()
+    }
+  }, [measure])
+
   // Sanitize the sender-controlled email HTML first, then wrap it in our
-  // trusted document scaffold (viewport + base styles + resize reporter).
-  // Memoized so height-state re-renders don't re-sanitize.
+  // trusted document scaffold. Memoized so height-state re-renders don't
+  // re-sanitize.
   const safeHtml = useMemo(() => buildSrcDoc(sanitizeEmailHtml(htmlContent)), [htmlContent])
 
   return (
@@ -119,19 +135,20 @@ export function EmailPreviewCard({ htmlContent, subject, recipient }: EmailPrevi
         </div>
       )}
 
-      {/* Sandbox Iframe */}
+      {/* Sandbox iframe — scripts NEVER run inside (no allow-scripts). */}
       <iframe
         ref={iframeRef}
         srcDoc={safeHtml}
-        title="Email Preview"
-        sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+        title="Email content"
+        sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+        onLoad={handleLoad}
         style={{
           width: '100%',
-          height,
+          height: `${height}px`,
           border: 'none',
           display: 'block',
           background: '#ffffff',
-          transition: 'height 0.2s ease-out'
+          transition: 'height 0.15s ease-out'
         }}
       />
     </div>

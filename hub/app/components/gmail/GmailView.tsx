@@ -1,5 +1,6 @@
 'use client'
 
+import { useEffect, useState } from 'react'
 import { EmailPreviewCard } from '@/app/components/EmailPreviewCard'
 import { FocusStrip } from '@/app/components/gmail/FocusStrip'
 import { useGmailInbox } from '@/app/hooks/useGmailInbox'
@@ -39,6 +40,34 @@ export function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => voi
   } = useGmailInbox({ onUnreadCount })
 
   const { focusItems } = useGmailFocus()
+
+  // Conversation context (Gmail-style): older messages in the thread render
+  // COLLAPSED (sender + date + one-line preview) so the newest message leads,
+  // and any earlier message — e.g. your own email this one replies to — is one
+  // tap away. The newest message starts expanded.
+  const [expandedMsgIds, setExpandedMsgIds] = useState<Set<string>>(new Set())
+  const lastMsgId = selectedThread?.messages[selectedThread.messages.length - 1]?.id
+  useEffect(() => {
+    setExpandedMsgIds(lastMsgId ? new Set([lastMsgId]) : new Set())
+  }, [selectedThread?.id, lastMsgId])
+
+  const toggleMsg = (id: string) =>
+    setExpandedMsgIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+
+  // One-line plain-text preview of a message body for collapsed rows.
+  const previewText = (html: string) =>
+    html
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&[a-z#0-9]+;/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 110)
 
   const formatDate = (dateStr: string) => {
     try {
@@ -220,23 +249,41 @@ export function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => voi
           <>
             {/* Messages — the EmailPreviewCard is the card; a slim meta row
                 above it replaces the old double-bordered wrapper so the email
-                body gets the full pane width. */}
-            <div style={{ flex: 1, overflowY: 'auto', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              {selectedThread.messages.map(msg => (
-                <div key={msg.id}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '8px', marginBottom: '6px', padding: '0 2px' }}>
-                    <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {extractName(msg.from)}
-                    </span>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', flexShrink: 0 }}>
-                      {formatDate(msg.date)}
-                    </span>
+                body gets the full pane width. Older messages collapse to a
+                tappable context row (Gmail-style). */}
+            <div style={{ flex: 1, overflowY: 'auto', padding: '8px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {selectedThread.messages.map(msg =>
+                expandedMsgIds.has(msg.id) ? (
+                  <div key={msg.id}>
+                    <button
+                      className="gmail-msg-meta"
+                      onClick={() => selectedThread.messages.length > 1 && toggleMsg(msg.id)}
+                      aria-expanded="true"
+                      aria-label={`Collapse message from ${extractName(msg.from)}`}
+                    >
+                      <span className="gmail-msg-meta__from">{extractName(msg.from)}</span>
+                      <span className="gmail-msg-meta__date">{formatDate(msg.date)}</span>
+                    </button>
+                    {msg.body && (
+                      <EmailPreviewCard htmlContent={msg.body} />
+                    )}
                   </div>
-                  {msg.body && (
-                    <EmailPreviewCard htmlContent={msg.body} />
-                  )}
-                </div>
-              ))}
+                ) : (
+                  <button
+                    key={msg.id}
+                    className="gmail-msg-collapsed"
+                    onClick={() => toggleMsg(msg.id)}
+                    aria-expanded="false"
+                    aria-label={`Expand earlier message from ${extractName(msg.from)}`}
+                  >
+                    <div className="gmail-msg-collapsed__top">
+                      <span className="gmail-msg-collapsed__from">{extractName(msg.from)}</span>
+                      <span className="gmail-msg-collapsed__date">{formatDate(msg.date)}</span>
+                    </div>
+                    <div className="gmail-msg-collapsed__preview">{previewText(msg.body || '')}</div>
+                  </button>
+                )
+              )}
               <div ref={bottomRef} />
             </div>
 

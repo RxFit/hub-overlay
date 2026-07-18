@@ -239,13 +239,45 @@ export async function POST(req: NextRequest) {
    now live in @/lib/google (shared with the AI context builder). Only the
    full-body parsing used by the thread view remains route-local. */
 
+type GmailPart = NonNullable<NonNullable<GmailMessage['payload']>['parts']>[number] & {
+  parts?: GmailPart[]
+}
+
+/** Depth-first search for a MIME part (multipart/alternative bodies nest
+ *  inside multipart/mixed and multipart/related, so a flat find() misses
+ *  the HTML part of most real-world newsletters). */
+function findPart(parts: GmailPart[] | undefined, mimeType: string): GmailPart | null {
+  for (const p of parts ?? []) {
+    if (p.mimeType === mimeType && p.body?.data) return p
+    const nested = findPart(p.parts, mimeType)
+    if (nested) return nested
+  }
+  return null
+}
+
+const escapeHtml = (s: string) =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+/** Decode a message body for the thread view, PREFERRING text/html so
+ *  designed emails (newsletters, graphics, styled sign-offs) render as
+ *  authored; plain-text bodies are escaped and newline-preserved. The
+ *  client sanitizes before rendering either way. */
 function decodeBody(msg: GmailMessage): string {
-  const data =
-    msg.payload?.body?.data ||
-    msg.payload?.parts?.find(p => p.mimeType === 'text/plain')?.body?.data ||
-    ''
-  if (!data) return msg.snippet ?? ''
-  return Buffer.from(data, 'base64').toString('utf-8')
+  const payload = msg.payload
+  const parts = payload?.parts as GmailPart[] | undefined
+
+  const htmlData =
+    (payload?.mimeType === 'text/html' ? payload?.body?.data : undefined) ||
+    findPart(parts, 'text/html')?.body?.data
+  if (htmlData) return Buffer.from(htmlData, 'base64').toString('utf-8')
+
+  const plainData =
+    (payload?.mimeType === 'text/plain' ? payload?.body?.data : undefined) ||
+    payload?.body?.data ||
+    findPart(parts, 'text/plain')?.body?.data
+  if (!plainData) return escapeHtml(msg.snippet ?? '')
+  const text = Buffer.from(plainData, 'base64').toString('utf-8')
+  return `<div style="white-space:pre-wrap">${escapeHtml(text)}</div>`
 }
 
 function parseThread(thread: GmailThread) {
