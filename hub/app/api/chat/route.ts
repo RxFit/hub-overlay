@@ -325,6 +325,10 @@ function streamModelResponse(
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ modelUsed: chunk.modelUsed })}\n\n`))
             continue
           }
+          // Defensive: never put empty text frames on the wire (reasoning-phase
+          // keep-alives are consumed inside the rotation layer, but any that
+          // slip through carry no information for the client).
+          if (chunk.length === 0) continue
           fullText += chunk
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: chunk })}\n\n`))
         }
