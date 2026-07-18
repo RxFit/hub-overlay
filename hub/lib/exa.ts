@@ -18,6 +18,13 @@ interface SearchOptions {
   /** Per-result text budget. EXA Search mode passes a larger budget so the
    *  synthesis model has real material to cite, not 1000-char stubs. */
   maxCharacters?: number
+  /** Exa search tier: 'auto' (~1s, default) | 'fast' | 'instant' |
+   *  'deep-lite' | 'deep' (4-15s, server-side parallel search agents) |
+   *  'deep-reasoning'. Deep variants run Exa's own multi-agent fan-out. */
+  type?: string
+  /** Extra query variations for deep-search variants — Exa runs them
+   *  alongside the main query in its parallel agents. */
+  additionalQueries?: string[]
 }
 
 export interface ExaSearchResult {
@@ -36,12 +43,18 @@ export interface ExaSearchResult {
  */
 export async function searchWeb(query: string, options?: SearchOptions): Promise<ExaSearchResult[]> {
   try {
-    const res = await getExa().searchAndContents(query, {
+    const searchOpts: Record<string, unknown> = {
       numResults: options?.numResults ?? 5,
       useAutoprompt: options?.useAutoprompt ?? true,
       text: { maxCharacters: options?.maxCharacters ?? 1000 },
+      // Exa's agent guide: highlights carry the most relevant excerpts at ~10x
+      // fewer tokens than full text — keep both; the mapper prefers highlights.
       highlights: true,
-    })
+    }
+    if (options?.type) searchOpts.type = options.type
+    if (options?.additionalQueries?.length) searchOpts.additionalQueries = options.additionalQueries
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const res = await getExa().searchAndContents(query, searchOpts as any)
 
     return res.results.map((r: any) => ({
       title: r.title,
@@ -54,6 +67,57 @@ export async function searchWeb(query: string, options?: SearchOptions): Promise
     console.error('[exa] searchWeb error:', err)
     throw err
   }
+}
+
+/**
+ * Parse a planner model's sub-query list. Defensive: malformed output falls
+ * back to just the original query. The original query always leads, planner
+ * queries follow (deduped, clipped), capped at `max` total.
+ */
+export function parseSubQueries(raw: string, originalQuery: string, max = 4): string[] {
+  const queries: string[] = [originalQuery.trim()]
+  const match = raw.match(/\[[\s\S]*\]/)
+  if (match) {
+    try {
+      const parsed = JSON.parse(match[0])
+      if (Array.isArray(parsed)) {
+        for (const q of parsed) {
+          if (queries.length >= max) break
+          if (typeof q !== 'string') continue
+          const clean = q.trim().slice(0, 200)
+          if (!clean) continue
+          if (queries.some(existing => existing.toLowerCase() === clean.toLowerCase())) continue
+          queries.push(clean)
+        }
+      }
+    } catch {
+      // fall through — original query alone
+    }
+  }
+  return queries
+}
+
+/**
+ * Merge parallel search-result lists: round-robin interleave (keeps source
+ * diversity across sub-queries instead of letting one query dominate),
+ * dedupe by normalized URL, cap the total.
+ */
+export function mergeExaResults(lists: ExaSearchResult[][], cap = 12): ExaSearchResult[] {
+  const seen = new Set<string>()
+  const merged: ExaSearchResult[] = []
+  const maxLen = Math.max(0, ...lists.map(l => l.length))
+  for (let i = 0; i < maxLen && merged.length < cap; i++) {
+    for (const list of lists) {
+      if (merged.length >= cap) break
+      const r = list[i]
+      if (!r?.url) continue
+      const key = r.url.replace(/\/+$/, '').toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      merged.push(r)
+    }
+  }
+  return merged
 }
 
 export async function fetchUrlWithExa(url: string): Promise<string> {

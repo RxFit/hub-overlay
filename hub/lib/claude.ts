@@ -144,12 +144,21 @@ export async function claudeChat(
 
 /* ── Streaming: SSE-based for interactive chat ── */
 
+export type ClaudeEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+/** `xhigh` arrived with the Opus 4.7 generation — pre-4.7 models (Sonnet 4.6,
+ *  the chain's backup) reject it with a 400. Clamp instead of failing over. */
+export function clampEffortForModel(model: string, effort: ClaudeEffort): ClaudeEffort {
+  if (effort === 'xhigh' && modelSupportsSamplingParams(model)) return 'high'
+  return effort
+}
+
 export async function* streamClaudeChat(
   messages: ChatMessage[],
   systemPrompt: string,
-  options: { model?: string; maxTokens?: number; temperature?: number } = {}
+  options: { model?: string; maxTokens?: number; temperature?: number; effort?: ClaudeEffort } = {}
 ): AsyncGenerator<string> {
-  const { model = CLAUDE_PRIMARY_MODEL, maxTokens = 4096, temperature = 0.7 } = options
+  const { model = CLAUDE_PRIMARY_MODEL, maxTokens = 4096, temperature = 0.7, effort } = options
   const apiKey = getApiKey()
 
   // Per-request ceiling shared via timeout-config (see lib/timeout-config.ts).
@@ -175,6 +184,7 @@ export async function* streamClaudeChat(
         // them into empty-string heartbeats that keep the idle watchdog fed.
         // (The thinking text itself is never yielded to the user.)
         ...(modelSupportsSamplingParams(model) ? {} : { thinking: { type: 'adaptive', display: 'summarized' } }),
+        ...(effort ? { output_config: { effort: clampEffortForModel(model, effort) } } : {}),
         stream: true,
         system: systemPrompt,
         messages: buildAnthropicMessages(messages),

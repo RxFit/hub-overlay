@@ -26,7 +26,7 @@ vi.mock('exa-js', () => ({
   },
 }))
 
-import { searchWeb, fetchUrlWithExa } from './exa'
+import { searchWeb, fetchUrlWithExa, parseSubQueries, mergeExaResults } from './exa'
 
 beforeEach(() => {
   vi.stubEnv('EXA_API_KEY', 'test-key')
@@ -145,5 +145,48 @@ describe('lazy client initialization', () => {
     await searchWeb('two')
     const callsWithTestKey = ctorMock.mock.calls.filter(([k]) => k === 'test-key')
     expect(callsWithTestKey.length).toBe(1)
+  })
+})
+
+describe('parseSubQueries', () => {
+
+  it('leads with the original query and appends planner queries, deduped and capped', () => {
+    const raw = '["angle one", "Angle One", "angle two", "angle three", "angle four"]'
+    const out = parseSubQueries(raw, 'original question', 4)
+    expect(out[0]).toBe('original question')
+    expect(out).toHaveLength(4)
+    expect(new Set(out.map(q => q.toLowerCase())).size).toBe(4)
+  })
+
+  it('falls back to the original query alone on malformed planner output', () => {
+    expect(parseSubQueries('total garbage', 'q')).toEqual(['q'])
+    expect(parseSubQueries('{"not":"array"}', 'q')).toEqual(['q'])
+    expect(parseSubQueries('[1, null, {}]', 'q')).toEqual(['q'])
+  })
+
+  it('clips oversized planner queries', () => {
+    const out = parseSubQueries(JSON.stringify(['x'.repeat(500)]), 'q')
+    expect(out[1].length).toBeLessThanOrEqual(200)
+  })
+})
+
+describe('mergeExaResults', () => {
+  const r = (url: string) => ({ url, title: url, snippet: 's' })
+
+  it('round-robin interleaves lists to preserve source diversity', () => {
+    const merged = mergeExaResults([
+      [r('https://a1'), r('https://a2')],
+      [r('https://b1'), r('https://b2')],
+    ])
+    expect(merged.map(x => x.url)).toEqual(['https://a1', 'https://b1', 'https://a2', 'https://b2'])
+  })
+
+  it('dedupes by normalized URL and respects the cap', () => {
+    const merged = mergeExaResults([
+      [r('https://same.com/'), r('https://x.com')],
+      [r('https://SAME.com'), r('https://y.com')],
+    ], 3)
+    expect(merged).toHaveLength(3)
+    expect(merged.filter(x => x.url.toLowerCase().includes('same')).length).toBe(1)
   })
 })

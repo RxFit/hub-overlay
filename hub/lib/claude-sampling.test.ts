@@ -121,3 +121,35 @@ describe('streamClaudeChat thinking heartbeats', () => {
     expect(chunks.join('')).toBe('Answer')
   })
 })
+
+describe('effort wiring (EXA research depth)', () => {
+  it('clamps xhigh to high on pre-4.7 models, passes through on Fable 5', async () => {
+    const { clampEffortForModel } = await import('./claude')
+    expect(clampEffortForModel('claude-fable-5', 'xhigh')).toBe('xhigh')
+    expect(clampEffortForModel('claude-sonnet-4-6', 'xhigh')).toBe('high')
+    expect(clampEffortForModel('claude-sonnet-4-6', 'medium')).toBe('medium')
+  })
+
+  it('sends output_config.effort when the effort option is set', async () => {
+    const { streamClaudeChat } = await import('./claude')
+    const mock = vi.fn(async () => {
+      const stream = new ReadableStream({
+        start(c) {
+          c.enqueue(new TextEncoder().encode('data: {"type":"content_block_delta","delta":{"text":"ok"}}\n'))
+          c.close()
+        },
+      })
+      return new Response(stream, { status: 200 })
+    }) as unknown as typeof fetch
+    global.fetch = mock
+
+    for await (const _ of streamClaudeChat(msg, 's', { model: 'claude-fable-5', effort: 'xhigh', maxTokens: 16000 })) { /* drain */ }
+    const body = JSON.parse(String((mock as ReturnType<typeof vi.fn>).mock.calls[0][1]?.body))
+    expect(body.output_config).toEqual({ effort: 'xhigh' })
+    expect(body.max_tokens).toBe(16000)
+
+    for await (const _ of streamClaudeChat(msg, 's', { model: 'claude-sonnet-4-6', effort: 'xhigh' })) { /* drain */ }
+    const body2 = JSON.parse(String((mock as ReturnType<typeof vi.fn>).mock.calls[1][1]?.body))
+    expect(body2.output_config).toEqual({ effort: 'high' })
+  })
+})

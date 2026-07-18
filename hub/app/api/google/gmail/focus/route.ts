@@ -13,7 +13,7 @@ import {
 } from '@/lib/gmail-focus'
 import { recordAiAction } from '@/lib/ai-audit'
 import { newRequestId } from '@/lib/observability'
-import { GoogleGenerativeAI } from '@google/generative-ai'
+import { geminiGenerateText } from '@/lib/gemini'
 
 export const runtime = 'nodejs'
 export const maxDuration = 30
@@ -46,50 +46,6 @@ const CACHE_TTL_MS = 10 * 60 * 1000
 const EMPTY_CACHE_TTL_MS = 2 * 60 * 1000
 const FOCUS_THREAD_POOL = 20
 
-/* Routine-path Gemini chain (matches lib/gemini GEMINI_MODEL_CHAIN policy):
-   3.5 Flash first, self-heal down to the proven 2.5 models. */
-const FOCUS_MODEL_CHAIN = ['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'] as const
-
-/* Lazy-initialized so the API key is read at runtime, not module-load time
-   (mirrors score-context/route.ts getGenAI()). */
-let _genAI: GoogleGenerativeAI | null = null
-function getGenAI(): GoogleGenerativeAI {
-  if (!_genAI) {
-    const key =
-      process.env.GEMINI_API_KEY ||
-      process.env.GOOGLE_API_KEY ||
-      process.env.GOOGLE_GENERATIVE_AI_API_KEY ||
-      ''
-    if (!key) {
-      throw new Error('No Gemini API key found. Set GEMINI_API_KEY, GOOGLE_API_KEY, or GOOGLE_GENERATIVE_AI_API_KEY.')
-    }
-    _genAI = new GoogleGenerativeAI(key)
-  }
-  return _genAI
-}
-
-async function rankWithGemini(prompt: string): Promise<{ raw: string; model: string }> {
-  let lastErr: unknown
-  for (const modelName of FOCUS_MODEL_CHAIN) {
-    try {
-      const model = getGenAI().getGenerativeModel({
-        model: modelName,
-        generationConfig: { temperature: 0.1, maxOutputTokens: 4096 },
-      })
-      const result = await model.generateContent(prompt)
-      const raw = result.response.text()
-      // Thinking-capable models can burn the whole output budget on thoughts
-      // and return empty text — treat that as a failure so the chain advances
-      // instead of caching an empty strip.
-      if (!raw || !raw.trim()) throw new Error(`${modelName} returned empty text`)
-      return { raw, model: modelName }
-    } catch (err) {
-      lastErr = err
-      console.warn(`[gmail-focus] ${modelName} failed, trying next in chain:`, err)
-    }
-  }
-  throw lastErr instanceof Error ? lastErr : new Error('All focus models failed')
-}
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions)
@@ -135,8 +91,14 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    // Ranking goes through the SAME Gemini configuration the chat path uses
+    // in production (lib/gemini geminiGenerateText) — a route-local SDK setup
+    // with a fixed output cap failed in prod while chat worked.
     const prompt = buildFocusPrompt(userEmail, threads)
-    const { raw, model } = await rankWithGemini(prompt)
+    const { text: raw, model } = await geminiGenerateText(
+      'You are an inbox triage assistant. Follow the instructions in the user message exactly and respond with ONLY the requested JSON array — no markdown, no prose.',
+      prompt,
+    )
     const items = parseFocusResponse(raw, new Set(threads.map(t => t.id)))
 
     const generatedAt = new Date().toISOString()
