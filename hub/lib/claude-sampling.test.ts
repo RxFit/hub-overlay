@@ -73,3 +73,51 @@ describe('claudeChat request body', () => {
     expect(body.temperature).toBe(0.1)
   })
 })
+
+describe('streamClaudeChat thinking heartbeats', () => {
+  function sseResponse(lines: string[]) {
+    const stream = new ReadableStream({
+      start(c) {
+        c.enqueue(new TextEncoder().encode(lines.map(l => `data: ${l}\n`).join('')))
+        c.close()
+      },
+    })
+    return new Response(stream, { status: 200 })
+  }
+
+  it('requests adaptive summarized thinking for Fable 5 (liveness) but not Sonnet 4.6', async () => {
+    const { streamClaudeChat } = await import('./claude')
+    const mock = vi.fn(async () =>
+      sseResponse([JSON.stringify({ type: 'content_block_delta', delta: { text: 'hi' } })])
+    ) as unknown as typeof fetch
+    global.fetch = mock
+
+    for await (const _ of streamClaudeChat(msg, 's', { model: 'claude-fable-5' })) { /* drain */ }
+    let body = JSON.parse(String((mock as ReturnType<typeof vi.fn>).mock.calls[0][1]?.body))
+    expect(body.thinking).toEqual({ type: 'adaptive', display: 'summarized' })
+    expect(body).not.toHaveProperty('temperature')
+
+    for await (const _ of streamClaudeChat(msg, 's', { model: 'claude-sonnet-4-6' })) { /* drain */ }
+    body = JSON.parse(String((mock as ReturnType<typeof vi.fn>).mock.calls[1][1]?.body))
+    expect(body).not.toHaveProperty('thinking')
+    expect(body).toHaveProperty('temperature')
+  })
+
+  it('yields empty-string heartbeats for thinking deltas/pings and text for text deltas', async () => {
+    const { streamClaudeChat } = await import('./claude')
+    global.fetch = vi.fn(async () =>
+      sseResponse([
+        JSON.stringify({ type: 'content_block_start', content_block: { type: 'thinking' } }),
+        JSON.stringify({ type: 'content_block_delta', delta: { thinking: 'reasoning…' } }),
+        JSON.stringify({ type: 'ping' }),
+        JSON.stringify({ type: 'content_block_delta', delta: { text: 'Answer' } }),
+      ])
+    ) as unknown as typeof fetch
+
+    const chunks: string[] = []
+    for await (const c of streamClaudeChat(msg, 's', { model: 'claude-fable-5' })) chunks.push(c)
+    // Heartbeats ('') keep the idle watchdog alive; the thinking TEXT is never yielded.
+    expect(chunks).toEqual(['', '', '', 'Answer'])
+    expect(chunks.join('')).toBe('Answer')
+  })
+})

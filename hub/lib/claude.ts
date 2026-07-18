@@ -169,6 +169,12 @@ export async function* streamClaudeChat(
         model,
         max_tokens: maxTokens,
         ...(modelSupportsSamplingParams(model) ? { temperature } : {}),
+        // Thinking-first models (Fable 5 etc.) are silent for 30-60s before
+        // their first visible token. Request summarized thinking so the API
+        // streams thinking deltas during that window — the parser below turns
+        // them into empty-string heartbeats that keep the idle watchdog fed.
+        // (The thinking text itself is never yielded to the user.)
+        ...(modelSupportsSamplingParams(model) ? {} : { thinking: { type: 'adaptive', display: 'summarized' } }),
         stream: true,
         system: systemPrompt,
         messages: buildAnthropicMessages(messages),
@@ -182,6 +188,12 @@ export async function* streamClaudeChat(
     }
 
     if (!res.body) throw new Error('No response body from Claude')
+
+    // The CONNECT ceiling is for OPENING the stream. Leaving this timer armed
+    // aborted every response at 45s TOTAL — which killed thinking-first models
+    // (Fable 5) mid-answer on long turns and rotated the chain to the faster
+    // backup. Mid-stream stalls are the idle watchdog's job, not this timer's.
+    clearTimeout(timeoutId)
 
     const reader = res.body.getReader()
     const decoder = new TextDecoder()
@@ -204,6 +216,15 @@ export async function* streamClaudeChat(
           const parsed = JSON.parse(data)
           if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
             yield parsed.delta.text
+          } else if (
+            parsed.type === 'ping' ||
+            parsed.type === 'content_block_start' ||
+            (parsed.type === 'content_block_delta' && parsed.delta?.thinking !== undefined)
+          ) {
+            // Liveness heartbeat: thinking deltas / pings prove the model is
+            // working. Yield '' so withIdleWatchdog resets WITHOUT emitting
+            // visible output (the rotation layer skips empty chunks).
+            yield ''
           }
         } catch {
           // Skip malformed SSE lines

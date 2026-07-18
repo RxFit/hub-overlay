@@ -648,6 +648,12 @@ async function* walkClaudeChain(
         // the watchdog (its finally closes the upstream reader). No error is
         // surfaced and nothing is restarted, so no-duplicate-answer holds.
         if (signal?.aborted) return 'served'
+        // Empty chunks are liveness heartbeats (thinking deltas / pings from
+        // streamClaudeChat): they reset the idle watchdog above but are NOT
+        // user-visible output — don't forward them, and don't let them mark
+        // the stream as "answer started" (a pre-text failure must still be
+        // allowed to rotate to the next model).
+        if (chunk === '') continue
         claudeEmitted = true
         yield chunk
       }
