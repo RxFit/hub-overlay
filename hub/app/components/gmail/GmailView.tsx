@@ -1,7 +1,9 @@
 'use client'
 
 import { EmailPreviewCard } from '@/app/components/EmailPreviewCard'
+import { FocusStrip } from '@/app/components/gmail/FocusStrip'
 import { useGmailInbox } from '@/app/hooks/useGmailInbox'
+import { useGmailFocus } from '@/app/hooks/useGmailFocus'
 
 /* ══════════════════════════════════════════
    GMAIL VIEW — presentational; data/logic in useGmailInbox (NS-5)
@@ -35,6 +37,8 @@ export function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => voi
     handleSendCompose,
     handleSend,
   } = useGmailInbox({ onUnreadCount })
+
+  const { focusItems } = useGmailFocus()
 
   const formatDate = (dateStr: string) => {
     try {
@@ -79,6 +83,9 @@ export function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => voi
             + Compose
           </button>
         </div>
+        {!loading && (
+          <FocusStrip items={focusItems} threads={threads} onOpen={openThread} />
+        )}
         {loading ? (
           [1,2,3,4,5].map(i => (
             <div key={i} style={{ padding: '12px', borderBottom: '1px solid var(--border)', opacity: 0.4 }}>
