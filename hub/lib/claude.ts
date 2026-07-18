@@ -19,6 +19,19 @@ const ANTHROPIC_VERSION = '2023-06-01'
 export const CLAUDE_PRIMARY_MODEL = 'claude-fable-5'
 export const CLAUDE_BACKUP_MODEL = 'claude-sonnet-4-6'
 
+/* Claude Fable 5 / Mythos, Opus 4.7+, and Sonnet 5 REJECT sampling parameters
+ * (`temperature`/`top_p`/`top_k` → 400 invalid_request_error). Sending
+ * temperature unconditionally therefore 400s EVERY Fable 5 request, cooldowns
+ * the model, and silently demotes the whole "Claude-first" chain to Sonnet 4.6
+ * — the primary model never actually serves. Omit temperature on these models. */
+const NO_SAMPLING_PARAM_MODELS = [
+  /^claude-fable-/, /^claude-mythos-/, /^claude-opus-4-(?:[7-9]|\d{2,})/, /^claude-sonnet-(?:[5-9]|\d{2,})(?:$|-)/,
+]
+
+export function modelSupportsSamplingParams(model: string): boolean {
+  return !NO_SAMPLING_PARAM_MODELS.some(re => re.test(model))
+}
+
 function getApiKey(): string {
   // Accept the canonical name plus the casings the Cloud Run service mounts
   // (Anthropic_API_Key / anthropic_token) — env vars are case-sensitive on
@@ -110,7 +123,7 @@ export async function claudeChat(
       body: JSON.stringify({
         model,
         max_tokens: maxTokens,
-        temperature,
+        ...(modelSupportsSamplingParams(model) ? { temperature } : {}),
         system: systemPrompt,
         messages: buildAnthropicMessages(messages),
       }),
@@ -155,7 +168,7 @@ export async function* streamClaudeChat(
       body: JSON.stringify({
         model,
         max_tokens: maxTokens,
-        temperature,
+        ...(modelSupportsSamplingParams(model) ? { temperature } : {}),
         stream: true,
         system: systemPrompt,
         messages: buildAnthropicMessages(messages),
