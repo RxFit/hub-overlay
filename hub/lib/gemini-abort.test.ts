@@ -99,7 +99,7 @@ describe('Gemini connect-race abort (P2 FIX3)', () => {
       // Flash "connects" only as a promise that rejects when ITS signal aborts —
       // proving the connect timeout actually reaches the upstream request.
       hoisted.geminiBehavior = (model, signal) => {
-        if (model === 'gemini-2.5-flash') {
+        if (model === 'gemini-3.5-flash') {
           return new Promise((_, reject) => {
             signal?.addEventListener('abort', () => reject(new Error('upstream aborted')))
           })
@@ -119,8 +119,8 @@ describe('Gemini connect-race abort (P2 FIX3)', () => {
       // stopped wait).
       expect(hoisted.capturedSignals[0]?.aborted).toBe(true)
       // The backup still served with the degraded banner (rotation intact).
-      expect(models).toEqual(['Gemini 2.5 Pro'])
-      expect(text).toBe('⚠️ *Primary model unavailable — using gemini-2.5-pro*\n\npro answer')
+      expect(models).toEqual(['Gemini 2.5 Flash'])
+      expect(text).toBe('⚠️ *Primary model unavailable — using gemini-2.5-flash*\n\npro answer')
 
       // The abandoned flash promise's rejection was swallowed — no leak.
       await vi.advanceTimersByTimeAsync(0)
@@ -161,6 +161,6 @@ describe('client-abort cooperative cancellation (P2 FIX4)', () => {
 
     expect(r.text).toBe('first ')       // partial preserved, NOT restarted/duplicated
     expect(r.error).toBeNull()          // abort is a clean stop, not a user error
-    expect(hoisted.geminiCalls).toEqual(['gemini-2.5-flash']) // no rotation to pro
+    expect(hoisted.geminiCalls).toEqual(['gemini-3.5-flash']) // no rotation down the chain
   })
 })

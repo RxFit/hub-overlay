@@ -128,7 +128,7 @@ describe('streamChat — Claude → Gemini rotation', () => {
     const r = await collect(streamChat(MESSAGES, 'sys', 'interview', false))
 
     expect(hoisted.claudeCalls).toEqual(['claude-fable-5', 'claude-sonnet-4-6'])
-    expect(r.models).toEqual(['Claude Fable 5', 'Claude Sonnet 4.6', 'Gemini 2.5 Flash'])
+    expect(r.models).toEqual(['Claude Fable 5', 'Claude Sonnet 4.6', 'Gemini 3.5 Flash'])
     expect(r.text).toContain('gem-answer')
     expect(r.error).toBeNull()
   })
@@ -156,7 +156,7 @@ describe('streamChat — Claude → Gemini rotation', () => {
     const r = await collect(streamChat(MESSAGES, 'sys', 'interview', false))
 
     expect(hoisted.claudeCalls).toEqual(['claude-fable-5'])  // Sonnet skipped (shared key)
-    expect(r.models).toEqual(['Claude Fable 5', 'Gemini 2.5 Flash'])
+    expect(r.models).toEqual(['Claude Fable 5', 'Gemini 3.5 Flash'])
     expect(r.text).toBe('gem')
   })
 
@@ -166,13 +166,13 @@ describe('streamChat — Claude → Gemini rotation', () => {
     const r = await collect(streamChat(MESSAGES, 'sys', 'recall', false))
 
     expect(hoisted.claudeCalls).toEqual([])
-    expect(r.models).toEqual(['Gemini 2.5 Flash'])
+    expect(r.models).toEqual(['Gemini 3.5 Flash'])
     expect(r.text).toBe('recall-answer')
   })
 
   it('does NOT fall back to Gemini Pro when Flash fails mid-stream', async () => {
     hoisted.geminiBehavior = (model) =>
-      model === 'gemini-2.5-flash'
+      model === 'gemini-3.5-flash'
         ? geminiStreamThenThrow(['X'], new Error('flash stalled'))
         : geminiStream(['SHOULD-NOT-RUN'])
 
@@ -180,7 +180,7 @@ describe('streamChat — Claude → Gemini rotation', () => {
 
     expect(r.text).toBe('X')
     expect(r.error).toBeInstanceOf(Error)
-    expect(hoisted.geminiCalls).toEqual(['gemini-2.5-flash']) // Pro never tried
+    expect(hoisted.geminiCalls).toEqual(['gemini-3.5-flash']) // rest of chain never tried
   })
 
   it('puts a failed model in cooldown so the next call skips it', async () => {
@@ -215,7 +215,7 @@ describe('streamChat — Claude → Gemini rotation', () => {
     expect(new Set(texts).size).toBe(50)                 // every stream got its own answer
     results.forEach(r => {
       expect(r.error).toBeNull()
-      expect(r.models).toEqual(['Gemini 2.5 Flash'])
+      expect(r.models).toEqual(['Gemini 3.5 Flash'])
     })
   })
 })
@@ -316,7 +316,7 @@ describe('streamChat — observability telemetry', () => {
     expect(byType('ai_error')).toHaveLength(0)
 
     const complete = byType('ai_complete')[0]
-    expect(complete).toMatchObject({ provider: 'gemini', model: 'gemini-2.5-flash' })
+    expect(complete).toMatchObject({ provider: 'gemini', model: 'gemini-3.5-flash' })
     expect(typeof complete.ms).toBe('number')
     // Every event correlates on the threaded requestId.
     for (const e of events) expect(e.requestId).toBe('req-ok')
@@ -405,8 +405,8 @@ describe('streamChat — P0 emergency cross-provider fallback (Gemini → Claude
     const r = await collect(streamChat(MESSAGES, 'sys', 'recall', false, 'req-x'))
 
     expect(r.error).toBeNull()
-    // Auth fast-fail: flash only, pro never burned; then the Claude chain head.
-    expect(hoisted.geminiCalls).toEqual(['gemini-2.5-flash'])
+    // Auth fast-fail: chain head only, rest never burned; then the Claude chain head.
+    expect(hoisted.geminiCalls).toEqual(['gemini-3.5-flash'])
     expect(hoisted.claudeCalls).toEqual(['claude-fable-5'])
     expect(r.models).toEqual(['Claude Fable 5'])
     // The user sees the graceful degraded-mode note, then the real answer.
@@ -414,7 +414,7 @@ describe('streamChat — P0 emergency cross-provider fallback (Gemini → Claude
 
     const fallbacks = byType('ai_fallback')
     expect(fallbacks).toHaveLength(1)
-    expect(fallbacks[0]).toMatchObject({ from: 'gemini-2.5-flash', to: 'claude-fable-5', reason: 'auth' })
+    expect(fallbacks[0]).toMatchObject({ from: 'gemini-3.5-flash', to: 'claude-fable-5', reason: 'auth' })
     expect(byType('ai_complete')[0]).toMatchObject({ provider: 'claude', model: 'claude-fable-5' })
     expect(byType('ai_error')).toHaveLength(0)
   })
@@ -427,11 +427,11 @@ describe('streamChat — P0 emergency cross-provider fallback (Gemini → Claude
     vi.useFakeTimers()
     try {
       const p = collect(streamChat(MESSAGES, 'sys', 'recall', false, 'req-y'))
-      await vi.advanceTimersByTimeAsync(2_500) // flash fails → 2s inter-model delay → pro fails
+      await vi.advanceTimersByTimeAsync(5_000) // 3.5-flash fails → 2s delay → 2.5-flash fails → 2s delay → pro fails
       const r = await p
 
       expect(r.error).toBeNull()
-      expect(hoisted.geminiCalls).toEqual(['gemini-2.5-flash', 'gemini-2.5-pro'])
+      expect(hoisted.geminiCalls).toEqual(['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'])
       expect(r.text).toContain('rescued')
       // Intra-Gemini fallback event, then the cross-provider one.
       const fallbacks = byType('ai_fallback')
@@ -449,7 +449,7 @@ describe('streamChat — P0 emergency cross-provider fallback (Gemini → Claude
 
     expect(r.text).toBe('')
     expect(hoisted.claudeCalls).toEqual([])            // Claude never walked
-    expect(hoisted.geminiCalls).toEqual(['gemini-2.5-flash']) // auth fast-fail, no pro retry
+    expect(hoisted.geminiCalls).toEqual(['gemini-3.5-flash']) // auth fast-fail, no chain retry
     expect(r.error?.message).toBe(AUTH_MSG)            // original error surfaces
     expect(friendlyModelError(r.error)).toBe(
       'The AI service is temporarily unavailable (provider configuration). '
