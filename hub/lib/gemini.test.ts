@@ -203,6 +203,40 @@ describe('streamChat — Claude → Gemini rotation', () => {
     expect(second.text).toBe('sonnet-answer')
   })
 
+  it('rotates when a Claude model completes with ZERO visible text (silent empty answer guard)', async () => {
+    // Fable 5 "succeeds" but emits nothing (e.g. whole max_tokens budget spent
+    // on internal reasoning) — that must be a FAILED attempt, not a clean
+    // empty [DONE]. Keep-alive '' chunks must not count as output either.
+    hoisted.claudeBehavior = (model) =>
+      model === 'claude-fable-5'
+        ? claudeYield(['', '', ''])       // reasoning keep-alives only, no text
+        : claudeYield(['sonnet-answer'])
+    hoisted.geminiBehavior = () => geminiStream(['unused'])
+
+    const r = await collect(streamChat(MESSAGES, 'sys', 'interview', false))
+
+    expect(hoisted.claudeCalls).toEqual(['claude-fable-5', 'claude-sonnet-4-6'])
+    expect(r.text).toBe('sonnet-answer')
+    expect(r.error).toBeNull()
+    // Empty keep-alives never reach the wire.
+    expect(r.models).toEqual(['Claude Fable 5', 'Claude Sonnet 4.6'])
+  })
+
+  it('rotates when a Gemini model completes with ZERO visible text', async () => {
+    hoisted.geminiBehavior = (model) =>
+      model === 'gemini-3.5-flash'
+        ? geminiStream([])                 // clean stream, no output
+        : geminiStream(['backup-answer'])
+
+    const p = collect(streamChat(MESSAGES, 'sys', 'recall', false))
+    await vi.advanceTimersByTimeAsync(2_500) // inter-model rotation delay
+    const r = await p
+
+    expect(hoisted.geminiCalls).toEqual(['gemini-3.5-flash', 'gemini-2.5-flash'])
+    expect(r.text).toContain('backup-answer')
+    expect(r.error).toBeNull()
+  })
+
   it('handles 50 concurrent streams with no cross-talk', async () => {
     let counter = 0
     hoisted.geminiBehavior = () => geminiStream([`tok${counter++}`])

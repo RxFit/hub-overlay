@@ -158,10 +158,18 @@ export async function* streamClaudeChat(
   systemPrompt: string,
   options: { model?: string; maxTokens?: number; temperature?: number; effort?: ClaudeEffort } = {}
 ): AsyncGenerator<string> {
-  const { model = CLAUDE_PRIMARY_MODEL, maxTokens = 4096, temperature = 0.7, effort } = options
+  // maxTokens 16384 (was 4096): thinking-first models (Fable 5) spend their
+  // reasoning tokens INSIDE max_tokens — a hard prompt could burn the whole
+  // 4096 budget thinking and finish with ZERO visible text (the "silent empty
+  // answer" bug: clean stream, no error, empty chat bubble).
+  const { model = CLAUDE_PRIMARY_MODEL, maxTokens = 16384, temperature = 0.7, effort } = options
   const apiKey = getApiKey()
 
-  // Per-request ceiling shared via timeout-config (see lib/timeout-config.ts).
+  // CONNECT-ONLY ceiling (see lib/timeout-config.ts): this timer guards opening
+  // the stream and is cleared as soon as headers arrive. It previously stayed
+  // armed for the LIFE of the stream, which silently truncated any answer
+  // whose total time exceeded 45s — fatal for a thinking model. Mid-stream
+  // stalls are the idle watchdog's job (withIdleWatchdog in lib/gemini.ts).
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), CONNECT_TIMEOUT_MS)
 
@@ -255,6 +263,7 @@ export async function* streamClaudeChat(
       }
     }
   } finally {
+    // Safety net for early exits before/at the connect phase.
     clearTimeout(timeoutId)
   }
 }

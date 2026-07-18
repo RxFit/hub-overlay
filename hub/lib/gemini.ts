@@ -658,6 +658,17 @@ async function* walkClaudeChain(
         claudeEmitted = true
         yield chunk
       }
+      // ZERO-TEXT COMPLETION GUARD: a stream that ends cleanly having emitted
+      // no visible text (e.g. the whole max_tokens budget consumed by internal
+      // reasoning) is a FAILED attempt, not success. Returning 'served' here
+      // was the "silent empty answer" bug — the client received a clean [DONE]
+      // and rendered an empty bubble with no error. Rotate instead.
+      if (!claudeEmitted) {
+        recordModelFailure(claudeModel, false, false)
+        emit({ type: 'ai_fallback', requestId: obs.requestId, from: claudeModel, to: CLAUDE_MODEL_CHAIN[i + 1] ?? GEMINI_MODEL_CHAIN[0], reason: 'error' })
+        console.warn(`[streamChat] Claude ${claudeModel} completed with ZERO visible text — treating as failure, rotating`)
+        continue
+      }
       return 'served' // Claude success — done
     } catch (err: unknown) {
       // W-2 FIX: Classify error to determine cooldown behavior
@@ -935,6 +946,19 @@ async function* streamGeminiWithFallback(
           emittedAny = true
           yield text
         }
+      }
+
+      // ZERO-TEXT COMPLETION GUARD (mirrors the Claude chain): a clean stream
+      // with no visible output is a failed attempt — rotate to the next model
+      // instead of ending the request with a silent empty answer.
+      if (!emittedAny) {
+        recordModelFailure(modelName, false, false)
+        if (isLastAttempt) {
+          throw new Error(`${modelName} completed with no output`)
+        }
+        emit({ type: 'ai_fallback', requestId: obs.requestId, from: modelName, to: modelsToTry[i + 1], reason: 'error' })
+        console.warn(`[gemini] ${modelName} completed with ZERO visible text — treating as failure, rotating`)
+        continue
       }
 
       return // Success

@@ -325,6 +325,19 @@ export function useChatEngine(options: UseChatEngineOptions) {
         }
       }
 
+      // Final safety net for the "silent empty answer" class of bug: if the
+      // stream ended cleanly but nothing ever rendered into the bubble (no
+      // text, no error frame), replace the empty bubble with an actionable
+      // message instead of leaving a blank forever. The server-side zero-text
+      // rotation should make this unreachable — this guard is the last line.
+      if (!fullText) {
+        setMessages(prev =>
+          prev.map(m => m.id === assistantId && !m.content
+            ? { ...m, content: "I couldn't generate an answer for that one — please try asking again." }
+            : m)
+        )
+      }
+
       return // Success — no fallback needed
     } catch (err) {
       const status = (err as { status?: number } | undefined)?.status
