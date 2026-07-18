@@ -6,8 +6,11 @@ import { stripSuggestedTools, stripTrailingPartialSuggestedTools } from '@/lib/m
 /* ── Safe Markdown-like renderer (no dangerouslySetInnerHTML) ── */
 export function parseInlineMarkdown(text: string, onToolActivate?: (toolId: string) => void): React.ReactNode[] {
   const nodes: React.ReactNode[] = []
-  // Match bold (**...**), italic (*...*), and tool references ([[...]])
-  const regex = /\*\*(.*?)\*\*|\*(.*?)\*|\[\[([\w-]+)\]\]/g
+  // Match markdown links ([text](https://url)), bold (**...**), italic (*...*),
+  // tool references ([[...]]), and bare http(s) URLs. Link hrefs are anchored to
+  // the https?:// scheme by the regex itself, so javascript:/data: URIs can
+  // never become anchors (XSS-safe by construction — no dangerouslySetInnerHTML).
+  const regex = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|\*\*(.*?)\*\*|\*(.*?)\*|\[\[([\w-]+)\]\]|(https?:\/\/[^\s<>"')\]]+)/g
   let lastIndex = 0
   let match: RegExpExecArray | null
 
@@ -16,15 +19,22 @@ export function parseInlineMarkdown(text: string, onToolActivate?: (toolId: stri
     if (match.index > lastIndex) {
       nodes.push(text.slice(lastIndex, match.index))
     }
-    if (match[1] !== undefined) {
-      // Bold
-      nodes.push(<strong key={`b-${match.index}`}>{match[1]}</strong>)
-    } else if (match[2] !== undefined) {
-      // Italic
-      nodes.push(<em key={`i-${match.index}`}>{match[2]}</em>)
+    if (match[1] !== undefined && match[2] !== undefined) {
+      // Markdown link — new tab + noopener so chat links never hijack the Hub tab
+      nodes.push(
+        <a key={`l-${match.index}`} className="chat-link" href={match[2]} target="_blank" rel="noopener noreferrer">
+          {match[1]}
+        </a>
+      )
     } else if (match[3] !== undefined) {
+      // Bold
+      nodes.push(<strong key={`b-${match.index}`}>{match[3]}</strong>)
+    } else if (match[4] !== undefined) {
+      // Italic
+      nodes.push(<em key={`i-${match.index}`}>{match[4]}</em>)
+    } else if (match[5] !== undefined) {
       // Tool reference — render as clickable gold link
-      const toolId = match[3]
+      const toolId = match[5]
       nodes.push(
         <button
           key={`tool-${match.index}`}
@@ -35,6 +45,18 @@ export function parseInlineMarkdown(text: string, onToolActivate?: (toolId: stri
           {toolId}
         </button>
       )
+    } else if (match[6] !== undefined) {
+      // Bare URL — strip trailing sentence punctuation out of the href so
+      // "see https://example.com." doesn't produce a 404ing link.
+      const raw = match[6]
+      const url = raw.replace(/[.,;:!?]+$/, '')
+      const trailing = raw.slice(url.length)
+      nodes.push(
+        <a key={`u-${match.index}`} className="chat-link" href={url} target="_blank" rel="noopener noreferrer">
+          {url}
+        </a>
+      )
+      if (trailing) nodes.push(trailing)
     }
     lastIndex = match.index + match[0].length
   }

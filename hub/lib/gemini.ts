@@ -347,13 +347,19 @@ function getModelDisplayName(model: string): string {
  *   interview  → Claude Fable 5 → Claude Sonnet 4.6 → Gemini 2.5 Flash → Gemini 2.5 Pro
  *   deep_dive (with skill active) → Claude Fable 5 → Claude Sonnet 4.6 → Gemini Flash → Gemini Pro
  *   execute (Pre-Cog quality gate) → Claude Fable 5 → Claude Sonnet 4.6 → Gemini Flash → Gemini Pro
+ *   exa_search (EXA toggle) → Claude Fable 5 → Claude Sonnet 4.6 → Gemini Flash → Gemini Pro
  *
  *   recall     → Gemini 2.5 Flash → Gemini 2.5 Pro
  *   deep_dive (no skill) → Gemini 2.5 Flash → Gemini 2.5 Pro
+ *
+ * exa_search is a server-side-only useCase (the client never sends it): the
+ * chat route sets it for EXA Search mode so research synthesis + citation gets
+ * the strongest model, not the fast default that plain deep_dive falls to.
  */
 function shouldUseClaude(useCase: string, hasActiveSkill: boolean): boolean {
   if (useCase === 'interview') return true
   if (useCase === 'execute') return true
+  if (useCase === 'exa_search') return true
   if (useCase === 'deep_dive' && hasActiveSkill) return true
   return false
 }

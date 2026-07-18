@@ -851,6 +851,23 @@ a:hover {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
 }
 
+/* ── Inline links in chat messages (markdown [text](url) + bare URLs) ──
+   overflow-wrap:anywhere is load-bearing on mobile: a long bare URL is one
+   unbreakable "word" that would otherwise stretch the bubble past the viewport. */
+.chat-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: var(--accent-border);
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.chat-link:hover {
+  color: var(--text-primary);
+  text-decoration-color: var(--accent);
+}
+
 .chat-copy-btn {
   background: transparent;
   border: none;
