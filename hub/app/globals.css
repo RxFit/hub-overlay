@@ -8502,7 +8502,7 @@ details[open] > .settings-collapsible__trigger .settings-collapsible__arrow {
 .gmail-list-item__from {
   flex: 1;
   min-width: 0;
-  font-size: 0.92rem;
+  font-size: 1rem;
   color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -8516,7 +8516,7 @@ details[open] > .settings-collapsible__trigger .settings-collapsible__arrow {
 
 .gmail-list-item__date {
   flex-shrink: 0;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   color: var(--text-muted);
 }
 
@@ -8602,7 +8602,7 @@ details[open] > .settings-collapsible__trigger .settings-collapsible__arrow {
 }
 
 .gmail-focus__hint {
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 400;
   letter-spacing: 0;
   text-transform: none;
@@ -8653,7 +8653,7 @@ details[open] > .settings-collapsible__trigger .settings-collapsible__arrow {
 .gmail-focus-card__from {
   flex: 1;
   min-width: 0;
-  font-size: 0.85rem;
+  font-size: 0.9rem;
   font-weight: 700;
   color: var(--text-primary);
   overflow: hidden;
@@ -8663,7 +8663,7 @@ details[open] > .settings-collapsible__trigger .settings-collapsible__arrow {
 
 .gmail-focus-card__action {
   flex-shrink: 0;
-  font-size: 0.68rem;
+  font-size: 0.75rem;
   font-weight: 700;
   letter-spacing: 0.03em;
   text-transform: uppercase;
