@@ -228,7 +228,7 @@ export function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => voi
                     <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {extractName(msg.from)}
                     </span>
-                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', flexShrink: 0 }}>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', flexShrink: 0 }}>
                       {formatDate(msg.date)}
                     </span>
                   </div>

@@ -46,11 +46,10 @@ export function FocusStrip({ items, threads, onOpen }: FocusStripProps) {
         Focus
         <span className="gmail-focus__hint">AI-suggested priorities</span>
       </div>
-      <div className="gmail-focus__rail" role="list">
+      <div className="gmail-focus__rail">
         {cards.map(({ item, thread }) => (
           <button
             key={item.id}
-            role="listitem"
             className="gmail-focus-card"
             onClick={() => onOpen(item.id)}
           >
