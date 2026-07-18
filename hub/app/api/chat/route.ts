@@ -181,16 +181,20 @@ async function runSearchPipeline(query: string, effectiveUseCase: string): Promi
  * no internal context) so the header toggle can never trigger another tool.
  * Returns a formatted results block for injection, or '' on empty/failure.
  */
-async function runExaOnlySearch(query: string): Promise<string> {
+async function runExaOnlySearch(query: string): Promise<{ context: string; failed: boolean }> {
   return withTimeout(
     (async () => {
       try {
         const exaResults = await breaker.execute('exa-search', () => searchWeb(query, {
           numResults: 8,
           useAutoprompt: true,
+          // EXA mode is a research surface — give the synthesis model real
+          // material per source, not 1000-char stubs.
+          maxCharacters: 3000,
         }))
-        if (exaResults.length === 0) return ''
-        return exaResults
+        log.info({ resultCount: exaResults.length }, 'EXA search mode: Exa.AI returned results')
+        if (exaResults.length === 0) return { context: '', failed: false }
+        const context = exaResults
           .map(r => {
             let entry = `**${r.title ?? 'Untitled'}** — [${r.url}]`
             if (r.publishedDate) entry += ` (${r.publishedDate.split('T')[0]})`
@@ -198,17 +202,21 @@ async function runExaOnlySearch(query: string): Promise<string> {
             return entry
           })
           .join('\n\n---\n\n')
+        return { context, failed: false }
       } catch (err) {
+        // FAILURE is not "no results": the prompt must disclose that live
+        // search didn't run, or the model answers from memory while the user
+        // believes they're reading semantic web search.
         if (err instanceof CircuitOpenError) {
-          log.warn({ key: 'exa-search' }, 'Exa circuit is OPEN — EXA search mode returning empty')
-          return ''
+          log.warn({ key: 'exa-search' }, 'Exa circuit is OPEN — EXA search unavailable')
+        } else {
+          log.warn({ err }, 'EXA search mode Exa.AI query failed')
         }
-        log.warn({ err }, 'EXA search mode Exa.AI query failed')
-        return ''
+        return { context: '', failed: true }
       }
     })(),
     10_000,
-    '',
+    { context: '', failed: true },
     'exa-only-search',
   )
 }
@@ -389,10 +397,13 @@ async function handleChat(req: NextRequest): Promise<Response> {
     const exaLastUserMsg = boundedMessages.filter(m => m.role === 'user').pop()
     const exaQuery = exaLastUserMsg?.content ?? ''
     log.info({ hasQuery: Boolean(exaQuery) }, 'EXA Search mode active — running Exa-only pipeline')
-    const exaContext = exaQuery ? await runExaOnlySearch(exaQuery) : ''
+    const exaSearch = exaQuery
+      ? await runExaOnlySearch(exaQuery)
+      : { context: '', failed: false }
     const exaSystemPrompt = buildSystemPrompt({
-      injectedContext: exaContext || undefined,
+      injectedContext: exaSearch.context || undefined,
       exaMode: true,
+      exaSearchFailed: exaSearch.failed,
     })
     // 'exa_search' routes to the Claude chain (Fable 5 → Sonnet 4.6 → Gemini
     // fallbacks) — research synthesis with citations needs the strongest model,
