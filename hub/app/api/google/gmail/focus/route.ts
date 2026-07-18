@@ -40,6 +40,10 @@ export const maxDuration = 30
    ══════════════════════════════════════════════════════════════════════════════ */
 
 const CACHE_TTL_MS = 10 * 60 * 1000
+/* An empty ranking is cached only briefly: it is far more often a transient
+   model hiccup (empty/truncated output) than a genuine "nothing matters"
+   verdict, and a 10-minute empty cache reads as "the feature is broken". */
+const EMPTY_CACHE_TTL_MS = 2 * 60 * 1000
 const FOCUS_THREAD_POOL = 20
 
 /* Routine-path Gemini chain (matches lib/gemini GEMINI_MODEL_CHAIN policy):
@@ -70,10 +74,15 @@ async function rankWithGemini(prompt: string): Promise<{ raw: string; model: str
     try {
       const model = getGenAI().getGenerativeModel({
         model: modelName,
-        generationConfig: { temperature: 0.1, maxOutputTokens: 512 },
+        generationConfig: { temperature: 0.1, maxOutputTokens: 4096 },
       })
       const result = await model.generateContent(prompt)
-      return { raw: result.response.text(), model: modelName }
+      const raw = result.response.text()
+      // Thinking-capable models can burn the whole output budget on thoughts
+      // and return empty text — treat that as a failure so the chain advances
+      // instead of caching an empty strip.
+      if (!raw || !raw.trim()) throw new Error(`${modelName} returned empty text`)
+      return { raw, model: modelName }
     } catch (err) {
       lastErr = err
       console.warn(`[gmail-focus] ${modelName} failed, trying next in chain:`, err)
@@ -133,13 +142,17 @@ export async function GET(req: NextRequest) {
     const generatedAt = new Date().toISOString()
     setCachedFocus(userEmail, {
       signature,
-      expiresAt: Date.now() + CACHE_TTL_MS,
+      expiresAt: Date.now() + (items.length > 0 ? CACHE_TTL_MS : EMPTY_CACHE_TTL_MS),
       generatedAt,
       model,
       items,
     })
 
-    await recordAiAction({ ...auditBase, status: 'success', target: { ...auditBase.target, model } })
+    await recordAiAction({
+      ...auditBase,
+      status: 'success',
+      target: { ...auditBase.target, model, itemCount: items.length },
+    })
     return NextResponse.json({ items, generatedAt, cached: false })
   } catch (err) {
     await recordAiAction({

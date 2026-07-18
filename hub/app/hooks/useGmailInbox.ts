@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { signIn } from 'next-auth/react'
 import { extractEmail, replySubject } from '@/lib/email-address'
 
@@ -75,6 +75,7 @@ export interface UseGmailInboxOptions {
 }
 
 export function useGmailInbox({ onUnreadCount }: UseGmailInboxOptions) {
+  const queryClient = useQueryClient()
   // Thread list mirrors the query cache but stays LOCAL so `openThread` can
   // optimistically mark a thread read; a background refetch resyncs it from the
   // server (same as the pre-NS-6 poll overwrote the list wholesale).
@@ -170,6 +171,83 @@ export function useGmailInbox({ onUnreadCount }: UseGmailInboxOptions) {
   // Retry the last attempted thread-open (used by the thread-error block).
   const retryOpenThread = () => {
     if (lastThreadIdRef.current) openThread(lastThreadIdRef.current)
+  }
+
+  /* ── Thread actions (action menu): trash + save-to-Google-Task ──
+   * Trash is optimistic: the thread leaves the list (and closes if open)
+   * immediately, and is restored on failure. Both surface a transient notice
+   * so the sheet can close instantly without losing feedback. */
+  const [actionBusy, setActionBusy] = useState(false)
+  const [actionNotice, setActionNotice] = useState<string | null>(null)
+  const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => { if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current) }, [])
+
+  const flashNotice = (text: string) => {
+    setActionNotice(text)
+    if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current)
+    noticeTimerRef.current = setTimeout(() => setActionNotice(null), 3500)
+  }
+
+  const trashThread = async (id: string) => {
+    setActionBusy(true)
+    // Optimistic removal at the QUERY-CACHE level (standard TanStack pattern):
+    // cancel any in-flight poll first, then filter the cached list — otherwise
+    // a refetch that was already running resolves after our local removal and
+    // the `data` effect resurrects the deleted thread.
+    await queryClient.cancelQueries({ queryKey: ['gmail', 'inbox'] })
+    queryClient.setQueryData<{ threads: GmailThread[]; unreadCount: number }>(
+      ['gmail', 'inbox'],
+      old => (old ? { ...old, threads: old.threads.filter(t => t.id !== id) } : old)
+    )
+    setThreads(prev => prev.filter(t => t.id !== id))
+    if (selectedThread?.id === id) {
+      setSelectedThread(null)
+      setMobileView('list')
+    }
+    try {
+      const r = await fetch('/api/google/gmail/actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'trash', threadId: id }),
+      })
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}))
+        throw new Error(body?.error || 'Failed to delete')
+      }
+      flashNotice('Moved to Trash')
+      refetch()
+    } catch (err) {
+      // Resync from the server rather than restoring a possibly-stale local
+      // snapshot (a poll may have delivered fresh data mid-request).
+      queryClient.invalidateQueries({ queryKey: ['gmail', 'inbox'] })
+      flashNotice(err instanceof Error ? `⚠️ ${err.message}` : '⚠️ Failed to delete')
+    }
+    setActionBusy(false)
+  }
+
+  const saveThreadAsTask = async (t: Pick<GmailThread, 'id' | 'subject' | 'from' | 'snippet'>) => {
+    setActionBusy(true)
+    try {
+      const r = await fetch('/api/google/gmail/actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'save_task',
+          threadId: t.id,
+          subject: t.subject,
+          from: t.from,
+          snippet: t.snippet,
+        }),
+      })
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}))
+        throw new Error(body?.error || 'Failed to save task')
+      }
+      flashNotice('Saved to Google Tasks')
+    } catch (err) {
+      flashNotice(err instanceof Error ? `⚠️ ${err.message}` : '⚠️ Failed to save task')
+    }
+    setActionBusy(false)
   }
 
   const handleComposeNew = () => {
@@ -288,6 +366,11 @@ export function useGmailInbox({ onUnreadCount }: UseGmailInboxOptions) {
     setIsComposing,
     setComposeTo,
     setComposeSubject,
+    // ── Thread actions (action menu) ──
+    actionBusy,
+    actionNotice,
+    trashThread,
+    saveThreadAsTask,
     // ── Handlers / effects ──
     refreshInbox,
     openThread,

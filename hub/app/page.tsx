@@ -1002,6 +1002,13 @@ export default function HubPage() {
       <GoogleChatPanel
         isOpen={chatPanelOpen}
         onClose={handleClosePanels}
+        onDiscussEmail={text => {
+          // "Discuss in AI chat": close the Gmail overlay so the AI column is
+          // visible, then run the email summary through the read-style inject
+          // (deep_dive — no intent detection on an informational lookup).
+          handleClosePanels()
+          injectDeepDive(text)
+        }}
       />
 
       {/* Mobile: Glassmorphism Bottom Navigation Bar */}
