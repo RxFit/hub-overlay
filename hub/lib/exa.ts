@@ -15,6 +15,9 @@ function getExa(): InstanceType<typeof Exa> {
 interface SearchOptions {
   numResults?: number
   useAutoprompt?: boolean
+  /** Per-result text budget. EXA Search mode passes a larger budget so the
+   *  synthesis model has real material to cite, not 1000-char stubs. */
+  maxCharacters?: number
 }
 
 export interface ExaSearchResult {
@@ -24,12 +27,19 @@ export interface ExaSearchResult {
   snippet?: string
 }
 
+/**
+ * THROWS on upstream failure (missing key, HTTP error, network) instead of
+ * returning []. Swallowing errors here made a broken EXA_API_KEY look like
+ * "no results" — the circuit breaker wrapped around this function never saw
+ * a failure (so it could never trip), and the chat told users the search
+ * "came back empty" when in truth it never ran. Callers already catch.
+ */
 export async function searchWeb(query: string, options?: SearchOptions): Promise<ExaSearchResult[]> {
   try {
     const res = await getExa().searchAndContents(query, {
       numResults: options?.numResults ?? 5,
       useAutoprompt: options?.useAutoprompt ?? true,
-      text: { maxCharacters: 1000 },
+      text: { maxCharacters: options?.maxCharacters ?? 1000 },
       highlights: true,
     })
 
@@ -42,7 +52,7 @@ export async function searchWeb(query: string, options?: SearchOptions): Promise
     }))
   } catch (err) {
     console.error('[exa] searchWeb error:', err)
-    return []
+    throw err
   }
 }
 

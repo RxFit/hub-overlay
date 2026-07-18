@@ -400,9 +400,12 @@ function MessageThread({
 export function GoogleChatPanel({
   isOpen,
   onClose,
+  onDiscussEmail,
 }: {
   isOpen: boolean
   onClose: () => void
+  /** Injects an email summary into the AI assistant chat (page.tsx wiring). */
+  onDiscussEmail?: (text: string) => void
 }) {
   const { visibleSpaces, isLoading, missingScope } = useSpaces()
   const { unreadMap } = useUnreadCounts(visibleSpaces)
@@ -445,6 +448,7 @@ export function GoogleChatPanel({
       setActiveTab={setActiveTab}
       gmailUnread={gmailUnread}
       setGmailUnread={setGmailUnread}
+      onDiscussEmail={onDiscussEmail}
     />
   )
 }
@@ -463,6 +467,7 @@ function GoogleChatPanelDialog({
   setActiveTab,
   gmailUnread,
   setGmailUnread,
+  onDiscussEmail,
 }: {
   onClose: () => void
   visibleSpaces: ChatSpace[]
@@ -477,6 +482,7 @@ function GoogleChatPanelDialog({
   setActiveTab: (v: 'chat' | 'gmail') => void
   gmailUnread: number
   setGmailUnread: (v: number) => void
+  onDiscussEmail?: (text: string) => void
 }) {
   const panelRef = useRef<HTMLDivElement>(null)
   // Focus trap + return-focus-to-opener + Escape-to-close, shared with the
@@ -582,7 +588,7 @@ function GoogleChatPanelDialog({
         {/* Panel body */}
         <div className="chat-panel-body">
           {activeTab === 'gmail' ? (
-            <GmailView onUnreadCount={setGmailUnread} />
+            <GmailView onUnreadCount={setGmailUnread} onDiscussEmail={onDiscussEmail} />
           ) : (
             <>
               {/* Spaces column (hidden on mobile when viewing thread) */}

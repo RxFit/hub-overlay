@@ -5,7 +5,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  *
  * The exa-js client is mocked; these tests lock the wrapper's contract:
  *  - result mapping (highlights joined ' ... ', falling back to raw text),
- *  - searchWeb swallowing upstream failures into [],
+ *  - searchWeb RE-THROWING upstream failures (so the circuit breaker can
+ *    trip and callers can distinguish failure from zero results),
  *  - fetchUrlWithExa RE-THROWING so callers can fall back to raw fetch,
  *  - lazy client init failing loudly when EXA_API_KEY is missing.
  */
@@ -82,9 +83,25 @@ describe('searchWeb', () => {
     )
   })
 
-  it('returns [] instead of throwing when the upstream search fails', async () => {
+  it('RE-THROWS when the upstream search fails (breaker must see failures)', async () => {
     searchMock.mockRejectedValueOnce(new Error('exa is down'))
-    await expect(searchWeb('query')).resolves.toEqual([])
+    await expect(searchWeb('query')).rejects.toThrow('exa is down')
+  })
+
+  it('passes the per-result text budget through (default 1000, override 3000)', async () => {
+    searchMock.mockResolvedValueOnce({ results: [] })
+    await searchWeb('defaults')
+    expect(searchMock).toHaveBeenLastCalledWith(
+      'defaults',
+      expect.objectContaining({ text: { maxCharacters: 1000 } }),
+    )
+
+    searchMock.mockResolvedValueOnce({ results: [] })
+    await searchWeb('rich', { maxCharacters: 3000 })
+    expect(searchMock).toHaveBeenLastCalledWith(
+      'rich',
+      expect.objectContaining({ text: { maxCharacters: 3000 } }),
+    )
   })
 })
 
@@ -109,12 +126,12 @@ describe('fetchUrlWithExa', () => {
 })
 
 describe('lazy client initialization', () => {
-  it('fails loudly when EXA_API_KEY is missing (searchWeb → [] via catch)', async () => {
+  it('fails loudly when EXA_API_KEY is missing (both paths propagate)', async () => {
     vi.resetModules()
     vi.stubEnv('EXA_API_KEY', '')
     const fresh = await import('./exa')
-    // searchWeb catches the config error and degrades to [] (search is optional)…
-    await expect(fresh.searchWeb('q')).resolves.toEqual([])
+    // searchWeb now PROPAGATES the config error (breaker/callers must see is optional)…
+    await expect(fresh.searchWeb('q')).rejects.toThrow('EXA_API_KEY not configured')
     // …but fetchUrlWithExa propagates it (callers must know to fall back).
     await expect(fresh.fetchUrlWithExa('https://example.com')).rejects.toThrow(
       'EXA_API_KEY not configured',

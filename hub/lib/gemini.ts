@@ -164,6 +164,9 @@ export function buildSystemPrompt(context: {
   activeSkillContent?: string
   /** EXA Search mode — pure Exa.AI search summarizer; bypasses all Hub tooling. */
   exaMode?: boolean
+  /** EXA mode only: the Exa.AI request FAILED (vs. genuinely zero results) —
+   *  the prompt must disclose that live search didn't run. */
+  exaSearchFailed?: boolean
 }): string {
   // Always inject the real current date so the model never guesses
   const now = new Date()
@@ -186,6 +189,8 @@ export function buildSystemPrompt(context: {
     p += `Current date and time: ${dateStr}, ${timeStr}\n\n`
     if (context.injectedContext) {
       p += `## Web Search Results (Exa.AI)\n${fenceUntrusted('Exa results', context.injectedContext)}\n\nSummarize and cite these results to answer the user's query.\n\n`
+    } else if (context.exaSearchFailed) {
+      p += `## Web Search Results (Exa.AI)\n\n[LIVE WEB SEARCH IS CURRENTLY UNAVAILABLE — the Exa.AI request failed. You MUST open your reply by telling the user that live web search could not run right now. If you then answer from prior knowledge, clearly label it as such (not from a live search) and note it may be out of date.]\n\n`
     } else {
       p += `## Web Search Results (Exa.AI)\n\n[No results were returned for this query — tell the user the search came back empty and suggest they rephrase.]\n\n`
     }
@@ -643,6 +648,12 @@ async function* walkClaudeChain(
         // the watchdog (its finally closes the upstream reader). No error is
         // surfaced and nothing is restarted, so no-duplicate-answer holds.
         if (signal?.aborted) return 'served'
+        // Empty chunks are liveness heartbeats (thinking deltas / pings from
+        // streamClaudeChat): they reset the idle watchdog above but are NOT
+        // user-visible output — don't forward them, and don't let them mark
+        // the stream as "answer started" (a pre-text failure must still be
+        // allowed to rotate to the next model).
+        if (chunk === '') continue
         claudeEmitted = true
         yield chunk
       }

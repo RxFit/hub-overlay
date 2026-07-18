@@ -1,16 +1,28 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { EmailPreviewCard } from '@/app/components/EmailPreviewCard'
 import { FocusStrip } from '@/app/components/gmail/FocusStrip'
-import { useGmailInbox } from '@/app/hooks/useGmailInbox'
+import { EmailActionSheet } from '@/app/components/gmail/EmailActionSheet'
+import { useGmailInbox, type GmailThread } from '@/app/hooks/useGmailInbox'
 import { useGmailFocus } from '@/app/hooks/useGmailFocus'
+import { buildDiscussPrompt } from '@/lib/gmail-actions'
 
 /* ══════════════════════════════════════════
    GMAIL VIEW — presentational; data/logic in useGmailInbox (NS-5)
    ══════════════════════════════════════════ */
 
-export function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => void }) {
+const LONG_PRESS_MS = 450
+const LONG_PRESS_MOVE_TOLERANCE_PX = 12
+
+export function GmailView({
+  onUnreadCount,
+  onDiscussEmail,
+}: {
+  onUnreadCount: (n: number) => void
+  /** Injects a message into the AI assistant chat (wired from page.tsx). */
+  onDiscussEmail?: (text: string) => void
+}) {
   const {
     threads,
     selectedThread,
@@ -37,7 +49,61 @@ export function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => voi
     handleComposeNew,
     handleSendCompose,
     handleSend,
+    actionBusy,
+    actionNotice,
+    trashThread,
+    saveThreadAsTask,
   } = useGmailInbox({ onUnreadCount })
+
+  /* ── Action menu (long-press a list row, right-click, or ⋯ in the reader) ── */
+  const [actionThread, setActionThread] = useState<GmailThread | null>(null)
+  const pressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pressOriginRef = useRef<{ x: number; y: number } | null>(null)
+  const suppressClickRef = useRef(false)
+  useEffect(() => () => { if (pressTimerRef.current) clearTimeout(pressTimerRef.current) }, [])
+
+  const cancelPress = () => {
+    if (pressTimerRef.current) clearTimeout(pressTimerRef.current)
+    pressTimerRef.current = null
+    pressOriginRef.current = null
+  }
+
+  const startPress = (t: GmailThread, e: React.PointerEvent) => {
+    cancelPress()
+    suppressClickRef.current = false
+    pressOriginRef.current = { x: e.clientX, y: e.clientY }
+    pressTimerRef.current = setTimeout(() => {
+      // Long-press reached: open the menu and swallow the trailing click.
+      suppressClickRef.current = true
+      try { navigator?.vibrate?.(10) } catch { /* silent */ }
+      setActionThread(t)
+    }, LONG_PRESS_MS)
+  }
+
+  const movePress = (e: React.PointerEvent) => {
+    const origin = pressOriginRef.current
+    if (!origin) return
+    // A scroll gesture is not a long-press.
+    if (
+      Math.abs(e.clientX - origin.x) > LONG_PRESS_MOVE_TOLERANCE_PX ||
+      Math.abs(e.clientY - origin.y) > LONG_PRESS_MOVE_TOLERANCE_PX
+    ) {
+      cancelPress()
+    }
+  }
+
+  const handleRowClick = (id: string) => {
+    if (suppressClickRef.current) {
+      suppressClickRef.current = false
+      return
+    }
+    openThread(id)
+  }
+
+  const handleDiscuss = (t: GmailThread) => {
+    setActionThread(null)
+    onDiscussEmail?.(buildDiscussPrompt({ subject: t.subject, from: t.from, snippet: t.snippet }))
+  }
 
   const { focusItems } = useGmailFocus()
 
@@ -145,7 +211,13 @@ export function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => voi
           threads.map(t => (
             <button
               key={t.id}
-              onClick={() => openThread(t.id)}
+              onClick={() => handleRowClick(t.id)}
+              onPointerDown={e => startPress(t, e)}
+              onPointerMove={movePress}
+              onPointerUp={cancelPress}
+              onPointerCancel={cancelPress}
+              onPointerLeave={cancelPress}
+              onContextMenu={e => { e.preventDefault(); setActionThread(t) }}
               className={`gmail-list-item${t.isUnread ? ' gmail-list-item--unread' : ''}${selectedThread?.id === t.id ? ' gmail-list-item--selected' : ''}`}
             >
               <div className="gmail-list-item__top">
@@ -175,6 +247,29 @@ export function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => voi
             <span className="gmail-thread-header__subject">
               {isComposing ? 'New Message' : threadSubject ?? ''}
             </span>
+            {selectedThread && !isComposing && (
+              <button
+                className="gmail-thread-header__more"
+                aria-label="Email actions"
+                onClick={() => {
+                  const listThread = threads.find(t => t.id === selectedThread.id)
+                  const first = selectedThread.messages[0]
+                  setActionThread(
+                    listThread ?? {
+                      id: selectedThread.id,
+                      subject: threadSubject ?? '(no subject)',
+                      from: first?.from ?? '',
+                      date: first?.date ?? '',
+                      snippet: '',
+                      isUnread: false,
+                      messageCount: selectedThread.messages.length,
+                    }
+                  )
+                }}
+              >
+                ⋯
+              </button>
+            )}
           </div>
         )}
 
@@ -329,6 +424,21 @@ export function GmailView({ onUnreadCount }: { onUnreadCount: (n: number) => voi
           </div>
         )}
       </div>
+
+      {/* Action menu + transient action feedback */}
+      {actionThread && (
+        <EmailActionSheet
+          thread={actionThread}
+          busy={actionBusy}
+          onDelete={() => { const id = actionThread.id; setActionThread(null); trashThread(id) }}
+          onSaveTask={() => { const t = actionThread; setActionThread(null); saveThreadAsTask(t) }}
+          onDiscuss={onDiscussEmail ? () => handleDiscuss(actionThread) : undefined}
+          onClose={() => setActionThread(null)}
+        />
+      )}
+      {actionNotice && (
+        <div className="gmail-toast" role="status">{actionNotice}</div>
+      )}
     </div>
   )
 }

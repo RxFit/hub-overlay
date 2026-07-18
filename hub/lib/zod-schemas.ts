@@ -243,6 +243,14 @@ export const GoogleGmailSendSchema = z.object({
   inReplyTo: z.string().max(998).optional(),
 })
 
+export const GoogleGmailActionSchema = z.object({
+  action: z.enum(['trash', 'save_task']),
+  threadId: z.string().trim().min(1).max(256),
+  subject: z.string().max(998).optional(),
+  from: z.string().max(512).optional(),
+  snippet: z.string().max(1024).optional(),
+})
+
 export const GoogleChatSendSchema = z.object({
   spaceId: z.string().trim().min(1).max(256),
   text: z.string().trim().min(1).max(4096),

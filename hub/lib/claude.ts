@@ -19,6 +19,19 @@ const ANTHROPIC_VERSION = '2023-06-01'
 export const CLAUDE_PRIMARY_MODEL = 'claude-fable-5'
 export const CLAUDE_BACKUP_MODEL = 'claude-sonnet-4-6'
 
+/* Claude Fable 5 / Mythos, Opus 4.7+, and Sonnet 5 REJECT sampling parameters
+ * (`temperature`/`top_p`/`top_k` → 400 invalid_request_error). Sending
+ * temperature unconditionally therefore 400s EVERY Fable 5 request, cooldowns
+ * the model, and silently demotes the whole "Claude-first" chain to Sonnet 4.6
+ * — the primary model never actually serves. Omit temperature on these models. */
+const NO_SAMPLING_PARAM_MODELS = [
+  /^claude-fable-/, /^claude-mythos-/, /^claude-opus-4-(?:[7-9]|\d{2,})/, /^claude-sonnet-(?:[5-9]|\d{2,})(?:$|-)/,
+]
+
+export function modelSupportsSamplingParams(model: string): boolean {
+  return !NO_SAMPLING_PARAM_MODELS.some(re => re.test(model))
+}
+
 function getApiKey(): string {
   // Accept the canonical name plus the casings the Cloud Run service mounts
   // (Anthropic_API_Key / anthropic_token) — env vars are case-sensitive on
@@ -110,7 +123,7 @@ export async function claudeChat(
       body: JSON.stringify({
         model,
         max_tokens: maxTokens,
-        temperature,
+        ...(modelSupportsSamplingParams(model) ? { temperature } : {}),
         system: systemPrompt,
         messages: buildAnthropicMessages(messages),
       }),
@@ -155,7 +168,13 @@ export async function* streamClaudeChat(
       body: JSON.stringify({
         model,
         max_tokens: maxTokens,
-        temperature,
+        ...(modelSupportsSamplingParams(model) ? { temperature } : {}),
+        // Thinking-first models (Fable 5 etc.) are silent for 30-60s before
+        // their first visible token. Request summarized thinking so the API
+        // streams thinking deltas during that window — the parser below turns
+        // them into empty-string heartbeats that keep the idle watchdog fed.
+        // (The thinking text itself is never yielded to the user.)
+        ...(modelSupportsSamplingParams(model) ? {} : { thinking: { type: 'adaptive', display: 'summarized' } }),
         stream: true,
         system: systemPrompt,
         messages: buildAnthropicMessages(messages),
@@ -169,6 +188,12 @@ export async function* streamClaudeChat(
     }
 
     if (!res.body) throw new Error('No response body from Claude')
+
+    // The CONNECT ceiling is for OPENING the stream. Leaving this timer armed
+    // aborted every response at 45s TOTAL — which killed thinking-first models
+    // (Fable 5) mid-answer on long turns and rotated the chain to the faster
+    // backup. Mid-stream stalls are the idle watchdog's job, not this timer's.
+    clearTimeout(timeoutId)
 
     const reader = res.body.getReader()
     const decoder = new TextDecoder()
@@ -191,6 +216,15 @@ export async function* streamClaudeChat(
           const parsed = JSON.parse(data)
           if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
             yield parsed.delta.text
+          } else if (
+            parsed.type === 'ping' ||
+            parsed.type === 'content_block_start' ||
+            (parsed.type === 'content_block_delta' && parsed.delta?.thinking !== undefined)
+          ) {
+            // Liveness heartbeat: thinking deltas / pings prove the model is
+            // working. Yield '' so withIdleWatchdog resets WITHOUT emitting
+            // visible output (the rotation layer skips empty chunks).
+            yield ''
           }
         } catch {
           // Skip malformed SSE lines

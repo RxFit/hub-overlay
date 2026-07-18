@@ -16,8 +16,12 @@
  *        <  CONNECT_TIMEOUT_MS (45s) per-attempt ceiling to OPEN a provider
  *                                   stream / complete a provider request
  *                                   (Gemini connect race + Claude fetch abort)
- *        <= CLIENT_ABORT_MS (45s)   browser AbortController on fetch('/api/chat')
- *                                   — the user-facing ceiling
+ *        <= CLIENT_ABORT_MS (110s)  browser AbortController on fetch('/api/chat')
+ *                                   — the user-facing ceiling. Sized for
+ *                                   thinking-first models (Fable 5 can think
+ *                                   30-60s before its first token on research
+ *                                   turns); progress is still guarded by the
+ *                                   30s idle watchdog + thinking heartbeats
  *        <  ROUTE_MAX_DURATION_MS (120s) platform request cap
  *                                   (Next `maxDuration`, Cloud Run/Railway)
  *
@@ -26,9 +30,10 @@
  *    (30s) well before any per-attempt ceiling, and torn down cleanly.
  *  - CONNECT <= CLIENT: the server's own per-attempt protection must not exceed
  *    the client's patience — otherwise the client abandons the request while the
- *    server keeps burning compute on work no one is waiting for. Gemini's connect
- *    race and Claude's request abort both sit at 45s so the two providers behave
- *    identically and both stay at/under the client bound.
+ *    server keeps burning compute on work no one is waiting for. The client bound
+ *    is deliberately larger than CONNECT: connecting must be fast (45s), but a
+ *    connected, heartbeat-alive stream (thinking models) may legitimately run
+ *    ~2 minutes before completing.
  *  - CLIENT < ROUTE_MAX_DURATION: the browser gives up (and the server tears the
  *    stream down) long before the hard platform cap, so we never rely on the
  *    platform killing a runaway request.
@@ -56,7 +61,7 @@ export const IDLE_TIMEOUT_MS = 30_000
 export const CONNECT_TIMEOUT_MS = 45_000
 
 /** Browser-side AbortController on fetch('/api/chat') — the user-facing ceiling. */
-export const CLIENT_ABORT_MS = 45_000
+export const CLIENT_ABORT_MS = 110_000
 
 /** Platform request cap; mirrors `export const maxDuration = 120` in route.ts. */
 export const ROUTE_MAX_DURATION_MS = 120_000

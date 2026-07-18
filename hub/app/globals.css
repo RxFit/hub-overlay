@@ -8781,3 +8781,163 @@ details[open] > .settings-collapsible__trigger .settings-collapsible__arrow {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ── Gmail action sheet (long-press / ⋯ menu) ── */
+.gmail-list-item {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.gmail-thread-header__more {
+  flex-shrink: 0;
+  min-width: 44px;
+  min-height: 44px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  font-size: 1.3rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.gmail-thread-header__more:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.gmail-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  animation: gmailSheetFade 0.15s ease-out;
+}
+
+@keyframes gmailSheetFade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.gmail-sheet {
+  width: 100%;
+  max-width: 440px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 16px 16px 0 0;
+  padding: 8px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+  animation: gmailSheetUp 0.2s var(--ease-out);
+}
+
+@keyframes gmailSheetUp {
+  from { transform: translateY(24px); opacity: 0.6; }
+  to   { transform: translateY(0); opacity: 1; }
+}
+
+.gmail-sheet__grab {
+  width: 36px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border);
+  margin: 2px auto 10px;
+}
+
+.gmail-sheet__header {
+  padding: 2px 8px 10px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 6px;
+}
+
+.gmail-sheet__from {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gmail-sheet__subject {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gmail-sheet__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 50px;
+  padding: 10px 12px;
+  background: none;
+  border: none;
+  border-radius: 10px;
+  text-align: left;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.gmail-sheet__row:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.gmail-sheet__row:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.gmail-sheet__icon {
+  width: 22px;
+  text-align: center;
+  color: var(--accent);
+}
+
+.gmail-sheet__row--danger,
+.gmail-sheet__row--danger .gmail-sheet__icon {
+  color: var(--danger, #ff5b5b);
+}
+
+.gmail-sheet__row--confirming {
+  background: rgba(255, 80, 80, 0.12);
+  font-weight: 700;
+}
+
+.gmail-sheet__row--cancel {
+  justify-content: center;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  margin-top: 4px;
+}
+
+/* ── Gmail transient action toast ── */
+.gmail-toast {
+  position: fixed;
+  left: 50%;
+  /* Above the reply composer, and pointer-events:none so its 3.5s lifetime
+     never swallows a tap aimed at the composer underneath. */
+  bottom: calc(84px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  z-index: 70;
+  pointer-events: none;
+  padding: 10px 18px;
+  background: var(--surface-2, rgba(30, 34, 45, 0.95));
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  font-weight: 600;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+  animation: gmailSheetFade 0.2s ease-out;
+}
