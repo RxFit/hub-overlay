@@ -618,6 +618,7 @@ async function* walkClaudeChain(
   systemPrompt: string,
   obs: ObsCtx,
   signal?: AbortSignal,
+  claudeOpts: { effort?: import('@/lib/claude').ClaudeEffort; maxTokens?: number } = {},
 ): AsyncGenerator<string | { modelUsed: string }, 'served' | 'fallthrough'> {
   const { streamClaudeChat } = await import('@/lib/claude')
 
@@ -641,7 +642,7 @@ async function* walkClaudeChain(
       yield { modelUsed: getModelDisplayName(claudeModel) }
 
       // Idle watchdog guards against a connected-then-stalled Claude stream.
-      const claudeIter = streamClaudeChat(messages, systemPrompt, { model: claudeModel })[Symbol.asyncIterator]()
+      const claudeIter = streamClaudeChat(messages, systemPrompt, { model: claudeModel, ...claudeOpts })[Symbol.asyncIterator]()
       for await (const chunk of withIdleWatchdog(claudeIter, IDLE_TIMEOUT_MS, claudeModel, () =>
         emit({ type: 'ai_timeout', requestId: obs.requestId, layer: 'idle', provider: 'claude', model: claudeModel }))) {
         // Client aborted mid-stream (FIX4): stop quietly. Returning tears down
@@ -708,6 +709,12 @@ async function* streamChatRotation(
   obs: ObsCtx,
   signal?: AbortSignal,
 ): AsyncGenerator<string | { modelUsed: string }> {
+  // EXA research turns get the full-depth treatment: xhigh effort (clamped to
+  // high on the pre-4.7 backup) and output headroom for thinking + a long
+  // cited synthesis. Other use cases keep the model defaults.
+  const claudeOpts = useCase === 'exa_search'
+    ? { effort: 'xhigh' as const, maxTokens: 16_000 }
+    : {}
   // Cooperative cancellation (FIX4): if the client is already gone, do no work.
   if (signal?.aborted) return
 
@@ -718,7 +725,7 @@ async function* streamChatRotation(
 
   if (shouldUseClaude(useCase, hasActiveSkill)) {
     claudeTried = true
-    if ((yield* walkClaudeChain(messages, systemPrompt, obs, signal)) === 'served') return
+    if ((yield* walkClaudeChain(messages, systemPrompt, obs, signal, claudeOpts)) === 'served') return
   }
 
   // Bail before the Gemini leg if the client aborted while Claude was walked.
@@ -778,7 +785,7 @@ async function* streamChatRotation(
     let claudeServed = false
     let noticeYielded = false
     let modelDisplay = getModelDisplayName(CLAUDE_MODEL_CHAIN[0])
-    const walk = walkClaudeChain(messages, systemPrompt, obs, signal)
+    const walk = walkClaudeChain(messages, systemPrompt, obs, signal, claudeOpts)
     try {
       while (true) {
         const step = await walk.next()
@@ -957,6 +964,44 @@ async function* streamGeminiWithFallback(
       console.warn(`[gemini] ${modelName} failed (${isRateLimit ? 'rate_limit' : 'error'}), falling back to ${modelsToTry[i + 1]}:`, err)
     }
   }
+}
+
+/**
+ * Non-streaming one-shot Gemini generation for structured server tasks
+ * (Gmail Focus ranking, score-context fallback).
+ *
+ * Deliberately mirrors the PROVEN chat configuration above — same SDK, same
+ * key resolution, same model chain with cooldowns, `systemInstruction` +
+ * user message, and NO maxOutputTokens cap (thinking-capable Gemini models
+ * can burn a fixed budget on thoughts and return empty text; the chat path
+ * sets no cap and works in production). Structured routes that previously
+ * built their own SDK calls diverged from this config and failed in prod
+ * while chat worked ([GoogleGenerativeAI Error] audit rows, 2026-07-18).
+ */
+export async function geminiGenerateText(
+  systemPrompt: string,
+  userPrompt: string,
+): Promise<{ text: string; model: string }> {
+  let lastErr: unknown
+  for (const modelName of GEMINI_MODEL_CHAIN) {
+    if (isModelInCooldown(modelName)) continue
+    try {
+      const model = getGenAI().getGenerativeModel({
+        model: modelName,
+        systemInstruction: systemPrompt,
+      })
+      const result = await model.generateContent(userPrompt)
+      const text = result.response.text()
+      if (!text || !text.trim()) throw new Error(`${modelName} returned empty text`)
+      return { text, model: modelName }
+    } catch (err) {
+      lastErr = err
+      recordModelFailure(modelName, isRateLimitError(err), isAuthOrKeyError(err))
+      if (isAuthOrKeyError(err)) throw err // shared credential — chain can't recover
+      console.warn(`[geminiGenerateText] ${modelName} failed, trying next in chain:`, err)
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error('All Gemini models failed or cooling down')
 }
 
 /**

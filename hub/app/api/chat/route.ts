@@ -6,7 +6,7 @@ import { createLogger } from '@/lib/logger'
 import { streamChat, buildSystemPrompt, friendlyModelError } from '@/lib/gemini'
 import { getCompanies, getIssues, getAgents, getRuns } from '@/lib/paperclip'
 import { searchSemanticBrain } from '@/lib/vertex'
-import { searchWeb } from '@/lib/exa'
+import { searchWeb, parseSubQueries, mergeExaResults, type ExaSearchResult } from '@/lib/exa'
 import { resolveAttachmentContext } from '@/lib/attachment-resolver'
 import { loadSkillContent } from '@/lib/skills-loader'
 import { SKILL_MAP } from '@/lib/skills'
@@ -185,16 +185,86 @@ async function runExaOnlySearch(query: string): Promise<{ context: string; faile
   return withTimeout(
     (async () => {
       try {
-        const exaResults = await breaker.execute('exa-search', () => searchWeb(query, {
-          numResults: 8,
-          useAutoprompt: true,
-          // EXA mode is a research surface — give the synthesis model real
-          // material per source, not 1000-char stubs.
-          maxCharacters: 3000,
-        }))
-        log.info({ resultCount: exaResults.length }, 'EXA search mode: Exa.AI returned results')
-        if (exaResults.length === 0) return { context: '', failed: false }
-        const context = exaResults
+        // ── 1. Query decomposition (deep-research pattern) ──
+        // A fast planner turns the question into complementary search angles;
+        // planner failure fails OPEN to the original query alone.
+        let queries: string[] = [query]
+        try {
+          const { geminiGenerateText } = await import('@/lib/gemini')
+          const plan = await withTimeout(
+            geminiGenerateText(
+              'You decompose research questions into web-search queries. Respond with ONLY a JSON array of 3 short, distinct search queries covering complementary angles of the user\'s question (different subtopics, comparisons, or evidence types — not rephrasings). No markdown, no prose.',
+              query,
+            ),
+            6_000,
+            null,
+            'exa-query-planner',
+          )
+          if (plan?.text) queries = parseSubQueries(plan.text, query, 4)
+        } catch (err) {
+          log.warn({ err }, 'EXA query planner failed — single-query search')
+        }
+
+        // ── 2a. Server-side deep fan-out (preferred) ──
+        // Exa's `deep` search tier runs ITS OWN parallel search agents over
+        // the main query + our planner's variations (4-15s) — the same
+        // orchestrator/worker pattern Exa Deep uses internally. If the tier
+        // is unavailable on this plan/SDK, fall back to client-side parallel
+        // `auto` searches (2b).
+        let merged: ExaSearchResult[] | null = null
+        try {
+          const deep = await breaker.execute('exa-search', () => searchWeb(query, {
+            type: 'deep',
+            additionalQueries: queries.slice(1),
+            numResults: 12,
+            useAutoprompt: true,
+            maxCharacters: 3000,
+          }))
+          if (deep.length > 0) {
+            merged = deep
+            log.info({ queryCount: queries.length, resultCount: deep.length }, 'EXA search mode: Exa deep-tier fan-out complete')
+          }
+        } catch (err) {
+          log.warn({ err }, 'EXA deep-tier search failed — falling back to parallel auto searches')
+        }
+
+        // ── 2b. Client-side parallel semantic searches (fallback) ──
+        const perQuery = queries.length > 1 ? 5 : 8
+        const settled = merged ? [] : await Promise.allSettled(
+          queries.map(q =>
+            breaker.execute('exa-search', () => searchWeb(q, {
+              numResults: perQuery,
+              useAutoprompt: true,
+              maxCharacters: 3000,
+            }))
+          )
+        )
+        const resultLists = settled
+          .filter((r): r is PromiseFulfilledResult<ExaSearchResult[]> => r.status === 'fulfilled')
+          .map(r => r.value)
+
+        if (!merged && resultLists.length === 0) {
+          // Every parallel search FAILED — disclose, don't disguise as empty.
+          const firstErr = settled.find(r => r.status === 'rejected') as PromiseRejectedResult | undefined
+          if (firstErr?.reason instanceof CircuitOpenError) {
+            log.warn({ key: 'exa-search' }, 'Exa circuit is OPEN — EXA search unavailable')
+          } else {
+            log.warn({ err: firstErr?.reason }, 'EXA search mode: all parallel Exa queries failed')
+          }
+          return { context: '', failed: true }
+        }
+
+        // ── 3. Merge: round-robin interleave, dedupe by URL, cap sources ──
+        if (!merged) {
+          merged = mergeExaResults(resultLists, 12)
+          log.info(
+            { queryCount: queries.length, resultCount: merged.length },
+            'EXA search mode: parallel Exa.AI fan-out complete'
+          )
+        }
+        if (merged.length === 0) return { context: '', failed: false }
+
+        const context = merged
           .map(r => {
             let entry = `**${r.title ?? 'Untitled'}** — [${r.url}]`
             if (r.publishedDate) entry += ` (${r.publishedDate.split('T')[0]})`
@@ -204,9 +274,6 @@ async function runExaOnlySearch(query: string): Promise<{ context: string; faile
           .join('\n\n---\n\n')
         return { context, failed: false }
       } catch (err) {
-        // FAILURE is not "no results": the prompt must disclose that live
-        // search didn't run, or the model answers from memory while the user
-        // believes they're reading semantic web search.
         if (err instanceof CircuitOpenError) {
           log.warn({ key: 'exa-search' }, 'Exa circuit is OPEN — EXA search unavailable')
         } else {
@@ -215,7 +282,7 @@ async function runExaOnlySearch(query: string): Promise<{ context: string; faile
         return { context: '', failed: true }
       }
     })(),
-    10_000,
+    30_000,
     { context: '', failed: true },
     'exa-only-search',
   )
