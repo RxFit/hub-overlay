@@ -4382,42 +4382,6 @@ a:hover .rx-arrow {
   color: #e06c6c;
 }
 
-.rp-placeholder {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--space-2);
-  padding: var(--space-4) var(--space-2);
-}
-
-.rp-placeholder__phase {
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--accent);
-  opacity: 0.8;
-}
-
-.rp-placeholder__title {
-  font-size: var(--text-md, 1rem);
-  font-weight: 700;
-  color: var(--text-primary);
-}
-
-.rp-placeholder__desc {
-  font-size: var(--text-xs);
-  color: var(--text-secondary);
-  line-height: 1.5;
-  margin: 0;
-}
-
-.rp-placeholder__actions {
-  display: flex;
-  gap: var(--space-2);
-  margin-top: var(--space-2);
-}
-
 /* ── Right Panel Phase 2: Issues & Agents tabs ── */
 .exec-tab {
   display: flex;
@@ -4495,6 +4459,60 @@ a:hover .rx-arrow {
 .exec-row__state[data-goal-status="active"] { color: var(--accent); border-color: var(--accent); }
 .exec-row__state[data-goal-status="achieved"] { color: #7dbb8a; border-color: rgba(125, 187, 138, 0.5); }
 .exec-row__state[data-goal-status="cancelled"] { color: var(--text-muted); }
+.exec-row__state[data-ws-state="running"] { color: #7dbb8a; border-color: rgba(125, 187, 138, 0.5); }
+.exec-row__state[data-project-status="started"],
+.exec-row__state[data-project-status="in_progress"] { color: var(--accent); border-color: var(--accent); }
+
+/* ── Spaces tab: workspace rows ── */
+.workspace-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  margin-bottom: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.workspace-row__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.workspace-row__name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  color: var(--text-primary);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.workspace-row__primary {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  padding: 0 5px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.workspace-row__location {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .exec-row__state[data-state-name="blocked"] { color: #e06c6c; border-color: rgba(224, 108, 108, 0.5); }
 .exec-row__state[data-state-group="completed"] { color: #7dbb8a; border-color: rgba(125, 187, 138, 0.5); }
 

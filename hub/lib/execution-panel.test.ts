@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   normalizeComments,
   normalizeRoutineRuns,
+  normalizeWorkspaces,
+  availableWorkspaceActions,
   buildGoalTree,
   wireStatusForState,
   availableAgentActions,
@@ -45,6 +47,43 @@ describe('normalizeRoutineRuns', () => {
     expect(bare.status).toBe('unknown')
     expect(bare.linkedIssueId).toBeNull()
     expect(normalizeRoutineRuns(null)).toEqual([])
+  })
+})
+
+describe('normalizeWorkspaces', () => {
+  it('handles bare arrays and wrapped { workspaces }, primary first', () => {
+    const raw = [
+      { id: 'w2', name: 'branch-ws', cwd: '/b', isPrimary: false },
+      { id: 'w1', name: 'main-ws', cwd: '/a', repoUrl: 'https://github.com/x/y', repoRef: 'main', isPrimary: true, desiredState: 'running' },
+    ]
+    const out = normalizeWorkspaces(raw)
+    expect(out.map((w) => w.id)).toEqual(['w1', 'w2'])
+    expect(out[0]).toMatchObject({ isPrimary: true, desiredState: 'running', repoRef: 'main' })
+    expect(normalizeWorkspaces({ workspaces: raw })).toHaveLength(2)
+  })
+
+  it('drops id-less entries and defaults missing fields', () => {
+    const out = normalizeWorkspaces([{ name: 'no-id' }, { id: 'w1' }])
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({ id: 'w1', name: 'workspace', cwd: null, isPrimary: false, desiredState: '' })
+    expect(normalizeWorkspaces(null)).toEqual([])
+  })
+
+  it('falls back to defaultRef when repoRef is absent', () => {
+    expect(normalizeWorkspaces([{ id: 'w1', defaultRef: 'develop' }])[0].repoRef).toBe('develop')
+  })
+})
+
+describe('availableWorkspaceActions', () => {
+  it('offers start only when a cwd exists and services are stopped', () => {
+    expect(availableWorkspaceActions({ cwd: '/a', desiredState: '' })).toEqual(['start'])
+    expect(availableWorkspaceActions({ cwd: '/a', desiredState: 'stopped' })).toEqual(['start'])
+  })
+
+  it('offers restart+stop while running, stop-only without a cwd', () => {
+    expect(availableWorkspaceActions({ cwd: '/a', desiredState: 'running' })).toEqual(['restart', 'stop'])
+    expect(availableWorkspaceActions({ cwd: null, desiredState: 'running' })).toEqual(['stop'])
+    expect(availableWorkspaceActions({ cwd: null, desiredState: '' })).toEqual([])
   })
 })
 
