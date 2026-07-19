@@ -5,6 +5,8 @@ import { useSession, signIn } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { TasksSection, CalendarSection, DocumentsSection, KPISection, ProjectHealthSection, SectionErrorBoundary } from '@/app/components/LeftPanelSections'
 import { ExecutionFeed } from '@/app/components/RightPanelSections'
+import { RightPanelTabsNav, PulseStrip, AttentionStrip, TabPlaceholder, type RightPanelTab } from '@/app/components/RightPanelWorkspace'
+import { useExecutionDashboard } from '@/app/hooks/useHubData'
 import { InterviewBadge, ActionConfirmCard, SkillBadge } from '@/app/components/ChatEnhancements'
 import { ToolPanel } from '@/app/components/ToolPanel'
 import { ToolPanelCollapsedRail, MobileToolEdge } from '@/app/components/ToolPanelCollapsedRail'
@@ -150,6 +152,11 @@ function RightPanel({
     ? `${paperclipBaseUrl}/companies/${activeCompany.companyId}`
     : paperclipBaseUrl
 
+  // Phase 1 workspace scaffold: tab state + the dashboard snapshot behind the
+  // Pulse header and Attention strip (read-only; no new write paths).
+  const [activeTab, setActiveTab] = useState<RightPanelTab>('pulse')
+  const { dashboard, isLoading: dashboardLoading } = useExecutionDashboard(activeCompany?.companyId)
+
   return (
     <aside ref={panelRef} className={`panel-right ${isOpen ? 'mobile-open' : ''}`} aria-label="Execution Layer" style={style}>
       <div className="panel-header">
@@ -189,12 +196,25 @@ function RightPanel({
         </div>
       </div>
 
+      <RightPanelTabsNav active={activeTab} onChange={setActiveTab} />
+
       <div className="panel-content">
-        <ProjectHealthSection projects={projects} onInjectChat={onInjectChat} userRole={userRole} isLoading={kpiLoading} error={kpiError} onRetry={onKpiRetry} />
-        {/* orgId derives from activeCompany (same projects.find the page used for the
-            now-removed activeOrgId prop — both resolved to this exact value). */}
-        <ExecutionFeed onInjectChat={onInjectChat} onInjectAction={onInjectAction} onCustomizeCSuite={onCustomizeCSuite} orgId={activeCompany?.companyId} />
+        {activeTab === 'pulse' ? (
+          <>
+            <PulseStrip dashboard={dashboard} isLoading={dashboardLoading} />
+            <ProjectHealthSection projects={projects} onInjectChat={onInjectChat} userRole={userRole} isLoading={kpiLoading} error={kpiError} onRetry={onKpiRetry} />
+            {/* orgId derives from activeCompany (same projects.find the page used for the
+                now-removed activeOrgId prop — both resolved to this exact value). */}
+            <ExecutionFeed onInjectChat={onInjectChat} onInjectAction={onInjectAction} onCustomizeCSuite={onCustomizeCSuite} orgId={activeCompany?.companyId} />
+          </>
+        ) : (
+          <TabPlaceholder tab={activeTab} paperclipUrl={paperclipUrl} onInjectChat={onInjectChat} />
+        )}
       </div>
+
+      {/* Persistent footer: blocked/error/approval/budget signals; every chip
+          resolves through a read-style assistant query. */}
+      <AttentionStrip dashboard={dashboard} onInjectChat={onInjectChat} />
     </aside>
   )
 }

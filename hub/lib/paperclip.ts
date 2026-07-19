@@ -17,7 +17,9 @@ import {
   AgentResponseSchema,
   ProjectsResponseSchema,
   RunsResponseSchema,
+  DashboardResponseSchema,
 } from '@/lib/zod-schemas'
+import { normalizeDashboard, type ExecutionDashboard } from '@/lib/execution-dashboard'
 import type { ZodType } from 'zod'
 
 const log = createLogger('paperclip')
@@ -596,6 +598,23 @@ export async function deleteAgent(_companyId: string, agentId: string, scope?: s
     undefined,
     scope
   )
+}
+
+/* ── Dashboard ── */
+
+/**
+ * Fetch the company health snapshot (agents/tasks/costs/approvals/budgets)
+ * behind the right panel's Pulse header. Lenient schema + zero-fill
+ * normalization: a version-drifted snapshot degrades to zeros, never throws
+ * on shape.
+ */
+export async function getDashboard(companyId: string): Promise<ExecutionDashboard> {
+  const data = await paperclipFetch(
+    `/api/companies/${companyId}/dashboard`,
+    undefined,
+    DashboardResponseSchema,
+  )
+  return normalizeDashboard(data, companyId)
 }
 
 /* ── Health Check ── */

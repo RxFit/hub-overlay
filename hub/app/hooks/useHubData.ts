@@ -287,5 +287,38 @@ export function useFeed() {
   }
 }
 
+/* ══════════════════════════════════════════
+   Execution Dashboard (Paperclip)
+   ══════════════════════════════════════════ */
+
+import type { ExecutionDashboard } from '@/lib/execution-dashboard'
+
+/**
+ * Fetch the Paperclip company health snapshot behind the right panel's Pulse
+ * header and Attention strip. Polls every 60s; keeps rendering stale data
+ * through transient failures (retry: 2).
+ */
+export function useExecutionDashboard(orgId?: string) {
+  const url = orgId
+    ? `/api/paperclip/dashboard?orgId=${encodeURIComponent(orgId)}`
+    : '/api/paperclip/dashboard'
+
+  const { data, error, isLoading, refetch } = useQuery<ExecutionDashboard>({
+    queryKey: ['execution-dashboard', orgId ?? 'default'],
+    queryFn: () => fetcher<ExecutionDashboard>(url),
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: false,
+    staleTime: 30_000,
+    retry: 2,
+  })
+
+  return {
+    dashboard: data ?? null,
+    isLoading,
+    error: error ?? undefined,
+    refetch,
+  }
+}
+
 /* ── Re-export types for convenience ── */
 export type { TaskItem, TaskListItem, CalendarEvent, DriveFile, FeedItem }
