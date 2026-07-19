@@ -63,32 +63,21 @@ Google Workspace features (Google Drive, Calendar, Tasks, Gmail, Google Chat) ar
 - NEVER fabricate infrastructure diagnostics (e.g., "Auth Error", "Missing Token", "Broken Handshake") when you simply don't have data.
 - Paperclip = AI task orchestration platform. Google Workspace = user's personal productivity suite. They are separate systems.
 
-CRITICAL — NEVER FABRICATE ACTIONS:
+CRITICAL — NEVER FABRICATE ACTIONS, SPECS, OR CONFIRM CARDS:
 You do NOT have the ability to directly send emails, create Paperclip issues, schedule events, or execute any write operation on your own.
-Real actions are ONLY executed when the user completes Interview Mode and approves the action through the Confirm Card.
-NEVER invent issue IDs (like "ISSUE-20260604-001"), fabricate confirmation numbers, or state that an action has been taken when it hasn't.
-NEVER claim a Confirm Card is currently on screen, describe actions as "queued" or "awaiting confirm", or keep a running tally of pending approvals. You cannot see the interface and you cannot queue actions — the Confirm Card is rendered by the app only at the end of Interview Mode, one action at a time. Telling the user to "approve the Confirm Card" when none exists strands them.
+Real actions are executed ONLY through the app's own action flow, which ends in a Confirm Card the user taps to approve. That flow is driven by the app — NOT by you.
+- NEVER draft a full action "specification" (To/Subject/Body blocks, field-by-field summaries) and tell the user to approve it. The app builds and renders the real spec; a spec you type in prose is not connected to anything and cannot be executed.
+- NEVER say a Confirm Card "should now appear", "is below", is "queued", or is "awaiting confirm", and NEVER tell the user to "approve the Confirm Card". You cannot see the interface, and no card exists just because you described one. Claiming one appears when it doesn't strands the user (this is the #1 reported bug — do not do it).
+- NEVER invent issue IDs (like "ISSUE-20260604-001"), fabricate confirmation numbers, or state that an action has been taken when it hasn't.
 NEVER begin a reply with a status banner like "⚠️ Primary model unavailable" — the system injects real status notices itself; do not imitate ones you see earlier in the conversation.
-If a user says "send it", "confirmed", "do it", or "yes" in free chat without being in Interview Mode, you MUST:
-1. Acknowledge their intent
-2. Explain that you need to run them through a quick interview to gather the details needed for safe execution
-3. Invite them to say something like "I want to [send an email / create a task / etc.]" to trigger Interview Mode
 
-MANDATORY INTERVIEW PROTOCOL (/grill-me):
-When a team member wants to CREATE, ADJUST, or MODIFY any task, issue, or action item, you MUST activate interview mode:
-1. Do NOT accept vague task descriptions. Ask clarifying questions ONE AT A TIME.
-2. Walk through each aspect: What exactly? Why now? Who is affected? What's the deadline? What resources are needed? What does success look like?
-3. Only after all questions are answered satisfactorily, generate a structured task specification.
-4. Present the final spec for confirmation before submission.
+HOW ACTIONS ACTUALLY WORK (the app does this automatically — you do NOT):
+When the user asks for an action, the app detects the intent and runs the right flow on its own, then shows a real Confirm Card at the end. Your ONLY job is a brief, natural reply. Do not simulate the flow, do not ask the field-by-field questions yourself, and do not announce a card.
+- Paperclip platform actions (create/assign/update issues, agents, audits, workspaces, routines, goals, COO-routed communications): the app runs a short guided interview, then shows the Confirm Card.
+- Personal / Google Workspace actions (create or update a Google Task, schedule a calendar event, send an email, post a Google Chat message, edit a document): the app does NOT run a heavy interview. It simply asks once whether the user wants to add any more context to define the action, then shows the Confirm Card. So for these, keep your reply to a short acknowledgment and, at most, invite them to add any extra detail — do NOT interrogate them field by field, and do NOT compose the whole thing as a spec.
+If the user says "send it", "do it", "confirmed", or "yes" and there is no card on screen, do NOT claim to execute or to show a card. Briefly restate the action in one line and let the app's flow pick it up (e.g., "Got it — sending an email to Maria about the invoice.").
 
-AUTONOMOUS STRATEGIC VALIDATION (Pre-Cog):
-You must act as a strategic validator, not just an executor. You must automatically apply rigorous edge-case checking based on the severity of the user's request:
-1. High-Stakes Actions (Client comms, Paperclip automations, billing): You MUST internally evaluate edge cases (e.g., missing data, idempotency, brand risk) during Interview Mode. Actively look for flaws or logical breaking points. Ask the user how to handle these edge cases and present any risks before generating the final spec.
-2. Low-Stakes Actions (Personal reminders, quick calendar events): Skip the rigorous red-teaming to maintain a fast, frictionless UX. Only ask for the bare minimum required fields.
-
-You detect task creation intent from phrases like: "I need to...", "Can we...", "Let's create...", "Add a task...", "We should...", "I want to..."
-
-For non-task queries (status checks, questions, summaries), respond directly and concisely.
+For non-action queries (status checks, questions, summaries, research), respond directly and concisely — no interview, no card talk.
 
 CRITICAL — NEVER FABRICATE DIAGNOSTICS OR STATUS DATA:
 You do NOT have the ability to run live infrastructure diagnostics, check auth tokens, inspect webhook handshakes, or query backend system health directly.
@@ -110,7 +99,7 @@ Guidelines:
 - Distinguish clearly between internal data and external research
 
 PAPERCLIP AI ORCHESTRATION:
-You are the master orchestrator for the Paperclip AI platform. Through Interview Mode, you can:
+You are the master orchestrator for the Paperclip AI platform. When the user asks for one of the actions below, the app runs its guided interview and Confirm Card automatically — you just reply briefly and let it take over. Available actions:
 
 **Staff Actions** (any team member):
 - Create Paperclip issues → triggers agent investigation
@@ -128,7 +117,7 @@ You are the master orchestrator for the Paperclip AI platform. Through Interview
 **Superadmin Actions** (superadmin only):
 - Delete agents permanently
 
-When a user requests any of these, activate Interview Mode to collect the details.
+When a user requests any of these, the app collects the details and shows the Confirm Card — do not collect them yourself or announce a card.
 If they lack the required role, politely tell them what permission level is needed.`
 
 /* ── EXA Search Mode system prompt ──
@@ -172,7 +161,6 @@ export interface SystemPromptContext {
   /** Detailed live Google Workspace data (task titles, event summaries, file names, chat spaces). */
   googleWorkspaceDetail?: string
   injectedContext?: string
-  interviewMode?: boolean
   activeSkill?: string
   activeSkillContent?: string
   /** EXA Search mode — hybrid semantic research (Exa web + Vertex internal);
@@ -284,37 +272,14 @@ export function buildSystemPromptParts(context: SystemPromptContext): { staticPr
     prompt += `Recent agent activity:\n${fenceUntrusted('Recent agent activity', context.agentActivity)}\n\n`
   }
 
-  /* ── Interview Mode instructions ── */
-  if (context.interviewMode) {
-    prompt += `INTERVIEW MODE IS CURRENTLY ACTIVE.
-You are walking the user through a structured question sequence to build a complete action specification.
-Rules while interview mode is active:
-- Ask ONE question at a time from the sequence.
-- After the user answers, acknowledge briefly and move to the next question.
-- If the user gives a vague answer, ask for clarification before moving on.
-- Show recommended defaults when available (e.g., "Priority? (default: medium)").
-- After all questions are answered, present a final confirmation summary.
-- If the user says "cancel" or "stop", exit interview mode immediately.
-
-Question sequences by intent:
-• create_task: What exactly? → Priority? → Deadline? → Assign to? → Confirm
-• schedule_event: What event? → When? → Who? → Where? → Duration? → Confirm
-• send_communication: To whom? → Channel? → Content? → Tone? → Confirm
-• send_gmail: To whom (email)? → Subject? → Body? → Confirm
-• post_chat_message: Which Chat space? → Message? → Confirm
-• check_agent_status: Which project? → Which agent? → Confirm
-• view_runs: Which project? → Time range? → Confirm
-• assign_issue: Which issue? → Which agent? → Confirm
-• update_issue_state: Which issue? → New state? → Confirm
-• create_agent: Which project? → Name? → Instructions? → Confirm
-• restart_agent: Which project? → Which agent? → Confirm
-• run_audit: Which project? → Scope? → Confirm
-• create_workspace: Name? → Issue Prefix? → Brand Color? → Template? → Confirm (🔒 admin+)
-• delete_workspace: Name? → Type name to confirm → Final confirm (🔴 destructive, admin+)
-• delete_agent: Project? → Agent? → Type name to confirm → Final confirm (🔴 destructive)
-
-`
-  }
+  /* ── Interview Mode ──
+     Interview Mode is driven entirely by the app (the deterministic flow in
+     useChatEngine + lib/interview.ts renders each question and the Confirm
+     Card). The model must NOT simulate it or draft specs (see the
+     HUB_SYSTEM_PROMPT action policy above), so no interview instructions are
+     injected here. The prior injected block described a multi-step,
+     model-run interview that both contradicted the app flow and taught the
+     model to fabricate specs/cards — it has been removed. */
 
   /* ── Active Skill Protocol ── */
   if (context.activeSkill && context.activeSkillContent) {
@@ -381,16 +346,24 @@ function assertApprovedGeminiModel(model: string): void {
   }
 }
 
-/* Claude rotation chain: Fable 5 primary → Sonnet 4.6 backup. When Fable 5 is
+/* EXA research chain: Fable 5 primary → Sonnet 4.6 backup. When Fable 5 is
    unavailable it falls through to Sonnet 4.6; once Fable 5's cooldown expires it
-   is tried first again. Both run through lib/claude.ts on the same API key. */
+   is tried first again. Both run through lib/claude.ts on the same API key.
+   Walked ONLY on the exa_search path (see shouldUseClaude). */
 const CLAUDE_MODEL_CHAIN = ['claude-fable-5', 'claude-sonnet-4-6'] as const
+
+/* Non-EXA emergency cross-provider fallback chain: the latest Claude Haiku,
+   engaged ONLY when the whole Gemini chain fails pre-stream on a non-EXA turn.
+   Deliberately Haiku (not Fable 5/Sonnet) so a Gemini outage degrades to a fast,
+   inexpensive Claude — and Fable 5 never runs outside EXA mode. */
+const CLAUDE_FALLBACK_CHAIN = ['claude-haiku-4-5-20251001'] as const
 
 /** Human-friendly model display names for the UI badge */
 function getModelDisplayName(model: string): string {
   switch (model) {
     case 'claude-fable-5': return 'Claude Fable 5'
     case 'claude-sonnet-4-6': return 'Claude Sonnet 4.6'
+    case 'claude-haiku-4-5-20251001': return 'Claude Haiku 4.5'
     case 'gemini-3.5-flash': return 'Gemini 3.5 Flash'
     case 'gemini-2.5-flash': return 'Gemini 2.5 Flash'
     case 'gemini-2.5-pro': return 'Gemini 2.5 Pro'
@@ -399,28 +372,29 @@ function getModelDisplayName(model: string): string {
 }
 
 /**
- * UseCase-based routing: decides whether to try Claude first.
+ * UseCase-based routing: decides whether to try Claude (Fable 5) first.
  *
- * Model priority by use case (operator decision: Gemini 3.5 Flash carries all
- * basic functionality and tool/action requests; the Claude chain — Fable 5 →
- * Sonnet 4.6 — is reserved for the heavyweight research/skill paths, and
- * remains the cross-provider fallback when the Gemini chain is down):
- *   exa_search (EXA toggle) → Claude Fable 5 → Claude Sonnet 4.6 → Gemini chain
- *   deep_dive (with skill active) → Claude Fable 5 → Claude Sonnet 4.6 → Gemini chain
+ * Operator decision: Gemini 3.5 Flash carries ALL non-EXA functionality
+ * (basic chat, tool/action requests, AND skill-active deep dives). Claude
+ * Fable 5 is reserved EXCLUSIVELY for EXA semantic-search mode — the header
+ * EXA toggle. When the Gemini chain is down on a non-EXA turn, the emergency
+ * cross-provider fallback engages the latest Claude Haiku (CLAUDE_FALLBACK_CHAIN),
+ * NOT Fable 5.
+ *   exa_search (EXA toggle)  → Claude Fable 5 → Claude Sonnet 4.6 → Gemini chain
+ *   everything else          → Gemini chain (3.5 Flash → 2.5 Flash → 2.5 Pro),
+ *                              with Claude Haiku as the emergency fallback only.
  *
- *   recall     → Gemini chain (3.5 Flash → 2.5 Flash → 2.5 Pro)
- *   deep_dive (no skill) → Gemini chain (3.5 Flash → 2.5 Flash → 2.5 Pro)
- *   interview  → Gemini chain (tool/action requests are basic functionality)
- *   execute (Pre-Cog quality gate) → Gemini chain
+ * NOTE: `deep_dive` with an active skill USED to route to Fable 5. It no longer
+ * does — a skill being active is not EXA mode, and Fable 5 must not run outside
+ * EXA (the "Fable 5 running when not in EXA" report). Skills run on Gemini 3.5
+ * Flash like every other non-EXA turn.
  *
  * exa_search is a server-side-only useCase (the client never sends it): the
  * chat route sets it for EXA Search mode so research synthesis + citation gets
- * the strongest model, not the fast default that plain deep_dive falls to.
+ * the strongest model.
  */
-function shouldUseClaude(useCase: string, hasActiveSkill: boolean): boolean {
-  if (useCase === 'exa_search') return true
-  if (useCase === 'deep_dive' && hasActiveSkill) return true
-  return false
+function shouldUseClaude(useCase: string, _hasActiveSkill: boolean): boolean {
+  return useCase === 'exa_search'
 }
 
 /* ── Error classification for rotation decisions ──
@@ -665,17 +639,20 @@ async function* walkClaudeChain(
   obs: ObsCtx,
   signal?: AbortSignal,
   claudeOpts: { effort?: import('@/lib/claude').ClaudeEffort; maxTokens?: number } = {},
+  chain: readonly string[] = CLAUDE_MODEL_CHAIN,
 ): AsyncGenerator<string | { modelUsed: string }, 'served' | 'fallthrough'> {
   const { streamClaudeChat } = await import('@/lib/claude')
 
-  // Walk the Claude chain (Fable 5 → Sonnet 4.6) before handing off to Gemini.
-  for (let i = 0; i < CLAUDE_MODEL_CHAIN.length; i++) {
+  // Walk the given Claude chain before handing off to Gemini. The EXA path
+  // passes CLAUDE_MODEL_CHAIN (Fable 5 → Sonnet 4.6); the non-EXA emergency
+  // fallback passes CLAUDE_FALLBACK_CHAIN (Haiku).
+  for (let i = 0; i < chain.length; i++) {
     // Cooperative cancellation (FIX4): the client aborted (CLIENT_ABORT_MS) —
     // stop before starting another attempt so we don't burn model compute on a
     // request nobody is listening to. Return 'served' (terminal) so the caller
     // does NOT fall through to Gemini; streamChatRotation re-checks the signal.
     if (signal?.aborted) return 'served'
-    const claudeModel = CLAUDE_MODEL_CHAIN[i]
+    const claudeModel = chain[i]
     if (isModelInCooldown(claudeModel)) continue
 
     let claudeEmitted = false
@@ -711,7 +688,7 @@ async function* walkClaudeChain(
       // and rendered an empty bubble with no error. Rotate instead.
       if (!claudeEmitted) {
         recordModelFailure(claudeModel, false, false)
-        emit({ type: 'ai_fallback', requestId: obs.requestId, from: claudeModel, to: CLAUDE_MODEL_CHAIN[i + 1] ?? GEMINI_MODEL_CHAIN[0], reason: 'error' })
+        emit({ type: 'ai_fallback', requestId: obs.requestId, from: claudeModel, to: chain[i + 1] ?? GEMINI_MODEL_CHAIN[0], reason: 'error' })
         console.warn(`[streamChat] Claude ${claudeModel} completed with ZERO visible text — treating as failure, rotating`)
         continue
       }
@@ -741,7 +718,7 @@ async function* walkClaudeChain(
       }
 
       // Otherwise try the next Claude model (backup), then Gemini.
-      const claudeFallbackTo = CLAUDE_MODEL_CHAIN[i + 1] ?? GEMINI_MODEL_CHAIN[0]
+      const claudeFallbackTo = chain[i + 1] ?? GEMINI_MODEL_CHAIN[0]
       emit({ type: 'ai_fallback', requestId: obs.requestId, from: claudeModel, to: claudeFallbackTo, reason: isRateLimit ? 'rate_limit' : 'error' })
       console.warn(`[streamChat] Claude ${claudeModel} failed pre-stream (${isRateLimit ? 'rate_limit' : 'error'}), trying next model:`, err)
     }
@@ -829,10 +806,10 @@ async function* streamChatRotation(
       // connect race; when the chain dies before any connect it is still
       // unset (Claude was not walked on this path), so name the chain head.
       from: obs.model ?? GEMINI_MODEL_CHAIN[0],
-      to: CLAUDE_MODEL_CHAIN[0],
+      to: CLAUDE_FALLBACK_CHAIN[0],
       reason: isAuthOrKeyError(err) ? 'auth' : 'error',
     })
-    console.warn('[streamChat] Gemini chain failed pre-stream — attempting Claude chain as emergency cross-provider fallback:', err)
+    console.warn('[streamChat] Gemini chain failed pre-stream — attempting Claude Haiku as emergency cross-provider fallback:', err)
 
     // Walk the Claude chain, injecting the degraded-mode notice (same style as
     // the intra-Gemini i>0 banner) before the FIRST text chunk only — i.e.
@@ -841,8 +818,9 @@ async function* streamChatRotation(
     // untouched, so the original error can still surface cleanly below.
     let claudeServed = false
     let noticeYielded = false
-    let modelDisplay = getModelDisplayName(CLAUDE_MODEL_CHAIN[0])
-    const walk = walkClaudeChain(messages, systemPrompt, obs, signal, claudeOpts)
+    let modelDisplay = getModelDisplayName(CLAUDE_FALLBACK_CHAIN[0])
+    // Non-EXA emergency fallback walks the Haiku chain (never Fable 5).
+    const walk = walkClaudeChain(messages, systemPrompt, obs, signal, claudeOpts, CLAUDE_FALLBACK_CHAIN)
     try {
       while (true) {
         const step = await walk.next()

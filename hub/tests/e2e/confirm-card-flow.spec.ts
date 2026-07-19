@@ -90,9 +90,11 @@ async function sendChat(page: Page, text: string) {
 async function runCreateTaskFlow(page: Page) {
   await sendChat(page, 'add a task to follow up with the vendor')
 
-  // Interview Mode activates parked on the confirm question.
-  await expect(page.getByText('Interview Mode Activated')).toBeVisible({ timeout: 15_000 })
+  // create_task is a personal action → the lightweight single "add any more
+  // context?" question (no multi-step Interview Mode ceremony).
+  await expect(page.getByText('add any more context to define this task')).toBeVisible({ timeout: 15_000 })
 
+  // Answer the single context question (a "go ahead"-style skip proceeds).
   await sendChat(page, 'yes')
 
   // Quality gate passes → scaffold + ActionConfirmCard.

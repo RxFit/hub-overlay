@@ -237,43 +237,58 @@ export async function detectIntent(message: string): Promise<{ intent: Interview
 /* ── Question Sequences ── */
 
 const INTERVIEW_SEQUENCES: Record<InterviewIntent, InterviewStep[]> = {
+  // ── Personal / Google Workspace actions ──
+  // These write only to the user's own Google account (Tasks, Calendar, Gmail,
+  // Chat) and are NOT Paperclip-platform actions, so they skip the multi-step
+  // interview entirely (operator decision: interview mode is overkill for a task
+  // or an email). The app extracts the action fields from the request, asks a
+  // SINGLE optional "add any more context?" question, then shows the Confirm
+  // Card. If a required field is missing, the context-sufficiency gate asks one
+  // targeted follow-up. `additionalContext` is folded into the action's content
+  // at execution time (see lib/actions/executeAction.ts).
   create_task: [
     {
-      question: 'What exactly needs to be done? Provide the task description and any necessary context.',
-      key: 'description',
-    },
-    {
-      question: 'I\'ll create this task with the context provided. Confirm? (yes / edit / cancel)',
-      key: '_confirm',
+      question: 'Want to add any more context to define this task (priority, deadline, who it\'s for)? Reply with details, or say "go ahead" to continue.',
+      key: 'additionalContext',
+      defaultValue: 'go ahead',
     },
   ],
 
   update_task: [
     {
-      question: 'Which task should I change? (its title or part of it)',
-      key: 'taskRef',
-    },
-    {
-      question: 'What should change? (mark done / reopen / delete, a new title, or a new due date)',
-      key: 'change',
-    },
-    {
-      question: 'I\'ll apply this change to your Google Task. Confirm? (yes / edit / cancel)',
-      key: '_confirm',
+      question: 'Want to add any more context for this change (which task, or what exactly should change)? Reply with details, or say "go ahead" to continue.',
+      key: 'additionalContext',
+      defaultValue: 'go ahead',
     },
   ],
 
   schedule_event: [
     {
-      question: 'What is this event about? Please provide the title, attendees, date/time, and any context.',
-      key: 'details',
-    },
-    {
-      question: 'I\'ll schedule this event with the details above. Confirm? (yes / edit / cancel)',
-      key: '_confirm',
+      question: 'Want to add any more context for this event (attendees, location, duration)? Reply with details, or say "go ahead" to continue.',
+      key: 'additionalContext',
+      defaultValue: 'go ahead',
     },
   ],
 
+  send_gmail: [
+    {
+      question: 'Want to add any more context for this email (recipient, subject, or what to say)? Reply with details, or say "go ahead" to continue.',
+      key: 'additionalContext',
+      defaultValue: 'go ahead',
+    },
+  ],
+
+  post_chat_message: [
+    {
+      question: 'Want to add any more context for this message (which space, or what to say)? Reply with details, or say "go ahead" to continue.',
+      key: 'additionalContext',
+      defaultValue: 'go ahead',
+    },
+  ],
+
+  // Google Docs/Sheets authoring keeps a short guided flow: unlike a one-line
+  // task or email, a document needs a title AND its content, so it collects
+  // those two fields rather than a single "add context?" question.
   create_google_doc: [
     {
       question: 'What should the document be titled?',
@@ -306,6 +321,8 @@ const INTERVIEW_SEQUENCES: Record<InterviewIntent, InterviewStep[]> = {
     },
   ],
 
+  // send_communication stays a guided interview: it is delegated to the COO
+  // Agent (a Paperclip-platform action), not a direct personal send.
   send_communication: [
     {
       question: 'Who should receive this and what should the message say? Provide the recipient, channel (email/slack/etc.), and the content.',
@@ -313,41 +330,6 @@ const INTERVIEW_SEQUENCES: Record<InterviewIntent, InterviewStep[]> = {
     },
     {
       question: 'I\'ll brief the COO Agent to send this communication. Confirm? (yes / edit / cancel)',
-      key: '_confirm',
-    },
-  ],
-
-  send_gmail: [
-    {
-      question: 'Who should receive this email? (email address)',
-      key: 'to',
-    },
-    {
-      question: 'What should the subject line be?',
-      key: 'subject',
-      defaultValue: '(no subject)',
-    },
-    {
-      question: 'What should the email say?',
-      key: 'body',
-    },
-    {
-      question: 'I\'ll send this email from your Gmail account. Confirm? (yes / edit / cancel)',
-      key: '_confirm',
-    },
-  ],
-
-  post_chat_message: [
-    {
-      question: 'Which Google Chat space should this be posted in?',
-      key: 'space',
-    },
-    {
-      question: 'What should the message say?',
-      key: 'message',
-    },
-    {
-      question: 'I\'ll post this message to Google Chat. Confirm? (yes / edit / cancel)',
       key: '_confirm',
     },
   ],
@@ -735,10 +717,14 @@ export function advanceInterview(
   // the answer was silently discarded and the interview dead-ended — no next
   // question, no confirm card, no chat send.
   if (state.step >= steps.length) {
+    // Drop a skip-phrase prior value ("go ahead" / "yes") so it never prefixes
+    // the real follow-up context the gate asked for. Real prior context is kept
+    // and accumulated across repeated blocks.
     const priorExtra = state.context.additionalContext
+    const priorClean = priorExtra && !isSkipContextAnswer(priorExtra) ? priorExtra : ''
     const mergedContext = {
       ...state.context,
-      additionalContext: [priorExtra, answer].filter(Boolean).join('\n'),
+      additionalContext: [priorClean, answer].filter(Boolean).join('\n'),
     }
     return {
       ...state,
@@ -845,12 +831,15 @@ export function buildConfirmationSpec(
   intent: InterviewIntent,
   context: Record<string, string>
 ): ActionSpec {
-  // Filter out the _confirm key and empty values
+  // Filter out the _confirm key and empty values. A "just proceed" answer to the
+  // lightweight-flow context question (additionalContext) carries no real
+  // information, so drop it too — otherwise the Confirm Card would show
+  // "Additional Context: go ahead". Real added context is preserved.
   const details: Record<string, string> = {}
   for (const [key, value] of Object.entries(context)) {
-    if (key !== '_confirm' && value) {
-      details[key] = value
-    }
+    if (key === '_confirm' || !value) continue
+    if (key === 'additionalContext' && isSkipContextAnswer(value)) continue
+    details[key] = value
   }
 
   // Build a human-readable summary
@@ -887,6 +876,58 @@ export function isDestructiveIntent(intent: InterviewIntent): boolean {
  */
 export function isReadOnlyIntent(intent: InterviewIntent): boolean {
   return intent === 'check_agent_status' || intent === 'view_runs' || intent === 'run_audit'
+}
+
+/**
+ * Personal / Google Workspace actions — they write only to the user's own
+ * Google account (Tasks, Calendar, Gmail, Chat) and are NOT Paperclip-platform
+ * actions. These use the lightweight single-question flow (one optional
+ * "add any more context?" step) instead of the multi-step interview, and skip
+ * the Pre-Cog CEO-handoff evaluation. Everything else is a Paperclip action.
+ */
+const PERSONAL_ACTION_INTENTS: ReadonlySet<InterviewIntent> = new Set([
+  'create_task',
+  'update_task',
+  'schedule_event',
+  'send_gmail',
+  'post_chat_message',
+])
+
+/**
+ * True for personal / Google Workspace actions that use the lightweight flow.
+ */
+export function isPersonalActionIntent(intent: InterviewIntent): boolean {
+  return PERSONAL_ACTION_INTENTS.has(intent)
+}
+
+/**
+ * True for Paperclip-platform actions — everything that is NOT a personal
+ * Google Workspace action. These keep the full guided interview + Pre-Cog gate.
+ */
+export function isPaperclipIntent(intent: InterviewIntent): boolean {
+  return !PERSONAL_ACTION_INTENTS.has(intent)
+}
+
+/**
+ * "No, just proceed" answers to the single lightweight-flow context question.
+ * When the user replies with one of these, `additionalContext` carries no real
+ * information and is dropped from the action spec (see buildConfirmationSpec) so
+ * it never pollutes the Confirm Card or the executed action.
+ */
+const CONTEXT_SKIP_PHRASES: ReadonlySet<string> = new Set([
+  'go ahead', 'go', 'proceed', 'continue', 'send', 'send it', 'do it', 'ready',
+  'no', 'nope', 'no thanks', 'no thank you', 'nothing', 'none', 'n/a', 'na',
+  'skip', 'that\'s all', 'thats all', 'all good', 'looks good', 'good',
+  'yes', 'yep', 'yeah', 'ok', 'okay', 'sure', 'that is all', 'all set',
+])
+
+/**
+ * Is a lightweight-flow context answer a "just proceed" skip (no real content)?
+ * Normalizes case + trailing punctuation before matching the skip set.
+ */
+export function isSkipContextAnswer(answer: string): boolean {
+  const norm = answer.trim().toLowerCase().replace(/[.!,\s]+$/g, '')
+  return norm === '' || CONTEXT_SKIP_PHRASES.has(norm)
 }
 
 /**

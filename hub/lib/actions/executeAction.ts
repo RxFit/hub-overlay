@@ -109,6 +109,19 @@ function isOpenIssue(issue: { status?: string; state?: { group?: string } }): bo
 }
 
 /**
+ * Personal-action lightweight flow: the single "additionalContext" answer —
+ * when the user actually added detail rather than a "go ahead" skip (skip
+ * phrases are already stripped in buildConfirmationSpec, so anything present
+ * here is real) — enriches the action's main content. Appends it after the base
+ * content, or uses it alone when the base is empty.
+ */
+function withExtraContext(base: string, extra?: string): string {
+  const add = (extra ?? '').trim()
+  if (!add) return base
+  return base ? `${base}\n\n${add}` : add
+}
+
+/**
  * Executes an approved action from Interview Mode.
  * Returns the result message to display in the chat.
  */
@@ -128,11 +141,19 @@ export async function executeAction(
       if (!taskListId) throw new Error('No task lists found')
 
       // Interview collects: description, priority, deadline, assignee
-      const taskTitle = spec.details.description || spec.details.title || spec.summary
-      const taskNotes = [
-        spec.details.priority ? `Priority: ${spec.details.priority}` : '',
-        spec.details.assignee ? `Assigned to: ${spec.details.assignee}` : '',
-      ].filter(Boolean).join('\n')
+      // Prefer the extracted description/title. When neither was captured (the
+      // user gave the task only via the single "add context?" answer), promote
+      // additionalContext to the title instead of falling back to the raw
+      // summary string — and then don't also duplicate it into the notes.
+      const taskPrimary = spec.details.description || spec.details.title
+      const taskTitle = taskPrimary || spec.details.additionalContext || spec.summary
+      const taskNotes = withExtraContext(
+        [
+          spec.details.priority ? `Priority: ${spec.details.priority}` : '',
+          spec.details.assignee ? `Assigned to: ${spec.details.assignee}` : '',
+        ].filter(Boolean).join('\n'),
+        taskPrimary ? spec.details.additionalContext : undefined,
+      )
 
       const res = await fetch('/api/google/tasks', {
         method: 'POST',
@@ -276,10 +297,13 @@ export async function executeAction(
       const endISO = endDate.toISOString()
 
       const eventTitle = spec.details.title || spec.summary
-      const eventDesc = [
-        spec.details.location ? `Location: ${spec.details.location}` : '',
-        spec.details.notes || '',
-      ].filter(Boolean).join('\n')
+      const eventDesc = withExtraContext(
+        [
+          spec.details.location ? `Location: ${spec.details.location}` : '',
+          spec.details.notes || '',
+        ].filter(Boolean).join('\n'),
+        spec.details.additionalContext,
+      )
 
       const attendeeList = spec.details.attendees
         ? spec.details.attendees.split(',').map((e: string) => e.trim()).filter(Boolean)
@@ -403,7 +427,10 @@ export async function executeAction(
       // fail for want of an email; an address passes through unchanged.
       const to = await resolveRecipientEmail(spec.details.to || '')
       const subject = spec.details.subject || '(no subject)'
-      const body = spec.details.body || spec.details.details || spec.summary
+      const body = withExtraContext(
+        spec.details.body || spec.details.details || '',
+        spec.details.additionalContext,
+      ) || spec.summary
 
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
         throw new Error(`I couldn't resolve "${spec.details.to}" to an email address. Edit the action and give me the address directly.`)
@@ -451,7 +478,10 @@ export async function executeAction(
       const msgRes = await fetch('/api/google/chat/messages', {
         method: 'POST',
         headers: chatHeaders,
-        body: JSON.stringify({ spaceId: space.name, text: spec.details.message }),
+        body: JSON.stringify({
+          spaceId: space.name,
+          text: withExtraContext(spec.details.message || '', spec.details.additionalContext),
+        }),
       })
       if (!msgRes.ok) throw new Error(`Chat message failed: ${msgRes.status}`)
       resultMsg = `💬 **Posted to ${space.displayName}**.`

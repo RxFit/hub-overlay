@@ -44,6 +44,8 @@ vi.mock('@google/generative-ai', () => ({
 vi.mock('@/lib/claude', () => ({
   CLAUDE_PRIMARY_MODEL: 'claude-fable-5',
   CLAUDE_BACKUP_MODEL: 'claude-sonnet-4-6',
+  // Non-EXA classifier fallback is Haiku (Fable 5 is EXA-only).
+  CLAUDE_FALLBACK_MODEL: 'claude-haiku-4-5-20251001',
   isClaudeConfigured: () => claudeState.configured,
   claudeChat: async (_msgs: unknown, _system: string, opts: { model: string }) => {
     claudeState.calls.push(opts.model)
@@ -91,30 +93,31 @@ describe('detect-intent provider fallback', () => {
     expect(claudeState.calls).toEqual([])
   })
 
-  it('falls back to the Claude chain when Gemini throws — the Confirm Card path survives a Gemini outage', async () => {
+  it('falls back to Claude Haiku when Gemini throws — the Confirm Card path survives a Gemini outage', async () => {
     geminiState.mode = 'throw'
-    claudeState.responses['claude-fable-5'] =
+    claudeState.responses['claude-haiku-4-5-20251001'] =
       '{"intent":"post_chat_message","extractedEntities":{"space":"RxGrowth Engine","message":"Domain migration items"}}'
     const res = await POST(req({ message: 'send the migration items to RxGrowth Engine', availableIntents: AVAILABLE }))
     const body = await res.json()
     expect(body.intent).toBe('post_chat_message')
     expect(body.extractedEntities.space).toBe('RxGrowth Engine')
-    expect(claudeState.calls).toEqual(['claude-fable-5'])
+    expect(claudeState.calls).toEqual(['claude-haiku-4-5-20251001'])
   })
 
-  it('walks to the Claude backup model when the primary also fails (matches the chat rotation)', async () => {
+  it('uses Haiku ONLY for the Claude fallback — never Fable 5 or Sonnet (Fable 5 is EXA-only)', async () => {
     geminiState.mode = 'throw'
-    claudeState.responses['claude-fable-5'] = 'throw'
-    claudeState.responses['claude-sonnet-4-6'] = '{"intent":"create_task","extractedEntities":{}}'
+    claudeState.responses['claude-haiku-4-5-20251001'] = '{"intent":"create_task","extractedEntities":{}}'
     const res = await POST(req({ message: 'create a task', availableIntents: AVAILABLE }))
     const body = await res.json()
     expect(body.intent).toBe('create_task')
-    expect(claudeState.calls).toEqual(['claude-fable-5', 'claude-sonnet-4-6'])
+    expect(claudeState.calls).toEqual(['claude-haiku-4-5-20251001'])
+    expect(claudeState.calls).not.toContain('claude-fable-5')
+    expect(claudeState.calls).not.toContain('claude-sonnet-4-6')
   })
 
   it('tolerates markdown fencing around the Claude JSON', async () => {
     geminiState.mode = 'throw'
-    claudeState.responses['claude-fable-5'] = '```json\n{"intent":"create_task","extractedEntities":{}}\n```'
+    claudeState.responses['claude-haiku-4-5-20251001'] = '```json\n{"intent":"create_task","extractedEntities":{}}\n```'
     const res = await POST(req({ message: 'create a task', availableIntents: AVAILABLE }))
     const body = await res.json()
     expect(body.intent).toBe('create_task')
@@ -122,8 +125,7 @@ describe('detect-intent provider fallback', () => {
 
   it('returns intent:null when every provider fails (prior behavior preserved)', async () => {
     geminiState.mode = 'throw'
-    claudeState.responses['claude-fable-5'] = 'throw'
-    claudeState.responses['claude-sonnet-4-6'] = 'throw'
+    claudeState.responses['claude-haiku-4-5-20251001'] = 'throw'
     const res = await POST(req({ message: 'send a chat message', availableIntents: AVAILABLE }))
     expect(await res.json()).toEqual({ intent: null, extractedEntities: {} })
   })

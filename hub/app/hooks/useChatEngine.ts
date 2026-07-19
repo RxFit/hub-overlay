@@ -13,6 +13,8 @@ import {
   hasPermission,
   getRequiredPermission,
   isHighStakesIntent,
+  isPaperclipIntent,
+  formatIntentLabel,
 } from '@/lib/interview'
 import { INTERVIEW_SCAFFOLD_KIND, isInterviewScaffold, type ChatMsgKind } from '@/lib/interview-scaffold'
 import { deriveSolutionSuggestion, type SolutionSuggestion } from '@/lib/solution-suggest'
@@ -483,11 +485,17 @@ export function useChatEngine(options: UseChatEngineOptions) {
             if (newState.active) {
               const question = getCurrentQuestion(newState)
               if (question) {
-                const totalQ = getTotalQuestions(intent)
+                // Paperclip-platform actions get the guided multi-question
+                // interview; personal / Google Workspace actions (task, event,
+                // email, chat) get a single lightweight "add any more context?"
+                // question — no interview ceremony (operator requirement).
+                const introContent = isPaperclipIntent(intent)
+                  ? `✦ **Interview Mode Activated**\n\nI need to understand this fully before we proceed. I'll ask you ${getTotalQuestions(intent)} quick questions.\n\n**Question 1 of ${getTotalQuestions(intent)}:**\n${question.question}${question.defaultValue ? `\n\n_Default: ${question.defaultValue}_` : ''}`
+                  : `✦ **${formatIntentLabel(intent)}**\n\n${question.question}`
                 const introMsg: ChatMsg = {
                   id: crypto.randomUUID(),
                   role: 'assistant' as const,
-                  content: `✦ **Interview Mode Activated**\n\nI need to understand this fully before we proceed. I'll ask you ${totalQ} quick questions.\n\n**Question 1 of ${totalQ}:**\n${question.question}${question.defaultValue ? `\n\n_Default: ${question.defaultValue}_` : ''}`,
+                  content: introContent,
                   timestamp: new Date().toISOString(),
                 }
                 setMessages(prevMsgs => [...prevMsgs, introMsg])
@@ -634,7 +642,13 @@ I need more detail before this can execute safely. The weakest area is **${(fina
             }
 
             // ── PASSED — proceed with existing quality gate logic ──
-            if (isHighStakesIntent(spec.intent)) {
+            // Pre-Cog CEO-handoff validation runs ONLY for Paperclip-platform
+            // high-stakes intents. Personal high-stakes actions (send_gmail,
+            // post_chat_message) already cleared the context-sufficiency gate
+            // above (which minted the gate token); running the "CEO handoff"
+            // eval on a personal email is overkill and off-message, so they go
+            // straight to the Confirm Card via the non-CEO-routed branch below.
+            if (isHighStakesIntent(spec.intent) && isPaperclipIntent(spec.intent)) {
               // High-Stakes Pre-Cog Validation: AI verifies edge cases before generating Confirm Card
               const specSummary = Object.entries(spec.details)
                 .map(([k, v]) => `${k}: ${v}`)

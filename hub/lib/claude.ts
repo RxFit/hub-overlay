@@ -16,9 +16,19 @@ const ANTHROPIC_VERSION = '2023-06-01'
 
 /* Model rotation: Fable 5 is primary; Sonnet 4.6 is the backup it falls back to
    (e.g. while Fable 5 is unavailable). When Fable 5 recovers, the cooldown in
-   the rotation layer (lib/gemini.ts) expires and it is tried first again. */
+   the rotation layer (lib/gemini.ts) expires and it is tried first again.
+   These two are reserved for EXA semantic-search research synthesis ONLY — the
+   one place Fable 5 is allowed to run (operator decision). */
 export const CLAUDE_PRIMARY_MODEL = 'claude-fable-5'
 export const CLAUDE_BACKUP_MODEL = 'claude-sonnet-4-6'
+
+/* Non-EXA Claude fallback: the latest Claude Haiku. Every non-EXA path (default
+   chat's emergency cross-provider fallback when the Gemini chain is down, plus
+   the intent-classifier and context-scorer Claude fallbacks) uses Haiku, NOT
+   Fable 5 — Fable 5 stays exclusive to EXA mode. Haiku accepts sampling params
+   (see modelSupportsSamplingParams), so it takes `temperature` and no thinking
+   config, exactly like Sonnet 4.6. */
+export const CLAUDE_FALLBACK_MODEL = 'claude-haiku-4-5-20251001'
 
 /* Claude Fable 5 / Mythos, Opus 4.7+, and Sonnet 5 REJECT sampling parameters
  * (`temperature`/`top_p`/`top_k` → 400 invalid_request_error). Sending
@@ -104,7 +114,10 @@ export async function claudeChat(
   systemPrompt: string,
   options: { model?: string; maxTokens?: number; temperature?: number } = {}
 ): Promise<string> {
-  const { model = CLAUDE_PRIMARY_MODEL, maxTokens = 2048, temperature = 0.3 } = options
+  // Default to Haiku, NOT Fable 5: Fable 5 is EXA-only and must be reached only
+  // via an explicit model (the EXA chain passes one). A caller that forgets the
+  // model gets the safe non-EXA fallback instead of silently running Fable 5.
+  const { model = CLAUDE_FALLBACK_MODEL, maxTokens = 2048, temperature = 0.3 } = options
   const apiKey = getApiKey()
 
   // Per-request ceiling — shared with the Gemini connect race via timeout-config
@@ -185,7 +198,9 @@ export async function* streamClaudeChat(
   // reasoning tokens INSIDE max_tokens — a hard prompt could burn the whole
   // 4096 budget thinking and finish with ZERO visible text (the "silent empty
   // answer" bug: clean stream, no error, empty chat bubble).
-  const { model = CLAUDE_PRIMARY_MODEL, maxTokens = 16384, temperature = 0.7, effort } = options
+  // Default to Haiku, NOT Fable 5 (see claudeChat): Fable 5 is EXA-only and is
+  // reached only via an explicit model on the EXA chain (walkClaudeChain).
+  const { model = CLAUDE_FALLBACK_MODEL, maxTokens = 16384, temperature = 0.7, effort } = options
   const apiKey = getApiKey()
 
   // CONNECT-ONLY ceiling (see lib/timeout-config.ts): this timer guards opening
