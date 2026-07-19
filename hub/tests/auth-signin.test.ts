@@ -33,7 +33,7 @@ type SignIn = (p: { user: { email?: string | null } | null }) => Promise<boolean
 
 async function loadSignIn(env: Record<string, string | undefined>): Promise<SignIn> {
   vi.resetModules()
-  for (const key of ['SUPERADMIN_EMAILS', 'ADMIN_EMAILS', 'ALLOWED_EMAIL_DOMAINS']) {
+  for (const key of ['SUPERADMIN_EMAILS', 'ADMIN_EMAILS', 'ALLOWED_EMAIL_DOMAINS', 'ALLOWED_EMAIL_ADDRESSES']) {
     delete process.env[key]
   }
   for (const [k, v] of Object.entries(env)) {
@@ -93,6 +93,21 @@ describe('auth signIn — ALLOW matrix (no legitimate user is locked out)', () =
     })
     expect(await signIn({ user: { email: 'x@partner.io' } })).toBe(true)
     expect(await signIn({ user: { email: 'y@rxfit.co' } })).toBe(true)
+  })
+
+  it('allows an individually-invited guest on a consumer domain (ALLOWED_EMAIL_ADDRESSES)', async () => {
+    // The caroljean37 case: a gmail.com guest with only an onboarding DB row —
+    // (b) and (c) both fail, so the explicit per-address invite must admit her.
+    state.roles['caroljean37@gmail.com'] = { role: 'onboarding', assignedProjects: [] }
+    const signIn = await loadSignIn({
+      SUPERADMIN_EMAILS: 'danny@rxfitatx.com',
+      ALLOWED_EMAIL_ADDRESSES: 'caroljean37@gmail.com',
+    })
+    expect(await signIn({ user: { email: 'caroljean37@gmail.com' } })).toBe(true)
+    // Case-insensitive, like the admin lists.
+    expect(await signIn({ user: { email: 'CarolJean37@Gmail.com' } })).toBe(true)
+    // The invite is for HER address only — the rest of gmail.com stays denied.
+    expect(await signIn({ user: { email: 'other@gmail.com' } })).toBe(false)
   })
 })
 

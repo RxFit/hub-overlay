@@ -100,6 +100,8 @@ jobs:
           ENV_VARS="$ENV_VARS,NODE_ENV=production"
           ENV_VARS="$ENV_VARS,PAPERCLIP_BASE_URL=https://rxfit-paperclip-11747747730.us-central1.run.app"
           ENV_VARS="$ENV_VARS,SUPERADMIN_EMAILS=danny@rxfitatx.com"
+          # Individually-invited guests on consumer domains (see lib/auth.ts).
+          ENV_VARS="$ENV_VARS,ALLOWED_EMAIL_ADDRESSES=caroljean37@gmail.com"
           ENV_VARS="$ENV_VARS,VERTEX_ENGINE_ID=semanticbrain_1779229063037"
           ENV_VARS="$ENV_VARS,VERTEX_GCP_PROJECT=semantic-brain-desktop"
 
