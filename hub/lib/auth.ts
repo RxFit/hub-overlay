@@ -39,6 +39,16 @@ const ALLOWED_EMAIL_DOMAINS: string[] = (() => {
   return explicit.length > 0 ? explicit : CONFIGURED_ADMIN_DOMAINS
 })()
 
+/**
+ * Individually-invited external accounts (comma-separated env var). For guests
+ * on consumer domains (e.g. a family member's gmail.com) where allowlisting
+ * the whole domain would open the gate to every Google account. These users
+ * sign in without needing a pre-assigned DB role; role resolution still runs
+ * normally afterwards.
+ */
+const ALLOWED_EMAIL_ADDRESSES = (process.env.ALLOWED_EMAIL_ADDRESSES || '')
+  .split(',').map(e => e.trim().toLowerCase()).filter(Boolean)
+
 /* ── Google Workspace OAuth scopes ── */
 const GOOGLE_SCOPES = [
   'openid',
@@ -194,6 +204,10 @@ export const authOptions: NextAuthOptions = {
 
       // (a) env-configured superadmin/admin always allowed.
       if (SUPERADMIN_EMAILS.includes(email) || ADMIN_EMAILS.includes(email)) return true
+
+      // (a2) individually-invited external account (ALLOWED_EMAIL_ADDRESSES) —
+      // guests on consumer domains where a domain allowlist would be too broad.
+      if (ALLOWED_EMAIL_ADDRESSES.includes(email)) return true
 
       // (c) allowed sign-in domain (default: the configured admins' domains).
       const domain = emailDomain(email)
