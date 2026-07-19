@@ -1,0 +1,55 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { createLogger } from '@/lib/logger'
+import { getProjects } from '@/lib/paperclip'
+
+const log = createLogger('paperclip/projects')
+
+export const runtime = 'nodejs'
+
+/**
+ * GET /api/paperclip/projects?companyId=<id>
+ *
+ * Normalized project list for the right panel's Spaces tab. Workspace
+ * sub-resources and runtime-service mutations go through the [...path]
+ * proxy (admin-gated, ownership pre-checked). Access scoping matches the
+ * other dedicated read routes.
+ */
+export async function GET(req: NextRequest) {
+  const session = await getServerSession(authOptions)
+  if (!session?.user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const companyId = req.nextUrl.searchParams.get('companyId')
+  if (!companyId) {
+    return NextResponse.json({ error: 'companyId is required' }, { status: 400 })
+  }
+
+  const user = session.user as Record<string, unknown>
+  const role = user.role as string
+  const assignedProjects = (user.assignedProjects as string[]) ?? []
+  if (
+    role !== 'superadmin' &&
+    !assignedProjects.includes('*') &&
+    !assignedProjects.includes(companyId)
+  ) {
+    return NextResponse.json(
+      { error: 'Access denied: not assigned to this project' },
+      { status: 403 }
+    )
+  }
+
+  try {
+    const projects = await getProjects(companyId)
+    return NextResponse.json(
+      { projects },
+      { headers: { 'Cache-Control': 'private, max-age=30' } }
+    )
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Failed to load projects'
+    log.error({ err: error, companyId }, 'Project list fetch failed')
+    return NextResponse.json({ error: message }, { status: 500 })
+  }
+}

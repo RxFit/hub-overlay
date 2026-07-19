@@ -5,11 +5,12 @@ import { useSession, signIn } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { TasksSection, CalendarSection, DocumentsSection, KPISection, ProjectHealthSection, SectionErrorBoundary } from '@/app/components/LeftPanelSections'
 import { ExecutionFeed } from '@/app/components/RightPanelSections'
-import { RightPanelTabsNav, PulseStrip, AttentionStrip, TabPlaceholder, type RightPanelTab } from '@/app/components/RightPanelWorkspace'
+import { RightPanelTabsNav, PulseStrip, AttentionStrip, type RightPanelTab } from '@/app/components/RightPanelWorkspace'
 import { IssuesTabView } from '@/app/components/IssuesTabView'
 import { AgentsTabView } from '@/app/components/AgentsTabView'
 import { RoutinesTabView } from '@/app/components/RoutinesTabView'
 import { GoalsTabView } from '@/app/components/GoalsTabView'
+import { SpacesTabView } from '@/app/components/SpacesTabView'
 import { useExecutionDashboard } from '@/app/hooks/useHubData'
 import { InterviewBadge, ActionConfirmCard, SkillBadge } from '@/app/components/ChatEnhancements'
 import { ToolPanel } from '@/app/components/ToolPanel'
@@ -220,7 +221,7 @@ function RightPanel({
         ) : activeTab === 'goals' ? (
           <GoalsTabView orgId={activeCompany?.companyId} userRole={userRole} onInjectChat={onInjectChat} onInjectAction={onInjectAction} />
         ) : (
-          <TabPlaceholder tab={activeTab} paperclipUrl={paperclipUrl} onInjectChat={onInjectChat} />
+          <SpacesTabView orgId={activeCompany?.companyId} userRole={userRole} onInjectChat={onInjectChat} />
         )}
       </div>
 

@@ -54,6 +54,13 @@ export function requiredWriteRank(method: string, apiPath: string): number {
   const isRoutineManage =
     ((m === 'PATCH' || m === 'DELETE') && /^\/api\/routines\/[a-f0-9-]+$/.test(path)) ||
     (m === 'POST' && (/^\/api\/companies\/[a-f0-9-]+\/routines$/.test(path) || /^\/api\/routines\/[a-f0-9-]+\/triggers$/.test(path)))
+  // Right-panel Phase 4: workspace runtime-service controls + workspace CRUD
+  const isWorkspaceRuntime =
+    m === 'POST' &&
+    /^\/api\/projects\/[a-f0-9-]+\/workspaces\/[a-f0-9-]+\/runtime-services\/(start|stop|restart)$/.test(path)
+  const isWorkspaceManage =
+    /^\/api\/projects\/[a-f0-9-]+\/workspaces(\/[a-f0-9-]+)?$/.test(path) &&
+    (m === 'POST' || m === 'PATCH' || m === 'DELETE')
   const isGoalManage =
     ((m === 'PATCH' || m === 'DELETE') && /^\/api\/goals\/[a-f0-9-]+$/.test(path)) ||
     (m === 'POST' && /^\/api\/companies\/[a-f0-9-]+\/goals$/.test(path))
@@ -95,6 +102,10 @@ export function requiredWriteRank(method: string, apiPath: string): number {
   // Creation paths are additionally gate-token-guarded in the proxy.
   if (isRoutineManage) return ROLE_RANK.admin
   if (isGoalManage) return ROLE_RANK.admin
+  // Workspace runtime services (start/stop/restart) and workspace CRUD →
+  // admin. These affect the shared execution environment agents run in.
+  if (isWorkspaceRuntime) return ROLE_RANK.admin
+  if (isWorkspaceManage) return ROLE_RANK.admin
 
   // Sole staff-tier write: issue creation (create_paperclip_issue /
   // send_communication). POST /api/issues is additionally gated by the
