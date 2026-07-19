@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { createLogger } from '@/lib/logger'
 import { getCompanies, getAgents, getIssues, getRuns } from '@/lib/paperclip'
+import { classifyAgentRole } from '@/lib/agentRoles'
 import type { CEOPulseRecord, DepartmentPulse, DepartmentHealth, AgentRoleKey, Agent, Run } from '@/types'
 
 const log = createLogger('paperclip/ceo-pulse')
@@ -19,25 +20,6 @@ export const runtime = 'nodejs'
    - Scores each department: ON_TRACK / DRIFTING / CRITICAL
    - Returns CEOPulseRecord with globalHealthPct
    ══════════════════════════════════════════════════════════════════════════════ */
-
-// Role keyword matching — used to classify agents into C-Suite roles
-const ROLE_KEYWORDS: Record<AgentRoleKey, string[]> = {
-  ceo:       ['ceo', 'chief executive', 'board'],
-  cmo:       ['cmo', 'marketing', 'content', 'seo', 'brand'],
-  cto:       ['cto', 'technical', 'engineer', 'dev', 'tech'],
-  cfo:       ['cfo', 'finance', 'revenue', 'billing', 'stripe'],
-  coo:       ['coo', 'operations', 'ops', 'comms'],
-}
-
-function classifyAgentRole(agentName: string): AgentRoleKey {
-  const lower = agentName.toLowerCase()
-  for (const [role, keywords] of Object.entries(ROLE_KEYWORDS)) {
-    if (keywords.some(k => lower.includes(k))) {
-      return role as AgentRoleKey
-    }
-  }
-  return 'ceo'
-}
 
 function scoreFromRuns(
   runCount: number,
@@ -103,12 +85,28 @@ export async function GET(req: Request) {
     const company = companies[0]
     const cutoffDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) // 7 days ago
 
-    // Fetch agents, issues, and runs in parallel
-    const [agents, issues, runs] = await Promise.all([
-      getAgents(company.id).catch(() => []),
-      getIssues(company.id, { limit: 50 }).catch(() => []),
-      getRuns(company.id, { limit: 50 }).catch(() => []),
+    // Fetch agents, issues, and runs in parallel. Individual failures degrade
+    // to [] so one flaky endpoint doesn't blank the pulse — but if ALL THREE
+    // fail, the backend is down and we must say so instead of fabricating a
+    // "healthy, empty" pulse (2026-06 audit P1-4: blank panels, never an alert).
+    const settled = await Promise.allSettled([
+      getAgents(company.id),
+      getIssues(company.id, { limit: 50 }),
+      getRuns(company.id, { limit: 50 }),
     ])
+    if (settled.every((s) => s.status === 'rejected')) {
+      log.error(
+        { companyId: company.id, errors: settled.map((s) => String((s as PromiseRejectedResult).reason)) },
+        'CEO pulse: all Paperclip fetches failed'
+      )
+      return NextResponse.json(
+        { error: 'Paperclip backend unreachable — pulse unavailable' },
+        { status: 502 }
+      )
+    }
+    const [agents, issues, runs] = settled.map((s) =>
+      s.status === 'fulfilled' ? s.value : []
+    ) as [Agent[], import('@/types').Issue[], Run[]]
 
     // Build per-role pulse data
     const roleGroups = new Map<AgentRoleKey, Agent[]>()

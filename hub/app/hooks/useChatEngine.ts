@@ -15,6 +15,16 @@ import {
   isHighStakesIntent,
 } from '@/lib/interview'
 import { INTERVIEW_SCAFFOLD_KIND, isInterviewScaffold, type ChatMsgKind } from '@/lib/interview-scaffold'
+import { deriveSolutionSuggestion, type SolutionSuggestion } from '@/lib/solution-suggest'
+import {
+  loadMemory,
+  saveMemory,
+  recordShown,
+  recordDismissed,
+  isDismissed,
+  canShow,
+  type SuggestionMemory,
+} from '@/lib/suggestion-memory'
 import { shouldRouteThroughSend } from '@/lib/inject-routing'
 import { stripDegradedBanner, stripSuggestedTools } from '@/lib/model-output'
 import { CLIENT_ABORT_MS } from '@/lib/timeout-config'
@@ -31,6 +41,14 @@ import type { InterviewState, ActionSpec, ChatAttachment, ActiveSkill, Company }
 export type ChatMsg = { id: string; role: 'user' | 'assistant'; content: string; kind?: ChatMsgKind; timestamp?: string; attachments?: ChatAttachment[] }
 
 export type MobileTab = 'chat' | 'command' | 'execution' | 'google_chat' | 'tool_panel'
+
+/** Human label for a suggested Paperclip primitive (Phase 6a SolutionCard). */
+const PRIMITIVE_LABELS: Record<SolutionSuggestion['primitive'], string> = {
+  routine: 'routine',
+  issue: 'delegated task',
+  project: 'project',
+  goal: 'goal',
+}
 
 /**
  * Maps a caught /api/chat error onto the user-facing bubble content plus a
@@ -199,6 +217,20 @@ export function useChatEngine(options: UseChatEngineOptions) {
   // Skills state
   const [activeSkill, setActiveSkill] = useState<ActiveSkill | null>(null)
   const [suggestedTools, setSuggestedTools] = useState<string[]>([])
+
+  // ── Phase 6a: "Paperclip as a solution" proactive suggestion ──
+  // The current SolutionCard (at most one at a time). Dismissal memory +
+  // frequency caps live in localStorage via suggestion-memory; loaded lazily
+  // and mirrored in a ref so the pure decision runs synchronously in doSend.
+  const [solutionSuggestion, setSolutionSuggestion] = useState<SolutionSuggestion | null>(null)
+  const suggestionMemRef = useRef<SuggestionMemory | null>(null)
+  const getSuggestionMem = useCallback((): SuggestionMemory => {
+    if (!suggestionMemRef.current) suggestionMemRef.current = loadMemory()
+    return suggestionMemRef.current
+  }, [])
+  // Assistant turns since the last card was shown; starts high so the first
+  // eligible suggestion can surface immediately.
+  const turnsSinceCardRef = useRef<number>(Number.MAX_SAFE_INTEGER)
 
   // EXA Search mode — header toggle. When ON, every send bypasses Interview
   // Mode, intent detection, skills, and internal search, and runs a pure Exa.AI
@@ -371,6 +403,10 @@ export function useChatEngine(options: UseChatEngineOptions) {
 
   const doSend = useCallback((message: string, msgAttachments?: ChatAttachment[]) => {
     haptic()
+    // A new send makes any showing SolutionCard stale — clear it, and count
+    // this turn toward the inter-suggestion gap (guardrail 1).
+    setSolutionSuggestion(null)
+    turnsSinceCardRef.current += 1
     // If there's a quoted reply, prepend it as context
     const quoteText = quotedReply?.content ?? ''
     const isTruncated = quoteText.length > 200
@@ -465,6 +501,27 @@ export function useChatEngine(options: UseChatEngineOptions) {
                 timestamp: new Date().toISOString(),
               }
               setMessages(prevMsgs => [...prevMsgs, followUpMsg])
+            }
+
+            // ── Phase 6a: offer a Paperclip primitive as the better solution ──
+            // Additive: the user's chosen action above proceeds untouched; this
+            // only attaches a SolutionCard when a routine/issue/project/goal
+            // beats it AND the user could actually take that action AND the
+            // frequency-cap / dismissal-memory guardrails allow it.
+            const suggestion = deriveSolutionSuggestion(intent, message)
+            if (suggestion && hasPermission(userRole, suggestion.targetIntent)) {
+              const mem = getSuggestionMem()
+              const now = Date.now()
+              if (
+                !isDismissed(mem, suggestion.dismissKey, now) &&
+                canShow(mem, suggestion.confidence, turnsSinceCardRef.current, now)
+              ) {
+                const nextMem = recordShown(mem, now)
+                suggestionMemRef.current = nextMem
+                saveMemory(nextMem)
+                turnsSinceCardRef.current = 0
+                setSolutionSuggestion(suggestion)
+              }
             }
           } else {
             // No intent detected, just send to normal chat API
@@ -892,6 +949,54 @@ Respond with EXACTLY one of:
     }
   }, [resolveActiveCompany, invalidateByUrl])
 
+  /* ── Phase 6a: SolutionCard accept / dismiss ── */
+
+  // Accept → open the gated interview for the suggested primitive, pre-filled
+  // from the conversation. This grants NO new privileges: the interview still
+  // runs the context-sufficiency gate, mints a gate token only on a genuine
+  // pass, and the proxy re-checks role tier. The final confirm/owner step is
+  // never pre-filled, so high-stakes creates always reach the gate.
+  const acceptSolution = useCallback((s: SolutionSuggestion) => {
+    setSolutionSuggestion(null)
+    if (!hasPermission(userRole, s.targetIntent)) return
+    const state = startInterview(s.targetIntent, s.prefill)
+    setInterviewState(state)
+    setActiveModel('Gemini 3.5 Flash')
+    const label = PRIMITIVE_LABELS[s.primitive]
+    if (state.active) {
+      const q = getCurrentQuestion(state)
+      if (q) {
+        const totalQ = getTotalQuestions(s.targetIntent)
+        setMessages(prev => [...prev, {
+          id: crypto.randomUUID(),
+          role: 'assistant' as const,
+          content: `✦ **Let's set up your ${label}.**\n\nI've pre-filled what I can from our chat. **Question ${state.step + 1} of ${totalQ}:**\n${q.question}${q.defaultValue ? `\n\n_Default: ${q.defaultValue}_` : ''}`,
+          timestamp: new Date().toISOString(),
+        }])
+      }
+    } else if (state.spec) {
+      setActionSpec(state.spec)
+      setMessages(prev => [...prev, {
+        id: crypto.randomUUID(),
+        role: 'assistant' as const,
+        content: `Thanks — I've drafted the ${label} below for your review.`,
+        timestamp: new Date().toISOString(),
+      }])
+    }
+  }, [userRole])
+
+  // Dismiss → "Not now" (permanent=false) snoozes 30d; "Don't offer this
+  // again" (permanent=true) blocks this primitive×topic forever.
+  const dismissSolution = useCallback((permanent: boolean) => {
+    // Side effects OUT of the setState updater (StrictMode may double-invoke it).
+    if (solutionSuggestion) {
+      const nextMem = recordDismissed(getSuggestionMem(), solutionSuggestion.dismissKey, permanent, Date.now())
+      suggestionMemRef.current = nextMem
+      saveMemory(nextMem)
+    }
+    setSolutionSuggestion(null)
+  }, [solutionSuggestion, getSuggestionMem])
+
   return {
     // ── State values (read in JSX) ──
     messages,
@@ -909,6 +1014,7 @@ Respond with EXACTLY one of:
     activeSkill,
     suggestedTools,
     exaMode,
+    solutionSuggestion,
     // ── Setters page JSX wires into events ──
     setInput,
     setMessages,
@@ -931,5 +1037,7 @@ Respond with EXACTLY one of:
     injectExecute,
     injectDeepDive,
     handleActionApprove,
+    acceptSolution,
+    dismissSolution,
   }
 }

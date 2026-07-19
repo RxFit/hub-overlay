@@ -2730,6 +2730,89 @@ a:hover .rx-arrow {
   font-size: var(--text-xs);
 }
 
+/* ── Phase 6a: SolutionCard (proactive "Paperclip as a solution") ── */
+.solution-card {
+  margin: var(--space-2) var(--space-6);
+  padding: var(--space-3) var(--space-4);
+  background: rgba(197, 160, 89, 0.07);
+  border: 1.5px solid rgba(197, 160, 89, 0.3);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  animation: rxSlideInUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.solution-card__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.solution-card__icon {
+  font-size: var(--text-base);
+  flex-shrink: 0;
+}
+
+.solution-card__headline {
+  font-weight: 700;
+  font-size: var(--text-sm);
+  color: var(--accent);
+}
+
+.solution-card__body {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.solution-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.solution-card__accept {
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--bg-primary);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.solution-card__accept:hover { opacity: 0.88; }
+
+.solution-card__dismiss,
+.solution-card__never {
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+  transition: color var(--duration-fast) ease, border-color var(--duration-fast) ease;
+}
+
+.solution-card__dismiss:hover,
+.solution-card__never:hover {
+  color: var(--text-secondary);
+  border-color: var(--border-hover, var(--border));
+}
+
+.solution-card__never {
+  margin-left: auto;
+  border-color: transparent;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .skill-badge__icon {
   font-size: var(--text-base);
   flex-shrink: 0;

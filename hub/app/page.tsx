@@ -12,7 +12,7 @@ import { RoutinesTabView } from '@/app/components/RoutinesTabView'
 import { GoalsTabView } from '@/app/components/GoalsTabView'
 import { SpacesTabView } from '@/app/components/SpacesTabView'
 import { useExecutionDashboard } from '@/app/hooks/useHubData'
-import { InterviewBadge, ActionConfirmCard, SkillBadge } from '@/app/components/ChatEnhancements'
+import { InterviewBadge, ActionConfirmCard, SkillBadge, SolutionCard } from '@/app/components/ChatEnhancements'
 import { ToolPanel } from '@/app/components/ToolPanel'
 import { ToolPanelCollapsedRail, MobileToolEdge } from '@/app/components/ToolPanelCollapsedRail'
 import type { ToolArtifactData } from '@/types'
@@ -422,6 +422,9 @@ export default function HubPage() {
     activeSkill,
     suggestedTools,
     exaMode,
+    solutionSuggestion,
+    acceptSolution,
+    dismissSolution,
     setInput,
     setMessages,
     setInterviewState,
@@ -752,6 +755,17 @@ export default function HubPage() {
               <SkillBadge
                 skill={activeSkill}
                 onDismiss={handleSkillDeactivate}
+              />
+            )}
+
+            {/* Phase 6a: proactive "Paperclip as a solution" card. Hidden while
+                an interview is active (accepting one starts an interview, which
+                clears the card). */}
+            {solutionSuggestion && !interviewState?.active && (
+              <SolutionCard
+                suggestion={solutionSuggestion}
+                onAccept={acceptSolution}
+                onDismiss={dismissSolution}
               />
             )}
 
