@@ -778,12 +778,131 @@ export async function resolveRecipient(
   if (!ref) return null
   if (EMAIL_RE.test(ref)) return { email: ref, displayName: ref }
 
+  // 1) Personal contacts (People API).
   try {
     const matches = await searchContacts(accessToken, ref, 5)
-    // Prefer an exact (case-insensitive) display-name match; else the top hit.
     const exact = matches.find((m) => m.displayName.toLowerCase() === ref.toLowerCase())
-    return exact ?? matches[0] ?? null
+    const hit = exact ?? matches[0]
+    if (hit) return hit
+  } catch {
+    /* contacts scope missing or lookup failed — fall through to directory */
+  }
+
+  // 2) Org directory (Admin SDK) — best-effort. A colleague who isn't in
+  //    personal contacts still resolves here. Failure (scope not granted /
+  //    Admin SDK off) is swallowed so contacts-only setups keep working.
+  try {
+    const dir = await searchDirectoryUsers(accessToken, ref, 5)
+    const exact = dir.find((m) => m.displayName.toLowerCase() === ref.toLowerCase())
+    return exact ?? dir[0] ?? null
   } catch {
     return null
   }
+}
+
+/* ══════════════════════════════════════════
+   Google Slides  —  https://slides.googleapis.com/v1
+   Scopes: presentations (create/edit) + drive.file
+   ══════════════════════════════════════════ */
+
+const SLIDES_BASE = 'https://slides.googleapis.com/v1/presentations'
+
+export interface GooglePresentation {
+  presentationId: string
+  title: string
+  presentationUrl: string
+}
+
+/**
+ * Create a Google Slides deck. Creates the presentation with a title, then —
+ * when body text is supplied — appends a TITLE_AND_BODY slide and inserts the
+ * title + body into its placeholders (the standard Slides batchUpdate pattern
+ * with explicit placeholder object IDs).
+ */
+export async function createGooglePresentation(
+  accessToken: string,
+  input: { title: string; body?: string }
+): Promise<GooglePresentation> {
+  const created = await googleFetch<{ presentationId: string; title?: string }>(
+    SLIDES_BASE,
+    accessToken,
+    { method: 'POST', body: JSON.stringify({ title: input.title }) }
+  )
+
+  const body = (input.body || '').trim()
+  if (body) {
+    const slideId = 'hub_slide_1'
+    const titleId = 'hub_slide_1_title'
+    const bodyId = 'hub_slide_1_body'
+    await googleFetch<unknown>(
+      `${SLIDES_BASE}/${created.presentationId}:batchUpdate`,
+      accessToken,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          requests: [
+            {
+              createSlide: {
+                objectId: slideId,
+                slideLayoutReference: { predefinedLayout: 'TITLE_AND_BODY' },
+                placeholderIdMappings: [
+                  { layoutPlaceholder: { type: 'TITLE' }, objectId: titleId },
+                  { layoutPlaceholder: { type: 'BODY' }, objectId: bodyId },
+                ],
+              },
+            },
+            { insertText: { objectId: titleId, text: input.title } },
+            { insertText: { objectId: bodyId, text: body } },
+          ],
+        }),
+      }
+    )
+  }
+
+  return {
+    presentationId: created.presentationId,
+    title: created.title ?? input.title,
+    presentationUrl: `https://docs.google.com/presentation/d/${created.presentationId}/edit`,
+  }
+}
+
+/* ══════════════════════════════════════════
+   Admin SDK Directory  —  https://admin.googleapis.com/admin/directory/v1
+   Scope: admin.directory.user.readonly. Resolve an org colleague → work email.
+   ══════════════════════════════════════════ */
+
+const DIRECTORY_BASE = 'https://admin.googleapis.com/admin/directory/v1'
+
+/**
+ * Search the org directory for users matching a free-text query, returning
+ * name+email matches. Uses viewType=domain_public so non-admin users can read
+ * the shared directory. `customer=my_customer` scopes the search to the
+ * caller's own Workspace organization.
+ */
+export async function searchDirectoryUsers(
+  accessToken: string,
+  query: string,
+  pageSize = 10
+): Promise<ContactMatch[]> {
+  // Directory query terms separated by spaces are ANDed, so search by name
+  // only (the recipient-resolution case: "Maria" → her work email). Quotes are
+  // stripped so they can't break the `name:'…'` term.
+  const safe = query.replace(/['"]/g, '').trim()
+  const params = new URLSearchParams({
+    customer: 'my_customer',
+    query: `name:'${safe}'`,
+    viewType: 'domain_public',
+    maxResults: String(pageSize),
+    projection: 'basic',
+  })
+  const data = await googleFetch<{
+    users?: { primaryEmail?: string; name?: { fullName?: string } }[]
+  }>(`${DIRECTORY_BASE}/users?${params}`, accessToken)
+
+  const matches: ContactMatch[] = []
+  for (const u of data.users ?? []) {
+    if (!u.primaryEmail) continue
+    matches.push({ email: u.primaryEmail, displayName: u.name?.fullName ?? u.primaryEmail })
+  }
+  return matches
 }
