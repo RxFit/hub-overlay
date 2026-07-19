@@ -132,25 +132,29 @@ When a user requests any of these, activate Interview Mode to collect the detail
 If they lack the required role, politely tell them what permission level is needed.`
 
 /* ── EXA Search Mode system prompt ──
-   Used when the user toggles the EXA search button in the header. In this mode
-   the assistant is a pure semantic-search summarizer over Exa.AI results — none
-   of the Hub orchestration, Interview Mode, skill, or internal-search behavior
-   applies. Kept deliberately narrow so the model does not drift into Hub actions
-   or invent tool suggestions while the toggle is on. */
-const EXA_SEARCH_SYSTEM_PROMPT = `You are the Hub's EXA Search assistant. The user has toggled EXA Search mode ON, turning this chat into a semantic web-search tool powered by Exa.AI. This is a research-only mode.
+   Used when the user toggles the EXA search button in the header. Hybrid
+   SEMANTIC-ONLY research mode over exactly two backends:
+     1. Exa.AI — semantic web search (public sources)
+     2. Vertex AI — the Internal Brain, semantic search over the company's own
+        Google Drive/Gmail/Chat documents
+   None of the Hub orchestration, Interview Mode, skill, Paperclip, or live
+   Workspace behavior applies. Kept deliberately narrow so the model does not
+   drift into Hub actions or invent tool suggestions while the toggle is on. */
+const EXA_SEARCH_SYSTEM_PROMPT = `You are the Hub's EXA Search assistant. The user has toggled EXA Search mode ON, turning this chat into a semantic research tool with exactly TWO search backends: Exa.AI (semantic web search over public sources) and the Internal Brain (Vertex AI semantic search over the company's own documents in Google Drive, Gmail, and Chat). This is a research-only mode.
 
 Your job:
-- Answer the user's query using ONLY the "Web Search Results (Exa.AI)" provided in your context below.
-- Synthesize the results into a clear, well-organized answer (great for pulling academic papers, business details, market/competitor research, or documentation).
-- ALWAYS cite your sources inline as markdown links using the exact URLs from the results, e.g. [source](https://example.com). End with a short "Sources" list of the links you used.
+- Answer the user's query using ONLY the "Web Search Results (Exa.AI)" and "Internal Knowledge (Vertex AI)" sections provided in your context below.
+- Synthesize BOTH sources into one clear, well-organized answer (great for combining market/competitor/academic research with the company's own documents and data).
+- ALWAYS attribute claims to their source: web claims cite inline markdown links with the exact URLs from the results, e.g. [source](https://example.com); internal claims name the document title and label it "(internal)". Never present internal company data as public information or vice versa.
+- End with a short "Sources" list — web links first, then internal document titles.
 - Lead with the direct answer, then supporting detail. Use bullet points where it aids scanning.
 
 Hard rules for this mode:
-- Do NOT fabricate facts, URLs, publication dates, or citations. If the results don't cover the query, say so plainly and suggest a refined search query.
+- Do NOT fabricate facts, URLs, document titles, publication dates, or citations. If neither source covers the query, say so plainly and suggest a refined search query.
 - Do NOT attempt any Hub action: no Interview Mode, no task/issue creation, no Confirm Cards, no skill protocols. Those tools are disabled while EXA Search is on.
 - Do NOT emit skill-suggestion metadata comments.
-- If no results were returned, tell the user the search came back empty and suggest rephrasing.
-The user can keep chatting about these results — later turns in this mode continue to summarize whatever new results are provided.`
+- If one source returned nothing, answer from the other and note which came back empty.
+The user can keep chatting about these results — later turns in this mode continue to synthesize whatever new results are provided.`
 
 export interface SystemPromptContext {
   projects?: string
@@ -171,11 +175,16 @@ export interface SystemPromptContext {
   interviewMode?: boolean
   activeSkill?: string
   activeSkillContent?: string
-  /** EXA Search mode — pure Exa.AI search summarizer; bypasses all Hub tooling. */
+  /** EXA Search mode — hybrid semantic research (Exa web + Vertex internal);
+   *  bypasses all other Hub tooling. */
   exaMode?: boolean
   /** EXA mode only: the Exa.AI request FAILED (vs. genuinely zero results) —
    *  the prompt must disclose that live search didn't run. */
   exaSearchFailed?: boolean
+  /** EXA mode only: formatted Internal Brain (Vertex AI) results block. */
+  exaInternalContext?: string
+  /** EXA mode only: the Vertex AI request FAILED (vs. zero internal matches). */
+  exaInternalFailed?: boolean
 }
 
 /**
@@ -213,6 +222,17 @@ export function buildSystemPromptParts(context: SystemPromptContext): { staticPr
       p += `## Web Search Results (Exa.AI)\n\n[LIVE WEB SEARCH IS CURRENTLY UNAVAILABLE — the Exa.AI request failed. You MUST open your reply by telling the user that live web search could not run right now. If you then answer from prior knowledge, clearly label it as such (not from a live search) and note it may be out of date.]\n\n`
     } else {
       p += `## Web Search Results (Exa.AI)\n\n[No results were returned for this query — tell the user the search came back empty and suggest they rephrase.]\n\n`
+    }
+    /* ── Internal Brain (Vertex AI semantic database) — the second backend of
+       hybrid EXA mode. Fenced as untrusted like every injected block (document
+       titles/snippets are authored content, not instructions). Empty vs failed
+       are disclosed distinctly so the model never fabricates internal docs. */
+    if (context.exaInternalContext) {
+      p += `## Internal Knowledge (Vertex AI — company semantic database)\n${fenceUntrusted('Internal Brain results', context.exaInternalContext)}\n\nThese are the company's OWN documents (Google Drive/Gmail/Chat). Cite them by document title labeled "(internal)" — never as public web sources.\n\n`
+    } else if (context.exaInternalFailed) {
+      p += `## Internal Knowledge (Vertex AI — company semantic database)\n\n[Internal semantic search is temporarily unavailable — the Vertex AI request failed. Note this briefly in your reply; answer from the web results and NEVER invent internal documents.]\n\n`
+    } else {
+      p += `## Internal Knowledge (Vertex AI — company semantic database)\n\n[No matching internal documents were found for this query. Say so briefly if the user asked about internal/company data; do NOT invent internal documents.]\n\n`
     }
     return { staticPrefix, dynamic: p }
   }

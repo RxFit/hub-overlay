@@ -929,7 +929,7 @@ export default function HubPage() {
                 <div className="exa-mode-banner" role="status">
                   <span className="exa-mode-banner__dot" aria-hidden="true" />
                   <span className="exa-mode-banner__label">EXA Search</span>
-                  <span className="exa-mode-banner__hint">Semantic web search — other assistant tools are paused</span>
+                  <span className="exa-mode-banner__hint">Semantic search: Exa web + internal brain — other tools paused</span>
                   <button
                     className="exa-mode-banner__off"
                     onClick={() => { haptic(); setExaMode(false) }}
@@ -978,7 +978,7 @@ export default function HubPage() {
                   ref={textareaRef}
                   className="chat-input"
                   aria-label="Chat message input"
-                  placeholder={exaMode ? "Search the web with EXA — papers, companies, market research..." : interviewState?.active ? "Answer the interview question..." : "Ask about your projects, create tasks, check status..."}
+                  placeholder={exaMode ? "Semantic search — web research + your internal documents..." : interviewState?.active ? "Answer the interview question..." : "Ask about your projects, create tasks, check status..."}
                   value={input}
                   onChange={handleTextareaInput}
                   onKeyDown={handleKeyDown}

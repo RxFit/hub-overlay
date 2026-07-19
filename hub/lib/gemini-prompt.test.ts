@@ -166,6 +166,47 @@ describe('buildSystemPrompt — EXA Search mode', () => {
     expect(prompt).toContain('No results were returned')
     expect(prompt).not.toContain('## Available Skills')
   })
+
+  /* ── Hybrid semantic mode: Exa (web) + Vertex Internal Brain ── */
+
+  it('renders the Internal Brain section fenced as untrusted alongside web results', () => {
+    const prompt = buildSystemPrompt({
+      exaMode: true,
+      injectedContext: 'web hit',
+      exaInternalContext: '**Q3 Board Deck** (drive://abc)\nRevenue plan details',
+    })
+    expect(prompt).toContain('Internal Knowledge (Vertex AI — company semantic database)')
+    expect(prompt).toContain('Q3 Board Deck')
+    // Fenced like every injected block — internal doc content is data, not
+    // instructions. Counted RELATIVE to web-only (the policy text itself
+    // contains a fence example): hybrid adds exactly one more fence.
+    const closes = (s: string) => s.split('</untrusted_data>').length - 1
+    const webOnly = buildSystemPrompt({ exaMode: true, injectedContext: 'web hit' })
+    expect(closes(prompt)).toBe(closes(webOnly) + 1)
+    // Attribution contract: internal docs cited as "(internal)", never as web sources.
+    expect(prompt).toContain('labeled "(internal)"')
+  })
+
+  it('discloses internal-search failure distinctly from zero internal matches', () => {
+    const failed = buildSystemPrompt({ exaMode: true, injectedContext: 'web hit', exaInternalFailed: true })
+    expect(failed).toContain('Internal semantic search is temporarily unavailable')
+    expect(failed).toContain('NEVER invent internal documents')
+
+    const empty = buildSystemPrompt({ exaMode: true, injectedContext: 'web hit' })
+    expect(empty).toContain('No matching internal documents')
+    expect(empty).not.toContain('temporarily unavailable')
+  })
+
+  it('hybrid mode still forbids all other Hub tooling', () => {
+    const prompt = buildSystemPrompt({
+      exaMode: true,
+      injectedContext: 'web',
+      exaInternalContext: 'internal',
+    })
+    expect(prompt).not.toContain('## Available Skills')
+    expect(prompt).not.toContain('MANDATORY INTERVIEW PROTOCOL')
+    expect(prompt).not.toContain('AI assistant for the RxFit operations hub')
+  })
 })
 
 describe('buildSystemPromptParts — prompt-caching split contract', () => {
