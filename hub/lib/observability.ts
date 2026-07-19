@@ -44,6 +44,10 @@ export type TelemetryEvent =
   | { type: 'ai_first_token'; requestId: string; ms: number }
   | { type: 'ai_complete'; requestId: string; ms: number; provider: AiProvider | 'unknown'; model: string; finishReason?: string }
   | { type: 'ai_timeout'; requestId: string; layer: TimeoutLayer; provider: AiProvider; model: string }
+  /** The model stopped because max_tokens was exhausted (stop_reason
+   *  "max_tokens") — the documented signature of a truncated or
+   *  thinking-consumed response. Watch this metric to tune max_tokens/effort. */
+  | { type: 'ai_truncated'; provider: AiProvider; model: string; requestId?: string }
   | { type: 'ai_fallback'; requestId: string; from: string; to: string; reason: string }
   | { type: 'ai_error'; requestId: string; provider?: AiProvider; code: string; message: string }
 
