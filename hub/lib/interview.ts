@@ -31,6 +31,7 @@ const INTENT_PERMISSIONS: Record<InterviewIntent, ActionPermission> = {
   // keeps them off pending/onboarding guests while covering the whole team.
   create_google_doc: 'staff',
   create_google_sheet: 'staff',
+  create_google_presentation: 'staff',
   // Staff-level (read + create)
   send_communication: 'staff',
   send_gmail: 'staff',
@@ -105,6 +106,11 @@ export const INTENT_DEFINITIONS: Array<{ id: InterviewIntent; description: strin
   {
     id: 'create_google_sheet',
     description: 'User wants to create a NEW Google Sheet / spreadsheet — e.g. "make a spreadsheet of this quarter\'s KPIs", "put these numbers in a Google Sheet", "export this table to Sheets". Use this when the durable output should be a Google Spreadsheet.',
+    expectedEntities: ['title', 'content'],
+  },
+  {
+    id: 'create_google_presentation',
+    description: 'User wants to create a NEW Google Slides deck / presentation — e.g. "make a slide deck for the pitch", "turn this into Google Slides", "build a presentation of these points". Use this when the durable output should be a Google Slides presentation.',
     expectedEntities: ['title', 'content'],
   },
   {
@@ -304,6 +310,22 @@ const INTERVIEW_SEQUENCES: Record<InterviewIntent, InterviewStep[]> = {
       question: 'Want to add any more context for this spreadsheet (a title, or the columns/rows)? Reply with details, or say "go ahead" to continue.',
       key: 'additionalContext',
       defaultValue: 'go ahead',
+    },
+  ],
+
+  create_google_presentation: [
+    {
+      question: 'What should the presentation be titled?',
+      key: 'title',
+    },
+    {
+      question: 'What should the deck cover? Paste or describe the content for the first slide (leave blank for a title-only deck).',
+      key: 'content',
+      defaultValue: '',
+    },
+    {
+      question: 'I\'ll create this Google Slides deck in your Drive. Confirm? (yes / edit / cancel)',
+      key: '_confirm',
     },
   ],
 
@@ -760,6 +782,7 @@ const INTENT_LABELS: Record<InterviewIntent, string> = {
   schedule_event: 'Schedule Event',
   create_google_doc: 'Create Google Doc',
   create_google_sheet: 'Create Google Sheet',
+  create_google_presentation: 'Create Google Slides',
   send_communication: 'Send Communication',
   send_gmail: 'Send Gmail',
   post_chat_message: 'Post Chat Message',
@@ -788,6 +811,7 @@ const INTENT_TARGET_SYSTEMS: Record<InterviewIntent, string[]> = {
   schedule_event: ['Google Calendar'],
   create_google_doc: ['Google Docs'],
   create_google_sheet: ['Google Sheets'],
+  create_google_presentation: ['Google Slides'],
   send_communication: ['Paperclip AI — COO Routed'],
   send_gmail: ['Gmail'],
   post_chat_message: ['Google Chat'],

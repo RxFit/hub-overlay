@@ -328,15 +328,14 @@ test('stress: a 120-event result flood with a long transcript stays correct and 
     ctl.active?.onresult?.({ results: finals })
   })
 
-  // The 120+1 onresult events dispatch synchronously above, but React batches
-  // their state updates and flushes to the DOM on a later tick. Gate on the
-  // settled value (auto-retrying) before snapshotting — a one-shot inputValue()
-  // read here can race the final flush under CI load and briefly see an
-  // empty/partial value (flaky failure of the startsWith assertion).
-  await expect(input).toHaveValue(/^word1 word2 .*word120 the end$/, { timeout: 10_000 })
+  // The 120 onresult events update React state asynchronously; a bare
+  // inputValue() read right after page.evaluate() races the React flush and
+  // flakes under CI load. Poll until the fully-flushed transcript settles
+  // (first + last segments present), then assert on the stable value.
+  await expect
+    .poll(async () => await input.inputValue(), { timeout: 5_000 })
+    .toMatch(/^word1 word2 .*word120 the end$/s)
   const value = await input.inputValue()
-  expect(value.startsWith('word1 word2 ')).toBe(true)
-  expect(value.endsWith('word120 the end')).toBe(true)
   expect(value).not.toContain('partial tail') // no stale interim left behind
 
   // UI is still responsive: stop the mic and type normally.

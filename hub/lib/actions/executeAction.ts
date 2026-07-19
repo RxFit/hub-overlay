@@ -369,6 +369,19 @@ export async function executeAction(
       break
     }
 
+    case 'create_google_presentation': {
+      const deckTitle = spec.details.title || spec.summary
+      const res = await fetch('/api/google/presentation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-AI-Intent': 'create_google_presentation' },
+        body: JSON.stringify({ title: deckTitle, body: spec.details.content || '' }),
+      })
+      if (!res.ok) throw new Error(await scopeAwareError(res, 'Presentation creation'))
+      const data = await res.json()
+      resultMsg = `🖼️ **Google Slides deck created!**\n\n"${data.presentation?.title || deckTitle}" is in your Drive.\n\n▶ [Open the deck](${data.presentation?.presentationUrl})`
+      break
+    }
+
     case 'send_communication': {
       if (!activeCompany) throw new Error('No workspace available — please select a project first.')
 

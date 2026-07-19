@@ -82,6 +82,7 @@ const INTENT_DIMENSIONS: Record<string, string[]> = {
   schedule_event: ['attendees', 'timing', 'purpose', 'duration'],
   create_google_doc: ['title', 'content'],
   create_google_sheet: ['title', 'content'],
+  create_google_presentation: ['title', 'content'],
   send_communication: ['recipient', 'channel', 'message_content', 'tone'],
   send_gmail: ['recipient', 'subject', 'message_content'],
   post_chat_message: ['space', 'message_content'],
@@ -134,7 +135,7 @@ Evaluate each dimension:
 - 25 points: success criteria or acceptance conditions are described
 
 For simpler intents (check_agent_status, view_runs, run_audit), any answer scores 80+.
-For personal-productivity intents (create_task, update_task, schedule_event, create_google_doc, create_google_sheet) — these write only to the user's OWN Google account — score 85+ whenever the action is specific enough for a competent assistant to execute (clear what, and when if timing matters). A Doc/Sheet needs only a title to be executable; content may be empty. Do NOT require constraints or success criteria for these.
+For personal-productivity intents (create_task, update_task, schedule_event, create_google_doc, create_google_sheet, create_google_presentation) — these write only to the user's OWN Google account — score 85+ whenever the action is specific enough for a competent assistant to execute (clear what, and when if timing matters). A Doc/Sheet/deck needs only a title to be executable; content may be empty. Do NOT require constraints or success criteria for these.
 For destructive intents (delete_workspace, delete_agent), require explicit confirmation text to score 80+.
 For complex intents (launch_campaign, create_agent), require all 4 dimensions to score 80+.
 
