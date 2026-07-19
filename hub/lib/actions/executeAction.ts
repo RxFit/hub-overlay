@@ -101,6 +101,96 @@ export async function executeAction(
       break
     }
 
+    case 'update_task': {
+      // Resolve the task by (partial) title across the user's task lists,
+      // including completed tasks so "reopen X" can find them.
+      const utRef = (spec.details.taskRef || '').toLowerCase().trim()
+      if (!utRef) throw new Error('Tell me which task to change (its title or part of it).')
+
+      const utListsRes = await fetch('/api/google/tasks')
+      if (!utListsRes.ok) throw new Error(`Failed to fetch task lists: ${utListsRes.status}`)
+      const utListsData = await utListsRes.json()
+      const utLists: Array<{ id: string; title: string }> = utListsData?.taskLists || []
+      if (utLists.length === 0) throw new Error('No task lists found')
+
+      let utFound: { listId: string; id: string; title: string; status?: string } | null = null
+      const utMatches: string[] = []
+      for (const list of utLists.slice(0, 5)) {
+        try {
+          const tasksRes = await fetch(`/api/google/tasks?taskListId=${encodeURIComponent(list.id)}&showCompleted=true`)
+          if (!tasksRes.ok) continue
+          const tasksData = await tasksRes.json()
+          const tasks: Array<{ id: string; title: string; status?: string }> = tasksData?.tasks || []
+          for (const t of tasks) {
+            if (t.title?.toLowerCase().includes(utRef)) {
+              utMatches.push(t.title)
+              if (!utFound) utFound = { listId: list.id, id: t.id, title: t.title, status: t.status }
+              // Exact title match wins over the first substring match
+              if (t.title.toLowerCase().trim() === utRef) {
+                utFound = { listId: list.id, id: t.id, title: t.title, status: t.status }
+              }
+            }
+          }
+        } catch { /* skip unreachable list */ }
+      }
+      if (!utFound) throw new Error(`Could not find a task matching "${spec.details.taskRef}" in your Google Tasks.`)
+      if (utMatches.length > 1 && !utMatches.some((t) => t.toLowerCase().trim() === utRef)) {
+        throw new Error(`Multiple tasks match "${spec.details.taskRef}": ${utMatches.slice(0, 6).map((t) => `"${t}"`).join(', ')}. Please edit and use the exact title.`)
+      }
+
+      const utChange = (spec.details.change || '').toLowerCase().trim()
+      const utHeaders = { 'Content-Type': 'application/json', 'X-AI-Intent': 'update_task' }
+      const utBase = { taskListId: utFound.listId, taskId: utFound.id }
+
+      if (/\b(done|complete|completed|finish|finished|check(ed)? off)\b/.test(utChange)) {
+        const res = await fetch('/api/google/tasks', {
+          method: 'POST', headers: utHeaders,
+          body: JSON.stringify({ action: 'complete', ...utBase }),
+        })
+        if (!res.ok) throw new Error(`Task completion failed: ${res.status}`)
+        resultMsg = `✅ **Task completed!**\n\n"${utFound.title}" has been marked done in your Google Tasks.`
+      } else if (/\b(reopen|uncomplete|not done|undo|restore)\b/.test(utChange)) {
+        const res = await fetch('/api/google/tasks', {
+          method: 'POST', headers: utHeaders,
+          body: JSON.stringify({ action: 'uncomplete', ...utBase }),
+        })
+        if (!res.ok) throw new Error(`Task reopen failed: ${res.status}`)
+        resultMsg = `↩️ **Task reopened.**\n\n"${utFound.title}" is back on your list.`
+      } else if (/\b(delete|remove|trash)\b/.test(utChange)) {
+        const res = await fetch('/api/google/tasks', {
+          method: 'POST', headers: utHeaders,
+          body: JSON.stringify({ action: 'delete', ...utBase }),
+        })
+        if (!res.ok) throw new Error(`Task deletion failed: ${res.status}`)
+        resultMsg = `🗑️ **Task deleted.**\n\n"${utFound.title}" has been removed from your Google Tasks.`
+      } else if (spec.details.change?.trim()) {
+        // Rename or reschedule. A parseable date → due-date change; otherwise
+        // treat the text as the new title.
+        const rawChange = spec.details.change.trim()
+        const dueMatch = rawChange.match(/(?:due|move|reschedule)[^a-z0-9]*(?:to|for|on)?\s*(.+)/i)
+        const dateText = dueMatch ? dueMatch[1] : rawChange
+        const parsedDue = Date.parse(dateText)
+        const payload: Record<string, string> = { action: 'update', ...utBase }
+        let changeLabel: string
+        if (!isNaN(parsedDue) && (dueMatch || /^\d{4}-\d{2}-\d{2}/.test(dateText))) {
+          payload.due = new Date(parsedDue).toISOString()
+          changeLabel = `due date moved to ${new Date(parsedDue).toLocaleDateString()}`
+        } else {
+          payload.title = rawChange.replace(/^(rename( it)?( to)?|retitle( to)?|call it)\s+/i, '').trim() || rawChange
+          changeLabel = `renamed to "${payload.title}"`
+        }
+        const res = await fetch('/api/google/tasks', {
+          method: 'POST', headers: utHeaders,
+          body: JSON.stringify(payload),
+        })
+        if (!res.ok) throw new Error(`Task update failed: ${res.status}`)
+        resultMsg = `✏️ **Task updated.**\n\n"${utFound.title}" — ${changeLabel}.`
+      } else {
+        throw new Error('Tell me what to change: mark done, reopen, delete, a new title, or a new due date.')
+      }
+      break
+    }
+
     case 'schedule_event': {
       // Interview collects: title, when, attendees, location, duration
       const whenText = spec.details.when || spec.details.start || spec.details.date || ''
