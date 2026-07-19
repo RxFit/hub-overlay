@@ -78,6 +78,7 @@ function getGenAI(): GoogleGenerativeAI {
 
 const INTENT_DIMENSIONS: Record<string, string[]> = {
   create_task: ['outcome', 'timeline', 'constraints', 'success_criteria'],
+  update_task: ['task_identity', 'change'],
   schedule_event: ['attendees', 'timing', 'purpose', 'duration'],
   send_communication: ['recipient', 'channel', 'message_content', 'tone'],
   send_gmail: ['recipient', 'subject', 'message_content'],
@@ -131,6 +132,7 @@ Evaluate each dimension:
 - 25 points: success criteria or acceptance conditions are described
 
 For simpler intents (check_agent_status, view_runs, run_audit), any answer scores 80+.
+For personal-productivity intents (create_task, update_task, schedule_event) — these write only to the user's OWN Google account — score 85+ whenever the action is specific enough for a competent assistant to execute (clear what, and when if timing matters). Do NOT require constraints or success criteria for these.
 For destructive intents (delete_workspace, delete_agent), require explicit confirmation text to score 80+.
 For complex intents (launch_campaign, create_agent), require all 4 dimensions to score 80+.
 
@@ -198,6 +200,20 @@ export async function POST(req: NextRequest) {
   // For read-only / simple intents with any answer → auto-pass
   const readOnlyIntents = ['check_agent_status', 'view_runs', 'run_audit']
   if (readOnlyIntents.includes(intent)) {
+    const result: ContextScoreResult = {
+      score: 90,
+      passed: true,
+      weakDimension: null,
+      followUpQuestion: null,
+    }
+    return NextResponse.json(withGateToken(result, intent, callerEmail))
+  }
+
+  // update_task mutates only the caller's own Google Tasks and still goes
+  // through the human confirm card. When both the task reference and the
+  // change are present, pass deterministically — an LLM rubric adds latency
+  // and false blocks to "mark X done" without adding safety.
+  if (intent === 'update_task' && (context.taskRef || '').trim() && (context.change || '').trim()) {
     const result: ContextScoreResult = {
       score: 90,
       passed: true,

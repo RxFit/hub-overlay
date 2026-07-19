@@ -116,6 +116,41 @@ export async function completeTask(
   )
 }
 
+/** Update a task's title, notes, and/or due date (only provided fields change) */
+export async function updateTask(
+  accessToken: string,
+  taskListId: string,
+  taskId: string,
+  patch: { title?: string; notes?: string; due?: string }
+): Promise<GoogleTask> {
+  return googleFetch<GoogleTask>(
+    `${TASKS_BASE}/lists/${taskListId}/tasks/${taskId}`,
+    accessToken,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }
+  )
+}
+
+/** Permanently delete a task. Google returns 204 with an empty body, so this
+ *  bypasses googleFetch's res.json() and checks the status directly. */
+export async function deleteTask(
+  accessToken: string,
+  taskListId: string,
+  taskId: string
+): Promise<void> {
+  const res = await fetch(`${TASKS_BASE}/lists/${taskListId}/tasks/${taskId}`, {
+    signal: AbortSignal.timeout(GOOGLE_API_TIMEOUT_MS),
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${accessToken}` },
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => 'Unknown error')
+    throw new Error(`Google API error ${res.status}: ${body}`)
+  }
+}
+
 /** Mark a task as needing action (uncomplete/restore) */
 export async function uncompleteTask(
   accessToken: string,

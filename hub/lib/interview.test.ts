@@ -91,6 +91,69 @@ describe('intent classification helpers', () => {
   })
 })
 
+describe('update_task intent', () => {
+  it('registers the intent in the classifier definitions', () => {
+    const def = INTENT_DEFINITIONS.find(d => d.id === 'update_task')
+    expect(def).toBeDefined()
+    expect(def?.expectedEntities).toEqual(['taskRef', 'change'])
+  })
+
+  it('is a personal-productivity intent available to every role', () => {
+    for (const role of ['onboarding', 'staff', 'admin', 'superadmin']) {
+      expect(hasPermission(role, 'update_task')).toBe(true)
+    }
+  })
+
+  it('advances through taskRef and change to a spec', () => {
+    let state = startInterview('update_task')
+    expect(getTotalQuestions('update_task')).toBe(3)
+
+    state = advanceInterview(state, 'invoice follow-up')
+    state = advanceInterview(state, 'mark done')
+    expect(state.active).toBe(true) // parked on _confirm
+
+    state = advanceInterview(state, 'yes')
+    expect(state.active).toBe(false)
+    expect(state.spec?.intent).toBe('update_task')
+    expect(state.spec?.details.taskRef).toBe('invoice follow-up')
+    expect(state.spec?.details.change).toBe('mark done')
+    expect(state.spec?.targetSystems).toEqual(['Google Tasks'])
+  })
+
+  it('is neither destructive, read-only, nor high-stakes', () => {
+    expect(isDestructiveIntent('update_task')).toBe(false)
+    expect(isReadOnlyIntent('update_task')).toBe(false)
+    expect(isHighStakesIntent('update_task')).toBe(false)
+  })
+})
+
+describe('post-gate follow-up answers (context-score block recovery)', () => {
+  it('folds an answer given past the last step into additionalContext and completes with a spec', () => {
+    // Simulate the state the engine creates when the context gate blocks a
+    // completed interview: active again, but step already past the sequence end.
+    let state = startInterview('create_task', { description: 'Do X' })
+    state = advanceInterview(state, 'yes') // completes (step == steps.length)
+    const blocked = { ...state, active: true, spec: null }
+
+    const recovered = advanceInterview(blocked, 'Deadline is Friday, success = client signs')
+    expect(recovered.active).toBe(false)
+    expect(recovered.spec).not.toBeNull()
+    expect(recovered.spec?.intent).toBe('create_task')
+    expect(recovered.context.additionalContext).toBe('Deadline is Friday, success = client signs')
+    expect(recovered.spec?.details.additionalContext).toBe('Deadline is Friday, success = client signs')
+  })
+
+  it('accumulates across repeated blocks instead of overwriting', () => {
+    let state = startInterview('create_task', { description: 'Do X' })
+    state = advanceInterview(state, 'yes')
+    let blocked = { ...state, active: true, spec: null }
+    let next = advanceInterview(blocked, 'first detail')
+    blocked = { ...next, active: true, spec: null }
+    next = advanceInterview(blocked, 'second detail')
+    expect(next.context.additionalContext).toBe('first detail\nsecond detail')
+  })
+})
+
 describe('F3 direct-send intents (send_gmail / post_chat_message)', () => {
   it('registers both intents in the classifier definitions', () => {
     const ids = INTENT_DEFINITIONS.map(d => d.id)

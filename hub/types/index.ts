@@ -236,6 +236,7 @@ export interface FeedItem {
 
 export type InterviewIntent =
   | 'create_task'
+  | 'update_task'
   | 'schedule_event'
   | 'send_communication'
   | 'create_paperclip_issue'

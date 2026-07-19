@@ -24,6 +24,7 @@ const INTENT_PERMISSIONS: Record<InterviewIntent, ActionPermission> = {
   // (onboarding) users like invited guests may run these; everything touching
   // shared systems (Gmail sends, Chat posts, Paperclip) stays staff+.
   create_task: 'onboarding',
+  update_task: 'onboarding',
   schedule_event: 'onboarding',
   // Staff-level (read + create)
   send_communication: 'staff',
@@ -80,6 +81,11 @@ export const INTENT_DEFINITIONS: Array<{ id: InterviewIntent; description: strin
     id: 'create_task',
     description: 'User wants to create, add, or delegate a new task, todo item, or ticket.',
     expectedEntities: ['description'],
+  },
+  {
+    id: 'update_task',
+    description: 'User wants to change an EXISTING task or todo item — edit its title or notes, change/set its due date, mark it done/complete, reopen it, or delete it (e.g. "mark the invoice task done", "move the report task to Friday", "delete the old onboarding todo").',
+    expectedEntities: ['taskRef', 'change'],
   },
   {
     id: 'schedule_event',
@@ -223,6 +229,21 @@ const INTERVIEW_SEQUENCES: Record<InterviewIntent, InterviewStep[]> = {
     },
     {
       question: 'I\'ll create this task with the context provided. Confirm? (yes / edit / cancel)',
+      key: '_confirm',
+    },
+  ],
+
+  update_task: [
+    {
+      question: 'Which task should I change? (its title or part of it)',
+      key: 'taskRef',
+    },
+    {
+      question: 'What should change? (mark done / reopen / delete, a new title, or a new due date)',
+      key: 'change',
+    },
+    {
+      question: 'I\'ll apply this change to your Google Task. Confirm? (yes / edit / cancel)',
       key: '_confirm',
     },
   ],
@@ -659,6 +680,27 @@ export function advanceInterview(
   if (!state.active || !state.intent) return state
 
   const steps = INTERVIEW_SEQUENCES[state.intent]
+
+  // Post-gate follow-up: when the context-sufficiency gate blocks a completed
+  // interview, the engine re-activates it with `step` already past the last
+  // question. Fold the user's follow-up answer into the context and complete
+  // again so the gate re-runs with the enriched context. Without this branch
+  // the answer was silently discarded and the interview dead-ended — no next
+  // question, no confirm card, no chat send.
+  if (state.step >= steps.length) {
+    const priorExtra = state.context.additionalContext
+    const mergedContext = {
+      ...state.context,
+      additionalContext: [priorExtra, answer].filter(Boolean).join('\n'),
+    }
+    return {
+      ...state,
+      context: mergedContext,
+      active: false,
+      spec: buildConfirmationSpec(state.intent, mergedContext),
+    }
+  }
+
   const currentStep = steps[state.step]
   if (!currentStep) return state
 
@@ -695,6 +737,7 @@ export function cancelInterview(): InterviewState {
 
 const INTENT_LABELS: Record<InterviewIntent, string> = {
   create_task: 'Create Task',
+  update_task: 'Update Task',
   schedule_event: 'Schedule Event',
   send_communication: 'Send Communication',
   send_gmail: 'Send Gmail',
@@ -720,6 +763,7 @@ const INTENT_LABELS: Record<InterviewIntent, string> = {
 
 const INTENT_TARGET_SYSTEMS: Record<InterviewIntent, string[]> = {
   create_task: ['Google Tasks', 'Paperclip'],
+  update_task: ['Google Tasks'],
   schedule_event: ['Google Calendar'],
   send_communication: ['Paperclip AI — COO Routed'],
   send_gmail: ['Gmail'],
