@@ -10,7 +10,10 @@ import {
   threadsSignature,
   getCachedFocus,
   setCachedFocus,
+  heuristicFocusItems,
+  type FocusItem,
 } from '@/lib/gmail-focus'
+import { withTimeout } from '@/lib/timeout'
 import { recordAiAction } from '@/lib/ai-audit'
 import { newRequestId } from '@/lib/observability'
 import { geminiGenerateText } from '@/lib/gemini'
@@ -90,45 +93,56 @@ export async function GET(req: NextRequest) {
     requestId: newRequestId(),
   }
 
+  // ── AI ranking with a hard time budget, heuristic fallback below ──
+  // Ranking goes through the SAME Gemini configuration the chat path uses in
+  // production (lib/gemini geminiGenerateText). Whatever happens — model
+  // failure, timeout, empty/garbled output — the strip still renders: the
+  // deterministic heuristic ranks from live inbox signals instead.
+  let items: FocusItem[] = []
+  let model = 'heuristic'
+  let aiFailure: string | null = null
   try {
-    // Ranking goes through the SAME Gemini configuration the chat path uses
-    // in production (lib/gemini geminiGenerateText) — a route-local SDK setup
-    // with a fixed output cap failed in prod while chat worked.
     const prompt = buildFocusPrompt(userEmail, threads)
-    const { text: raw, model } = await geminiGenerateText(
-      'You are an inbox triage assistant. Follow the instructions in the user message exactly and respond with ONLY the requested JSON array — no markdown, no prose.',
-      prompt,
+    const ranked = await withTimeout(
+      geminiGenerateText(
+        'You are an inbox triage assistant. Follow the instructions in the user message exactly and respond with ONLY the requested JSON array — no markdown, no prose.',
+        prompt,
+      ),
+      20_000,
+      null,
+      'gmail-focus-rank',
     )
-    const items = parseFocusResponse(raw, new Set(threads.map(t => t.id)))
-
-    const generatedAt = new Date().toISOString()
-    setCachedFocus(userEmail, {
-      signature,
-      expiresAt: Date.now() + (items.length > 0 ? CACHE_TTL_MS : EMPTY_CACHE_TTL_MS),
-      generatedAt,
-      model,
-      items,
-    })
-
-    await recordAiAction({
-      ...auditBase,
-      status: 'success',
-      target: { ...auditBase.target, model, itemCount: items.length },
-    })
-    return NextResponse.json({ items, generatedAt, cached: false })
+    if (ranked) {
+      items = parseFocusResponse(ranked.text, new Set(threads.map(t => t.id)))
+      if (items.length > 0) model = ranked.model
+    } else {
+      aiFailure = 'rank timeout (20s)'
+    }
   } catch (err) {
-    await recordAiAction({
-      ...auditBase,
-      status: 'failed',
-      error: err instanceof Error ? err.message : 'unknown error',
-    })
-    // Advisory feature: degrade to an empty strip rather than an error state.
-    return NextResponse.json({
-      items: [],
-      generatedAt: new Date().toISOString(),
-      cached: false,
-      degraded: true,
-    })
+    aiFailure = err instanceof Error ? err.message.slice(0, 200) : 'unknown error'
   }
+
+  if (items.length === 0) {
+    items = heuristicFocusItems(threads)
+  }
+
+  const generatedAt = new Date().toISOString()
+  setCachedFocus(userEmail, {
+    signature,
+    // Heuristic results are a stopgap — keep them briefly so the AI ranker is
+    // retried soon; genuine AI rankings hold for the full TTL.
+    expiresAt: Date.now() + (model !== 'heuristic' ? CACHE_TTL_MS : EMPTY_CACHE_TTL_MS),
+    generatedAt,
+    model,
+    items,
+  })
+
+  await recordAiAction({
+    ...auditBase,
+    status: aiFailure && model === 'heuristic' ? 'failed' : 'success',
+    target: { ...auditBase.target, model, itemCount: items.length },
+    ...(aiFailure ? { error: aiFailure } : {}),
+  })
+  return NextResponse.json({ items, generatedAt, cached: false })
 }
 

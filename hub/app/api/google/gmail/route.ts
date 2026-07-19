@@ -62,6 +62,10 @@ export async function GET(req: NextRequest) {
   const view = searchParams.get('view') || 'inbox'
   const threadId = searchParams.get('threadId')
   const maxResults = clampInt(searchParams.get('maxResults'), 20, 1, 100)
+  // Gmail list-page cursor (opaque token from a previous response). Validated
+  // before URL interpolation.
+  const pageTokenRaw = searchParams.get('pageToken')
+  const pageToken = pageTokenRaw && /^[A-Za-z0-9_=-]{1,512}$/.test(pageTokenRaw) ? pageTokenRaw : null
 
   try {
     // Return a specific thread
@@ -72,13 +76,13 @@ export async function GET(req: NextRequest) {
 
     // Return inbox thread list
     const label = view === 'sent' ? 'SENT' : view === 'unread' ? 'UNREAD' : 'INBOX'
-    const list = await gmailGet<{ threads?: { id: string; snippet: string }[]; resultSizeEstimate: number }>(
-      `/threads?labelIds=${label}&maxResults=${maxResults}`,
+    const list = await gmailGet<{ threads?: { id: string; snippet: string }[]; nextPageToken?: string; resultSizeEstimate: number }>(
+      `/threads?labelIds=${label}&maxResults=${maxResults}${pageToken ? `&pageToken=${pageToken}` : ''}`,
       accessToken
     )
 
     if (!list.threads?.length) {
-      return NextResponse.json({ threads: [], unreadCount: 0 })
+      return NextResponse.json({ threads: [], unreadCount: 0, nextPageToken: null })
     }
 
     // Fetch metadata for each thread in parallel
@@ -90,9 +94,9 @@ export async function GET(req: NextRequest) {
       )
     )
 
-    // Get unread count
+    // Get unread count (first page only — pagination requests reuse the badge)
     let unreadCount = 0
-    try {
+    if (!pageToken) try {
       const unread = await gmailGet<{ threads?: unknown[] }>(`/threads?labelIds=UNREAD&maxResults=1`, accessToken)
       // Gmail doesn't give total count cheaply — we get resultSizeEstimate elsewhere
       const labelInfo = await gmailGet<{ messagesUnread: number }>(`/labels/INBOX`, accessToken)
@@ -104,6 +108,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       threads: threads.filter(Boolean),
       unreadCount,
+      nextPageToken: list.nextPageToken ?? null,
     })
   } catch (err) {
     return googleApiErrorResponse(err)

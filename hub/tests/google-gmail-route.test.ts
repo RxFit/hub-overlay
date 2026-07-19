@@ -199,8 +199,32 @@ describe('GET /api/google/gmail', () => {
     stubGmail([['/threads?labelIds=SENT', { threads: [] }]])
     const res = await GET(getReq('?view=sent&maxResults=9999'))
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ threads: [], unreadCount: 0 })
+    expect(await res.json()).toEqual({ threads: [], unreadCount: 0, nextPageToken: null })
     expect(fetchCalls[0].url).toContain('labelIds=SENT&maxResults=100')
+  })
+
+  it('passes a valid pageToken through, returns nextPageToken, and skips the unread count on paged requests', async () => {
+    stubGmail([
+      ['/threads?labelIds=INBOX', { threads: [{ id: 'a', snippet: 's' }], nextPageToken: 'tok-2' }],
+      ['/threads/a?format=metadata', { id: 'a', messages: [{ id: 'm', threadId: 'a', payload: { headers: [] } }] }],
+    ])
+    const res = await GET(getReq('?view=inbox&maxResults=50&pageToken=tok-1'))
+    expect(res.status).toBe(200)
+    const json = await res.json()
+    expect(json.nextPageToken).toBe('tok-2')
+    expect(json.unreadCount).toBe(0)
+    expect(fetchCalls[0].url).toContain('pageToken=tok-1')
+    // Paged requests must not re-fetch the unread count / label endpoints.
+    expect(fetchCalls.some(c => c.url.includes('labelIds=UNREAD') || c.url.includes('/labels/INBOX'))).toBe(false)
+  })
+
+  it('drops a malformed pageToken instead of forwarding it to Gmail', async () => {
+    stubGmail([
+      ['/threads?labelIds=INBOX', { threads: [] }],
+    ])
+    const res = await GET(getReq(`?view=inbox&pageToken=${encodeURIComponent('bad token!<>')}`))
+    expect(res.status).toBe(200)
+    expect(fetchCalls[0].url).not.toContain('pageToken')
   })
 
   it('treats an unread-count failure as non-fatal (threads still returned, count 0)', async () => {

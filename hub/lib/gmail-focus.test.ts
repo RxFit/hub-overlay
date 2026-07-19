@@ -6,6 +6,7 @@ import {
   getCachedFocus,
   setCachedFocus,
   __resetFocusCacheForTest,
+  heuristicFocusItems,
   MAX_FOCUS_ITEMS,
   MAX_REASON_LENGTH,
   type FocusItem,
@@ -30,6 +31,47 @@ describe('threadsSignature', () => {
     expect(threadsSignature([...a, thread({ id: 'b' })])).not.toBe(sigA)
     expect(threadsSignature([thread({ id: 'a', isUnread: false })])).not.toBe(sigA)
     expect(threadsSignature([thread({ id: 'a', isUnread: true })])).toBe(sigA)
+  })
+})
+
+describe('heuristicFocusItems (AI-outage fallback)', () => {
+  const fresh = () => new Date().toUTCString()
+  const stale = () => new Date(Date.now() - 3 * 24 * 3600_000).toUTCString()
+
+  it('surfaces unread human conversations with a reply action, top score first', () => {
+    const items = heuristicFocusItems([
+      thread({ id: 'convo', from: 'Sarah Allen <sarah@example.com>', isUnread: true, messageCount: 3, date: fresh() }),
+      thread({ id: 'solo', from: 'Bob <bob@example.com>', isUnread: true, messageCount: 1, date: stale() }),
+    ])
+    expect(items.map(i => i.id)).toEqual(['convo', 'solo'])
+    expect(items[0].priority).toBe(100) // unread + human + multi-message + recent
+    expect(items[0].action).toBe('reply')
+    expect(items[1].action).toBe('read')
+    expect(items[0].reason.length).toBeGreaterThan(0)
+  })
+
+  it('filters out low-signal threads: read automated mail never makes the strip', () => {
+    expect(
+      heuristicFocusItems([
+        thread({ id: 'promo', from: 'Deals <no-reply@marketing.example.com>', isUnread: false, messageCount: 1, date: stale() }),
+        thread({ id: 'notif', from: 'GitHub <notifications@github.com>', isUnread: true, messageCount: 1, date: stale() }),
+      ])
+    ).toEqual([])
+  })
+
+  it('caps output at max (default 3) even when more threads qualify', () => {
+    const many = ['a', 'b', 'c', 'd', 'e'].map(id =>
+      thread({ id, from: `${id} <${id}@example.com>`, isUnread: true, messageCount: 2, date: fresh() })
+    )
+    expect(heuristicFocusItems(many)).toHaveLength(3)
+    expect(heuristicFocusItems(many, 5)).toHaveLength(5)
+  })
+
+  it('treats an unparseable date as no recency bonus, not NaN', () => {
+    const [item] = heuristicFocusItems([
+      thread({ id: 'x', from: 'A <a@example.com>', isUnread: true, messageCount: 1, date: 'not-a-date' }),
+    ])
+    expect(item.priority).toBe(70) // unread(40) + human(30), no recency
   })
 })
 

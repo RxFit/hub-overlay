@@ -53,6 +53,9 @@ export function GmailView({
     actionNotice,
     trashThread,
     saveThreadAsTask,
+    loadMore,
+    hasMore,
+    loadingMore,
   } = useGmailInbox({ onUnreadCount })
 
   /* ── Action menu (long-press a list row, right-click, or ⋯ in the reader) ── */
@@ -228,6 +231,15 @@ export function GmailView({
               <div className="gmail-list-item__snippet">{t.snippet}</div>
             </button>
           ))
+        )}
+        {!loading && !isError && threads.length > 0 && hasMore && (
+          <button
+            className="gmail-load-more"
+            onClick={() => loadMore()}
+            disabled={loadingMore}
+          >
+            {loadingMore ? 'Loading…' : 'Load older emails'}
+          </button>
         )}
       </div>
 
