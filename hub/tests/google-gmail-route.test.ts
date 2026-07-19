@@ -137,28 +137,41 @@ describe('GET /api/google/gmail', () => {
     expect(thread.messages[0]).toMatchObject({
       from: 'a@x.com',
       subject: 'Hello',
-      body: 'plain body text',
+      body: '<div style="white-space:pre-wrap">plain body text</div>',
       isUnread: true,
       inReplyTo: '<mid-1>',
     })
   })
 
-  it('falls back to the text/plain part, then the snippet, when decoding bodies', async () => {
+  it('prefers text/html (even nested in multipart), then text/plain escaped, then the snippet', async () => {
     stubGmail([
       ['/threads/t2?format=full', {
         id: 't2',
         messages: [
           {
+            // multipart/alternative nested inside multipart/mixed — the HTML
+            // part must win so designed emails render as authored.
+            id: 'm0', threadId: 't2',
+            payload: { parts: [
+              { mimeType: 'multipart/alternative', parts: [
+                { mimeType: 'text/plain', body: { data: b64('plain alt') } },
+                { mimeType: 'text/html', body: { data: b64('<h1>Designed</h1>') } },
+              ] },
+            ] },
+          },
+          {
             id: 'm1', threadId: 't2',
-            payload: { parts: [{ mimeType: 'text/plain', body: { data: b64('part body') } }] },
+            payload: { parts: [{ mimeType: 'text/plain', body: { data: b64('part <body>') } }] },
           },
           { id: 'm2', threadId: 't2', snippet: 'only snippet' },
         ],
       }],
     ])
     const { thread } = await (await GET(getReq('?threadId=t2'))).json()
-    expect(thread.messages[0].body).toBe('part body')
-    expect(thread.messages[1].body).toBe('only snippet')
+    expect(thread.messages[0].body).toBe('<h1>Designed</h1>')
+    // Plain text is HTML-escaped and newline-preserving so it renders safely.
+    expect(thread.messages[1].body).toBe('<div style="white-space:pre-wrap">part &lt;body&gt;</div>')
+    expect(thread.messages[2].body).toBe('only snippet')
   })
 
   it('lists inbox threads with metadata, drops per-thread failures, and reports the label unread count', async () => {
@@ -186,8 +199,32 @@ describe('GET /api/google/gmail', () => {
     stubGmail([['/threads?labelIds=SENT', { threads: [] }]])
     const res = await GET(getReq('?view=sent&maxResults=9999'))
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ threads: [], unreadCount: 0 })
+    expect(await res.json()).toEqual({ threads: [], unreadCount: 0, nextPageToken: null })
     expect(fetchCalls[0].url).toContain('labelIds=SENT&maxResults=100')
+  })
+
+  it('passes a valid pageToken through, returns nextPageToken, and skips the unread count on paged requests', async () => {
+    stubGmail([
+      ['/threads?labelIds=INBOX', { threads: [{ id: 'a', snippet: 's' }], nextPageToken: 'tok-2' }],
+      ['/threads/a?format=metadata', { id: 'a', messages: [{ id: 'm', threadId: 'a', payload: { headers: [] } }] }],
+    ])
+    const res = await GET(getReq('?view=inbox&maxResults=50&pageToken=tok-1'))
+    expect(res.status).toBe(200)
+    const json = await res.json()
+    expect(json.nextPageToken).toBe('tok-2')
+    expect(json.unreadCount).toBe(0)
+    expect(fetchCalls[0].url).toContain('pageToken=tok-1')
+    // Paged requests must not re-fetch the unread count / label endpoints.
+    expect(fetchCalls.some(c => c.url.includes('labelIds=UNREAD') || c.url.includes('/labels/INBOX'))).toBe(false)
+  })
+
+  it('drops a malformed pageToken instead of forwarding it to Gmail', async () => {
+    stubGmail([
+      ['/threads?labelIds=INBOX', { threads: [] }],
+    ])
+    const res = await GET(getReq(`?view=inbox&pageToken=${encodeURIComponent('bad token!<>')}`))
+    expect(res.status).toBe(200)
+    expect(fetchCalls[0].url).not.toContain('pageToken')
   })
 
   it('treats an unread-count failure as non-fatal (threads still returned, count 0)', async () => {

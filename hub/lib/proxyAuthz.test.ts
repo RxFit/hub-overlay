@@ -43,6 +43,50 @@ describe('requiredWriteRank', () => {
     expect(requiredWriteRank('POST', '/api/companies')).toBe(ROLE_RANK.admin)
   })
 
+  it('lets staff comment on an issue (right-panel Phase 2)', () => {
+    expect(requiredWriteRank('POST', '/api/issues/abc-123/comments')).toBe(ROLE_RANK.staff)
+    // Uppercase-UUID form must resolve identically (case-insensitive matching)
+    expect(requiredWriteRank('POST', '/api/issues/ABC-123/comments')).toBe(ROLE_RANK.staff)
+    // Deeper subpaths are NOT comments and fall closed to admin
+    expect(requiredWriteRank('POST', '/api/issues/abc-123/comments/extra')).toBe(ROLE_RANK.admin)
+  })
+
+  it('requires admin for agent lifecycle actions (wake/pause/resume/clear-error)', () => {
+    for (const action of ['wakeup', 'pause', 'resume', 'clear-error']) {
+      expect(requiredWriteRank('POST', `/api/agents/abc-123/${action}`)).toBe(ROLE_RANK.admin)
+    }
+    // Unlisted agent subpath writes stay fail-closed at admin
+    expect(requiredWriteRank('POST', '/api/agents/abc-123/terminate')).toBe(ROLE_RANK.admin)
+  })
+
+  it('lets staff fire an existing routine, but requires admin to manage routines (Phase 3)', () => {
+    expect(requiredWriteRank('POST', '/api/routines/abc-123/run')).toBe(ROLE_RANK.staff)
+    expect(requiredWriteRank('POST', '/api/routines/ABC-123/run')).toBe(ROLE_RANK.staff)
+    expect(requiredWriteRank('PATCH', '/api/routines/abc-123')).toBe(ROLE_RANK.admin)
+    expect(requiredWriteRank('DELETE', '/api/routines/abc-123')).toBe(ROLE_RANK.admin)
+    expect(requiredWriteRank('POST', '/api/companies/abc-123/routines')).toBe(ROLE_RANK.admin)
+    expect(requiredWriteRank('POST', '/api/routines/abc-123/triggers')).toBe(ROLE_RANK.admin)
+    // routine-trigger mutations stay fail-closed at admin
+    expect(requiredWriteRank('PATCH', '/api/routine-triggers/abc-123')).toBe(ROLE_RANK.admin)
+  })
+
+  it('requires admin for goal CRUD (Phase 3)', () => {
+    expect(requiredWriteRank('POST', '/api/companies/abc-123/goals')).toBe(ROLE_RANK.admin)
+    expect(requiredWriteRank('PATCH', '/api/goals/abc-123')).toBe(ROLE_RANK.admin)
+    expect(requiredWriteRank('DELETE', '/api/goals/abc-123')).toBe(ROLE_RANK.admin)
+  })
+
+  it('requires admin for workspace runtime services and workspace CRUD (Phase 4)', () => {
+    for (const action of ['start', 'stop', 'restart']) {
+      expect(requiredWriteRank('POST', `/api/projects/abc-1/workspaces/def-2/runtime-services/${action}`)).toBe(ROLE_RANK.admin)
+    }
+    expect(requiredWriteRank('POST', '/api/projects/abc-1/workspaces')).toBe(ROLE_RANK.admin)
+    expect(requiredWriteRank('PATCH', '/api/projects/abc-1/workspaces/def-2')).toBe(ROLE_RANK.admin)
+    expect(requiredWriteRank('DELETE', '/api/projects/abc-1/workspaces/def-2')).toBe(ROLE_RANK.admin)
+    // Unknown runtime action falls closed to admin too
+    expect(requiredWriteRank('POST', '/api/projects/abc-1/workspaces/def-2/runtime-services/nuke')).toBe(ROLE_RANK.admin)
+  })
+
   it('lets staff create an issue', () => {
     expect(requiredWriteRank('POST', '/api/issues')).toBe(ROLE_RANK.staff)
   })

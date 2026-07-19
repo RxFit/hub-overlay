@@ -56,9 +56,42 @@ export interface Agent {
   description: string | null
   adapter: string
   status: 'active' | 'inactive' | 'error'
+  /** Paperclip's native 7-value status (idle/paused/running/…), kept alongside
+      the Hub's 3-state model so the agent roster can distinguish paused from
+      idle and offer the right lifecycle action. */
+  rawStatus?: string
   companyId: string
   createdAt: string
   lastHeartbeat: string | null
+}
+
+export interface Routine {
+  id: string
+  title: string
+  description: string | null
+  /** Paperclip routine status — 'active' | 'paused' (kept open for drift). */
+  status: string
+  assigneeAgentId: string | null
+  assigneeName: string | null
+  projectId: string | null
+  companyId: string
+  createdAt: string | null
+  updatedAt: string | null
+}
+
+export interface Goal {
+  id: string
+  title: string
+  description: string | null
+  /** 'company' | 'team' | 'agent' | 'task' (kept open for drift). */
+  level: string
+  /** 'planned' | 'active' | 'achieved' | 'cancelled' (kept open for drift). */
+  status: string
+  parentId: string | null
+  ownerAgentId: string | null
+  companyId: string
+  createdAt: string | null
+  updatedAt: string | null
 }
 
 export interface Project {
@@ -203,6 +236,7 @@ export interface FeedItem {
 
 export type InterviewIntent =
   | 'create_task'
+  | 'update_task'
   | 'schedule_event'
   | 'send_communication'
   | 'create_paperclip_issue'
@@ -221,6 +255,12 @@ export type InterviewIntent =
   // F3: Direct human-confirmed send actions (Gmail + Google Chat)
   | 'send_gmail'
   | 'post_chat_message'
+  // Right-panel Phase 3: Routines + Goals orchestration
+  | 'create_routine'
+  | 'update_routine'
+  | 'run_routine'
+  | 'create_goal'
+  | 'update_goal'
 
 export interface InterviewStep {
   question: string
@@ -253,8 +293,10 @@ export interface ActionSpec {
   gateToken?: string
 }
 
-/** Minimum Hub role required to execute an action */
-export type ActionPermission = 'staff' | 'admin' | 'superadmin'
+/** Minimum Hub role required to execute an action. 'onboarding' marks
+ *  personal-productivity actions (the user's OWN Google account — Tasks,
+ *  Calendar) that even unassigned pending users may run. */
+export type ActionPermission = 'onboarding' | 'staff' | 'admin' | 'superadmin'
 
 /* ── Multi-Tenant KPI Types ── */
 

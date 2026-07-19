@@ -62,6 +62,10 @@ export async function GET(req: NextRequest) {
   const view = searchParams.get('view') || 'inbox'
   const threadId = searchParams.get('threadId')
   const maxResults = clampInt(searchParams.get('maxResults'), 20, 1, 100)
+  // Gmail list-page cursor (opaque token from a previous response). Validated
+  // before URL interpolation.
+  const pageTokenRaw = searchParams.get('pageToken')
+  const pageToken = pageTokenRaw && /^[A-Za-z0-9_=-]{1,512}$/.test(pageTokenRaw) ? pageTokenRaw : null
 
   try {
     // Return a specific thread
@@ -72,13 +76,13 @@ export async function GET(req: NextRequest) {
 
     // Return inbox thread list
     const label = view === 'sent' ? 'SENT' : view === 'unread' ? 'UNREAD' : 'INBOX'
-    const list = await gmailGet<{ threads?: { id: string; snippet: string }[]; resultSizeEstimate: number }>(
-      `/threads?labelIds=${label}&maxResults=${maxResults}`,
+    const list = await gmailGet<{ threads?: { id: string; snippet: string }[]; nextPageToken?: string; resultSizeEstimate: number }>(
+      `/threads?labelIds=${label}&maxResults=${maxResults}${pageToken ? `&pageToken=${pageToken}` : ''}`,
       accessToken
     )
 
     if (!list.threads?.length) {
-      return NextResponse.json({ threads: [], unreadCount: 0 })
+      return NextResponse.json({ threads: [], unreadCount: 0, nextPageToken: null })
     }
 
     // Fetch metadata for each thread in parallel
@@ -90,9 +94,9 @@ export async function GET(req: NextRequest) {
       )
     )
 
-    // Get unread count
+    // Get unread count (first page only — pagination requests reuse the badge)
     let unreadCount = 0
-    try {
+    if (!pageToken) try {
       const unread = await gmailGet<{ threads?: unknown[] }>(`/threads?labelIds=UNREAD&maxResults=1`, accessToken)
       // Gmail doesn't give total count cheaply — we get resultSizeEstimate elsewhere
       const labelInfo = await gmailGet<{ messagesUnread: number }>(`/labels/INBOX`, accessToken)
@@ -104,6 +108,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       threads: threads.filter(Boolean),
       unreadCount,
+      nextPageToken: list.nextPageToken ?? null,
     })
   } catch (err) {
     return googleApiErrorResponse(err)
@@ -239,13 +244,45 @@ export async function POST(req: NextRequest) {
    now live in @/lib/google (shared with the AI context builder). Only the
    full-body parsing used by the thread view remains route-local. */
 
+type GmailPart = NonNullable<NonNullable<GmailMessage['payload']>['parts']>[number] & {
+  parts?: GmailPart[]
+}
+
+/** Depth-first search for a MIME part (multipart/alternative bodies nest
+ *  inside multipart/mixed and multipart/related, so a flat find() misses
+ *  the HTML part of most real-world newsletters). */
+function findPart(parts: GmailPart[] | undefined, mimeType: string): GmailPart | null {
+  for (const p of parts ?? []) {
+    if (p.mimeType === mimeType && p.body?.data) return p
+    const nested = findPart(p.parts, mimeType)
+    if (nested) return nested
+  }
+  return null
+}
+
+const escapeHtml = (s: string) =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+/** Decode a message body for the thread view, PREFERRING text/html so
+ *  designed emails (newsletters, graphics, styled sign-offs) render as
+ *  authored; plain-text bodies are escaped and newline-preserved. The
+ *  client sanitizes before rendering either way. */
 function decodeBody(msg: GmailMessage): string {
-  const data =
-    msg.payload?.body?.data ||
-    msg.payload?.parts?.find(p => p.mimeType === 'text/plain')?.body?.data ||
-    ''
-  if (!data) return msg.snippet ?? ''
-  return Buffer.from(data, 'base64').toString('utf-8')
+  const payload = msg.payload
+  const parts = payload?.parts as GmailPart[] | undefined
+
+  const htmlData =
+    (payload?.mimeType === 'text/html' ? payload?.body?.data : undefined) ||
+    findPart(parts, 'text/html')?.body?.data
+  if (htmlData) return Buffer.from(htmlData, 'base64').toString('utf-8')
+
+  const plainData =
+    (payload?.mimeType === 'text/plain' ? payload?.body?.data : undefined) ||
+    payload?.body?.data ||
+    findPart(parts, 'text/plain')?.body?.data
+  if (!plainData) return escapeHtml(msg.snippet ?? '')
+  const text = Buffer.from(plainData, 'base64').toString('utf-8')
+  return `<div style="white-space:pre-wrap">${escapeHtml(text)}</div>`
 }
 
 function parseThread(thread: GmailThread) {

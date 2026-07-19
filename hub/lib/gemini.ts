@@ -4,6 +4,15 @@ import { SKILL_CATALOG_PROMPT } from './skills'
 import { fenceUntrusted, UNTRUSTED_CONTENT_POLICY } from './prompt-safety'
 import { IDLE_TIMEOUT_MS, CONNECT_TIMEOUT_MS } from './timeout-config'
 import { emit, newRequestId, startTimer, type AiProvider } from './observability'
+import type { SystemPromptParts } from './claude'
+
+/* Local join for the union prompt form — Gemini's systemInstruction wants one
+   string; the Claude path receives the parts intact for prompt caching. Kept
+   local (not imported from claude.ts) so test mocks of @/lib/claude never need
+   to provide it. */
+function sysText(sp: string | SystemPromptParts): string {
+  return typeof sp === 'string' ? sp : sp.staticPrefix + sp.dynamic
+}
 
 /* Lazy-initialized so the API key is read at runtime, not build time.
    Prevents empty-key 403s when Railway injects env vars after the build step. */
@@ -123,27 +132,31 @@ When a user requests any of these, activate Interview Mode to collect the detail
 If they lack the required role, politely tell them what permission level is needed.`
 
 /* ── EXA Search Mode system prompt ──
-   Used when the user toggles the EXA search button in the header. In this mode
-   the assistant is a pure semantic-search summarizer over Exa.AI results — none
-   of the Hub orchestration, Interview Mode, skill, or internal-search behavior
-   applies. Kept deliberately narrow so the model does not drift into Hub actions
-   or invent tool suggestions while the toggle is on. */
-const EXA_SEARCH_SYSTEM_PROMPT = `You are the Hub's EXA Search assistant. The user has toggled EXA Search mode ON, turning this chat into a semantic web-search tool powered by Exa.AI. This is a research-only mode.
+   Used when the user toggles the EXA search button in the header. Hybrid
+   SEMANTIC-ONLY research mode over exactly two backends:
+     1. Exa.AI — semantic web search (public sources)
+     2. Vertex AI — the Internal Brain, semantic search over the company's own
+        Google Drive/Gmail/Chat documents
+   None of the Hub orchestration, Interview Mode, skill, Paperclip, or live
+   Workspace behavior applies. Kept deliberately narrow so the model does not
+   drift into Hub actions or invent tool suggestions while the toggle is on. */
+const EXA_SEARCH_SYSTEM_PROMPT = `You are the Hub's EXA Search assistant. The user has toggled EXA Search mode ON, turning this chat into a semantic research tool with exactly TWO search backends: Exa.AI (semantic web search over public sources) and the Internal Brain (Vertex AI semantic search over the company's own documents in Google Drive, Gmail, and Chat). This is a research-only mode.
 
 Your job:
-- Answer the user's query using ONLY the "Web Search Results (Exa.AI)" provided in your context below.
-- Synthesize the results into a clear, well-organized answer (great for pulling academic papers, business details, market/competitor research, or documentation).
-- ALWAYS cite your sources inline as markdown links using the exact URLs from the results, e.g. [source](https://example.com). End with a short "Sources" list of the links you used.
+- Answer the user's query using ONLY the "Web Search Results (Exa.AI)" and "Internal Knowledge (Vertex AI)" sections provided in your context below.
+- Synthesize BOTH sources into one clear, well-organized answer (great for combining market/competitor/academic research with the company's own documents and data).
+- ALWAYS attribute claims to their source: web claims cite inline markdown links with the exact URLs from the results, e.g. [source](https://example.com); internal claims name the document title and label it "(internal)". Never present internal company data as public information or vice versa.
+- End with a short "Sources" list — web links first, then internal document titles.
 - Lead with the direct answer, then supporting detail. Use bullet points where it aids scanning.
 
 Hard rules for this mode:
-- Do NOT fabricate facts, URLs, publication dates, or citations. If the results don't cover the query, say so plainly and suggest a refined search query.
+- Do NOT fabricate facts, URLs, document titles, publication dates, or citations. If neither source covers the query, say so plainly and suggest a refined search query.
 - Do NOT attempt any Hub action: no Interview Mode, no task/issue creation, no Confirm Cards, no skill protocols. Those tools are disabled while EXA Search is on.
 - Do NOT emit skill-suggestion metadata comments.
-- If no results were returned, tell the user the search came back empty and suggest rephrasing.
-The user can keep chatting about these results — later turns in this mode continue to summarize whatever new results are provided.`
+- If one source returned nothing, answer from the other and note which came back empty.
+The user can keep chatting about these results — later turns in this mode continue to synthesize whatever new results are provided.`
 
-export function buildSystemPrompt(context: {
+export interface SystemPromptContext {
   projects?: string
   summary?: string
   agentActivity?: string
@@ -162,9 +175,29 @@ export function buildSystemPrompt(context: {
   interviewMode?: boolean
   activeSkill?: string
   activeSkillContent?: string
-  /** EXA Search mode — pure Exa.AI search summarizer; bypasses all Hub tooling. */
+  /** EXA Search mode — hybrid semantic research (Exa web + Vertex internal);
+   *  bypasses all other Hub tooling. */
   exaMode?: boolean
-}): string {
+  /** EXA mode only: the Exa.AI request FAILED (vs. genuinely zero results) —
+   *  the prompt must disclose that live search didn't run. */
+  exaSearchFailed?: boolean
+  /** EXA mode only: formatted Internal Brain (Vertex AI) results block. */
+  exaInternalContext?: string
+  /** EXA mode only: the Vertex AI request FAILED (vs. zero internal matches). */
+  exaInternalFailed?: boolean
+}
+
+/**
+ * Prompt-caching split (P0, deep-research finding): the base persona + the
+ * untrusted-content policy are BYTE-IDENTICAL on every request, so they form
+ * `staticPrefix` — the Claude client puts a cache_control breakpoint on that
+ * block and repeat requests read it at 0.1x input price. Everything from the
+ * current date down (workspace context, injected search results) is `dynamic`
+ * and must stay AFTER the breakpoint — a timestamp above it would make every
+ * request a guaranteed cache miss. staticPrefix + dynamic concatenates to
+ * exactly the string buildSystemPrompt always produced (locked by test).
+ */
+export function buildSystemPromptParts(context: SystemPromptContext): { staticPrefix: string; dynamic: string } {
   // Always inject the real current date so the model never guesses
   const now = new Date()
   const dateStr = now.toLocaleDateString('en-US', {
@@ -181,20 +214,31 @@ export function buildSystemPrompt(context: {
      suggestedTools instruction so no other "tool" can be triggered while the
      EXA toggle is on (the user's explicit requirement). */
   if (context.exaMode) {
-    let p = EXA_SEARCH_SYSTEM_PROMPT + '\n\n'
-    p += UNTRUSTED_CONTENT_POLICY + '\n\n'
-    p += `Current date and time: ${dateStr}, ${timeStr}\n\n`
+    const staticPrefix = EXA_SEARCH_SYSTEM_PROMPT + '\n\n' + UNTRUSTED_CONTENT_POLICY + '\n\n'
+    let p = `Current date and time: ${dateStr}, ${timeStr}\n\n`
     if (context.injectedContext) {
       p += `## Web Search Results (Exa.AI)\n${fenceUntrusted('Exa results', context.injectedContext)}\n\nSummarize and cite these results to answer the user's query.\n\n`
+    } else if (context.exaSearchFailed) {
+      p += `## Web Search Results (Exa.AI)\n\n[LIVE WEB SEARCH IS CURRENTLY UNAVAILABLE — the Exa.AI request failed. You MUST open your reply by telling the user that live web search could not run right now. If you then answer from prior knowledge, clearly label it as such (not from a live search) and note it may be out of date.]\n\n`
     } else {
       p += `## Web Search Results (Exa.AI)\n\n[No results were returned for this query — tell the user the search came back empty and suggest they rephrase.]\n\n`
     }
-    return p
+    /* ── Internal Brain (Vertex AI semantic database) — the second backend of
+       hybrid EXA mode. Fenced as untrusted like every injected block (document
+       titles/snippets are authored content, not instructions). Empty vs failed
+       are disclosed distinctly so the model never fabricates internal docs. */
+    if (context.exaInternalContext) {
+      p += `## Internal Knowledge (Vertex AI — company semantic database)\n${fenceUntrusted('Internal Brain results', context.exaInternalContext)}\n\nThese are the company's OWN documents (Google Drive/Gmail/Chat). Cite them by document title labeled "(internal)" — never as public web sources.\n\n`
+    } else if (context.exaInternalFailed) {
+      p += `## Internal Knowledge (Vertex AI — company semantic database)\n\n[Internal semantic search is temporarily unavailable — the Vertex AI request failed. Note this briefly in your reply; answer from the web results and NEVER invent internal documents.]\n\n`
+    } else {
+      p += `## Internal Knowledge (Vertex AI — company semantic database)\n\n[No matching internal documents were found for this query. Say so briefly if the user asked about internal/company data; do NOT invent internal documents.]\n\n`
+    }
+    return { staticPrefix, dynamic: p }
   }
 
-  let prompt = HUB_SYSTEM_PROMPT + '\n\n'
-  prompt += UNTRUSTED_CONTENT_POLICY + '\n\n'
-  prompt += `Current date and time: ${dateStr}, ${timeStr}\n\n`
+  const staticPrefix = HUB_SYSTEM_PROMPT + '\n\n' + UNTRUSTED_CONTENT_POLICY + '\n\n'
+  let prompt = `Current date and time: ${dateStr}, ${timeStr}\n\n`
 
   /* ── Role context ── */
   if (context.role) {
@@ -290,7 +334,13 @@ Question sequences by intent:
     prompt += `Currently active context (retrieved on the user's behalf — web results, documents, attachments):\n${fenceUntrusted('retrieved context', context.injectedContext)}\n\nUse this context to inform your response. The user is asking about this specific item.\n\n`
   }
 
-  return prompt
+  return { staticPrefix, dynamic: prompt }
+}
+
+/** Back-compat single-string form — exactly staticPrefix + dynamic. */
+export function buildSystemPrompt(context: SystemPromptContext): string {
+  const parts = buildSystemPromptParts(context)
+  return parts.staticPrefix + parts.dynamic
 }
 
 export function chatMessagesToContents(messages: ChatMessage[]): Content[] {
@@ -311,9 +361,16 @@ export function chatMessagesToContents(messages: ChatMessage[]): Content[] {
  * hub/lib/claude.ts, not the Google SDK — see hub/lib/claude.ts.
  */
 const APPROVED_GEMINI_MODELS: readonly string[] = [
-  'gemini-2.5-flash',    // Primary — fast, 1M context
-  'gemini-2.5-pro',      // Fallback — proven reasoning model
+  'gemini-3.5-flash',    // Primary — GA May 2026, frontier-level at flash speed/cost
+  'gemini-2.5-flash',    // Fallback — fast, 1M context, proven on this key
+  'gemini-2.5-pro',      // Last resort — proven reasoning model
 ] as const
+
+/* Gemini rotation chain, strongest-fast-first. 3.5 Flash serves the routine
+   app functionality (tasks, documents, calendar, Gmail, Google Chat
+   interactions via recall/deep_dive); if it errors on this key the rotation
+   self-heals down to the proven 2.5 models rather than failing the request. */
+const GEMINI_MODEL_CHAIN = ['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'] as const
 
 function assertApprovedGeminiModel(model: string): void {
   if (!APPROVED_GEMINI_MODELS.includes(model)) {
@@ -334,6 +391,7 @@ function getModelDisplayName(model: string): string {
   switch (model) {
     case 'claude-fable-5': return 'Claude Fable 5'
     case 'claude-sonnet-4-6': return 'Claude Sonnet 4.6'
+    case 'gemini-3.5-flash': return 'Gemini 3.5 Flash'
     case 'gemini-2.5-flash': return 'Gemini 2.5 Flash'
     case 'gemini-2.5-pro': return 'Gemini 2.5 Pro'
     default: return model
@@ -343,17 +401,24 @@ function getModelDisplayName(model: string): string {
 /**
  * UseCase-based routing: decides whether to try Claude first.
  *
- * Model priority by use case (Claude chain = Fable 5 → Sonnet 4.6):
- *   interview  → Claude Fable 5 → Claude Sonnet 4.6 → Gemini 2.5 Flash → Gemini 2.5 Pro
- *   deep_dive (with skill active) → Claude Fable 5 → Claude Sonnet 4.6 → Gemini Flash → Gemini Pro
- *   execute (Pre-Cog quality gate) → Claude Fable 5 → Claude Sonnet 4.6 → Gemini Flash → Gemini Pro
+ * Model priority by use case (operator decision: Gemini 3.5 Flash carries all
+ * basic functionality and tool/action requests; the Claude chain — Fable 5 →
+ * Sonnet 4.6 — is reserved for the heavyweight research/skill paths, and
+ * remains the cross-provider fallback when the Gemini chain is down):
+ *   exa_search (EXA toggle) → Claude Fable 5 → Claude Sonnet 4.6 → Gemini chain
+ *   deep_dive (with skill active) → Claude Fable 5 → Claude Sonnet 4.6 → Gemini chain
  *
- *   recall     → Gemini 2.5 Flash → Gemini 2.5 Pro
- *   deep_dive (no skill) → Gemini 2.5 Flash → Gemini 2.5 Pro
+ *   recall     → Gemini chain (3.5 Flash → 2.5 Flash → 2.5 Pro)
+ *   deep_dive (no skill) → Gemini chain (3.5 Flash → 2.5 Flash → 2.5 Pro)
+ *   interview  → Gemini chain (tool/action requests are basic functionality)
+ *   execute (Pre-Cog quality gate) → Gemini chain
+ *
+ * exa_search is a server-side-only useCase (the client never sends it): the
+ * chat route sets it for EXA Search mode so research synthesis + citation gets
+ * the strongest model, not the fast default that plain deep_dive falls to.
  */
 function shouldUseClaude(useCase: string, hasActiveSkill: boolean): boolean {
-  if (useCase === 'interview') return true
-  if (useCase === 'execute') return true
+  if (useCase === 'exa_search') return true
   if (useCase === 'deep_dive' && hasActiveSkill) return true
   return false
 }
@@ -545,7 +610,7 @@ export function __resetModelCooldownsForTest(): void {
  */
 export async function* streamChat(
   messages: ChatMessage[],
-  systemPrompt: string,
+  systemPrompt: string | SystemPromptParts,
   useCase: string = 'deep_dive',
   hasActiveSkill: boolean = false,
   requestId: string = newRequestId(),
@@ -596,9 +661,10 @@ export async function* streamChat(
  */
 async function* walkClaudeChain(
   messages: ChatMessage[],
-  systemPrompt: string,
+  systemPrompt: string | SystemPromptParts,
   obs: ObsCtx,
   signal?: AbortSignal,
+  claudeOpts: { effort?: import('@/lib/claude').ClaudeEffort; maxTokens?: number } = {},
 ): AsyncGenerator<string | { modelUsed: string }, 'served' | 'fallthrough'> {
   const { streamClaudeChat } = await import('@/lib/claude')
 
@@ -622,15 +688,32 @@ async function* walkClaudeChain(
       yield { modelUsed: getModelDisplayName(claudeModel) }
 
       // Idle watchdog guards against a connected-then-stalled Claude stream.
-      const claudeIter = streamClaudeChat(messages, systemPrompt, { model: claudeModel })[Symbol.asyncIterator]()
+      const claudeIter = streamClaudeChat(messages, systemPrompt, { model: claudeModel, ...claudeOpts })[Symbol.asyncIterator]()
       for await (const chunk of withIdleWatchdog(claudeIter, IDLE_TIMEOUT_MS, claudeModel, () =>
         emit({ type: 'ai_timeout', requestId: obs.requestId, layer: 'idle', provider: 'claude', model: claudeModel }))) {
         // Client aborted mid-stream (FIX4): stop quietly. Returning tears down
         // the watchdog (its finally closes the upstream reader). No error is
         // surfaced and nothing is restarted, so no-duplicate-answer holds.
         if (signal?.aborted) return 'served'
+        // Empty chunks are liveness heartbeats (thinking deltas / pings from
+        // streamClaudeChat): they reset the idle watchdog above but are NOT
+        // user-visible output — don't forward them, and don't let them mark
+        // the stream as "answer started" (a pre-text failure must still be
+        // allowed to rotate to the next model).
+        if (chunk === '') continue
         claudeEmitted = true
         yield chunk
+      }
+      // ZERO-TEXT COMPLETION GUARD: a stream that ends cleanly having emitted
+      // no visible text (e.g. the whole max_tokens budget consumed by internal
+      // reasoning) is a FAILED attempt, not success. Returning 'served' here
+      // was the "silent empty answer" bug — the client received a clean [DONE]
+      // and rendered an empty bubble with no error. Rotate instead.
+      if (!claudeEmitted) {
+        recordModelFailure(claudeModel, false, false)
+        emit({ type: 'ai_fallback', requestId: obs.requestId, from: claudeModel, to: CLAUDE_MODEL_CHAIN[i + 1] ?? GEMINI_MODEL_CHAIN[0], reason: 'error' })
+        console.warn(`[streamChat] Claude ${claudeModel} completed with ZERO visible text — treating as failure, rotating`)
+        continue
       }
       return 'served' // Claude success — done
     } catch (err: unknown) {
@@ -652,13 +735,13 @@ async function* walkClaudeChain(
       // Auth/key/billing failures share the credential across the whole Claude
       // chain — the backup can't succeed either, so skip straight to Gemini.
       if (claudeErr?.type === 'auth') {
-        emit({ type: 'ai_fallback', requestId: obs.requestId, from: claudeModel, to: 'gemini-2.5-flash', reason: 'auth' })
+        emit({ type: 'ai_fallback', requestId: obs.requestId, from: claudeModel, to: GEMINI_MODEL_CHAIN[0], reason: 'auth' })
         console.warn(`[streamChat] Claude ${claudeModel} auth failure — skipping Claude chain, falling back to Gemini:`, err)
         break
       }
 
       // Otherwise try the next Claude model (backup), then Gemini.
-      const claudeFallbackTo = CLAUDE_MODEL_CHAIN[i + 1] ?? 'gemini-2.5-flash'
+      const claudeFallbackTo = CLAUDE_MODEL_CHAIN[i + 1] ?? GEMINI_MODEL_CHAIN[0]
       emit({ type: 'ai_fallback', requestId: obs.requestId, from: claudeModel, to: claudeFallbackTo, reason: isRateLimit ? 'rate_limit' : 'error' })
       console.warn(`[streamChat] Claude ${claudeModel} failed pre-stream (${isRateLimit ? 'rate_limit' : 'error'}), trying next model:`, err)
     }
@@ -677,12 +760,18 @@ async function* walkClaudeChain(
  */
 async function* streamChatRotation(
   messages: ChatMessage[],
-  systemPrompt: string,
+  systemPrompt: string | SystemPromptParts,
   useCase: string,
   hasActiveSkill: boolean,
   obs: ObsCtx,
   signal?: AbortSignal,
 ): AsyncGenerator<string | { modelUsed: string }> {
+  // EXA research turns get the full-depth treatment: xhigh effort (clamped to
+  // high on the pre-4.7 backup) and output headroom for thinking + a long
+  // cited synthesis. Other use cases keep the model defaults.
+  const claudeOpts = useCase === 'exa_search'
+    ? { effort: 'xhigh' as const, maxTokens: 16_000 }
+    : {}
   // Cooperative cancellation (FIX4): if the client is already gone, do no work.
   if (signal?.aborted) return
 
@@ -693,7 +782,7 @@ async function* streamChatRotation(
 
   if (shouldUseClaude(useCase, hasActiveSkill)) {
     claudeTried = true
-    if ((yield* walkClaudeChain(messages, systemPrompt, obs, signal)) === 'served') return
+    if ((yield* walkClaudeChain(messages, systemPrompt, obs, signal, claudeOpts)) === 'served') return
   }
 
   // Bail before the Gemini leg if the client aborted while Claude was walked.
@@ -739,7 +828,7 @@ async function* streamChatRotation(
       // obs.model is only (re)assigned by a Gemini model that got past the
       // connect race; when the chain dies before any connect it is still
       // unset (Claude was not walked on this path), so name the chain head.
-      from: obs.model ?? 'gemini-2.5-flash',
+      from: obs.model ?? GEMINI_MODEL_CHAIN[0],
       to: CLAUDE_MODEL_CHAIN[0],
       reason: isAuthOrKeyError(err) ? 'auth' : 'error',
     })
@@ -753,7 +842,7 @@ async function* streamChatRotation(
     let claudeServed = false
     let noticeYielded = false
     let modelDisplay = getModelDisplayName(CLAUDE_MODEL_CHAIN[0])
-    const walk = walkClaudeChain(messages, systemPrompt, obs, signal)
+    const walk = walkClaudeChain(messages, systemPrompt, obs, signal, claudeOpts)
     try {
       while (true) {
         const step = await walk.next()
@@ -790,15 +879,15 @@ async function* streamChatRotation(
 
 /**
  * Gemini streaming with fallback chain.
- * Gemini 2.5 Flash → Gemini 2.5 Pro
+ * Gemini 3.5 Flash → Gemini 2.5 Flash → Gemini 2.5 Pro
  */
 async function* streamGeminiWithFallback(
   messages: ChatMessage[],
-  systemPrompt: string,
+  systemPrompt: string | SystemPromptParts,
   obs: ObsCtx,
   signal?: AbortSignal,
 ): AsyncGenerator<string | { modelUsed: string }> {
-  const modelsToTry = ['gemini-2.5-flash', 'gemini-2.5-pro'] as const
+  const modelsToTry = GEMINI_MODEL_CHAIN
   modelsToTry.forEach(assertApprovedGeminiModel)
 
   const contents = chatMessagesToContents(messages.slice(0, -1))
@@ -828,7 +917,7 @@ async function* streamGeminiWithFallback(
 
       const model = getGenAI().getGenerativeModel({
         model: modelName,
-        systemInstruction: systemPrompt,
+        systemInstruction: sysText(systemPrompt),
       })
 
       const chat = model.startChat({ history: contents })
@@ -905,6 +994,19 @@ async function* streamGeminiWithFallback(
         }
       }
 
+      // ZERO-TEXT COMPLETION GUARD (mirrors the Claude chain): a clean stream
+      // with no visible output is a failed attempt — rotate to the next model
+      // instead of ending the request with a silent empty answer.
+      if (!emittedAny) {
+        recordModelFailure(modelName, false, false)
+        if (isLastAttempt) {
+          throw new Error(`${modelName} completed with no output`)
+        }
+        emit({ type: 'ai_fallback', requestId: obs.requestId, from: modelName, to: modelsToTry[i + 1], reason: 'error' })
+        console.warn(`[gemini] ${modelName} completed with ZERO visible text — treating as failure, rotating`)
+        continue
+      }
+
       return // Success
     } catch (err) {
       // Client aborted (FIX4): the failure is just the cancellation — stop
@@ -935,16 +1037,41 @@ async function* streamGeminiWithFallback(
 }
 
 /**
- * Legacy export — preserved for backward compatibility.
- * Filters out modelUsed events and yields only text.
+ * Non-streaming one-shot Gemini generation for structured server tasks
+ * (Gmail Focus ranking, score-context fallback).
+ *
+ * Deliberately mirrors the PROVEN chat configuration above — same SDK, same
+ * key resolution, same model chain with cooldowns, `systemInstruction` +
+ * user message, and NO maxOutputTokens cap (thinking-capable Gemini models
+ * can burn a fixed budget on thoughts and return empty text; the chat path
+ * sets no cap and works in production). Structured routes that previously
+ * built their own SDK calls diverged from this config and failed in prod
+ * while chat worked ([GoogleGenerativeAI Error] audit rows, 2026-07-18).
  */
-export async function* streamGeminiChat(
-  messages: ChatMessage[],
+export async function geminiGenerateText(
   systemPrompt: string,
-  useCase: string = 'deep_dive'
-): AsyncGenerator<string> {
-  for await (const chunk of streamChat(messages, systemPrompt, useCase, false)) {
-    if (typeof chunk === 'string') yield chunk
+  userPrompt: string,
+): Promise<{ text: string; model: string }> {
+  let lastErr: unknown
+  for (const modelName of GEMINI_MODEL_CHAIN) {
+    if (isModelInCooldown(modelName)) continue
+    try {
+      const model = getGenAI().getGenerativeModel({
+        model: modelName,
+        systemInstruction: systemPrompt,
+      })
+      const result = await model.generateContent(userPrompt)
+      const text = result.response.text()
+      if (!text || !text.trim()) throw new Error(`${modelName} returned empty text`)
+      return { text, model: modelName }
+    } catch (err) {
+      lastErr = err
+      recordModelFailure(modelName, isRateLimitError(err), isAuthOrKeyError(err))
+      if (isAuthOrKeyError(err)) throw err // shared credential — chain can't recover
+      console.warn(`[geminiGenerateText] ${modelName} failed, trying next in chain:`, err)
+    }
   }
+  throw lastErr instanceof Error ? lastErr : new Error('All Gemini models failed or cooling down')
 }
+
 

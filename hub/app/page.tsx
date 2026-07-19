@@ -5,7 +5,14 @@ import { useSession, signIn } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { TasksSection, CalendarSection, DocumentsSection, KPISection, ProjectHealthSection, SectionErrorBoundary } from '@/app/components/LeftPanelSections'
 import { ExecutionFeed } from '@/app/components/RightPanelSections'
-import { InterviewBadge, ActionConfirmCard, SkillBadge } from '@/app/components/ChatEnhancements'
+import { RightPanelTabsNav, PulseStrip, AttentionStrip, type RightPanelTab } from '@/app/components/RightPanelWorkspace'
+import { IssuesTabView } from '@/app/components/IssuesTabView'
+import { AgentsTabView } from '@/app/components/AgentsTabView'
+import { RoutinesTabView } from '@/app/components/RoutinesTabView'
+import { GoalsTabView } from '@/app/components/GoalsTabView'
+import { SpacesTabView } from '@/app/components/SpacesTabView'
+import { useExecutionDashboard } from '@/app/hooks/useHubData'
+import { InterviewBadge, ActionConfirmCard, SkillBadge, SolutionCard } from '@/app/components/ChatEnhancements'
 import { ToolPanel } from '@/app/components/ToolPanel'
 import { ToolPanelCollapsedRail, MobileToolEdge } from '@/app/components/ToolPanelCollapsedRail'
 import type { ToolArtifactData } from '@/types'
@@ -35,7 +42,9 @@ import { isInterviewScaffold } from '@/lib/interview-scaffold'
 import { useCompanies } from '@/app/hooks/useCompanies'
 import type { ChatAttachment } from '@/types'
 import { useChatEngine, type ChatMsg, type MobileTab } from '@/app/hooks/useChatEngine'
+import { useVoiceInput } from '@/app/hooks/useVoiceInput'
 import { useSwipePanels } from '@/app/hooks/useSwipePanels'
+import { resolveRole } from '@/lib/roles'
 import { MessageContent, parseInlineMarkdown } from '@/app/components/MessageContent'
 
 
@@ -150,6 +159,11 @@ function RightPanel({
     ? `${paperclipBaseUrl}/companies/${activeCompany.companyId}`
     : paperclipBaseUrl
 
+  // Phase 1 workspace scaffold: tab state + the dashboard snapshot behind the
+  // Pulse header and Attention strip (read-only; no new write paths).
+  const [activeTab, setActiveTab] = useState<RightPanelTab>('pulse')
+  const { dashboard, isLoading: dashboardLoading } = useExecutionDashboard(activeCompany?.companyId)
+
   return (
     <aside ref={panelRef} className={`panel-right ${isOpen ? 'mobile-open' : ''}`} aria-label="Execution Layer" style={style}>
       <div className="panel-header">
@@ -189,12 +203,33 @@ function RightPanel({
         </div>
       </div>
 
+      <RightPanelTabsNav active={activeTab} onChange={setActiveTab} />
+
       <div className="panel-content">
-        <ProjectHealthSection projects={projects} onInjectChat={onInjectChat} userRole={userRole} isLoading={kpiLoading} error={kpiError} onRetry={onKpiRetry} />
-        {/* orgId derives from activeCompany (same projects.find the page used for the
-            now-removed activeOrgId prop — both resolved to this exact value). */}
-        <ExecutionFeed onInjectChat={onInjectChat} onInjectAction={onInjectAction} onCustomizeCSuite={onCustomizeCSuite} orgId={activeCompany?.companyId} />
+        {activeTab === 'pulse' ? (
+          <>
+            <PulseStrip dashboard={dashboard} isLoading={dashboardLoading} />
+            <ProjectHealthSection projects={projects} onInjectChat={onInjectChat} userRole={userRole} isLoading={kpiLoading} error={kpiError} onRetry={onKpiRetry} />
+            {/* orgId derives from activeCompany (same projects.find the page used for the
+                now-removed activeOrgId prop — both resolved to this exact value). */}
+            <ExecutionFeed onInjectChat={onInjectChat} onInjectAction={onInjectAction} onCustomizeCSuite={onCustomizeCSuite} orgId={activeCompany?.companyId} />
+          </>
+        ) : activeTab === 'issues' ? (
+          <IssuesTabView orgId={activeCompany?.companyId} userRole={userRole} onInjectChat={onInjectChat} />
+        ) : activeTab === 'agents' ? (
+          <AgentsTabView orgId={activeCompany?.companyId} userRole={userRole} onInjectChat={onInjectChat} />
+        ) : activeTab === 'routines' ? (
+          <RoutinesTabView orgId={activeCompany?.companyId} userRole={userRole} onInjectChat={onInjectChat} onInjectAction={onInjectAction} />
+        ) : activeTab === 'goals' ? (
+          <GoalsTabView orgId={activeCompany?.companyId} userRole={userRole} onInjectChat={onInjectChat} onInjectAction={onInjectAction} />
+        ) : (
+          <SpacesTabView orgId={activeCompany?.companyId} userRole={userRole} onInjectChat={onInjectChat} />
+        )}
       </div>
+
+      {/* Persistent footer: blocked/error/approval/budget signals; every chip
+          resolves through a read-style assistant query. */}
+      <AttentionStrip dashboard={dashboard} onInjectChat={onInjectChat} />
     </aside>
   )
 }
@@ -276,7 +311,10 @@ export default function HubPage() {
   // Derive current user role from session
   const userRole = (session?.user as Record<string, unknown>)?.role as string ?? 'onboarding'
   const isOnboarding = userRole === 'onboarding'
-  const canUseInterviewMode = !isOnboarding
+  // From the role config (single source of truth) — onboarding users now get
+  // Interview Mode too, so personal Google actions (own Tasks/Calendar) work;
+  // per-intent permissions still deny org-level actions with a clear message.
+  const canUseInterviewMode = resolveRole(userRole).canUseInterviewMode
   const canAccessAdmin = userRole === 'admin' || userRole === 'superadmin'
 
   // Dynamic suggestions based on the user's actual projects/workspace
@@ -384,6 +422,9 @@ export default function HubPage() {
     activeSkill,
     suggestedTools,
     exaMode,
+    solutionSuggestion,
+    acceptSolution,
+    dismissSolution,
     setInput,
     setMessages,
     setInterviewState,
@@ -444,6 +485,9 @@ export default function HubPage() {
     mobileRightOpen,
     handleClosePanels,
     handleMobileTab,
+    // The Google Chat / Gmail overlay owns horizontal touch movement (Focus
+    // strip, email rows) — drawer swipes are fully disengaged while it's open.
+    disabled: chatPanelOpen,
   })
 
   /* ── Mobile drawer a11y: dialog focus management, scroll-lock, Escape ── */
@@ -581,12 +625,36 @@ export default function HubPage() {
     })
   }, [activeSkill])
 
+  /* ── Voice-to-text (Web Speech API) ──
+   * Dictation streams into the same `input` state as typing, so send/attach/
+   * interview flows are untouched. Reads the live value from the textarea ref
+   * (always current) and mirrors handleTextareaInput's auto-resize when
+   * setting text programmatically. */
+  const getVoiceBase = useCallback(() => textareaRef.current?.value ?? '', [])
+  const setVoiceInput = useCallback((value: string) => {
+    setInput(value)
+    const el = textareaRef.current
+    if (el) {
+      el.style.height = 'auto'
+      el.style.height = Math.min(el.scrollHeight, 120) + 'px'
+    }
+  }, [setInput])
+  const voice = useVoiceInput({ getInput: getVoiceBase, setInput: setVoiceInput })
+  const { isListening: voiceListening, stop: voiceStop } = voice
+
+  /* Sending ends an active dictation so the mic doesn't keep appending to the
+   * now-cleared input. */
+  const handleComposerSend = useCallback(() => {
+    if (voiceListening) voiceStop()
+    handleSend()
+  }, [voiceListening, voiceStop, handleSend])
+
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      handleSend()
+      handleComposerSend()
     }
-  }, [handleSend])
+  }, [handleComposerSend])
 
   const handleTextareaInput = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value)
@@ -690,6 +758,17 @@ export default function HubPage() {
               />
             )}
 
+            {/* Phase 6a: proactive "Paperclip as a solution" card. Hidden while
+                an interview is active (accepting one starts an interview, which
+                clears the card). */}
+            {solutionSuggestion && !interviewState?.active && (
+              <SolutionCard
+                suggestion={solutionSuggestion}
+                onAccept={acceptSolution}
+                onDismiss={dismissSolution}
+              />
+            )}
+
             {/* Interview badge — live context score */}
             {interviewState?.active && (
               <InterviewBadge
@@ -750,7 +829,7 @@ export default function HubPage() {
                       {userInitials}
                     </div>
                   )}
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '78%' }}>
+                  <div className={`chat-message-col ${msg.role === 'user' ? 'chat-message-col--user' : 'chat-message-col--ai'}`}>
                     <div className={`chat-bubble ${msg.role === 'user' ? 'chat-bubble-user' : 'chat-bubble-ai'}`} style={{ maxWidth: '100%' }}>
                       <MessageContent content={msg.content} onToolActivate={handleSkillActivate} />
                     </div>
@@ -864,7 +943,7 @@ export default function HubPage() {
                 <div className="exa-mode-banner" role="status">
                   <span className="exa-mode-banner__dot" aria-hidden="true" />
                   <span className="exa-mode-banner__label">EXA Search</span>
-                  <span className="exa-mode-banner__hint">Semantic web search — other assistant tools are paused</span>
+                  <span className="exa-mode-banner__hint">Semantic search: Exa web + internal brain — other tools paused</span>
                   <button
                     className="exa-mode-banner__off"
                     onClick={() => { haptic(); setExaMode(false) }}
@@ -893,6 +972,17 @@ export default function HubPage() {
                   onRemove={handleRemoveAttachment}
                 />
               )}
+              {voice.error && (
+                <div className="voice-error-banner" role="alert">
+                  {voice.error}
+                </div>
+              )}
+              {voice.isListening && (
+                <div className="voice-listening-banner" role="status">
+                  <span className="voice-listening-banner__dot" aria-hidden="true" />
+                  Listening… tap the mic again to stop
+                </div>
+              )}
               <div className="chat-input-wrapper">
                 <ContextAttachMenu
                   onAttach={handleAddAttachment}
@@ -902,15 +992,32 @@ export default function HubPage() {
                   ref={textareaRef}
                   className="chat-input"
                   aria-label="Chat message input"
-                  placeholder={exaMode ? "Search the web with EXA — papers, companies, market research..." : interviewState?.active ? "Answer the interview question..." : "Ask about your projects, create tasks, check status..."}
+                  placeholder={exaMode ? "Semantic search — web research + your internal documents..." : interviewState?.active ? "Answer the interview question..." : "Ask about your projects, create tasks, check status..."}
                   value={input}
                   onChange={handleTextareaInput}
                   onKeyDown={handleKeyDown}
                   rows={1}
                 />
+                {voice.isSupported && (
+                  <button
+                    className={`chat-mic-btn ${voice.isListening ? 'chat-mic-btn--listening' : ''}`}
+                    onClick={() => { haptic(); voice.toggle() }}
+                    disabled={isTyping}
+                    aria-label={voice.isListening ? 'Stop voice input' : 'Start voice input'}
+                    aria-pressed={voice.isListening}
+                    title={voice.isListening ? 'Stop voice input' : 'Dictate a message'}
+                  >
+                    {/* Microphone glyph (inline SVG so it inherits currentColor) */}
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+                      <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
+                      <line x1="12" y1="18" x2="12" y2="22" />
+                    </svg>
+                  </button>
+                )}
                 <button
                   className="chat-send-btn"
-                  onClick={handleSend}
+                  onClick={handleComposerSend}
                   disabled={(!input.trim() && attachments.length === 0) || isTyping}
                   aria-label="Send message"
                 >
@@ -1002,6 +1109,13 @@ export default function HubPage() {
       <GoogleChatPanel
         isOpen={chatPanelOpen}
         onClose={handleClosePanels}
+        onDiscussEmail={text => {
+          // "Discuss in AI chat": close the Gmail overlay so the AI column is
+          // visible, then run the email summary through the read-style inject
+          // (deep_dive — no intent detection on an informational lookup).
+          handleClosePanels()
+          injectDeepDive(text)
+        }}
       />
 
       {/* Mobile: Glassmorphism Bottom Navigation Bar */}

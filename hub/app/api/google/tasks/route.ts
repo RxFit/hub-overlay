@@ -4,7 +4,7 @@ import { authOptions } from '@/lib/auth'
 import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
 import { clampInt } from '@/lib/num'
 import { GoogleTaskCreateSchema } from '@/lib/zod-schemas'
-import { listTaskLists, listTasks, createTask, completeTask, uncompleteTask } from '@/lib/google'
+import { listTaskLists, listTasks, createTask, completeTask, uncompleteTask, updateTask, deleteTask } from '@/lib/google'
 import { AI_INTENT_HEADER, GATE_TOKEN_HEADER } from '@/lib/requireGate'
 import { recordAiAction } from '@/lib/ai-audit'
 import { checkActionLimit } from '@/lib/rate-limit'
@@ -143,6 +143,29 @@ export async function POST(req: NextRequest) {
       }
       const task = await uncompleteTask(accessToken, taskListId, taskId)
       return NextResponse.json({ task })
+    }
+
+    if (action === 'update') {
+      if (!taskId) {
+        return NextResponse.json({ error: 'taskId is required' }, { status: 400 })
+      }
+      const patch: { title?: string; notes?: string; due?: string } = {}
+      if (typeof title === 'string' && title.trim()) patch.title = title.trim()
+      if (typeof notes === 'string') patch.notes = notes
+      if (typeof due === 'string' && due.trim()) patch.due = due.trim()
+      if (Object.keys(patch).length === 0) {
+        return NextResponse.json({ error: 'Nothing to update — provide title, notes, or due' }, { status: 400 })
+      }
+      const task = await updateTask(accessToken, taskListId, taskId, patch)
+      return NextResponse.json({ task })
+    }
+
+    if (action === 'delete') {
+      if (!taskId) {
+        return NextResponse.json({ error: 'taskId is required' }, { status: 400 })
+      }
+      await deleteTask(accessToken, taskListId, taskId)
+      return NextResponse.json({ deleted: true })
     }
 
     return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 })

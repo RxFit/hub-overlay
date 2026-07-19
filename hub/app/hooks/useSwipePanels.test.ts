@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest'
+// @vitest-environment jsdom
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import {
   gestureReducer,
   computeDrag,
@@ -262,5 +263,84 @@ describe('computeDrag — transform math matches the pre-refactor inline values'
   it('returns null when the swipe would fight an already-open opposite panel', () => {
     expect(computeDrag('right', 100, { left: true, right: false }, W)).toBeNull()
     expect(computeDrag('left', -100, { left: false, right: true }, W)).toBeNull()
+  })
+})
+
+/* ════════════════════════════════════════════════════════════════════════════
+   Hook-level `disabled` guard — with the Google Chat / Gmail overlay open,
+   drawer swipes must be fully disengaged (horizontal strips there own the
+   finger). Drives the real hook through a throwaway component (no
+   @testing-library dependency) and asserts a full commit-distance swipe emits
+   NO open/close command while disabled, and still works when enabled.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+import { act, createElement } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
+import { vi } from 'vitest'
+import { useSwipePanels } from './useSwipePanels'
+
+;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+function renderSwipeHook(disabled: boolean) {
+  const handleMobileTab = vi.fn()
+  const handleClosePanels = vi.fn()
+  const result: { current: ReturnType<typeof useSwipePanels> } = {
+    current: undefined as unknown as ReturnType<typeof useSwipePanels>,
+  }
+  const container = document.createElement('div')
+  let root: Root
+  function Probe() {
+    result.current = useSwipePanels({
+      mobileLeftOpen: false,
+      mobileRightOpen: false,
+      handleClosePanels,
+      handleMobileTab,
+      disabled,
+    })
+    return null
+  }
+  act(() => {
+    root = createRoot(container)
+    root.render(createElement(Probe))
+  })
+  return { result, handleMobileTab, handleClosePanels, unmount: () => act(() => root.unmount()) }
+}
+
+const touchEvt = (x: number, y: number) => ({
+  touches: [{ clientX: x, clientY: y }],
+  changedTouches: [{ clientX: x, clientY: y }],
+  target: document.body,
+}) as unknown as React.TouchEvent
+
+describe('useSwipePanels — disabled while the chat/Gmail overlay is open', () => {
+  const realInnerWidth = window.innerWidth
+  beforeEach(() => {
+    Object.defineProperty(window, 'innerWidth', { value: PHONE_W, configurable: true })
+  })
+  afterEach(() => {
+    Object.defineProperty(window, 'innerWidth', { value: realInnerWidth, configurable: true })
+  })
+
+  function fullLeftSwipe(h: ReturnType<typeof renderSwipeHook>) {
+    act(() => {
+      h.result.current.handleTouchStart(touchEvt(320, 200))
+      h.result.current.handleTouchMove(touchEvt(150, 200))
+      h.result.current.handleTouchEnd(touchEvt(120, 200))
+    })
+  }
+
+  it('a commit-distance swipe emits no command when disabled', () => {
+    const h = renderSwipeHook(true)
+    fullLeftSwipe(h)
+    expect(h.handleMobileTab).not.toHaveBeenCalled()
+    expect(h.handleClosePanels).not.toHaveBeenCalled()
+    h.unmount()
+  })
+
+  it('the same swipe opens the right panel when enabled (control)', () => {
+    const h = renderSwipeHook(false)
+    fullLeftSwipe(h)
+    expect(h.handleMobileTab).toHaveBeenCalledWith('execution')
+    h.unmount()
   })
 })

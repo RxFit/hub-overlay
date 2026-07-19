@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback, useReducer } from 'react'
-import { useSpaces, useMessages, useSendMessage, useSpaceMembers, useUnreadCounts } from '@/app/hooks/useGoogleChat'
+import { useSpaces, useMessages, useSendMessage, useSpaceMembers, useUnreadCounts, useMarkSpaceRead } from '@/app/hooks/useGoogleChat'
 import type { ChatSpace, ChatMessage, SpaceMember } from '@/app/hooks/useGoogleChat'
 import { MentionPicker, useMentionTrigger } from '@/app/components/MentionPicker'
 import { InfoPopover } from '@/app/components/InfoPopover'
@@ -205,6 +205,7 @@ function MessageThread({
 }) {
   const { messages, isLoading } = useMessages(spaceId)
   const { send, isSending, sendError, clearError } = useSendMessage()
+  const { markRead } = useMarkSpaceRead()
   const { members } = useSpaceMembers(spaceId)
   const [draft, setDraft] = useState('')
   const [cursorPos, setCursorPos] = useState(0)
@@ -240,6 +241,14 @@ function MessageThread({
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
     }
   }, [messages, spaceId])
+
+  // Viewing a space marks it read — server-side readstate write + immediate
+  // local badge clear. Keyed to the latest message so each new arrival while
+  // the thread is open re-marks, but poll refetches with no new mail don't.
+  useEffect(() => {
+    if (!messages.length) return
+    markRead(spaceId, messages[messages.length - 1]?.name)
+  }, [messages, spaceId, markRead])
 
   const handleMentionSelect = useCallback((member: SpaceMember) => {
     if (mention.atIndex === -1) return
@@ -400,9 +409,12 @@ function MessageThread({
 export function GoogleChatPanel({
   isOpen,
   onClose,
+  onDiscussEmail,
 }: {
   isOpen: boolean
   onClose: () => void
+  /** Injects an email summary into the AI assistant chat (page.tsx wiring). */
+  onDiscussEmail?: (text: string) => void
 }) {
   const { visibleSpaces, isLoading, missingScope } = useSpaces()
   const { unreadMap } = useUnreadCounts(visibleSpaces)
@@ -445,6 +457,7 @@ export function GoogleChatPanel({
       setActiveTab={setActiveTab}
       gmailUnread={gmailUnread}
       setGmailUnread={setGmailUnread}
+      onDiscussEmail={onDiscussEmail}
     />
   )
 }
@@ -463,6 +476,7 @@ function GoogleChatPanelDialog({
   setActiveTab,
   gmailUnread,
   setGmailUnread,
+  onDiscussEmail,
 }: {
   onClose: () => void
   visibleSpaces: ChatSpace[]
@@ -477,6 +491,7 @@ function GoogleChatPanelDialog({
   setActiveTab: (v: 'chat' | 'gmail') => void
   gmailUnread: number
   setGmailUnread: (v: number) => void
+  onDiscussEmail?: (text: string) => void
 }) {
   const panelRef = useRef<HTMLDivElement>(null)
   // Focus trap + return-focus-to-opener + Escape-to-close, shared with the
@@ -582,7 +597,7 @@ function GoogleChatPanelDialog({
         {/* Panel body */}
         <div className="chat-panel-body">
           {activeTab === 'gmail' ? (
-            <GmailView onUnreadCount={setGmailUnread} />
+            <GmailView onUnreadCount={setGmailUnread} onDiscussEmail={onDiscussEmail} />
           ) : (
             <>
               {/* Spaces column (hidden on mobile when viewing thread) */}

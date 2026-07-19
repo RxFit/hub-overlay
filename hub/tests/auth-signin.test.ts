@@ -33,7 +33,7 @@ type SignIn = (p: { user: { email?: string | null } | null }) => Promise<boolean
 
 async function loadSignIn(env: Record<string, string | undefined>): Promise<SignIn> {
   vi.resetModules()
-  for (const key of ['SUPERADMIN_EMAILS', 'ADMIN_EMAILS', 'ALLOWED_EMAIL_DOMAINS']) {
+  for (const key of ['SUPERADMIN_EMAILS', 'ADMIN_EMAILS', 'ALLOWED_EMAIL_DOMAINS', 'ALLOWED_EMAIL_ADDRESSES', 'USER_DISPLAY_NAME_OVERRIDES']) {
     delete process.env[key]
   }
   for (const [k, v] of Object.entries(env)) {
@@ -94,6 +94,21 @@ describe('auth signIn — ALLOW matrix (no legitimate user is locked out)', () =
     expect(await signIn({ user: { email: 'x@partner.io' } })).toBe(true)
     expect(await signIn({ user: { email: 'y@rxfit.co' } })).toBe(true)
   })
+
+  it('allows an individually-invited guest on a consumer domain (ALLOWED_EMAIL_ADDRESSES)', async () => {
+    // The caroljean37 case: a gmail.com guest with only an onboarding DB row —
+    // (b) and (c) both fail, so the explicit per-address invite must admit her.
+    state.roles['caroljean37@gmail.com'] = { role: 'onboarding', assignedProjects: [] }
+    const signIn = await loadSignIn({
+      SUPERADMIN_EMAILS: 'danny@rxfitatx.com',
+      ALLOWED_EMAIL_ADDRESSES: 'caroljean37@gmail.com',
+    })
+    expect(await signIn({ user: { email: 'caroljean37@gmail.com' } })).toBe(true)
+    // Case-insensitive, like the admin lists.
+    expect(await signIn({ user: { email: 'CarolJean37@Gmail.com' } })).toBe(true)
+    // The invite is for HER address only — the rest of gmail.com stays denied.
+    expect(await signIn({ user: { email: 'other@gmail.com' } })).toBe(false)
+  })
 })
 
 describe('auth signIn — DENY matrix (fail closed for unknown external accounts)', () => {
@@ -124,5 +139,46 @@ describe('auth signIn — DENY matrix (fail closed for unknown external accounts
     expect(await signIn({ user: { email: 'newhire@rxfitatx.com' } })).toBe(false)
     // …but the configured superadmin still gets in via the env rule.
     expect(await signIn({ user: { email: 'danny@rxfitatx.com' } })).toBe(true)
+  })
+})
+
+describe('auth session — display-name overrides (USER_DISPLAY_NAME_OVERRIDES)', () => {
+  type SessionCb = (p: {
+    session: { user: { email?: string | null; name?: string | null } }
+    token: Record<string, unknown>
+  }) => Promise<{ user: Record<string, unknown> }>
+
+  async function loadSession(env: Record<string, string>): Promise<SessionCb> {
+    vi.resetModules()
+    for (const key of ['SUPERADMIN_EMAILS', 'ADMIN_EMAILS', 'ALLOWED_EMAIL_DOMAINS', 'ALLOWED_EMAIL_ADDRESSES', 'USER_DISPLAY_NAME_OVERRIDES']) {
+      delete process.env[key]
+    }
+    for (const [k, v] of Object.entries(env)) process.env[k] = v
+    const mod = await import('@/lib/auth')
+    const cb = mod.authOptions.callbacks?.session
+    if (!cb) throw new Error('session callback is not configured')
+    return cb as unknown as SessionCb
+  }
+
+  it('overrides the Google profile name for a configured user (email matched case-insensitively)', async () => {
+    const session = await loadSession({
+      USER_DISPLAY_NAME_OVERRIDES: 'caroljean37@gmail.com:Carol-Jean',
+    })
+    const out = await session({
+      session: { user: { email: 'CarolJean37@gmail.com', name: 'Carol' } },
+      token: { role: 'onboarding', assignedProjects: [], sub: 'x' },
+    })
+    expect(out.user.name).toBe('Carol-Jean')
+  })
+
+  it('leaves everyone else on their Google profile name', async () => {
+    const session = await loadSession({
+      USER_DISPLAY_NAME_OVERRIDES: 'caroljean37@gmail.com:Carol-Jean',
+    })
+    const out = await session({
+      session: { user: { email: 'danny@rxfitatx.com', name: 'Danny Trejo' } },
+      token: { role: 'superadmin', assignedProjects: ['*'], sub: 'y' },
+    })
+    expect(out.user.name).toBe('Danny Trejo')
   })
 })

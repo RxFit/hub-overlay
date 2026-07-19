@@ -73,7 +73,12 @@ export const DEFAULT_ROLES: Record<string, RoleConfig> = {
     canChat: true,
     canManageRoles: false,
     canViewAllProjects: false,
-    canUseInterviewMode: false,  // Interview Mode disabled until assigned
+    // Interview Mode ON so action requests route through intent detection.
+    // Per-intent permissions (lib/interview INTENT_PERMISSIONS) still bound
+    // what an onboarding user may execute: personal Google actions (own
+    // Tasks/Calendar) pass; org-level intents get a clear Permission Denied
+    // instead of silently degrading to a plain-chat answer that can't act.
+    canUseInterviewMode: true,
     canAccessAdmin: false,
   },
 }

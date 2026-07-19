@@ -65,7 +65,11 @@
   --font-display: var(--font-syne), var(--font-space-grotesk), 'Syne', 'Space Grotesk', system-ui, -apple-system, sans-serif;
   --font-heading: var(--font-space-grotesk), 'Space Grotesk', system-ui, -apple-system, sans-serif;
   --font-body:    var(--font-space-grotesk), 'Space Grotesk', system-ui, -apple-system, sans-serif;
-  --font-chat:    var(--font-dm-sans), var(--font-space-grotesk), 'DM Sans', 'Space Grotesk', system-ui, -apple-system, sans-serif;
+  /* Chat body = system-first stack. Native UI fonts (SF Pro / Roboto / Segoe)
+     have larger x-heights and hinting tuned for small screens, which measurably
+     improves long-form readability on phones vs. geometric display fonts.
+     DM Sans stays as a late fallback; brand fonts remain on display/headers. */
+  --font-chat:    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', var(--font-dm-sans), 'DM Sans', Arial, sans-serif;
   --font-mono:    var(--font-jetbrains-mono), 'JetBrains Mono', 'Fira Code', monospace;
 
   /* Fluid type scale — clamp(min, preferred, max) */
@@ -807,13 +811,35 @@ a:hover {
   border: 1px solid var(--border);
 }
 
+/* ── Message column (width owner) ──
+   The column, not the bubble, constrains message width so media queries can
+   tune it per role. AI replies follow the Claude/ChatGPT pattern: a readable
+   measure (~70ch ≈ 65–72 chars/line) on desktop, near-full width on mobile —
+   narrow SMS-style bubbles waste small screens and make answers feel endless. */
+.chat-message-col {
+  display: flex;
+  flex-direction: column;
+  max-width: 78%;
+}
+
+.chat-message-col--ai {
+  align-items: flex-start;
+  max-width: min(88%, 70ch);
+}
+
+.chat-message-col--user {
+  align-items: flex-end;
+}
+
 .chat-bubble {
   max-width: 78%;
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-xl);
   font-family: var(--font-chat);
   font-size: clamp(0.9375rem, 0.88rem + 0.28vw, 1rem); /* 15–16px fluid */
-  line-height: 1.7;
+  /* 1.5–1.6 is the readability sweet spot; 1.7 stretched long answers taller
+     without aiding line tracking. */
+  line-height: 1.6;
   letter-spacing: 0.005em;
 }
 
@@ -823,6 +849,23 @@ a:hover {
   color: var(--text-primary);
   border-top-left-radius: var(--radius-sm);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+
+/* ── Inline links in chat messages (markdown [text](url) + bare URLs) ──
+   overflow-wrap:anywhere is load-bearing on mobile: a long bare URL is one
+   unbreakable "word" that would otherwise stretch the bubble past the viewport. */
+.chat-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: var(--accent-border);
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.chat-link:hover {
+  color: var(--text-primary);
+  text-decoration-color: var(--accent);
 }
 
 .chat-copy-btn {
@@ -930,6 +973,67 @@ a:hover {
   opacity: 0.28;
   cursor: not-allowed;
   transform: none;
+}
+
+/* ── Voice input (mic) ── */
+.chat-mic-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  border: 1px solid rgba(197, 160, 89, 0.22);
+  color: var(--text-secondary, #9a9a9a);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.chat-mic-btn:hover {
+  color: var(--text-primary, #eaeaea);
+  border-color: rgba(197, 160, 89, 0.45);
+}
+
+.chat-mic-btn:disabled {
+  opacity: 0.28;
+  cursor: not-allowed;
+}
+
+.chat-mic-btn--listening {
+  background: rgba(220, 80, 80, 0.14);
+  border-color: rgba(220, 80, 80, 0.55);
+  color: #e05656;
+  animation: mic-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(220, 80, 80, 0.35); }
+  50% { box-shadow: 0 0 0 6px rgba(220, 80, 80, 0); }
+}
+
+.voice-listening-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: #e05656;
+  padding: var(--space-1) var(--space-2);
+}
+
+.voice-listening-banner__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e05656;
+  animation: mic-pulse 1.6s ease-in-out infinite;
+}
+
+.voice-error-banner {
+  font-size: var(--text-xs);
+  color: #e0a656;
+  padding: var(--space-1) var(--space-2);
 }
 
 .chat-suggestions {
@@ -2250,9 +2354,38 @@ a:hover .rx-arrow {
     gap: var(--space-2);
   }
 
-  /* Smaller bubbles */
+  /* ── Mobile chat readability (research-backed) ──
+     16px floor (WCAG-friendly + prevents iOS input auto-zoom heuristics from
+     kicking in), full-width AI replies, compact avatar/padding so the text
+     column gets the screen, not the chrome. On a 375px phone this widens the
+     AI text column from ~235px (~30 chars/line) to ~305px (~42 chars/line). */
   .chat-bubble {
+    max-width: 100%;
+    font-size: 1rem; /* 16px floor on phones */
+    padding: var(--space-3);
+  }
+
+  .chat-message-col--ai {
+    max-width: 100%;
+    /* Bubble + reply/copy row can use every available pixel */
+    flex: 1;
+    min-width: 0;
+  }
+
+  .chat-message-col--user {
     max-width: 88%;
+  }
+
+  /* Compact AI avatar on phones — frees ~10px of text column per line while
+     staying recognizable. (User avatar keeps its size; user bubbles are short.) */
+  .chat-message .chat-message-avatar-ai {
+    width: 26px;
+    height: 26px;
+    font-size: 0.65rem;
+  }
+
+  .chat-message {
+    gap: var(--space-2);
   }
 
   /* Hide username and power view button */
@@ -2595,6 +2728,89 @@ a:hover .rx-arrow {
   border: 1.5px solid rgba(197, 160, 89, 0.25);
   border-radius: var(--radius-md);
   font-size: var(--text-xs);
+}
+
+/* ── Phase 6a: SolutionCard (proactive "Paperclip as a solution") ── */
+.solution-card {
+  margin: var(--space-2) var(--space-6);
+  padding: var(--space-3) var(--space-4);
+  background: rgba(197, 160, 89, 0.07);
+  border: 1.5px solid rgba(197, 160, 89, 0.3);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  animation: rxSlideInUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.solution-card__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.solution-card__icon {
+  font-size: var(--text-base);
+  flex-shrink: 0;
+}
+
+.solution-card__headline {
+  font-weight: 700;
+  font-size: var(--text-sm);
+  color: var(--accent);
+}
+
+.solution-card__body {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.solution-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.solution-card__accept {
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--bg-primary);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.solution-card__accept:hover { opacity: 0.88; }
+
+.solution-card__dismiss,
+.solution-card__never {
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+  transition: color var(--duration-fast) ease, border-color var(--duration-fast) ease;
+}
+
+.solution-card__dismiss:hover,
+.solution-card__never:hover {
+  color: var(--text-secondary);
+  border-color: var(--border-hover, var(--border));
+}
+
+.solution-card__never {
+  margin-left: auto;
+  border-color: transparent;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .skill-badge__icon {
@@ -4212,6 +4428,414 @@ a:hover .rx-arrow {
   background: rgba(197, 160, 89, 0.12);
   color: var(--accent);
 }
+
+/* ── Right Panel Workspace (Phase 1: tabs + pulse + attention) ── */
+.rp-tabs {
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.pulse-strip {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.pulse-stat {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-elevated, rgba(255, 255, 255, 0.02));
+  min-width: 0;
+}
+
+.pulse-stat--alert {
+  border-color: rgba(224, 108, 108, 0.45);
+}
+
+.pulse-stat--skeleton {
+  height: 62px;
+  animation: pulse 1.8s ease-in-out infinite;
+}
+
+.pulse-stat__value {
+  font-family: var(--font-mono);
+  font-size: var(--text-lg);
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.pulse-stat--alert .pulse-stat__value {
+  color: #e06c6c;
+}
+
+.pulse-stat__label {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.pulse-stat__sub {
+  font-size: var(--text-2xs);
+  color: var(--text-secondary);
+  opacity: 0.8;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.attention-strip {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--border);
+  background: var(--bg-primary);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.attention-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(224, 108, 108, 0.4);
+  background: rgba(224, 108, 108, 0.08);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--duration-fast) ease;
+}
+
+.attention-chip:hover {
+  background: rgba(224, 108, 108, 0.16);
+  color: var(--text-primary);
+}
+
+.attention-chip__count {
+  font-weight: 700;
+  color: #e06c6c;
+}
+
+/* ── Right Panel Phase 2: Issues & Agents tabs ── */
+.exec-tab {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.exec-muted {
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+  padding: var(--space-2) 0;
+}
+
+.exec-error {
+  font-size: var(--text-2xs);
+  color: #e06c6c;
+  padding: var(--space-1) 0;
+}
+
+.exec-row-wrap {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-2);
+  overflow: hidden;
+}
+
+.exec-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  transition: background var(--duration-fast) ease;
+}
+
+.exec-row:hover,
+.exec-row--expanded {
+  background: var(--bg-elevated, rgba(255, 255, 255, 0.03));
+}
+
+.exec-row__id {
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.exec-row__title {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.exec-row__state {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.exec-row__state[data-state-group="started"] { color: var(--accent); border-color: var(--accent); }
+.exec-row__state[data-routine-status="active"] { color: #7dbb8a; border-color: rgba(125, 187, 138, 0.5); }
+.exec-row__state[data-routine-status="paused"] { color: var(--text-muted); }
+.exec-row__state[data-goal-status="active"] { color: var(--accent); border-color: var(--accent); }
+.exec-row__state[data-goal-status="achieved"] { color: #7dbb8a; border-color: rgba(125, 187, 138, 0.5); }
+.exec-row__state[data-goal-status="cancelled"] { color: var(--text-muted); }
+.exec-row__state[data-ws-state="running"] { color: #7dbb8a; border-color: rgba(125, 187, 138, 0.5); }
+.exec-row__state[data-project-status="started"],
+.exec-row__state[data-project-status="in_progress"] { color: var(--accent); border-color: var(--accent); }
+
+/* ── Spaces tab: workspace rows ── */
+.workspace-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  margin-bottom: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.workspace-row__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.workspace-row__name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  color: var(--text-primary);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.workspace-row__primary {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  padding: 0 5px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.workspace-row__location {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.exec-row__state[data-state-name="blocked"] { color: #e06c6c; border-color: rgba(224, 108, 108, 0.5); }
+.exec-row__state[data-state-group="completed"] { color: #7dbb8a; border-color: rgba(125, 187, 138, 0.5); }
+
+.exec-drawer {
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.exec-drawer__desc {
+  font-size: var(--text-2xs);
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.exec-drawer__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+}
+
+.exec-drawer__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.exec-drawer__label {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+}
+
+.exec-select,
+.exec-input {
+  background: var(--bg-elevated, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: var(--text-2xs);
+  padding: var(--space-1) var(--space-2);
+}
+
+.exec-input { flex: 1; min-width: 0; }
+
+.exec-drawer__comments {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.exec-comment {
+  display: flex;
+  gap: var(--space-2);
+  font-size: var(--text-2xs);
+  line-height: 1.4;
+}
+
+.exec-comment__author {
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.exec-comment__author[data-author-type="agent"] { color: var(--accent); }
+
+.exec-comment__body {
+  color: var(--text-secondary);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.exec-drawer__composer {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.agent-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-2);
+  overflow: hidden;
+}
+
+.agent-card[data-agent-status="error"] {
+  border-color: rgba(224, 108, 108, 0.45);
+}
+
+.agent-card__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.agent-card__name {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-card__status {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.agent-card__status[data-agent-status="active"] { color: #7dbb8a; border-color: rgba(125, 187, 138, 0.5); }
+.agent-card__status[data-agent-status="error"] { color: #e06c6c; border-color: rgba(224, 108, 108, 0.5); }
+
+.agent-card__beat {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.agent-card__alert {
+  font-size: var(--text-2xs);
+  color: #e06c6c;
+  padding: 0 var(--space-3) var(--space-2);
+}
+
+.agent-card__body {
+  padding: 0 var(--space-3) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-2);
+}
+
+.agent-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.exec-runs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.exec-run {
+  display: flex;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+}
+
+.exec-run__status { flex-shrink: 0; }
+.exec-run[data-run-status="failed"] .exec-run__status { color: #e06c6c; }
+.exec-run[data-run-status="completed"] .exec-run__status { color: #7dbb8a; }
+.exec-run[data-run-status="running"] .exec-run__status { color: var(--accent); }
+.exec-run__issue { color: var(--text-secondary); }
+.exec-run__time { margin-left: auto; flex-shrink: 0; }
 
 /* ── Feed Date Group ── */
 .feed-date-group {
@@ -8386,3 +9010,512 @@ details[open] > .settings-collapsible__trigger .settings-collapsible__arrow {
   to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 }
 
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   GMAIL VIEW — responsive list/detail (full-width single pane on mobile)
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* Desktop: a wider inbox column than the chat spaces list — email rows need
+   room for sender + subject + snippet. Mobile (≤640px) inherits the
+   .chat-panel-spaces full-width override, restated below to win the cascade. */
+.gmail-list {
+  width: 280px;
+  min-width: 280px;
+}
+
+.gmail-list-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 12px 14px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.gmail-list-item:hover {
+  background: var(--bg-hover);
+}
+
+.gmail-list-item--selected {
+  background: var(--surface-2);
+}
+
+.gmail-list-item__top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.gmail-list-item__from {
+  flex: 1;
+  min-width: 0;
+  font-size: 1rem;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gmail-list-item--unread .gmail-list-item__from {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.gmail-list-item__date {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.gmail-list-item__subject {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gmail-list-item--unread .gmail-list-item__subject {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.gmail-list-item__snippet {
+  margin-top: 2px;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* "Load older emails" — full-width row at the bottom of the thread list.
+   Deliberately oversized (64px) so it's an easy one-thumb mobile target. */
+.gmail-load-more {
+  display: block;
+  width: 100%;
+  min-height: 64px;
+  padding: 20px 12px;
+  background: var(--surface-2);
+  border: none;
+  border-top: 1px solid var(--border);
+  color: var(--accent);
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+}
+
+.gmail-load-more:active {
+  background: var(--border);
+}
+
+.gmail-load-more:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.gmail-thread-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  min-height: 44px;
+}
+
+.gmail-thread-header__subject {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+@media (max-width: 640px) {
+  /* Single-pane mode: the inbox owns the whole screen. */
+  .gmail-list {
+    width: 100%;
+    min-width: 100%;
+    border-right: none;
+  }
+
+  .gmail-list-item {
+    padding: 14px 16px;
+  }
+}
+
+/* ── Gmail Focus strip — AI-ranked "handle these first" rail ── */
+.gmail-focus {
+  padding: 10px 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.gmail-focus__title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 0 14px 8px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.gmail-focus__spark {
+  color: var(--accent);
+}
+
+.gmail-focus__hint {
+  font-size: 0.75rem;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-muted);
+}
+
+.gmail-focus__rail {
+  display: flex;
+  gap: 10px;
+  padding: 0 14px;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.gmail-focus__rail::-webkit-scrollbar {
+  display: none;
+}
+
+.gmail-focus-card {
+  flex: 0 0 auto;
+  width: min(78vw, 260px);
+  scroll-snap-align: start;
+  text-align: left;
+  padding: 12px 14px;
+  min-height: 44px;
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.gmail-focus-card:hover {
+  background: var(--bg-hover);
+}
+
+.gmail-focus-card__top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 3px;
+}
+
+.gmail-focus-card__from {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gmail-focus-card__action {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #000;
+}
+
+.gmail-focus-card__action--read,
+.gmail-focus-card__action--archive {
+  background: var(--surface-2, rgba(255, 255, 255, 0.08));
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+}
+
+.gmail-focus-card__subject {
+  font-size: 0.82rem;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gmail-focus-card__reason {
+  margin-top: 3px;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ── Gmail thread: message meta + collapsed context rows ── */
+.gmail-msg-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  margin-bottom: 6px;
+  padding: 2px;
+  background: none;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.gmail-msg-meta__from {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gmail-msg-meta__date {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.gmail-msg-collapsed {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  min-height: 44px;
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  opacity: 0.85;
+  transition: opacity var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out);
+}
+
+.gmail-msg-collapsed:hover {
+  opacity: 1;
+  background: var(--bg-hover);
+}
+
+.gmail-msg-collapsed__top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.gmail-msg-collapsed__from {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gmail-msg-collapsed__date {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.gmail-msg-collapsed__preview {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Gmail action sheet (long-press / ⋯ menu) ── */
+.gmail-list-item {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.gmail-thread-header__more {
+  flex-shrink: 0;
+  min-width: 44px;
+  min-height: 44px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  font-size: 1.3rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.gmail-thread-header__more:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.gmail-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  animation: gmailSheetFade 0.15s ease-out;
+}
+
+@keyframes gmailSheetFade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.gmail-sheet {
+  width: 100%;
+  max-width: 440px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 16px 16px 0 0;
+  padding: 8px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+  animation: gmailSheetUp 0.2s var(--ease-out);
+}
+
+@keyframes gmailSheetUp {
+  from { transform: translateY(24px); opacity: 0.6; }
+  to   { transform: translateY(0); opacity: 1; }
+}
+
+.gmail-sheet__grab {
+  width: 36px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border);
+  margin: 2px auto 10px;
+}
+
+.gmail-sheet__header {
+  padding: 2px 8px 10px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 6px;
+}
+
+.gmail-sheet__from {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gmail-sheet__subject {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gmail-sheet__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 50px;
+  padding: 10px 12px;
+  background: none;
+  border: none;
+  border-radius: 10px;
+  text-align: left;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.gmail-sheet__row:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.gmail-sheet__row:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.gmail-sheet__icon {
+  width: 22px;
+  text-align: center;
+  color: var(--accent);
+}
+
+.gmail-sheet__row--danger,
+.gmail-sheet__row--danger .gmail-sheet__icon {
+  color: var(--danger, #ff5b5b);
+}
+
+.gmail-sheet__row--confirming {
+  background: rgba(255, 80, 80, 0.12);
+  font-weight: 700;
+}
+
+.gmail-sheet__row--cancel {
+  justify-content: center;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  margin-top: 4px;
+}
+
+/* ── Gmail transient action toast ── */
+.gmail-toast {
+  position: fixed;
+  left: 50%;
+  /* Above the reply composer, and pointer-events:none so its 3.5s lifetime
+     never swallows a tap aimed at the composer underneath. */
+  bottom: calc(84px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  z-index: 70;
+  pointer-events: none;
+  padding: 10px 18px;
+  background: var(--surface-2, rgba(30, 34, 45, 0.95));
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  font-weight: 600;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+  animation: gmailSheetFade 0.2s ease-out;
+}

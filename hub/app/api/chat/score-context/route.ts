@@ -78,6 +78,7 @@ function getGenAI(): GoogleGenerativeAI {
 
 const INTENT_DIMENSIONS: Record<string, string[]> = {
   create_task: ['outcome', 'timeline', 'constraints', 'success_criteria'],
+  update_task: ['task_identity', 'change'],
   schedule_event: ['attendees', 'timing', 'purpose', 'duration'],
   send_communication: ['recipient', 'channel', 'message_content', 'tone'],
   send_gmail: ['recipient', 'subject', 'message_content'],
@@ -94,6 +95,13 @@ const INTENT_DIMENSIONS: Record<string, string[]> = {
   create_workspace: ['name', 'template'],
   delete_workspace: ['confirmation'],
   delete_agent: ['confirmation'],
+  // Right-panel Phase 3: routines + goals. A routine passes only when the spec
+  // is actually executable — clear recurring work, an owner, and a schedule.
+  create_routine: ['task_clarity', 'assignee', 'schedule', 'success_criteria'],
+  update_routine: ['routine_identity', 'change'],
+  run_routine: ['routine_identity'],
+  create_goal: ['goal_clarity', 'level', 'ownership'],
+  update_goal: ['goal_identity', 'change'],
 }
 
 function buildScoringPrompt(
@@ -124,6 +132,7 @@ Evaluate each dimension:
 - 25 points: success criteria or acceptance conditions are described
 
 For simpler intents (check_agent_status, view_runs, run_audit), any answer scores 80+.
+For personal-productivity intents (create_task, update_task, schedule_event) — these write only to the user's OWN Google account — score 85+ whenever the action is specific enough for a competent assistant to execute (clear what, and when if timing matters). Do NOT require constraints or success criteria for these.
 For destructive intents (delete_workspace, delete_agent), require explicit confirmation text to score 80+.
 For complex intents (launch_campaign, create_agent), require all 4 dimensions to score 80+.
 
@@ -200,6 +209,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(withGateToken(result, intent, callerEmail))
   }
 
+  // update_task mutates only the caller's own Google Tasks and still goes
+  // through the human confirm card. When both the task reference and the
+  // change are present, pass deterministically — an LLM rubric adds latency
+  // and false blocks to "mark X done" without adding safety.
+  if (intent === 'update_task' && (context.taskRef || '').trim() && (context.change || '').trim()) {
+    const result: ContextScoreResult = {
+      score: 90,
+      passed: true,
+      weakDimension: null,
+      followUpQuestion: null,
+    }
+    return NextResponse.json(withGateToken(result, intent, callerEmail))
+  }
+
   const dimensions = INTENT_DIMENSIONS[intent] ?? ['outcome', 'timeline', 'constraints']
 
   // If no answers yet, return a baseline low score without calling Gemini
@@ -215,11 +238,26 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    // Claude Fable 5 primary → Gemini 2.5 Pro fallback for scoring
+    // Gemini 3.5 Flash primary → Claude chain fallback for scoring. Operator
+    // decision: Gemini Flash carries basic functionality + tool requests; the
+    // Claude chain is provider redundancy, not the default.
     const prompt = buildScoringPrompt(intent, context, dimensions)
 
-    // Try Claude first (better at structured JSON output): Fable 5 → Sonnet 4.6.
     try {
+      const model = getGenAI().getGenerativeModel({
+        model: 'gemini-3.5-flash',
+        systemInstruction: 'You are a context sufficiency scorer. Return ONLY valid JSON.',
+        generationConfig: { temperature: 0.1, maxOutputTokens: 256 },
+      })
+      const result = await model.generateContent(prompt)
+      const rawText = result.response.text()
+      const scoreResult = parseScoreResponse(rawText)
+      return NextResponse.json(withGateToken(scoreResult, intent, callerEmail))
+    } catch (geminiErr) {
+      console.warn('[score-context] Gemini 3.5 Flash failed, falling back to Claude chain:', geminiErr)
+
+      // Fallback: Claude Fable 5 → Sonnet 4.6 (a Gemini outage must not
+      // disable the quality gate — high-stakes intents would fail closed).
       const { claudeChat, CLAUDE_PRIMARY_MODEL, CLAUDE_BACKUP_MODEL } = await import('@/lib/claude')
       const scorerSystem = 'You are a context sufficiency scorer. Return ONLY valid JSON.'
       const scorerMessages = [{ id: '1', role: 'user' as const, content: prompt, timestamp: new Date().toISOString() }]
@@ -230,18 +268,6 @@ export async function POST(req: NextRequest) {
         console.warn('[score-context] Claude Fable 5 failed, trying Sonnet 4.6:', primaryErr)
         rawText = await claudeChat(scorerMessages, scorerSystem, { model: CLAUDE_BACKUP_MODEL, maxTokens: 256, temperature: 0.1 })
       }
-      const scoreResult = parseScoreResponse(rawText)
-      return NextResponse.json(withGateToken(scoreResult, intent, callerEmail))
-    } catch (claudeErr) {
-      console.warn('[score-context] Claude chain failed, falling back to Gemini 2.5 Pro:', claudeErr)
-
-      // Fallback: Gemini 2.5 Pro
-      const model = getGenAI().getGenerativeModel({
-        model: 'gemini-2.5-pro',
-        generationConfig: { temperature: 0.1, maxOutputTokens: 256 },
-      })
-      const result = await model.generateContent(prompt)
-      const rawText = result.response.text()
       const scoreResult = parseScoreResponse(rawText)
       return NextResponse.json(withGateToken(scoreResult, intent, callerEmail))
     }

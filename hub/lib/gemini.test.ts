@@ -125,10 +125,10 @@ describe('streamChat — Claude → Gemini rotation', () => {
     hoisted.claudeBehavior = () => claudeYieldThenThrow([], new Error('claude down'))
     hoisted.geminiBehavior = () => geminiStream(['gem-answer'])
 
-    const r = await collect(streamChat(MESSAGES, 'sys', 'interview', false))
+    const r = await collect(streamChat(MESSAGES, 'sys', 'deep_dive', true))
 
     expect(hoisted.claudeCalls).toEqual(['claude-fable-5', 'claude-sonnet-4-6'])
-    expect(r.models).toEqual(['Claude Fable 5', 'Claude Sonnet 4.6', 'Gemini 2.5 Flash'])
+    expect(r.models).toEqual(['Claude Fable 5', 'Claude Sonnet 4.6', 'Gemini 3.5 Flash'])
     expect(r.text).toContain('gem-answer')
     expect(r.error).toBeNull()
   })
@@ -140,7 +140,7 @@ describe('streamChat — Claude → Gemini rotation', () => {
         : claudeYield(['SHOULD-NOT-RUN'])
     hoisted.geminiBehavior = () => geminiStream(['SHOULD-NOT-RUN'])
 
-    const r = await collect(streamChat(MESSAGES, 'sys', 'interview', false))
+    const r = await collect(streamChat(MESSAGES, 'sys', 'deep_dive', true))
 
     expect(r.text).toBe('Hello ')                 // partial preserved, NOT restarted
     expect(r.error).toBeInstanceOf(Error)         // error propagates
@@ -153,10 +153,10 @@ describe('streamChat — Claude → Gemini rotation', () => {
     hoisted.claudeBehavior = () => claudeYieldThenThrow([], Object.assign(new Error('401'), { claudeError: { type: 'auth' } }))
     hoisted.geminiBehavior = () => geminiStream(['gem'])
 
-    const r = await collect(streamChat(MESSAGES, 'sys', 'interview', false))
+    const r = await collect(streamChat(MESSAGES, 'sys', 'deep_dive', true))
 
     expect(hoisted.claudeCalls).toEqual(['claude-fable-5'])  // Sonnet skipped (shared key)
-    expect(r.models).toEqual(['Claude Fable 5', 'Gemini 2.5 Flash'])
+    expect(r.models).toEqual(['Claude Fable 5', 'Gemini 3.5 Flash'])
     expect(r.text).toBe('gem')
   })
 
@@ -166,13 +166,13 @@ describe('streamChat — Claude → Gemini rotation', () => {
     const r = await collect(streamChat(MESSAGES, 'sys', 'recall', false))
 
     expect(hoisted.claudeCalls).toEqual([])
-    expect(r.models).toEqual(['Gemini 2.5 Flash'])
+    expect(r.models).toEqual(['Gemini 3.5 Flash'])
     expect(r.text).toBe('recall-answer')
   })
 
   it('does NOT fall back to Gemini Pro when Flash fails mid-stream', async () => {
     hoisted.geminiBehavior = (model) =>
-      model === 'gemini-2.5-flash'
+      model === 'gemini-3.5-flash'
         ? geminiStreamThenThrow(['X'], new Error('flash stalled'))
         : geminiStream(['SHOULD-NOT-RUN'])
 
@@ -180,7 +180,7 @@ describe('streamChat — Claude → Gemini rotation', () => {
 
     expect(r.text).toBe('X')
     expect(r.error).toBeInstanceOf(Error)
-    expect(hoisted.geminiCalls).toEqual(['gemini-2.5-flash']) // Pro never tried
+    expect(hoisted.geminiCalls).toEqual(['gemini-3.5-flash']) // rest of chain never tried
   })
 
   it('puts a failed model in cooldown so the next call skips it', async () => {
@@ -191,16 +191,50 @@ describe('streamChat — Claude → Gemini rotation', () => {
     hoisted.geminiBehavior = () => geminiStream(['unused'])
 
     // Two sequential calls share the module-level cooldown Map (reset in beforeEach).
-    const first = await collect(streamChat(MESSAGES, 'sys', 'interview', false))
+    const first = await collect(streamChat(MESSAGES, 'sys', 'deep_dive', true))
     expect(hoisted.claudeCalls).toEqual(['claude-fable-5', 'claude-sonnet-4-6'])
     expect(first.text).toBe('sonnet-answer')
 
     hoisted.claudeCalls.length = 0
-    const second = await collect(streamChat(MESSAGES, 'sys', 'interview', false))
+    const second = await collect(streamChat(MESSAGES, 'sys', 'deep_dive', true))
     // Fable 5 is cooling down → skipped without even emitting its modelUsed badge
     expect(hoisted.claudeCalls).toEqual(['claude-sonnet-4-6'])
     expect(second.models).toEqual(['Claude Sonnet 4.6'])
     expect(second.text).toBe('sonnet-answer')
+  })
+
+  it('rotates when a Claude model completes with ZERO visible text (silent empty answer guard)', async () => {
+    // Fable 5 "succeeds" but emits nothing (e.g. whole max_tokens budget spent
+    // on internal reasoning) — that must be a FAILED attempt, not a clean
+    // empty [DONE]. Keep-alive '' chunks must not count as output either.
+    hoisted.claudeBehavior = (model) =>
+      model === 'claude-fable-5'
+        ? claudeYield(['', '', ''])       // reasoning keep-alives only, no text
+        : claudeYield(['sonnet-answer'])
+    hoisted.geminiBehavior = () => geminiStream(['unused'])
+
+    const r = await collect(streamChat(MESSAGES, 'sys', 'deep_dive', true))
+
+    expect(hoisted.claudeCalls).toEqual(['claude-fable-5', 'claude-sonnet-4-6'])
+    expect(r.text).toBe('sonnet-answer')
+    expect(r.error).toBeNull()
+    // Empty keep-alives never reach the wire.
+    expect(r.models).toEqual(['Claude Fable 5', 'Claude Sonnet 4.6'])
+  })
+
+  it('rotates when a Gemini model completes with ZERO visible text', async () => {
+    hoisted.geminiBehavior = (model) =>
+      model === 'gemini-3.5-flash'
+        ? geminiStream([])                 // clean stream, no output
+        : geminiStream(['backup-answer'])
+
+    const p = collect(streamChat(MESSAGES, 'sys', 'recall', false))
+    await vi.advanceTimersByTimeAsync(2_500) // inter-model rotation delay
+    const r = await p
+
+    expect(hoisted.geminiCalls).toEqual(['gemini-3.5-flash', 'gemini-2.5-flash'])
+    expect(r.text).toContain('backup-answer')
+    expect(r.error).toBeNull()
   })
 
   it('handles 50 concurrent streams with no cross-talk', async () => {
@@ -215,7 +249,7 @@ describe('streamChat — Claude → Gemini rotation', () => {
     expect(new Set(texts).size).toBe(50)                 // every stream got its own answer
     results.forEach(r => {
       expect(r.error).toBeNull()
-      expect(r.models).toEqual(['Gemini 2.5 Flash'])
+      expect(r.models).toEqual(['Gemini 3.5 Flash'])
     })
   })
 })
@@ -316,7 +350,7 @@ describe('streamChat — observability telemetry', () => {
     expect(byType('ai_error')).toHaveLength(0)
 
     const complete = byType('ai_complete')[0]
-    expect(complete).toMatchObject({ provider: 'gemini', model: 'gemini-2.5-flash' })
+    expect(complete).toMatchObject({ provider: 'gemini', model: 'gemini-3.5-flash' })
     expect(typeof complete.ms).toBe('number')
     // Every event correlates on the threaded requestId.
     for (const e of events) expect(e.requestId).toBe('req-ok')
@@ -329,7 +363,7 @@ describe('streamChat — observability telemetry', () => {
         ? claudeYieldThenThrow([], new Error('fable down'))
         : claudeYield(['sonnet-answer'])
 
-    const r = await collect(streamChat(MESSAGES, 'sys', 'interview', false, 'req-fb'))
+    const r = await collect(streamChat(MESSAGES, 'sys', 'deep_dive', true, 'req-fb'))
     expect(r.text).toBe('sonnet-answer')
 
     // The fallback event fired on its REAL trigger (a genuine primary failure).
@@ -346,7 +380,7 @@ describe('streamChat — observability telemetry', () => {
     hoisted.claudeBehavior = () => claudeYieldThenThrow([], new Error('claude down'))
     hoisted.geminiBehavior = () => { throw new Error('gemini 500 internal error') }
 
-    const r = await collect(streamChat(MESSAGES, 'sys', 'interview', false, 'req-err'))
+    const r = await collect(streamChat(MESSAGES, 'sys', 'deep_dive', true, 'req-err'))
     expect(r.error).toBeInstanceOf(Error)
 
     expect(byType('ai_complete')).toHaveLength(0)
@@ -405,8 +439,8 @@ describe('streamChat — P0 emergency cross-provider fallback (Gemini → Claude
     const r = await collect(streamChat(MESSAGES, 'sys', 'recall', false, 'req-x'))
 
     expect(r.error).toBeNull()
-    // Auth fast-fail: flash only, pro never burned; then the Claude chain head.
-    expect(hoisted.geminiCalls).toEqual(['gemini-2.5-flash'])
+    // Auth fast-fail: chain head only, rest never burned; then the Claude chain head.
+    expect(hoisted.geminiCalls).toEqual(['gemini-3.5-flash'])
     expect(hoisted.claudeCalls).toEqual(['claude-fable-5'])
     expect(r.models).toEqual(['Claude Fable 5'])
     // The user sees the graceful degraded-mode note, then the real answer.
@@ -414,7 +448,7 @@ describe('streamChat — P0 emergency cross-provider fallback (Gemini → Claude
 
     const fallbacks = byType('ai_fallback')
     expect(fallbacks).toHaveLength(1)
-    expect(fallbacks[0]).toMatchObject({ from: 'gemini-2.5-flash', to: 'claude-fable-5', reason: 'auth' })
+    expect(fallbacks[0]).toMatchObject({ from: 'gemini-3.5-flash', to: 'claude-fable-5', reason: 'auth' })
     expect(byType('ai_complete')[0]).toMatchObject({ provider: 'claude', model: 'claude-fable-5' })
     expect(byType('ai_error')).toHaveLength(0)
   })
@@ -427,11 +461,11 @@ describe('streamChat — P0 emergency cross-provider fallback (Gemini → Claude
     vi.useFakeTimers()
     try {
       const p = collect(streamChat(MESSAGES, 'sys', 'recall', false, 'req-y'))
-      await vi.advanceTimersByTimeAsync(2_500) // flash fails → 2s inter-model delay → pro fails
+      await vi.advanceTimersByTimeAsync(5_000) // 3.5-flash fails → 2s delay → 2.5-flash fails → 2s delay → pro fails
       const r = await p
 
       expect(r.error).toBeNull()
-      expect(hoisted.geminiCalls).toEqual(['gemini-2.5-flash', 'gemini-2.5-pro'])
+      expect(hoisted.geminiCalls).toEqual(['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'])
       expect(r.text).toContain('rescued')
       // Intra-Gemini fallback event, then the cross-provider one.
       const fallbacks = byType('ai_fallback')
@@ -449,7 +483,7 @@ describe('streamChat — P0 emergency cross-provider fallback (Gemini → Claude
 
     expect(r.text).toBe('')
     expect(hoisted.claudeCalls).toEqual([])            // Claude never walked
-    expect(hoisted.geminiCalls).toEqual(['gemini-2.5-flash']) // auth fast-fail, no pro retry
+    expect(hoisted.geminiCalls).toEqual(['gemini-3.5-flash']) // auth fast-fail, no chain retry
     expect(r.error?.message).toBe(AUTH_MSG)            // original error surfaces
     expect(friendlyModelError(r.error)).toBe(
       'The AI service is temporarily unavailable (provider configuration). '
@@ -462,7 +496,7 @@ describe('streamChat — P0 emergency cross-provider fallback (Gemini → Claude
     hoisted.claudeBehavior = () => claudeYieldThenThrow([], new Error('claude down'))
     hoisted.geminiBehavior = () => { throw new Error(AUTH_MSG) }
 
-    const r = await collect(streamChat(MESSAGES, 'sys', 'interview', false))
+    const r = await collect(streamChat(MESSAGES, 'sys', 'deep_dive', true))
 
     // Claude chain walked exactly once (both models), never a second time.
     expect(hoisted.claudeCalls).toEqual(['claude-fable-5', 'claude-sonnet-4-6'])
@@ -568,5 +602,40 @@ describe('friendlyModelError — user-facing message mapping', () => {
     ]) {
       expect(out).not.toContain(needle)
     }
+  })
+})
+
+describe('useCase routing — Gemini 3.5 Flash carries basic + tool requests', () => {
+  beforeEach(() => {
+    hoisted.claudeCalls.length = 0
+    hoisted.geminiCalls.length = 0
+    hoisted.claudeBehavior = null
+    hoisted.geminiBehavior = null
+    hoisted.claudeConfigured = true // Claude available — routing must still pick Gemini
+    __resetModelCooldownsForTest()
+  })
+  afterEach(() => __resetModelCooldownsForTest())
+
+  it.each(['recall', 'deep_dive', 'interview', 'execute'] as const)(
+    '%s (no skill) streams from the Gemini chain without touching Claude',
+    async (useCase) => {
+      hoisted.geminiBehavior = () => geminiStream(['flash-answer'])
+      const r = await collect(streamChat(MESSAGES, 'sys', useCase, false))
+      expect(hoisted.claudeCalls).toEqual([])
+      expect(hoisted.geminiCalls).toEqual(['gemini-3.5-flash'])
+      expect(r.models).toEqual(['Gemini 3.5 Flash'])
+      expect(r.text).toBe('flash-answer')
+    },
+  )
+
+  it.each([
+    ['exa_search', false],
+    ['deep_dive', true],
+  ] as const)('%s (skill=%s) stays Claude Fable 5-first', async (useCase, hasSkill) => {
+    hoisted.claudeBehavior = () => claudeYield(['fable-answer'])
+    const r = await collect(streamChat(MESSAGES, 'sys', useCase, hasSkill))
+    expect(hoisted.claudeCalls[0]).toBe('claude-fable-5')
+    expect(r.models[0]).toBe('Claude Fable 5')
+    expect(r.text).toBe('fable-answer')
   })
 })

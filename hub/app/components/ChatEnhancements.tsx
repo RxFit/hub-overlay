@@ -2,6 +2,65 @@
 
 import { useCallback, useRef, useState } from 'react'
 import type { InterviewState, InterviewIntent, ActionSpec, ActiveSkill } from '@/types'
+import type { SolutionSuggestion } from '@/lib/solution-suggest'
+
+const PRIMITIVE_ICON: Record<SolutionSuggestion['primitive'], string> = {
+  routine: '🔁',
+  issue: '🤖',
+  project: '📁',
+  goal: '🎯',
+}
+
+/**
+ * SolutionCard (Phase 6a) — the proactive "Paperclip as a solution" prompt.
+ * Rendered under an assistant reply when the suggestion engine detects a
+ * Paperclip primitive that beats the plain action the user asked for.
+ *
+ * Additive by design: `onAccept` opens the gated interview (no new
+ * privileges), `onDismiss(false)` snoozes ("Not now"), `onDismiss(true)`
+ * blocks this suggestion permanently ("Don't offer this again"). The
+ * user's original action is never hijacked — it proceeds regardless.
+ */
+export function SolutionCard({
+  suggestion,
+  onAccept,
+  onDismiss,
+}: {
+  suggestion: SolutionSuggestion
+  onAccept: (s: SolutionSuggestion) => void
+  onDismiss: (permanent: boolean) => void
+}) {
+  const swipe = useSwipeDismiss(() => onDismiss(false))
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="solution-card"
+      data-primitive={suggestion.primitive}
+      onTouchStart={swipe.onTouchStart}
+      onTouchMove={swipe.onTouchMove}
+      onTouchEnd={swipe.onTouchEnd}
+      style={swipe.style}
+    >
+      <div className="solution-card__head">
+        <span aria-hidden="true" className="solution-card__icon">{PRIMITIVE_ICON[suggestion.primitive]}</span>
+        <span className="solution-card__headline">{suggestion.headline}</span>
+      </div>
+      <p className="solution-card__body">{suggestion.body}</p>
+      <div className="solution-card__actions">
+        <button className="solution-card__accept" onClick={() => onAccept(suggestion)}>
+          {suggestion.acceptLabel}
+        </button>
+        <button className="solution-card__dismiss" onClick={() => onDismiss(false)}>
+          Not now
+        </button>
+        <button className="solution-card__never" onClick={() => onDismiss(true)} aria-label="Don't offer this again">
+          Don&rsquo;t offer this again
+        </button>
+      </div>
+    </div>
+  )
+}
 
 /* ── E4: Swipe-to-dismiss hook ── */
 function useSwipeDismiss(onDismiss: () => void) {

@@ -1,4 +1,4 @@
-import type { Company, Issue, Run, Agent, Project } from '@/types'
+import type { Company, Issue, Run, Agent, Project, Routine, Goal } from '@/types'
 import { getPaperclipAuthHeaders, clearPaperclipSession } from '@/lib/paperclipSession'
 import { PAPERCLIP_BASE_URL } from '@/lib/paperclipConfig'
 import { createLogger } from '@/lib/logger'
@@ -17,7 +17,11 @@ import {
   AgentResponseSchema,
   ProjectsResponseSchema,
   RunsResponseSchema,
+  DashboardResponseSchema,
+  RoutinesResponseSchema,
+  GoalsResponseSchema,
 } from '@/lib/zod-schemas'
+import { normalizeDashboard, type ExecutionDashboard } from '@/lib/execution-dashboard'
 import type { ZodType } from 'zod'
 
 const log = createLogger('paperclip')
@@ -173,6 +177,7 @@ function normalizeAgent(raw: Record<string, unknown>): Agent {
     ...(raw as unknown as Agent),
     adapter: (raw.adapter as string) ?? (raw.adapterType as string) ?? 'unknown',
     status: AGENT_STATUS_MAP[rawStatus] ?? 'inactive',
+    rawStatus,
     lastHeartbeat: (raw.lastHeartbeat as string | null)
       ?? (raw.lastHeartbeatAt as string | null)
       ?? null,
@@ -596,6 +601,82 @@ export async function deleteAgent(_companyId: string, agentId: string, scope?: s
     undefined,
     scope
   )
+}
+
+/* ── Routines ── */
+
+function normalizeRoutine(raw: Record<string, unknown>, companyId: string): Routine {
+  const assignee = raw.assignedAgent as Record<string, unknown> | undefined
+  return {
+    id: String(raw.id),
+    title: String(raw.title ?? ''),
+    description: (raw.description as string | null) ?? null,
+    status: typeof raw.status === 'string' ? raw.status : 'paused',
+    assigneeAgentId: (raw.assigneeAgentId as string | null) ?? null,
+    assigneeName:
+      (raw.assigneeName as string | null)
+      ?? (typeof assignee?.name === 'string' ? assignee.name : null),
+    projectId: (raw.projectId as string | null) ?? null,
+    companyId: typeof raw.companyId === 'string' ? raw.companyId : companyId,
+    createdAt: (raw.createdAt as string | null) ?? null,
+    updatedAt: (raw.updatedAt as string | null) ?? null,
+  }
+}
+
+export async function getRoutines(companyId: string): Promise<Routine[]> {
+  const data = await paperclipFetch(
+    `/api/companies/${companyId}/routines`,
+    undefined,
+    RoutinesResponseSchema,
+    undefined,
+    true,
+  )
+  return pickArray<Record<string, unknown>>(data, 'routines').map((r) => normalizeRoutine(r, companyId))
+}
+
+/* ── Goals ── */
+
+function normalizeGoal(raw: Record<string, unknown>, companyId: string): Goal {
+  return {
+    id: String(raw.id),
+    title: String(raw.title ?? ''),
+    description: (raw.description as string | null) ?? null,
+    level: typeof raw.level === 'string' ? raw.level : 'task',
+    status: typeof raw.status === 'string' ? raw.status : 'planned',
+    parentId: (raw.parentId as string | null) ?? null,
+    ownerAgentId: (raw.ownerAgentId as string | null) ?? null,
+    companyId: typeof raw.companyId === 'string' ? raw.companyId : companyId,
+    createdAt: (raw.createdAt as string | null) ?? null,
+    updatedAt: (raw.updatedAt as string | null) ?? null,
+  }
+}
+
+export async function getGoals(companyId: string): Promise<Goal[]> {
+  const data = await paperclipFetch(
+    `/api/companies/${companyId}/goals`,
+    undefined,
+    GoalsResponseSchema,
+    undefined,
+    true,
+  )
+  return pickArray<Record<string, unknown>>(data, 'goals').map((g) => normalizeGoal(g, companyId))
+}
+
+/* ── Dashboard ── */
+
+/**
+ * Fetch the company health snapshot (agents/tasks/costs/approvals/budgets)
+ * behind the right panel's Pulse header. Lenient schema + zero-fill
+ * normalization: a version-drifted snapshot degrades to zeros, never throws
+ * on shape.
+ */
+export async function getDashboard(companyId: string): Promise<ExecutionDashboard> {
+  const data = await paperclipFetch(
+    `/api/companies/${companyId}/dashboard`,
+    undefined,
+    DashboardResponseSchema,
+  )
+  return normalizeDashboard(data, companyId)
 }
 
 /* ── Health Check ── */

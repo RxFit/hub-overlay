@@ -3,10 +3,11 @@ import { getServerSession } from 'next-auth'
 import { getToken } from 'next-auth/jwt'
 import { authOptions } from '@/lib/auth'
 import { createLogger } from '@/lib/logger'
-import { streamChat, buildSystemPrompt, friendlyModelError } from '@/lib/gemini'
+import { streamChat, buildSystemPromptParts, friendlyModelError } from '@/lib/gemini'
+import type { SystemPromptParts } from '@/lib/claude'
 import { getCompanies, getIssues, getAgents, getRuns } from '@/lib/paperclip'
 import { searchSemanticBrain } from '@/lib/vertex'
-import { searchWeb } from '@/lib/exa'
+import { searchWeb, parseSubQueries, mergeExaResults, type ExaSearchResult } from '@/lib/exa'
 import { resolveAttachmentContext } from '@/lib/attachment-resolver'
 import { loadSkillContent } from '@/lib/skills-loader'
 import { SKILL_MAP } from '@/lib/skills'
@@ -181,16 +182,90 @@ async function runSearchPipeline(query: string, effectiveUseCase: string): Promi
  * no internal context) so the header toggle can never trigger another tool.
  * Returns a formatted results block for injection, or '' on empty/failure.
  */
-async function runExaOnlySearch(query: string): Promise<string> {
+async function runExaOnlySearch(query: string): Promise<{ context: string; failed: boolean }> {
   return withTimeout(
     (async () => {
       try {
-        const exaResults = await breaker.execute('exa-search', () => searchWeb(query, {
-          numResults: 8,
-          useAutoprompt: true,
-        }))
-        if (exaResults.length === 0) return ''
-        return exaResults
+        // ── 1. Query decomposition (deep-research pattern) ──
+        // A fast planner turns the question into complementary search angles;
+        // planner failure fails OPEN to the original query alone.
+        let queries: string[] = [query]
+        try {
+          const { geminiGenerateText } = await import('@/lib/gemini')
+          const plan = await withTimeout(
+            geminiGenerateText(
+              'You decompose research questions into web-search queries. Respond with ONLY a JSON array of 3 short, distinct search queries covering complementary angles of the user\'s question (different subtopics, comparisons, or evidence types — not rephrasings). No markdown, no prose.',
+              query,
+            ),
+            6_000,
+            null,
+            'exa-query-planner',
+          )
+          if (plan?.text) queries = parseSubQueries(plan.text, query, 4)
+        } catch (err) {
+          log.warn({ err }, 'EXA query planner failed — single-query search')
+        }
+
+        // ── 2a. Server-side deep fan-out (preferred) ──
+        // Exa's `deep` search tier runs ITS OWN parallel search agents over
+        // the main query + our planner's variations (4-15s) — the same
+        // orchestrator/worker pattern Exa Deep uses internally. If the tier
+        // is unavailable on this plan/SDK, fall back to client-side parallel
+        // `auto` searches (2b).
+        let merged: ExaSearchResult[] | null = null
+        try {
+          const deep = await breaker.execute('exa-search', () => searchWeb(query, {
+            type: 'deep',
+            additionalQueries: queries.slice(1),
+            numResults: 12,
+            useAutoprompt: true,
+            maxCharacters: 3000,
+          }))
+          if (deep.length > 0) {
+            merged = deep
+            log.info({ queryCount: queries.length, resultCount: deep.length }, 'EXA search mode: Exa deep-tier fan-out complete')
+          }
+        } catch (err) {
+          log.warn({ err }, 'EXA deep-tier search failed — falling back to parallel auto searches')
+        }
+
+        // ── 2b. Client-side parallel semantic searches (fallback) ──
+        const perQuery = queries.length > 1 ? 5 : 8
+        const settled = merged ? [] : await Promise.allSettled(
+          queries.map(q =>
+            breaker.execute('exa-search', () => searchWeb(q, {
+              numResults: perQuery,
+              useAutoprompt: true,
+              maxCharacters: 3000,
+            }))
+          )
+        )
+        const resultLists = settled
+          .filter((r): r is PromiseFulfilledResult<ExaSearchResult[]> => r.status === 'fulfilled')
+          .map(r => r.value)
+
+        if (!merged && resultLists.length === 0) {
+          // Every parallel search FAILED — disclose, don't disguise as empty.
+          const firstErr = settled.find(r => r.status === 'rejected') as PromiseRejectedResult | undefined
+          if (firstErr?.reason instanceof CircuitOpenError) {
+            log.warn({ key: 'exa-search' }, 'Exa circuit is OPEN — EXA search unavailable')
+          } else {
+            log.warn({ err: firstErr?.reason }, 'EXA search mode: all parallel Exa queries failed')
+          }
+          return { context: '', failed: true }
+        }
+
+        // ── 3. Merge: round-robin interleave, dedupe by URL, cap sources ──
+        if (!merged) {
+          merged = mergeExaResults(resultLists, 12)
+          log.info(
+            { queryCount: queries.length, resultCount: merged.length },
+            'EXA search mode: parallel Exa.AI fan-out complete'
+          )
+        }
+        if (merged.length === 0) return { context: '', failed: false }
+
+        const context = merged
           .map(r => {
             let entry = `**${r.title ?? 'Untitled'}** — [${r.url}]`
             if (r.publishedDate) entry += ` (${r.publishedDate.split('T')[0]})`
@@ -198,17 +273,18 @@ async function runExaOnlySearch(query: string): Promise<string> {
             return entry
           })
           .join('\n\n---\n\n')
+        return { context, failed: false }
       } catch (err) {
         if (err instanceof CircuitOpenError) {
-          log.warn({ key: 'exa-search' }, 'Exa circuit is OPEN — EXA search mode returning empty')
-          return ''
+          log.warn({ key: 'exa-search' }, 'Exa circuit is OPEN — EXA search unavailable')
+        } else {
+          log.warn({ err }, 'EXA search mode Exa.AI query failed')
         }
-        log.warn({ err }, 'EXA search mode Exa.AI query failed')
-        return ''
+        return { context: '', failed: true }
       }
     })(),
-    10_000,
-    '',
+    30_000,
+    { context: '', failed: true },
     'exa-only-search',
   )
 }
@@ -221,7 +297,7 @@ async function runExaOnlySearch(query: string): Promise<string> {
  */
 function streamModelResponse(
   boundedMessages: ChatMessage[],
-  systemPrompt: string,
+  systemPrompt: SystemPromptParts,
   effectiveUseCase: string,
   hasActiveSkill: boolean,
   req: NextRequest,
@@ -250,6 +326,10 @@ function streamModelResponse(
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ modelUsed: chunk.modelUsed })}\n\n`))
             continue
           }
+          // Defensive: never put empty text frames on the wire (reasoning-phase
+          // keep-alives are consumed inside the rotation layer, but any that
+          // slip through carry no information for the client).
+          if (chunk.length === 0) continue
           fullText += chunk
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: chunk })}\n\n`))
         }
@@ -388,13 +468,55 @@ async function handleChat(req: NextRequest): Promise<Response> {
   if (exaMode) {
     const exaLastUserMsg = boundedMessages.filter(m => m.role === 'user').pop()
     const exaQuery = exaLastUserMsg?.content ?? ''
-    log.info({ hasQuery: Boolean(exaQuery) }, 'EXA Search mode active — running Exa-only pipeline')
-    const exaContext = exaQuery ? await runExaOnlySearch(exaQuery) : ''
-    const exaSystemPrompt = buildSystemPrompt({
-      injectedContext: exaContext || undefined,
+    log.info({ hasQuery: Boolean(exaQuery) }, 'EXA Search mode active — hybrid semantic pipeline (Exa web + Vertex internal)')
+
+    // Hybrid SEMANTIC-ONLY research: Exa (web) + Vertex AI Internal Brain run
+    // CONCURRENTLY, each failing open independently — a Vertex outage must not
+    // kill web results and vice versa. Everything else (pgvector, Paperclip,
+    // Workspace context, attachments, skills) stays disabled in this mode.
+    const [exaSearch, internalSearch] = await Promise.all([
+      exaQuery ? runExaOnlySearch(exaQuery) : Promise.resolve({ context: '', failed: false }),
+      exaQuery
+        ? withTimeout(
+            (async () => {
+              try {
+                const vertexResults = await breaker.execute('vertex-ai', () => searchSemanticBrain(exaQuery))
+                if (vertexResults && vertexResults.length > 0) {
+                  const ctx = vertexResults
+                    .map(r => `**${r.title}** ${r.uri ? `(${r.uri})` : ''}\n${r.snippet}`)
+                    .join('\n\n---\n\n')
+                  return { context: ctx, failed: false }
+                }
+                return { context: '', failed: false } // genuinely zero matches
+              } catch (err) {
+                if (err instanceof CircuitOpenError) {
+                  log.warn({ key: 'vertex-ai' }, 'Vertex circuit OPEN — EXA hybrid runs web-only')
+                } else {
+                  log.warn({ err }, 'EXA hybrid: Vertex internal search failed — web-only')
+                }
+                return { context: '', failed: true }
+              }
+            })(),
+            8_000,
+            { context: '', failed: true },
+            'exa-internal-search',
+          )
+        : Promise.resolve({ context: '', failed: false }),
+    ])
+
+    // Parts form → Claude puts a cache breakpoint on the static prefix
+    // (persona + policy) so repeat EXA turns read it at 0.1x input price.
+    const exaSystemPrompt = buildSystemPromptParts({
+      injectedContext: exaSearch.context || undefined,
       exaMode: true,
+      exaSearchFailed: exaSearch.failed,
+      exaInternalContext: internalSearch.context || undefined,
+      exaInternalFailed: internalSearch.failed,
     })
-    return streamModelResponse(boundedMessages, exaSystemPrompt, 'deep_dive', false, req)
+    // 'exa_search' routes to the Claude chain (Fable 5 → Sonnet 4.6 → Gemini
+    // fallbacks) — research synthesis with citations needs the strongest model,
+    // not the Gemini Flash default that plain no-skill deep_dive falls to.
+    return streamModelResponse(boundedMessages, exaSystemPrompt, 'exa_search', false, req)
   }
 
   // ── Parallel pre-stream context assembly ──
@@ -562,7 +684,9 @@ async function handleChat(req: NextRequest): Promise<Response> {
     if (content) activeSkillContent = content
   }
 
-  const systemPrompt = buildSystemPrompt({
+  // Parts form for prompt caching — static persona/policy prefix cached,
+  // dynamic context (date, workspace, search results) after the breakpoint.
+  const systemPrompt = buildSystemPromptParts({
     projects: projectContext,
     agentActivity,
     googleWorkspace: Object.keys(googleWorkspaceCounts).length > 0 ? googleWorkspaceCounts : undefined,

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { ChatMessage } from '@/types'
-import { streamChat, streamGeminiChat, friendlyModelError, __resetModelCooldownsForTest } from './gemini'
+import { streamChat, friendlyModelError, __resetModelCooldownsForTest } from './gemini'
 
 /* ════════════════════════════════════════════════════════════════════════════
    Rotation branches NS-8 left uncovered (NS-11): cooldown re-entry after
@@ -109,7 +109,7 @@ describe('missing Gemini API key', () => {
       const { error, text } = await collect(streamChat(MESSAGES, 'sys', 'recall'))
       expect(text).toBe('')
       expect(error?.message).toContain('No Gemini API key found')
-      // Auth-class failure: gemini-2.5-pro was never attempted.
+      // Auth-class failure: the rest of the Gemini chain was never attempted.
       expect(hoisted.geminiCalls).toEqual([])
       // The user-facing string frames it as provider configuration, not leak.
       expect(friendlyModelError(error)).toContain('provider configuration')
@@ -129,20 +129,20 @@ describe('cooldown re-entry (Claude chain)', () => {
     }
 
     // Call 1: Fable fails pre-stream → Sonnet serves.
-    const r1 = await collect(streamChat(MESSAGES, 'sys', 'interview'))
+    const r1 = await collect(streamChat(MESSAGES, 'sys', 'deep_dive', true))
     expect(r1.error).toBeNull()
     expect(hoisted.claudeCalls).toEqual(['claude-fable-5', 'claude-sonnet-4-6'])
     expect(r1.models).toEqual(['Claude Fable 5', 'Claude Sonnet 4.6']) // rotation visible to the UI
 
     // Call 2 (inside the 5-min error cooldown): Fable is not even attempted.
-    const r2 = await collect(streamChat(MESSAGES, 'sys', 'interview'))
+    const r2 = await collect(streamChat(MESSAGES, 'sys', 'deep_dive', true))
     expect(r2.error).toBeNull()
     expect(hoisted.claudeCalls).toEqual(['claude-fable-5', 'claude-sonnet-4-6', 'claude-sonnet-4-6'])
 
     // Cooldown expires (error cooldown = 300s) → Fable is tried FIRST again.
     fableUp = true
     vi.advanceTimersByTime(301_000)
-    const r3 = await collect(streamChat(MESSAGES, 'sys', 'interview'))
+    const r3 = await collect(streamChat(MESSAGES, 'sys', 'deep_dive', true))
     expect(r3.error).toBeNull()
     expect(hoisted.claudeCalls.at(-1)).toBe('claude-fable-5')
     expect(r3.text).toBe('claude-fable-5 says hi')
@@ -164,7 +164,7 @@ describe('Claude auth-failure cooldown tier (P2 FIX2)', () => {
 
     // Call 1: Fable auth-fails → the shared-credential break skips Sonnet and
     // hands off to Gemini. Fable is now recorded in the AUTH cooldown tier.
-    const r1 = await collect(streamChat(MESSAGES, 'sys', 'interview'))
+    const r1 = await collect(streamChat(MESSAGES, 'sys', 'deep_dive', true))
     expect(hoisted.claudeCalls).toEqual(['claude-fable-5']) // Sonnet skipped (auth break)
     expect(r1.text).toBe('gem')
 
@@ -175,14 +175,14 @@ describe('Claude auth-failure cooldown tier (P2 FIX2)', () => {
     fableAuthFails = false
     hoisted.claudeCalls.length = 0
     vi.advanceTimersByTime(301_000)
-    const r2 = await collect(streamChat(MESSAGES, 'sys', 'interview'))
+    const r2 = await collect(streamChat(MESSAGES, 'sys', 'deep_dive', true))
     expect(hoisted.claudeCalls).toEqual(['claude-sonnet-4-6']) // Fable STILL cooling → skipped
     expect(r2.text).toBe('claude-sonnet-4-6 says hi')
 
     // Past the full 30-min auth cooldown, Fable is tried FIRST again.
     hoisted.claudeCalls.length = 0
     vi.advanceTimersByTime(1_800_000)
-    const r3 = await collect(streamChat(MESSAGES, 'sys', 'interview'))
+    const r3 = await collect(streamChat(MESSAGES, 'sys', 'deep_dive', true))
     expect(hoisted.claudeCalls[0]).toBe('claude-fable-5')
     expect(r3.text).toBe('claude-fable-5 says hi')
   })
@@ -193,17 +193,18 @@ describe('all models in cooldown (Gemini chain)', () => {
     process.env.GEMINI_API_KEY = 'test-key'
     hoisted.geminiBehavior = () => Promise.reject(new Error('gemini 500 internal'))
 
-    // Call 1: flash fails, 2s inter-model delay, pro fails → both cool down.
+    // Call 1: each chain model fails with a 2s inter-model delay between
+    // attempts → all three cool down.
     const p1 = collect(streamChat(MESSAGES, 'sys', 'recall'))
-    await vi.advanceTimersByTimeAsync(2_500)
+    await vi.advanceTimersByTimeAsync(5_000)
     const r1 = await p1
     expect(r1.error?.message).toContain('gemini 500 internal')
-    expect(hoisted.geminiCalls).toEqual(['gemini-2.5-flash', 'gemini-2.5-pro'])
+    expect(hoisted.geminiCalls).toEqual(['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'])
 
-    // Call 2, still inside both cooldowns: terminal error, zero upstream calls.
+    // Call 2, still inside every cooldown: terminal error, zero upstream calls.
     const r2 = await collect(streamChat(MESSAGES, 'sys', 'recall'))
     expect(r2.error?.message).toBe('All models are in cooldown')
-    expect(hoisted.geminiCalls).toHaveLength(2) // unchanged
+    expect(hoisted.geminiCalls).toHaveLength(3) // unchanged
     expect(friendlyModelError(r2.error)).toBe('The AI is busy right now. Please try again in a moment.')
   })
 })
@@ -212,7 +213,7 @@ describe('Gemini connect-race timeout', () => {
   it('times out a never-connecting primary at CONNECT_TIMEOUT_MS and serves from the backup with the degraded banner', async () => {
     process.env.GEMINI_API_KEY = 'test-key'
     hoisted.geminiBehavior = (model) =>
-      model === 'gemini-2.5-flash'
+      model === 'gemini-3.5-flash'
         ? new Promise(() => {}) // connects never
         : geminiStream(['pro answer'])
 
@@ -222,10 +223,10 @@ describe('Gemini connect-race timeout', () => {
     const { text, models, error } = await p
 
     expect(error).toBeNull()
-    expect(models).toEqual(['Gemini 2.5 Pro'])
+    expect(models).toEqual(['Gemini 2.5 Flash'])
     // The i>0 degraded-mode banner is part of the user-visible contract.
-    expect(text).toBe('⚠️ *Primary model unavailable — using gemini-2.5-pro*\n\npro answer')
-    expect(hoisted.geminiCalls).toEqual(['gemini-2.5-flash', 'gemini-2.5-pro'])
+    expect(text).toBe('⚠️ *Primary model unavailable — using gemini-2.5-flash*\n\npro answer')
+    expect(hoisted.geminiCalls).toEqual(['gemini-3.5-flash', 'gemini-2.5-flash'])
   })
 })
 
@@ -240,12 +241,4 @@ describe('input contract + legacy wrapper', () => {
     expect(error?.message).toBe('Last message must be from the user')
   })
 
-  it('streamGeminiChat (legacy) yields ONLY text — modelUsed events are filtered out', async () => {
-    process.env.GEMINI_API_KEY = 'test-key'
-    hoisted.geminiBehavior = () => geminiStream(['a', 'b'])
-    const chunks: string[] = []
-    for await (const c of streamGeminiChat(MESSAGES, 'sys', 'recall')) chunks.push(c)
-    expect(chunks).toEqual(['a', 'b'])
-    for (const c of chunks) expect(typeof c).toBe('string')
-  })
 })

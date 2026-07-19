@@ -29,14 +29,6 @@ interface BusinessManagerState {
   mutate: () => void
 }
 
-const ROLE_DISPLAY: Record<string, string> = {
-  ceo: 'CEO',
-  cmo: 'CMO',
-  cto: 'CTO',
-  cfo: 'CFO',
-  coo: 'COO',
-}
-
 export function useBusinessManager(orgId?: string): BusinessManagerState {
   const url = orgId
     ? `/api/paperclip/ceo-pulse?orgId=${encodeURIComponent(orgId)}`
@@ -72,7 +64,7 @@ export function healthToColor(status: string): 'green' | 'amber' | 'red' | 'gray
   }
 }
 
-/** Helper: human-readable label for a role key */
-export function roleLabel(role: string): string {
-  return ROLE_DISPLAY[role] ?? role.toUpperCase()
-}
+// roleLabel now lives in lib/agentRoles.ts (single source for role
+// classification + display); re-exported here so existing consumers keep
+// their import path.
+export { roleLabel } from '@/lib/agentRoles'

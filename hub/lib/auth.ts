@@ -39,6 +39,34 @@ const ALLOWED_EMAIL_DOMAINS: string[] = (() => {
   return explicit.length > 0 ? explicit : CONFIGURED_ADMIN_DOMAINS
 })()
 
+/**
+ * Individually-invited external accounts (comma-separated env var). For guests
+ * on consumer domains (e.g. a family member's gmail.com) where allowlisting
+ * the whole domain would open the gate to every Google account. These users
+ * sign in without needing a pre-assigned DB role; role resolution still runs
+ * normally afterwards.
+ */
+const ALLOWED_EMAIL_ADDRESSES = (process.env.ALLOWED_EMAIL_ADDRESSES || '')
+  .split(',').map(e => e.trim().toLowerCase()).filter(Boolean)
+
+/**
+ * Per-user display-name overrides: "email:Name,email2:Name2". The hub shows
+ * `session.user.name` (the Google profile name) everywhere; this lets the
+ * operator correct how a user is addressed (e.g. "Carol-Jean", not "Carol")
+ * without touching their Google account. Applied in the session callback.
+ */
+const USER_DISPLAY_NAME_OVERRIDES: Record<string, string> = (() => {
+  const map: Record<string, string> = {}
+  for (const pair of (process.env.USER_DISPLAY_NAME_OVERRIDES || '').split(',')) {
+    const sep = pair.indexOf(':')
+    if (sep <= 0) continue
+    const email = pair.slice(0, sep).trim().toLowerCase()
+    const name = pair.slice(sep + 1).trim()
+    if (email && name) map[email] = name
+  }
+  return map
+})()
+
 /* ── Google Workspace OAuth scopes ── */
 const GOOGLE_SCOPES = [
   'openid',
@@ -55,9 +83,11 @@ const GOOGLE_SCOPES = [
   'https://www.googleapis.com/auth/chat.spaces.readonly',
   'https://www.googleapis.com/auth/chat.messages',
   'https://www.googleapis.com/auth/chat.messages.create',
-  // Google Chat — member listing + read state (for unread badges)
+  // Google Chat — member listing + read state (for unread badges).
+  // readstate is the FULL scope (read + write): opening a chat in the hub
+  // marks it read so the unread badge clears here and in Google Chat.
   'https://www.googleapis.com/auth/chat.memberships.readonly',
-  'https://www.googleapis.com/auth/chat.users.readstate.readonly',
+  'https://www.googleapis.com/auth/chat.users.readstate',
   // KPI sources — GA4 Data API + Google Search Console
   'https://www.googleapis.com/auth/analytics.readonly',
   'https://www.googleapis.com/auth/webmasters.readonly',
@@ -193,6 +223,10 @@ export const authOptions: NextAuthOptions = {
       // (a) env-configured superadmin/admin always allowed.
       if (SUPERADMIN_EMAILS.includes(email) || ADMIN_EMAILS.includes(email)) return true
 
+      // (a2) individually-invited external account (ALLOWED_EMAIL_ADDRESSES) —
+      // guests on consumer domains where a domain allowlist would be too broad.
+      if (ALLOWED_EMAIL_ADDRESSES.includes(email)) return true
+
       // (c) allowed sign-in domain (default: the configured admins' domains).
       const domain = emailDomain(email)
       if (domain && ALLOWED_EMAIL_DOMAINS.includes(domain)) return true
@@ -268,6 +302,10 @@ export const authOptions: NextAuthOptions = {
         u.assignedProjects = token.assignedProjects
         u.id = token.sub
         u.error = token.error
+        // Operator display-name override (see USER_DISPLAY_NAME_OVERRIDES).
+        const email = (session.user.email || '').toLowerCase()
+        const nameOverride = USER_DISPLAY_NAME_OVERRIDES[email]
+        if (nameOverride) u.name = nameOverride
       }
       return session
     },

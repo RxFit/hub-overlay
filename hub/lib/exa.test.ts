@@ -5,7 +5,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  *
  * The exa-js client is mocked; these tests lock the wrapper's contract:
  *  - result mapping (highlights joined ' ... ', falling back to raw text),
- *  - searchWeb swallowing upstream failures into [],
+ *  - searchWeb RE-THROWING upstream failures (so the circuit breaker can
+ *    trip and callers can distinguish failure from zero results),
  *  - fetchUrlWithExa RE-THROWING so callers can fall back to raw fetch,
  *  - lazy client init failing loudly when EXA_API_KEY is missing.
  */
@@ -25,7 +26,7 @@ vi.mock('exa-js', () => ({
   },
 }))
 
-import { searchWeb, fetchUrlWithExa } from './exa'
+import { searchWeb, fetchUrlWithExa, parseSubQueries, mergeExaResults } from './exa'
 
 beforeEach(() => {
   vi.stubEnv('EXA_API_KEY', 'test-key')
@@ -82,9 +83,28 @@ describe('searchWeb', () => {
     )
   })
 
-  it('returns [] instead of throwing when the upstream search fails', async () => {
+  it('RE-THROWS when the upstream search fails (breaker must see failures)', async () => {
     searchMock.mockRejectedValueOnce(new Error('exa is down'))
-    await expect(searchWeb('query')).resolves.toEqual([])
+    await expect(searchWeb('query')).rejects.toThrow('exa is down')
+  })
+
+  it('fetches highlights-only by default; full text only when a caller sizes it', async () => {
+    // Default: highlights only — each Exa content type is billed per page, and
+    // the mapper discards text whenever highlights exist, so fetching both
+    // doubled content cost for nothing.
+    searchMock.mockResolvedValueOnce({ results: [] })
+    await searchWeb('defaults')
+    const defaultOpts = searchMock.mock.calls.at(-1)?.[1] as Record<string, unknown>
+    expect(defaultOpts.highlights).toBe(true)
+    expect(defaultOpts.text).toBeUndefined()
+
+    // Explicit sizing (deep-research path) still gets full text at that budget.
+    searchMock.mockResolvedValueOnce({ results: [] })
+    await searchWeb('rich', { maxCharacters: 3000 })
+    expect(searchMock).toHaveBeenLastCalledWith(
+      'rich',
+      expect.objectContaining({ text: { maxCharacters: 3000 }, highlights: true }),
+    )
   })
 })
 
@@ -109,12 +129,12 @@ describe('fetchUrlWithExa', () => {
 })
 
 describe('lazy client initialization', () => {
-  it('fails loudly when EXA_API_KEY is missing (searchWeb → [] via catch)', async () => {
+  it('fails loudly when EXA_API_KEY is missing (both paths propagate)', async () => {
     vi.resetModules()
     vi.stubEnv('EXA_API_KEY', '')
     const fresh = await import('./exa')
-    // searchWeb catches the config error and degrades to [] (search is optional)…
-    await expect(fresh.searchWeb('q')).resolves.toEqual([])
+    // searchWeb now PROPAGATES the config error (breaker/callers must see is optional)…
+    await expect(fresh.searchWeb('q')).rejects.toThrow('EXA_API_KEY not configured')
     // …but fetchUrlWithExa propagates it (callers must know to fall back).
     await expect(fresh.fetchUrlWithExa('https://example.com')).rejects.toThrow(
       'EXA_API_KEY not configured',
@@ -128,5 +148,48 @@ describe('lazy client initialization', () => {
     await searchWeb('two')
     const callsWithTestKey = ctorMock.mock.calls.filter(([k]) => k === 'test-key')
     expect(callsWithTestKey.length).toBe(1)
+  })
+})
+
+describe('parseSubQueries', () => {
+
+  it('leads with the original query and appends planner queries, deduped and capped', () => {
+    const raw = '["angle one", "Angle One", "angle two", "angle three", "angle four"]'
+    const out = parseSubQueries(raw, 'original question', 4)
+    expect(out[0]).toBe('original question')
+    expect(out).toHaveLength(4)
+    expect(new Set(out.map(q => q.toLowerCase())).size).toBe(4)
+  })
+
+  it('falls back to the original query alone on malformed planner output', () => {
+    expect(parseSubQueries('total garbage', 'q')).toEqual(['q'])
+    expect(parseSubQueries('{"not":"array"}', 'q')).toEqual(['q'])
+    expect(parseSubQueries('[1, null, {}]', 'q')).toEqual(['q'])
+  })
+
+  it('clips oversized planner queries', () => {
+    const out = parseSubQueries(JSON.stringify(['x'.repeat(500)]), 'q')
+    expect(out[1].length).toBeLessThanOrEqual(200)
+  })
+})
+
+describe('mergeExaResults', () => {
+  const r = (url: string) => ({ url, title: url, snippet: 's' })
+
+  it('round-robin interleaves lists to preserve source diversity', () => {
+    const merged = mergeExaResults([
+      [r('https://a1'), r('https://a2')],
+      [r('https://b1'), r('https://b2')],
+    ])
+    expect(merged.map(x => x.url)).toEqual(['https://a1', 'https://b1', 'https://a2', 'https://b2'])
+  })
+
+  it('dedupes by normalized URL and respects the cap', () => {
+    const merged = mergeExaResults([
+      [r('https://same.com/'), r('https://x.com')],
+      [r('https://SAME.com'), r('https://y.com')],
+    ], 3)
+    expect(merged).toHaveLength(3)
+    expect(merged.filter(x => x.url.toLowerCase().includes('same')).length).toBe(1)
   })
 })

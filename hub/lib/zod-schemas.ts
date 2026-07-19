@@ -135,6 +135,77 @@ export const ProjectsResponseSchema = z.union([
   z.object({ projects: ProjectSchema.array() }).passthrough(),
 ])
 
+/* Routines and Goals (right-panel Phase 3). Lenient: only `id` and `title`
+   are required on the wire; everything else normalizes with defaults in
+   lib/paperclip.ts. */
+export const RoutineSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  description: z.string().nullable().optional(),
+  status: z.string().optional(),
+  assigneeAgentId: z.string().nullable().optional(),
+  assigneeName: z.string().nullable().optional(),
+  projectId: z.string().nullable().optional(),
+  companyId: z.string().optional(),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
+}).passthrough()
+
+export const RoutinesResponseSchema = z.union([
+  RoutineSchema.array(),
+  z.object({ routines: RoutineSchema.array() }).passthrough(),
+])
+
+export const GoalSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  description: z.string().nullable().optional(),
+  level: z.string().optional(),
+  status: z.string().optional(),
+  parentId: z.string().nullable().optional(),
+  ownerAgentId: z.string().nullable().optional(),
+  companyId: z.string().optional(),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
+}).passthrough()
+
+export const GoalsResponseSchema = z.union([
+  GoalSchema.array(),
+  z.object({ goals: GoalSchema.array() }).passthrough(),
+])
+
+/* Company dashboard snapshot (GET /api/companies/:id/dashboard).
+   Deliberately lenient: every section is optional and passthrough because the
+   snapshot's field set varies across Paperclip versions — normalization to a
+   zero-filled shape happens in lib/execution-dashboard.ts, not here. */
+export const DashboardResponseSchema = z.object({
+  companyId: z.string().optional(),
+  agents: z.object({
+    active: z.number().optional(),
+    running: z.number().optional(),
+    paused: z.number().optional(),
+    error: z.number().optional(),
+  }).passthrough().optional(),
+  tasks: z.object({
+    open: z.number().optional(),
+    inProgress: z.number().optional(),
+    blocked: z.number().optional(),
+    done: z.number().optional(),
+  }).passthrough().optional(),
+  costs: z.object({
+    monthSpendCents: z.number().optional(),
+    monthBudgetCents: z.number().optional(),
+    monthUtilizationPercent: z.number().optional(),
+  }).passthrough().optional(),
+  pendingApprovals: z.number().optional(),
+  budgets: z.object({
+    activeIncidents: z.number().optional(),
+    pendingApprovals: z.number().optional(),
+    pausedAgents: z.number().optional(),
+    pausedProjects: z.number().optional(),
+  }).passthrough().optional(),
+}).passthrough()
+
 /* ── HUB API input schemas ── */
 
 export const ChatMessageSchema = z.object({
@@ -241,6 +312,14 @@ export const GoogleGmailSendSchema = z.object({
   message: z.string().min(1).max(1_000_000),
   threadId: z.string().max(256).optional(),
   inReplyTo: z.string().max(998).optional(),
+})
+
+export const GoogleGmailActionSchema = z.object({
+  action: z.enum(['trash', 'save_task']),
+  threadId: z.string().trim().min(1).max(256),
+  subject: z.string().max(998).optional(),
+  from: z.string().max(512).optional(),
+  snippet: z.string().max(1024).optional(),
 })
 
 export const GoogleChatSendSchema = z.object({

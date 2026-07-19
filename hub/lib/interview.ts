@@ -19,9 +19,14 @@ import type {
 /* ── Role Permissions ── */
 
 const INTENT_PERMISSIONS: Record<InterviewIntent, ActionPermission> = {
+  // Personal productivity — writes ONLY to the requesting user's own Google
+  // account (their Tasks list / their Calendar), never to org data. Pending
+  // (onboarding) users like invited guests may run these; everything touching
+  // shared systems (Gmail sends, Chat posts, Paperclip) stays staff+.
+  create_task: 'onboarding',
+  update_task: 'onboarding',
+  schedule_event: 'onboarding',
   // Staff-level (read + create)
-  create_task: 'staff',
-  schedule_event: 'staff',
   send_communication: 'staff',
   send_gmail: 'staff',
   post_chat_message: 'staff',
@@ -39,6 +44,12 @@ const INTENT_PERMISSIONS: Record<InterviewIntent, ActionPermission> = {
   create_workspace: 'admin',
   delete_workspace: 'admin',
   delete_agent: 'superadmin',
+  // Right-panel Phase 3: routines + goals
+  create_routine: 'admin',
+  update_routine: 'admin',
+  run_routine: 'staff',
+  create_goal: 'admin',
+  update_goal: 'admin',
 }
 
 const ROLE_HIERARCHY: Record<string, number> = {
@@ -70,6 +81,11 @@ export const INTENT_DEFINITIONS: Array<{ id: InterviewIntent; description: strin
     id: 'create_task',
     description: 'User wants to create, add, or delegate a new task, todo item, or ticket.',
     expectedEntities: ['description'],
+  },
+  {
+    id: 'update_task',
+    description: 'User wants to change an EXISTING task or todo item — edit its title or notes, change/set its due date, mark it done/complete, reopen it, or delete it (e.g. "mark the invoice task done", "move the report task to Friday", "delete the old onboarding todo").',
+    expectedEntities: ['taskRef', 'change'],
   },
   {
     id: 'schedule_event',
@@ -151,6 +167,31 @@ export const INTENT_DEFINITIONS: Array<{ id: InterviewIntent; description: strin
     description: 'User wants to permanently delete or decommission an agent.',
     expectedEntities: ['project', 'agent'],
   },
+  {
+    id: 'create_routine',
+    description: 'User wants to set up recurring or scheduled agent work — e.g. "every morning have the CFO reconcile Stripe" or "create a weekly SEO report routine".',
+    expectedEntities: ['description', 'agent', 'schedule'],
+  },
+  {
+    id: 'update_routine',
+    description: 'User wants to pause, resume, rename, or otherwise change an existing routine (recurring scheduled work).',
+    expectedEntities: ['routineRef', 'change'],
+  },
+  {
+    id: 'run_routine',
+    description: 'User wants to manually fire or trigger an existing routine right now, outside its schedule.',
+    expectedEntities: ['routineRef'],
+  },
+  {
+    id: 'create_goal',
+    description: 'User wants to define a new business goal, objective, or mission for the company, a team, or an agent.',
+    expectedEntities: ['description', 'level'],
+  },
+  {
+    id: 'update_goal',
+    description: 'User wants to change an existing goal — mark it achieved, activate it, cancel it, or edit its description.',
+    expectedEntities: ['goalRef', 'change'],
+  },
 ]
 
 /**
@@ -188,6 +229,21 @@ const INTERVIEW_SEQUENCES: Record<InterviewIntent, InterviewStep[]> = {
     },
     {
       question: 'I\'ll create this task with the context provided. Confirm? (yes / edit / cancel)',
+      key: '_confirm',
+    },
+  ],
+
+  update_task: [
+    {
+      question: 'Which task should I change? (its title or part of it)',
+      key: 'taskRef',
+    },
+    {
+      question: 'What should change? (mark done / reopen / delete, a new title, or a new due date)',
+      key: 'change',
+    },
+    {
+      question: 'I\'ll apply this change to your Google Task. Confirm? (yes / edit / cancel)',
       key: '_confirm',
     },
   ],
@@ -460,6 +516,87 @@ const INTERVIEW_SEQUENCES: Record<InterviewIntent, InterviewStep[]> = {
       key: '_confirm',
     },
   ],
+
+  create_routine: [
+    {
+      question: 'What should this routine do on each run? Describe the recurring work and any context the agent needs.',
+      key: 'description',
+    },
+    {
+      question: 'Which agent should own this routine? (e.g. CFO, CMO, or an agent name)',
+      key: 'agent',
+    },
+    {
+      question: 'What schedule should it run on? Give a cron expression (e.g. "0 9 * * *" for daily at 9am UTC), or say "manual" for on-demand only.',
+      key: 'schedule',
+    },
+    {
+      question: 'I\'ll create this routine with the schedule and owner above. Confirm? (yes / edit / cancel)',
+      key: '_confirm',
+    },
+  ],
+
+  update_routine: [
+    {
+      question: 'Which routine should I change? (name or part of its title)',
+      key: 'routineRef',
+    },
+    {
+      question: 'What should change? (pause / resume, or a new title)',
+      key: 'change',
+    },
+    {
+      question: 'I\'ll apply this change to the routine. Confirm? (yes / edit / cancel)',
+      key: '_confirm',
+    },
+  ],
+
+  run_routine: [
+    {
+      question: 'Which routine should I fire right now? (name or part of its title)',
+      key: 'routineRef',
+    },
+    {
+      question: 'I\'ll trigger a manual run of this routine — its own concurrency policy still applies. Confirm? (yes / edit / cancel)',
+      key: '_confirm',
+    },
+  ],
+
+  create_goal: [
+    {
+      question: 'What is the goal? State the objective and why it matters (what success looks like).',
+      key: 'description',
+    },
+    {
+      question: 'What level is this goal? (company / team / agent / task — default: team)',
+      key: 'level',
+      defaultValue: 'team',
+    },
+    {
+      question: 'Should a specific agent own this goal? (agent name, or "none")',
+      key: 'owner',
+      defaultValue: 'none',
+    },
+    {
+      question: 'I\'ll create this goal in the workspace goal tree. Confirm? (yes / edit / cancel)',
+      key: '_confirm',
+    },
+  ],
+
+  update_goal: [
+    {
+      question: 'Which goal should I change? (name or part of its title)',
+      key: 'goalRef',
+    },
+    {
+      question: 'What should change? (activate / achieved / cancel, or a new description)',
+      key: 'change',
+    },
+    {
+      question: 'I\'ll apply this change to the goal. Confirm? (yes / edit / cancel)',
+      key: '_confirm',
+    },
+  ],
 }
 
 /**
@@ -543,6 +680,27 @@ export function advanceInterview(
   if (!state.active || !state.intent) return state
 
   const steps = INTERVIEW_SEQUENCES[state.intent]
+
+  // Post-gate follow-up: when the context-sufficiency gate blocks a completed
+  // interview, the engine re-activates it with `step` already past the last
+  // question. Fold the user's follow-up answer into the context and complete
+  // again so the gate re-runs with the enriched context. Without this branch
+  // the answer was silently discarded and the interview dead-ended — no next
+  // question, no confirm card, no chat send.
+  if (state.step >= steps.length) {
+    const priorExtra = state.context.additionalContext
+    const mergedContext = {
+      ...state.context,
+      additionalContext: [priorExtra, answer].filter(Boolean).join('\n'),
+    }
+    return {
+      ...state,
+      context: mergedContext,
+      active: false,
+      spec: buildConfirmationSpec(state.intent, mergedContext),
+    }
+  }
+
   const currentStep = steps[state.step]
   if (!currentStep) return state
 
@@ -579,6 +737,7 @@ export function cancelInterview(): InterviewState {
 
 const INTENT_LABELS: Record<InterviewIntent, string> = {
   create_task: 'Create Task',
+  update_task: 'Update Task',
   schedule_event: 'Schedule Event',
   send_communication: 'Send Communication',
   send_gmail: 'Send Gmail',
@@ -595,10 +754,16 @@ const INTENT_LABELS: Record<InterviewIntent, string> = {
   create_workspace: 'Create Workspace',
   delete_workspace: 'Delete Workspace',
   delete_agent: 'Delete Agent',
+  create_routine: 'Create Routine',
+  update_routine: 'Update Routine',
+  run_routine: 'Run Routine Now',
+  create_goal: 'Create Goal',
+  update_goal: 'Update Goal',
 }
 
 const INTENT_TARGET_SYSTEMS: Record<InterviewIntent, string[]> = {
   create_task: ['Google Tasks', 'Paperclip'],
+  update_task: ['Google Tasks'],
   schedule_event: ['Google Calendar'],
   send_communication: ['Paperclip AI — COO Routed'],
   send_gmail: ['Gmail'],
@@ -615,6 +780,11 @@ const INTENT_TARGET_SYSTEMS: Record<InterviewIntent, string[]> = {
   create_workspace: ['Paperclip AI'],
   delete_workspace: ['Paperclip AI'],
   delete_agent: ['Paperclip AI'],
+  create_routine: ['Paperclip AI'],
+  update_routine: ['Paperclip AI'],
+  run_routine: ['Paperclip AI'],
+  create_goal: ['Paperclip AI'],
+  update_goal: ['Paperclip AI'],
 }
 
 /**
@@ -679,7 +849,12 @@ export function isHighStakesIntent(intent: InterviewIntent): boolean {
     intent === 'send_communication' ||
     intent === 'send_gmail' ||
     intent === 'post_chat_message' ||
-    intent === 'create_paperclip_issue'
+    intent === 'create_paperclip_issue' ||
+    // Phase 3 creation intents: both stand up durable orchestration objects
+    // (recurring agent work / the goal tree), so they carry gate tokens and
+    // the proxy fails closed without one.
+    intent === 'create_routine' ||
+    intent === 'create_goal'
   )
 }
 

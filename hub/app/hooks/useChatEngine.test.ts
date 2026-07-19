@@ -36,6 +36,23 @@ describe('resolveChatError (chat error → bubble + reauth decision)', () => {
     expect(reauth).toBe(false)
     expect(content).toMatch(/took longer than expected/i)
   })
+
+  it('gives a 413 (oversized conversation) actionable copy, not the generic bubble', () => {
+    const err = Object.assign(new Error('Request too large'), { status: 413 })
+    const { content, reauth } = resolveChatError(err)
+    expect(reauth).toBe(false)
+    expect(content).toMatch(/too large/i)
+    expect(content).toMatch(/new chat/i)
+    expect(content).not.toMatch(/went wrong on my end/i)
+  })
+
+  it('gives a 429 (rate limit) slow-down copy, not the generic bubble', () => {
+    const err = Object.assign(new Error('Too many requests'), { status: 429 })
+    const { content, reauth } = resolveChatError(err)
+    expect(reauth).toBe(false)
+    expect(content).toMatch(/too quickly|few seconds/i)
+    expect(content).not.toMatch(/went wrong on my end/i)
+  })
 })
 
 describe('resolvePreCogVerdict (high-stakes briefing eval → outcome)', () => {

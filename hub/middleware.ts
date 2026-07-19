@@ -95,7 +95,14 @@ export const config = {
      * - /api/healthz (unauthenticated Cloud Run startup/health probe — must be
      *   reachable without a session so the probe never 401s or redirects)
      * - /_next (Next.js internals)
+     * - static brand assets by extension (png/ico/svg/webmanifest). iOS fetches
+     *   /apple-touch-icon.png for "Add to Home Screen" WITHOUT the session
+     *   cookie; a 307 to /login hands it HTML instead of the PNG, so Safari
+     *   silently falls back to a page-screenshot tile. Same for favicon.ico,
+     *   the PWA icons, and site.webmanifest (Android/Chrome install icons).
+     *   These are public brand images — nothing sensitive ships with these
+     *   extensions, and no route handler serves them.
      */
-    '/((?!login|api/auth|api/chat|api/embeddings|api/webhooks|api/healthz|_next|favicon\\.svg|static).*)',
+    '/((?!login|api/auth|api/chat|api/embeddings|api/webhooks|api/healthz|_next|static|.*\\.(?:png|ico|svg|webmanifest)$).*)',
   ],
 }
