@@ -35,8 +35,8 @@ export const maxDuration = 30
    POST /api/chat/score-context
 
    Evaluates whether an in-progress Interview Mode has collected enough context
-   to safely generate an ActionConfirmCard. Uses Claude Fable 5 (primary) or
-   Gemini 2.5 Pro (fallback) to score:
+   to safely generate an ActionConfirmCard. Uses Gemini 3.5 Flash (primary) or
+   Claude Haiku (fallback) to score:
 
    Input:
    {
@@ -254,20 +254,15 @@ export async function POST(req: NextRequest) {
       const scoreResult = parseScoreResponse(rawText)
       return NextResponse.json(withGateToken(scoreResult, intent, callerEmail))
     } catch (geminiErr) {
-      console.warn('[score-context] Gemini 3.5 Flash failed, falling back to Claude chain:', geminiErr)
+      console.warn('[score-context] Gemini 3.5 Flash failed, falling back to Claude Haiku:', geminiErr)
 
-      // Fallback: Claude Fable 5 → Sonnet 4.6 (a Gemini outage must not
-      // disable the quality gate — high-stakes intents would fail closed).
-      const { claudeChat, CLAUDE_PRIMARY_MODEL, CLAUDE_BACKUP_MODEL } = await import('@/lib/claude')
+      // Fallback: Claude Haiku (a Gemini outage must not disable the quality
+      // gate — high-stakes intents would fail closed). Haiku, not Fable 5:
+      // Fable 5 is reserved for EXA mode; scoring is a fast structured task.
+      const { claudeChat, CLAUDE_FALLBACK_MODEL } = await import('@/lib/claude')
       const scorerSystem = 'You are a context sufficiency scorer. Return ONLY valid JSON.'
       const scorerMessages = [{ id: '1', role: 'user' as const, content: prompt, timestamp: new Date().toISOString() }]
-      let rawText: string
-      try {
-        rawText = await claudeChat(scorerMessages, scorerSystem, { model: CLAUDE_PRIMARY_MODEL, maxTokens: 256, temperature: 0.1 })
-      } catch (primaryErr) {
-        console.warn('[score-context] Claude Fable 5 failed, trying Sonnet 4.6:', primaryErr)
-        rawText = await claudeChat(scorerMessages, scorerSystem, { model: CLAUDE_BACKUP_MODEL, maxTokens: 256, temperature: 0.1 })
-      }
+      const rawText = await claudeChat(scorerMessages, scorerSystem, { model: CLAUDE_FALLBACK_MODEL, maxTokens: 256, temperature: 0.1 })
       const scoreResult = parseScoreResponse(rawText)
       return NextResponse.json(withGateToken(scoreResult, intent, callerEmail))
     }

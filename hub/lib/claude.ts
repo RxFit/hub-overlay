@@ -16,9 +16,19 @@ const ANTHROPIC_VERSION = '2023-06-01'
 
 /* Model rotation: Fable 5 is primary; Sonnet 4.6 is the backup it falls back to
    (e.g. while Fable 5 is unavailable). When Fable 5 recovers, the cooldown in
-   the rotation layer (lib/gemini.ts) expires and it is tried first again. */
+   the rotation layer (lib/gemini.ts) expires and it is tried first again.
+   These two are reserved for EXA semantic-search research synthesis ONLY — the
+   one place Fable 5 is allowed to run (operator decision). */
 export const CLAUDE_PRIMARY_MODEL = 'claude-fable-5'
 export const CLAUDE_BACKUP_MODEL = 'claude-sonnet-4-6'
+
+/* Non-EXA Claude fallback: the latest Claude Haiku. Every non-EXA path (default
+   chat's emergency cross-provider fallback when the Gemini chain is down, plus
+   the intent-classifier and context-scorer Claude fallbacks) uses Haiku, NOT
+   Fable 5 — Fable 5 stays exclusive to EXA mode. Haiku accepts sampling params
+   (see modelSupportsSamplingParams), so it takes `temperature` and no thinking
+   config, exactly like Sonnet 4.6. */
+export const CLAUDE_FALLBACK_MODEL = 'claude-haiku-4-5-20251001'
 
 /* Claude Fable 5 / Mythos, Opus 4.7+, and Sonnet 5 REJECT sampling parameters
  * (`temperature`/`top_p`/`top_k` → 400 invalid_request_error). Sending

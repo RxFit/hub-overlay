@@ -80,8 +80,8 @@ function normalizeDetection(parsed: unknown, availableIntents: AvailableIntent[]
 }
 
 /**
- * Claude fallback classifier (Fable 5 → Sonnet 4.6), mirroring score-context's
- * provider redundancy. Interview Mode — and therefore the ActionConfirmCard —
+ * Claude fallback classifier (Haiku), mirroring score-context's provider
+ * redundancy. Interview Mode — and therefore the ActionConfirmCard —
  * can ONLY start from this route, so a Gemini-only classifier made every
  * provider outage silently disable all actions: the chat model (already
  * running on its own Claude fallback) kept telling users to "approve via the
@@ -89,7 +89,9 @@ function normalizeDetection(parsed: unknown, availableIntents: AvailableIntent[]
  * render. Each attempt is timeout-bounded so the send path stays responsive.
  */
 async function detectWithClaude(message: string, availableIntents: AvailableIntent[]): Promise<DetectedIntent | null> {
-  const { claudeChat, isClaudeConfigured, CLAUDE_PRIMARY_MODEL, CLAUDE_BACKUP_MODEL } = await import('@/lib/claude')
+  // Non-EXA path → Claude Haiku (never Fable 5). Fable 5 is reserved for EXA
+  // semantic-search mode; the classifier is a fast structured task Haiku handles.
+  const { claudeChat, isClaudeConfigured, CLAUDE_FALLBACK_MODEL } = await import('@/lib/claude')
   if (!isClaudeConfigured()) return null
 
   const system = `${buildClassifierInstruction(availableIntents)}
@@ -97,7 +99,7 @@ Respond with ONLY a valid JSON object on a single line, no markdown and no expla
 {"intent":"<intent-id or empty string>","extractedEntities":{"<entity>":"<value>"}}`
   const classifierMessages = [{ id: '1', role: 'user' as const, content: message, timestamp: new Date().toISOString() }]
 
-  for (const model of [CLAUDE_PRIMARY_MODEL, CLAUDE_BACKUP_MODEL]) {
+  for (const model of [CLAUDE_FALLBACK_MODEL]) {
     try {
       const rawText = await withTimeout(
         claudeChat(classifierMessages, system, { model, maxTokens: 256, temperature: 0 }),

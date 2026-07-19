@@ -3,6 +3,7 @@
 import { useCallback, useRef, useState } from 'react'
 import type { InterviewState, InterviewIntent, ActionSpec, ActiveSkill } from '@/types'
 import type { SolutionSuggestion } from '@/lib/solution-suggest'
+import { isPaperclipIntent } from '@/lib/interview'
 
 const PRIMITIVE_ICON: Record<SolutionSuggestion['primitive'], string> = {
   routine: '🔁',
@@ -146,6 +147,12 @@ export function InterviewBadge({
   if (!state.active || !state.intent) return null
 
   const intentLabel = INTENT_LABELS[state.intent] ?? state.intent
+  // Paperclip actions run the guided interview; personal actions (task, event,
+  // email, chat) use the single lightweight context question, so drop the
+  // "Interview Mode" branding and the multi-question step counter for them.
+  const isPaperclip = isPaperclipIntent(state.intent)
+  const badgeTitle = isPaperclip ? `Interview Mode — ${intentLabel}` : intentLabel
+  const showStep = isPaperclip && totalQuestions > 1
   const stepDisplay = `Question ${Math.min(state.step + 1, totalQuestions)} of ${totalQuestions}`
 
   // Context score display: only show when a score exists and < 80
@@ -174,11 +181,13 @@ export function InterviewBadge({
       {/* Label + Step + Score */}
       <div className="interview-badge__body">
         <div className="interview-badge__title">
-          Interview Mode — {intentLabel}
+          {badgeTitle}
         </div>
-        <div className="interview-badge__step">
-          {stepDisplay}
-        </div>
+        {showStep && (
+          <div className="interview-badge__step">
+            {stepDisplay}
+          </div>
+        )}
 
         {/* Context score bar — only shown during scoring phase */}
         {showScore && (

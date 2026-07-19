@@ -120,6 +120,38 @@ describe('executeAction: send_gmail', () => {
     })
   })
 
+  it('folds a real additionalContext (lightweight flow) into the email body', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ sent: true }))
+
+    await executeAction(
+      specFor('send_gmail', {
+        to: 'maria@rxfitatx.com',
+        subject: 'Invoice',
+        body: 'The invoice is paid',
+        additionalContext: 'CC the CFO and keep it formal',
+      }, GATE_TOKEN),
+      deps
+    )
+
+    const [, init] = fetchMock.mock.calls[0]
+    expect(JSON.parse(init.body).message).toBe('The invoice is paid\n\nCC the CFO and keep it formal')
+  })
+
+  it('uses additionalContext as the body when no body/details were extracted', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ sent: true }))
+
+    await executeAction(
+      specFor('send_gmail', {
+        to: 'maria@rxfitatx.com',
+        additionalContext: 'Let the team know the demo moved to 3pm',
+      }, GATE_TOKEN),
+      deps
+    )
+
+    const [, init] = fetchMock.mock.calls[0]
+    expect(JSON.parse(init.body).message).toBe('Let the team know the demo moved to 3pm')
+  })
+
   it('throws with the status when the send fails', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ error: 'nope' }, false, 500))
 

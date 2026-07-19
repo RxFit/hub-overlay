@@ -7,6 +7,9 @@ import {
   isDestructiveIntent,
   isReadOnlyIntent,
   isHighStakesIntent,
+  isPaperclipIntent,
+  isPersonalActionIntent,
+  isSkipContextAnswer,
   getTotalQuestions,
   INTENT_DEFINITIONS,
 } from '@/lib/interview'
@@ -43,28 +46,50 @@ describe('hasPermission', () => {
   })
 })
 
-describe('interview flow', () => {
-  it('advances create_task through its question sequence to a spec', () => {
-    let state = startInterview('create_task')
+describe('interview flow (personal lightweight single-question flow)', () => {
+  it('create_task is a single "add context?" question that completes to a spec', () => {
+    // Personal actions (task/event/email/chat) no longer run the multi-step
+    // interview — one optional context question, then the Confirm Card.
+    expect(getTotalQuestions('create_task')).toBe(1)
+
+    // Extracted description is prefilled; the one context question still shows.
+    let state = startInterview('create_task', { description: 'Email the onboarding pack' })
     expect(state.active).toBe(true)
     expect(state.step).toBe(0)
 
-    // answer the description question
-    state = advanceInterview(state, 'Email the new client onboarding pack')
-    expect(state.active).toBe(true) // _confirm still pending
-
-    // answer the confirm question -> interview completes with a spec
-    state = advanceInterview(state, 'yes')
+    // Answering the single context question completes the flow with a spec.
+    state = advanceInterview(state, 'go ahead')
     expect(state.active).toBe(false)
     expect(state.spec).not.toBeNull()
     expect(state.spec?.intent).toBe('create_task')
+    expect(state.spec?.details.description).toBe('Email the onboarding pack')
+    // "go ahead" is a skip phrase — it must not pollute the spec.
+    expect(state.spec?.details.additionalContext).toBeUndefined()
   })
 
-  it('fast-forwards past pre-filled answers', () => {
+  it('keeps real added context in the spec', () => {
+    let state = startInterview('create_task', { description: 'Email the onboarding pack' })
+    state = advanceInterview(state, 'due Friday, high priority')
+    expect(state.active).toBe(false)
+    expect(state.spec?.details.additionalContext).toBe('due Friday, high priority')
+  })
+
+  it('schedule_event completes to a spec through the single context question', () => {
+    expect(getTotalQuestions('schedule_event')).toBe(1)
+    let state = startInterview('schedule_event', { details: 'Kickoff with Acme Tuesday 2pm' })
+    expect(state.active).toBe(true) // parked on the single context question
+    state = advanceInterview(state, 'go ahead')
+    expect(state.active).toBe(false)
+    expect(state.spec?.intent).toBe('schedule_event')
+    expect(state.spec?.details.details).toBe('Kickoff with Acme Tuesday 2pm')
+    expect(state.spec?.targetSystems).toEqual(['Google Calendar'])
+  })
+
+  it('does not skip the context question just because fields were prefilled', () => {
     const state = startInterview('create_task', { description: 'prefilled task' })
-    // description was prefilled, so we should be parked on the _confirm step
+    // The single step is `additionalContext` (never prefilled), so we park on it.
     expect(state.active).toBe(true)
-    expect(state.step).toBe(1)
+    expect(state.step).toBe(0)
   })
 })
 
@@ -87,7 +112,46 @@ describe('intent classification helpers', () => {
     expect(spec.details.description).toBe('Do X')
     expect(spec.details._confirm).toBeUndefined() // _confirm is stripped
     expect(spec.requiredPermission).toBe('onboarding') // create_task is a personal-productivity intent
-    expect(getTotalQuestions('create_task')).toBe(2)
+    expect(getTotalQuestions('create_task')).toBe(1) // single lightweight context question
+  })
+
+  it('drops a skip-phrase additionalContext but keeps real added context', () => {
+    const skipped = buildConfirmationSpec('send_gmail', {
+      to: 'maria@rxfitatx.com', body: 'Invoice paid', additionalContext: 'go ahead',
+    })
+    expect(skipped.details.additionalContext).toBeUndefined()
+    expect(skipped.details.body).toBe('Invoice paid')
+
+    const kept = buildConfirmationSpec('send_gmail', {
+      to: 'maria@rxfitatx.com', body: 'Invoice paid', additionalContext: 'keep it formal',
+    })
+    expect(kept.details.additionalContext).toBe('keep it formal')
+  })
+})
+
+describe('intent category helpers (Paperclip vs personal)', () => {
+  it('classifies personal / Google Workspace actions as non-Paperclip', () => {
+    for (const intent of ['create_task', 'update_task', 'schedule_event', 'send_gmail', 'post_chat_message'] as const) {
+      expect(isPersonalActionIntent(intent)).toBe(true)
+      expect(isPaperclipIntent(intent)).toBe(false)
+      expect(getTotalQuestions(intent)).toBe(1) // lightweight single-question flow
+    }
+  })
+
+  it('classifies platform actions (issues, agents, routines, COO comms) as Paperclip', () => {
+    for (const intent of ['create_paperclip_issue', 'send_communication', 'create_agent', 'launch_campaign', 'create_routine', 'create_goal', 'run_audit'] as const) {
+      expect(isPaperclipIntent(intent)).toBe(true)
+      expect(isPersonalActionIntent(intent)).toBe(false)
+    }
+  })
+
+  it('treats "just proceed" answers as context skips, real detail as content', () => {
+    for (const phrase of ['go ahead', 'no', 'nope', 'proceed', 'send it', 'yes', 'ok', 'that\'s all', '  Go Ahead.  ']) {
+      expect(isSkipContextAnswer(phrase)).toBe(true)
+    }
+    for (const phrase of ['due Friday', 'CC the CFO', 'make it formal']) {
+      expect(isSkipContextAnswer(phrase)).toBe(false)
+    }
   })
 })
 
@@ -104,15 +168,14 @@ describe('update_task intent', () => {
     }
   })
 
-  it('advances through taskRef and change to a spec', () => {
-    let state = startInterview('update_task')
-    expect(getTotalQuestions('update_task')).toBe(3)
+  it('builds a spec from extracted taskRef + change via the single context question', () => {
+    // Personal lightweight flow: extraction prefills taskRef + change; the one
+    // context question then completes the spec.
+    expect(getTotalQuestions('update_task')).toBe(1)
+    let state = startInterview('update_task', { taskRef: 'invoice follow-up', change: 'mark done' })
+    expect(state.active).toBe(true) // parked on the single context question
 
-    state = advanceInterview(state, 'invoice follow-up')
-    state = advanceInterview(state, 'mark done')
-    expect(state.active).toBe(true) // parked on _confirm
-
-    state = advanceInterview(state, 'yes')
+    state = advanceInterview(state, 'go ahead')
     expect(state.active).toBe(false)
     expect(state.spec?.intent).toBe('update_task')
     expect(state.spec?.details.taskRef).toBe('invoice follow-up')
@@ -185,17 +248,15 @@ describe('F3 direct-send intents (send_gmail / post_chat_message)', () => {
     expect(isReadOnlyIntent('post_chat_message')).toBe(false)
   })
 
-  it('advances send_gmail through to _confirm and builds a spec', () => {
-    let state = startInterview('send_gmail')
-    expect(state.active).toBe(true)
-    expect(getTotalQuestions('send_gmail')).toBe(4)
+  it('builds a send_gmail spec from extracted fields via the single context question', () => {
+    // Lightweight flow: one optional context question, then the Confirm Card.
+    expect(getTotalQuestions('send_gmail')).toBe(1)
+    let state = startInterview('send_gmail', {
+      to: 'maria@rxfitatx.com', subject: '(no subject)', body: 'The invoice is paid',
+    })
+    expect(state.active).toBe(true) // parked on the single context question
 
-    state = advanceInterview(state, 'maria@rxfitatx.com')
-    state = advanceInterview(state, '') // subject → default '(no subject)'
-    state = advanceInterview(state, 'The invoice is paid')
-    expect(state.active).toBe(true) // parked on _confirm
-
-    state = advanceInterview(state, 'yes')
+    state = advanceInterview(state, 'go ahead')
     expect(state.active).toBe(false)
     expect(state.spec?.intent).toBe('send_gmail')
     expect(state.spec?.details.to).toBe('maria@rxfitatx.com')
@@ -205,15 +266,12 @@ describe('F3 direct-send intents (send_gmail / post_chat_message)', () => {
     expect(state.spec?.requiredPermission).toBe('staff')
   })
 
-  it('advances post_chat_message through to _confirm and builds a spec', () => {
-    let state = startInterview('post_chat_message')
-    expect(getTotalQuestions('post_chat_message')).toBe(3)
+  it('builds a post_chat_message spec from extracted fields via the single context question', () => {
+    expect(getTotalQuestions('post_chat_message')).toBe(1)
+    let state = startInterview('post_chat_message', { space: 'RxFit Ops', message: 'Demo moved to 3pm' })
+    expect(state.active).toBe(true) // parked on the single context question
 
-    state = advanceInterview(state, 'RxFit Ops')
-    state = advanceInterview(state, 'Demo moved to 3pm')
-    expect(state.active).toBe(true) // parked on _confirm
-
-    state = advanceInterview(state, 'yes')
+    state = advanceInterview(state, 'go ahead')
     expect(state.active).toBe(false)
     expect(state.spec?.intent).toBe('post_chat_message')
     expect(state.spec?.details.space).toBe('RxFit Ops')
@@ -222,13 +280,13 @@ describe('F3 direct-send intents (send_gmail / post_chat_message)', () => {
     expect(state.spec?.requiredPermission).toBe('staff')
   })
 
-  it('fast-forwards past extracted entities to _confirm', () => {
+  it('always asks the context question once, even with all fields extracted', () => {
     const state = startInterview('send_gmail', {
       to: 'maria@rxfitatx.com',
       subject: 'Invoice',
       body: 'The invoice is paid',
     })
     expect(state.active).toBe(true)
-    expect(state.step).toBe(3) // parked on _confirm
+    expect(state.step).toBe(0) // parked on the single context question, not fast-forwarded past it
   })
 })
