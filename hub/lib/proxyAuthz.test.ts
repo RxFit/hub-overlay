@@ -76,6 +76,17 @@ describe('requiredWriteRank', () => {
     expect(requiredWriteRank('DELETE', '/api/goals/abc-123')).toBe(ROLE_RANK.admin)
   })
 
+  it('requires admin for workspace runtime services and workspace CRUD (Phase 4)', () => {
+    for (const action of ['start', 'stop', 'restart']) {
+      expect(requiredWriteRank('POST', `/api/projects/abc-1/workspaces/def-2/runtime-services/${action}`)).toBe(ROLE_RANK.admin)
+    }
+    expect(requiredWriteRank('POST', '/api/projects/abc-1/workspaces')).toBe(ROLE_RANK.admin)
+    expect(requiredWriteRank('PATCH', '/api/projects/abc-1/workspaces/def-2')).toBe(ROLE_RANK.admin)
+    expect(requiredWriteRank('DELETE', '/api/projects/abc-1/workspaces/def-2')).toBe(ROLE_RANK.admin)
+    // Unknown runtime action falls closed to admin too
+    expect(requiredWriteRank('POST', '/api/projects/abc-1/workspaces/def-2/runtime-services/nuke')).toBe(ROLE_RANK.admin)
+  })
+
   it('lets staff create an issue', () => {
     expect(requiredWriteRank('POST', '/api/issues')).toBe(ROLE_RANK.staff)
   })

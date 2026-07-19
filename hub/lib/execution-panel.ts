@@ -189,6 +189,62 @@ export const GOAL_STATUS_OPTIONS: Array<{ status: string; label: string }> = [
   { status: 'cancelled', label: 'Cancelled' },
 ]
 
+/* ── Project workspaces (Spaces tab, Phase 4) ── */
+
+export interface WorkspaceInfo {
+  id: string
+  name: string
+  cwd: string | null
+  repoUrl: string | null
+  repoRef: string | null
+  sourceType: string
+  isPrimary: boolean
+  /** 'running' | 'stopped' | '' — Paperclip's desired runtime-services state. */
+  desiredState: string
+}
+
+/**
+ * Normalize GET /api/projects/:id/workspaces (bare array or wrapped).
+ * Only `id` is required; everything else degrades to null/'' so a
+ * version-drifted payload renders instead of crashing the tab.
+ */
+export function normalizeWorkspaces(data: unknown): WorkspaceInfo[] {
+  const arr = Array.isArray(data)
+    ? data
+    : data && typeof data === 'object' && Array.isArray((data as Record<string, unknown>).workspaces)
+      ? ((data as Record<string, unknown>).workspaces as unknown[])
+      : []
+
+  return arr
+    .filter((w): w is Record<string, unknown> => !!w && typeof w === 'object' && typeof w.id === 'string')
+    .map((w) => ({
+      id: String(w.id),
+      name: str(w.name, 'workspace'),
+      cwd: typeof w.cwd === 'string' ? w.cwd : null,
+      repoUrl: typeof w.repoUrl === 'string' ? w.repoUrl : null,
+      repoRef: typeof w.repoRef === 'string' ? w.repoRef : typeof w.defaultRef === 'string' ? w.defaultRef : null,
+      sourceType: str(w.sourceType, 'local'),
+      isPrimary: w.isPrimary === true,
+      desiredState: str(w.desiredState),
+    }))
+    // Primary workspace first, then alphabetical — the shared working copy is
+    // the one operators reach for.
+    .sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary) || a.name.localeCompare(b.name))
+}
+
+export type WorkspaceRuntimeAction = 'start' | 'stop' | 'restart'
+
+/**
+ * Which runtime-service actions make sense for a workspace. Paperclip
+ * requires a local path (`cwd`) for start/restart; stop is offered whenever
+ * services are (or may be) running.
+ */
+export function availableWorkspaceActions(ws: Pick<WorkspaceInfo, 'cwd' | 'desiredState'>): WorkspaceRuntimeAction[] {
+  const running = ws.desiredState === 'running'
+  if (!ws.cwd) return running ? ['stop'] : []
+  return running ? ['restart', 'stop'] : ['start']
+}
+
 /* ── Agent lifecycle affordances ── */
 
 export type AgentLifecycleAction = 'wakeup' | 'pause' | 'resume' | 'clear-error'

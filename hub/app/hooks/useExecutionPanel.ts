@@ -2,13 +2,16 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Agent, Issue, Run } from '@/types'
-import type { Goal, Routine } from '@/types'
+import type { Goal, Project, Routine } from '@/types'
 import {
   normalizeComments,
   normalizeRoutineRuns,
+  normalizeWorkspaces,
   type AgentLifecycleAction,
   type IssueComment,
   type RoutineRun,
+  type WorkspaceInfo,
+  type WorkspaceRuntimeAction,
 } from '@/lib/execution-panel'
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -210,6 +213,50 @@ export function useUpdateGoalStatus(orgId?: string) {
       writeJson(`/api/paperclip/goals/${encodeURIComponent(goalId)}`, 'PATCH', { status }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['exec-panel', 'goals', orgId ?? 'none'] })
+    },
+  })
+}
+
+/* ── Spaces tab (projects + workspaces) ── */
+
+export function useProjectsPanel(orgId?: string, enabled: boolean = true) {
+  const { data, error, isLoading, refetch } = useQuery<{ projects: Project[] }>({
+    queryKey: ['exec-panel', 'projects', orgId ?? 'none'],
+    queryFn: () => fetcher(`/api/paperclip/projects?companyId=${encodeURIComponent(orgId!)}`),
+    enabled: enabled && !!orgId,
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: false,
+    staleTime: 30_000,
+    retry: 2,
+  })
+  return { projects: data?.projects ?? [], isLoading, error: error ?? undefined, refetch }
+}
+
+export function useProjectWorkspaces(projectId?: string) {
+  const { data, error, isLoading, refetch } = useQuery<WorkspaceInfo[]>({
+    queryKey: ['exec-panel', 'workspaces', projectId ?? 'none'],
+    queryFn: async () => {
+      const raw = await fetcher<unknown>(`/api/paperclip/projects/${encodeURIComponent(projectId!)}/workspaces`)
+      return normalizeWorkspaces(raw)
+    },
+    enabled: !!projectId,
+    refetchOnWindowFocus: false,
+    staleTime: 30_000,
+    retry: 1,
+  })
+  return { workspaces: data ?? [], isLoading, error: error ?? undefined, refetch }
+}
+
+export function useWorkspaceRuntimeAction(projectId?: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ workspaceId, action }: { workspaceId: string; action: WorkspaceRuntimeAction }) =>
+      writeJson(
+        `/api/paperclip/projects/${encodeURIComponent(projectId!)}/workspaces/${encodeURIComponent(workspaceId)}/runtime-services/${action}`,
+        'POST'
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['exec-panel', 'workspaces', projectId ?? 'none'] })
     },
   })
 }
