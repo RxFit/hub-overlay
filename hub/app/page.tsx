@@ -42,6 +42,7 @@ import { isInterviewScaffold } from '@/lib/interview-scaffold'
 import { useCompanies } from '@/app/hooks/useCompanies'
 import type { ChatAttachment } from '@/types'
 import { useChatEngine, type ChatMsg, type MobileTab } from '@/app/hooks/useChatEngine'
+import { useVoiceInput } from '@/app/hooks/useVoiceInput'
 import { useSwipePanels } from '@/app/hooks/useSwipePanels'
 import { resolveRole } from '@/lib/roles'
 import { MessageContent, parseInlineMarkdown } from '@/app/components/MessageContent'
@@ -621,12 +622,36 @@ export default function HubPage() {
     })
   }, [activeSkill])
 
+  /* ── Voice-to-text (Web Speech API) ──
+   * Dictation streams into the same `input` state as typing, so send/attach/
+   * interview flows are untouched. Reads the live value from the textarea ref
+   * (always current) and mirrors handleTextareaInput's auto-resize when
+   * setting text programmatically. */
+  const getVoiceBase = useCallback(() => textareaRef.current?.value ?? '', [])
+  const setVoiceInput = useCallback((value: string) => {
+    setInput(value)
+    const el = textareaRef.current
+    if (el) {
+      el.style.height = 'auto'
+      el.style.height = Math.min(el.scrollHeight, 120) + 'px'
+    }
+  }, [setInput])
+  const voice = useVoiceInput({ getInput: getVoiceBase, setInput: setVoiceInput })
+  const { isListening: voiceListening, stop: voiceStop } = voice
+
+  /* Sending ends an active dictation so the mic doesn't keep appending to the
+   * now-cleared input. */
+  const handleComposerSend = useCallback(() => {
+    if (voiceListening) voiceStop()
+    handleSend()
+  }, [voiceListening, voiceStop, handleSend])
+
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      handleSend()
+      handleComposerSend()
     }
-  }, [handleSend])
+  }, [handleComposerSend])
 
   const handleTextareaInput = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value)
@@ -933,6 +958,17 @@ export default function HubPage() {
                   onRemove={handleRemoveAttachment}
                 />
               )}
+              {voice.error && (
+                <div className="voice-error-banner" role="alert">
+                  {voice.error}
+                </div>
+              )}
+              {voice.isListening && (
+                <div className="voice-listening-banner" role="status">
+                  <span className="voice-listening-banner__dot" aria-hidden="true" />
+                  Listening… tap the mic again to stop
+                </div>
+              )}
               <div className="chat-input-wrapper">
                 <ContextAttachMenu
                   onAttach={handleAddAttachment}
@@ -948,9 +984,26 @@ export default function HubPage() {
                   onKeyDown={handleKeyDown}
                   rows={1}
                 />
+                {voice.isSupported && (
+                  <button
+                    className={`chat-mic-btn ${voice.isListening ? 'chat-mic-btn--listening' : ''}`}
+                    onClick={() => { haptic(); voice.toggle() }}
+                    disabled={isTyping}
+                    aria-label={voice.isListening ? 'Stop voice input' : 'Start voice input'}
+                    aria-pressed={voice.isListening}
+                    title={voice.isListening ? 'Stop voice input' : 'Dictate a message'}
+                  >
+                    {/* Microphone glyph (inline SVG so it inherits currentColor) */}
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+                      <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
+                      <line x1="12" y1="18" x2="12" y2="22" />
+                    </svg>
+                  </button>
+                )}
                 <button
                   className="chat-send-btn"
-                  onClick={handleSend}
+                  onClick={handleComposerSend}
                   disabled={(!input.trim() && attachments.length === 0) || isTyping}
                   aria-label="Send message"
                 >
