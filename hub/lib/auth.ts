@@ -91,6 +91,17 @@ const GOOGLE_SCOPES = [
   // KPI sources — GA4 Data API + Google Search Console
   'https://www.googleapis.com/auth/analytics.readonly',
   'https://www.googleapis.com/auth/webmasters.readonly',
+  // Docs / Sheets authoring — turn ephemeral skill artifacts (Decision Memo,
+  // Storyline) and KPI snapshots into durable Google Docs/Sheets. `documents`
+  // and `spreadsheets` are SENSITIVE (not restricted); `drive.file` is
+  // NON-sensitive and grants per-file access only to files the app creates,
+  // which is how new Docs/Sheets land in the user's Drive without full-drive.
+  'https://www.googleapis.com/auth/documents',
+  'https://www.googleapis.com/auth/spreadsheets',
+  'https://www.googleapis.com/auth/drive.file',
+  // People API — resolve a contact name to an email so "email Maria …" works
+  // instead of failing for want of an address. Read-only + SENSITIVE.
+  'https://www.googleapis.com/auth/contacts.readonly',
 ].join(' ')
 
 
@@ -192,6 +203,10 @@ export const authOptions: NextAuthOptions = {
           scope: GOOGLE_SCOPES,
           access_type: 'offline',
           prompt: 'consent',
+          // Incremental authorization: when new scopes are added, roll the
+          // user's previously-granted scopes into the new grant instead of
+          // replacing them, so a re-consent never silently drops old access.
+          include_granted_scopes: 'true',
         },
       },
     }),

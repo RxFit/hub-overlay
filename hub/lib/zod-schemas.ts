@@ -304,6 +304,9 @@ export const GoogleCalendarCreateSchema = z.object({
   // value can't reach Google. Optional: all-day events omit it.
   timeZone: z.string().max(64).optional(),
   calendarId: z.string().max(1024).optional(),
+  // When true, request a Google Meet link on the event (no new scope needed —
+  // the existing full `calendar` scope covers conferenceData creation).
+  addMeetLink: z.boolean().optional(),
 })
 
 export const GoogleGmailSendSchema = z.object({

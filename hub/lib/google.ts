@@ -183,6 +183,9 @@ export interface GoogleCalendarEvent {
   status: string
   organizer?: { email: string; displayName?: string }
   attendees?: { email: string; responseStatus: string }[]
+  /** Google Meet (Hangout) URL when the event was created with addMeetLink. */
+  hangoutLink?: string
+  conferenceData?: { entryPoints?: { entryPointType?: string; uri?: string }[] }
   /** Source calendar this event was fetched from — required to delete it from the
    *  correct calendar (events.list doesn't include it; the route tags it). */
   calendarId?: string
@@ -250,6 +253,7 @@ export async function createCalendarEvent(
     location?: string
     timeZone?: string  // IANA tz, e.g. "America/Chicago"; required for correct timed events
     calendarId?: string
+    addMeetLink?: boolean  // when true, mint + attach a Google Meet link
   }
 ): Promise<GoogleCalendarEvent> {
   const calId = encodeURIComponent(event.calendarId ?? 'primary')
@@ -277,8 +281,26 @@ export async function createCalendarEvent(
     body.attendees = event.attendees.map(email => ({ email }))
   }
 
+  // Google Meet link: requesting conferenceData.createRequest with a unique
+  // requestId (and conferenceDataVersion=1 on the call) makes Google mint a
+  // Meet link and attach it to the event. No new scope needed — the existing
+  // full `calendar` scope covers this. requestId dedupes retries; we derive a
+  // stable one from the event summary + start so a retried insert coalesces.
+  const params = new URLSearchParams()
+  if (event.addMeetLink) {
+    const requestId = `hub-${event.start}-${event.summary}`.replace(/[^a-zA-Z0-9-]/g, '').slice(0, 64) || 'hub-meet'
+    body.conferenceData = {
+      createRequest: {
+        requestId,
+        conferenceSolutionKey: { type: 'hangoutsMeet' },
+      },
+    }
+    params.set('conferenceDataVersion', '1')
+  }
+
+  const qs = params.toString()
   return googleFetch<GoogleCalendarEvent>(
-    `${CALENDAR_BASE}/calendars/${calId}/events`,
+    `${CALENDAR_BASE}/calendars/${calId}/events${qs ? `?${qs}` : ''}`,
     accessToken,
     {
       method: 'POST',
@@ -608,4 +630,160 @@ export async function updateSpaceReadState(
     accessToken,
     { method: 'PATCH', body: JSON.stringify({ lastReadTime }) }
   )
+}
+
+/* ══════════════════════════════════════════
+   Google Docs  —  https://docs.googleapis.com/v1
+   Scopes: documents (create/edit) + drive.file (file lands in the user's Drive)
+   ══════════════════════════════════════════ */
+
+const DOCS_BASE = 'https://docs.googleapis.com/v1'
+
+export interface GoogleDoc {
+  documentId: string
+  title: string
+  /** Convenience URL (not returned by the API — we synthesize it). */
+  documentUrl?: string
+}
+
+/**
+ * Create a Google Doc with a title and optional body text. Two calls: create
+ * the (empty) doc, then batchUpdate to insert the body at index 1. Returns the
+ * doc id + a synthesized editor URL.
+ */
+export async function createGoogleDoc(
+  accessToken: string,
+  input: { title: string; body?: string }
+): Promise<GoogleDoc> {
+  const created = await googleFetch<{ documentId: string; title: string }>(
+    `${DOCS_BASE}/documents`,
+    accessToken,
+    { method: 'POST', body: JSON.stringify({ title: input.title }) }
+  )
+
+  if (input.body && input.body.trim()) {
+    await googleFetch<unknown>(
+      `${DOCS_BASE}/documents/${created.documentId}:batchUpdate`,
+      accessToken,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          requests: [{ insertText: { location: { index: 1 }, text: input.body } }],
+        }),
+      }
+    )
+  }
+
+  return {
+    documentId: created.documentId,
+    title: created.title,
+    documentUrl: `https://docs.google.com/document/d/${created.documentId}/edit`,
+  }
+}
+
+/* ══════════════════════════════════════════
+   Google Sheets  —  https://sheets.googleapis.com/v4
+   Scopes: spreadsheets (create/edit) + drive.file
+   ══════════════════════════════════════════ */
+
+const SHEETS_BASE = 'https://sheets.googleapis.com/v4/spreadsheets'
+
+export interface GoogleSheet {
+  spreadsheetId: string
+  title: string
+  spreadsheetUrl: string
+}
+
+/**
+ * Create a Google Sheet with a title and optional seed rows (array of rows,
+ * each a string[] of cell values) written starting at A1.
+ */
+export async function createGoogleSheet(
+  accessToken: string,
+  input: { title: string; rows?: string[][] }
+): Promise<GoogleSheet> {
+  const created = await googleFetch<{ spreadsheetId: string; spreadsheetUrl: string; properties?: { title?: string } }>(
+    SHEETS_BASE,
+    accessToken,
+    { method: 'POST', body: JSON.stringify({ properties: { title: input.title } }) }
+  )
+
+  if (input.rows?.length) {
+    await googleFetch<unknown>(
+      `${SHEETS_BASE}/${created.spreadsheetId}/values/A1?valueInputOption=USER_ENTERED`,
+      accessToken,
+      { method: 'PUT', body: JSON.stringify({ values: input.rows }) }
+    )
+  }
+
+  return {
+    spreadsheetId: created.spreadsheetId,
+    title: created.properties?.title ?? input.title,
+    spreadsheetUrl: created.spreadsheetUrl ?? `https://docs.google.com/spreadsheets/d/${created.spreadsheetId}/edit`,
+  }
+}
+
+/* ══════════════════════════════════════════
+   Google People (Contacts)  —  https://people.googleapis.com/v1
+   Scope: contacts.readonly. Used to resolve a name → email address.
+   ══════════════════════════════════════════ */
+
+const PEOPLE_BASE = 'https://people.googleapis.com/v1'
+
+export interface ContactMatch {
+  displayName: string
+  email: string
+}
+
+/**
+ * Search the user's contacts by free-text query, returning name+email matches.
+ * Uses People API searchContacts (readMask limited to names + emailAddresses).
+ */
+export async function searchContacts(
+  accessToken: string,
+  query: string,
+  pageSize = 10
+): Promise<ContactMatch[]> {
+  const params = new URLSearchParams({
+    query,
+    readMask: 'names,emailAddresses',
+    pageSize: String(pageSize),
+  })
+  const data = await googleFetch<{
+    results?: { person?: { names?: { displayName?: string }[]; emailAddresses?: { value?: string }[] } }[]
+  }>(`${PEOPLE_BASE}/people:searchContacts?${params}`, accessToken)
+
+  const matches: ContactMatch[] = []
+  for (const r of data.results ?? []) {
+    const email = r.person?.emailAddresses?.[0]?.value
+    if (!email) continue
+    matches.push({ email, displayName: r.person?.names?.[0]?.displayName ?? email })
+  }
+  return matches
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+/**
+ * Resolve a recipient reference to an email address. If it already looks like
+ * an email, it's returned unchanged. Otherwise the contacts are searched and
+ * the best match is returned. Returns `null` when nothing resolves — callers
+ * decide whether to surface an actionable "couldn't find that contact" error.
+ */
+export async function resolveRecipient(
+  accessToken: string,
+  reference: string
+): Promise<ContactMatch | null> {
+  const ref = (reference || '').trim()
+  if (!ref) return null
+  if (EMAIL_RE.test(ref)) return { email: ref, displayName: ref }
+
+  try {
+    const matches = await searchContacts(accessToken, ref, 5)
+    // Prefer an exact (case-insensitive) display-name match; else the top hit.
+    const exact = matches.find((m) => m.displayName.toLowerCase() === ref.toLowerCase())
+    return exact ?? matches[0] ?? null
+  } catch {
+    return null
+  }
 }

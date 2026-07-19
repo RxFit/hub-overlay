@@ -31,7 +31,7 @@ import { shouldRouteThroughSend } from '@/lib/inject-routing'
 import { stripDegradedBanner, stripSuggestedTools } from '@/lib/model-output'
 import { CLIENT_ABORT_MS } from '@/lib/timeout-config'
 import { getAdminContactEmail } from '@/lib/access-request'
-import { executeAction } from '@/lib/actions/executeAction'
+import { executeAction, MISSING_SCOPE_MARKER } from '@/lib/actions/executeAction'
 import type { InterviewState, ActionSpec, ChatAttachment, ActiveSkill, Company } from '@/types'
 
 /**
@@ -953,6 +953,20 @@ Respond with EXACTLY one of:
       ))
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : 'Unknown error'
+      // Insufficient-scope: the user's grant predates a newly-added Google
+      // scope (Docs/Sheets/Contacts). Re-consent fixes it — trigger the same
+      // signIn('google') self-heal used for 401s. This fires ONLY on the
+      // MISSING_SCOPE marker, never on a bare 403 (RBAC/gate denials, which
+      // re-consent can't fix), so it can't loop on a legitimate denial.
+      if (errMsg.startsWith(MISSING_SCOPE_MARKER)) {
+        setMessages(prev => prev.map(m =>
+          m.id === workingId
+            ? { ...m, content: `🔐 **One-time permission needed.** ${errMsg.slice(MISSING_SCOPE_MARKER.length + 1).trim()}\n\nReopening Google sign-in so you can grant it — then re-run this action.` }
+            : m
+        ))
+        signIn('google')
+        return
+      }
       setMessages(prev => prev.map(m =>
         m.id === workingId
           ? { ...m, content: `❌ **Action failed:** ${errMsg}\n\nPlease try again or contact support.` }
