@@ -441,7 +441,7 @@ export function useChatEngine(options: UseChatEngineOptions) {
 
             const newState = startInterview(intent, extractedEntities)
             setInterviewState(newState)
-            setActiveModel('Claude Fable 5')
+            setActiveModel('Gemini 3.5 Flash')
 
             // If the state is still active, it means we have unanswered questions.
             if (newState.active) {
@@ -729,7 +729,7 @@ Respond with EXACTLY one of:
           const confirmedSpec = nextState.spec
           runAfter = () => {
             setInterviewState(nextState)
-            setActiveModel('Claude Fable 5')
+            setActiveModel('Gemini 3.5 Flash')
             fireScoreGate()
             // Run the async gate — it updates state on its own and removes the
             // "Scoring context quality…" bubble when it resolves.
@@ -749,7 +749,7 @@ Respond with EXACTLY one of:
           }
           runAfter = () => {
             setInterviewState(nextState)
-            setActiveModel('Claude Fable 5')
+            setActiveModel('Gemini 3.5 Flash')
             fireScoreGate()
           }
         }

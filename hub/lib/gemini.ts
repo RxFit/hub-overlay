@@ -356,22 +356,23 @@ function getModelDisplayName(model: string): string {
 /**
  * UseCase-based routing: decides whether to try Claude first.
  *
- * Model priority by use case (Claude chain = Fable 5 → Sonnet 4.6):
- *   interview  → Claude Fable 5 → Claude Sonnet 4.6 → Gemini chain
- *   deep_dive (with skill active) → Claude Fable 5 → Claude Sonnet 4.6 → Gemini chain
- *   execute (Pre-Cog quality gate) → Claude Fable 5 → Claude Sonnet 4.6 → Gemini chain
+ * Model priority by use case (operator decision: Gemini 3.5 Flash carries all
+ * basic functionality and tool/action requests; the Claude chain — Fable 5 →
+ * Sonnet 4.6 — is reserved for the heavyweight research/skill paths, and
+ * remains the cross-provider fallback when the Gemini chain is down):
  *   exa_search (EXA toggle) → Claude Fable 5 → Claude Sonnet 4.6 → Gemini chain
+ *   deep_dive (with skill active) → Claude Fable 5 → Claude Sonnet 4.6 → Gemini chain
  *
  *   recall     → Gemini chain (3.5 Flash → 2.5 Flash → 2.5 Pro)
  *   deep_dive (no skill) → Gemini chain (3.5 Flash → 2.5 Flash → 2.5 Pro)
+ *   interview  → Gemini chain (tool/action requests are basic functionality)
+ *   execute (Pre-Cog quality gate) → Gemini chain
  *
  * exa_search is a server-side-only useCase (the client never sends it): the
  * chat route sets it for EXA Search mode so research synthesis + citation gets
  * the strongest model, not the fast default that plain deep_dive falls to.
  */
 function shouldUseClaude(useCase: string, hasActiveSkill: boolean): boolean {
-  if (useCase === 'interview') return true
-  if (useCase === 'execute') return true
   if (useCase === 'exa_search') return true
   if (useCase === 'deep_dive' && hasActiveSkill) return true
   return false
