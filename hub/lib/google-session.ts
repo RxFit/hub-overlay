@@ -52,6 +52,39 @@ export function googleApiErrorResponse(err: unknown): NextResponse {
   return NextResponse.json({ error: message }, { status })
 }
 
+/**
+ * Error response for routes behind a NEWLY-added OAuth scope (Docs, Sheets,
+ * Contacts). An existing user whose grant predates the scope gets a Google
+ * 403 `insufficientPermissions` — which the generic mapper would fold into a
+ * reauth 401. That works, but a dedicated `code: 'MISSING_SCOPE'` 403 lets the
+ * client show a precise "grant access" prompt and re-consent, mirroring the
+ * Chat routes. This runs BEFORE `googleApiErrorResponse`; anything that is NOT
+ * a scope/permission 403 falls through to the generic mapper unchanged.
+ *
+ * IMPORTANT: only a genuine Google insufficient-scope 403 returns MISSING_SCOPE.
+ * A bare 403 from role/gate/RBAC layers must NEVER reach here — re-consent
+ * cannot fix those and would loop. This helper is for Google-upstream errors only.
+ */
+export function googleWriteErrorResponse(err: unknown, scopeLabel: string): NextResponse {
+  const message = (err instanceof Error ? err.message : '').toLowerCase()
+  const isScopeDenial =
+    /\b403\b/.test(message) &&
+    (message.includes('insufficient') ||
+      message.includes('permission') ||
+      message.includes('accessnotconfigured') ||
+      message.includes('scope'))
+  if (isScopeDenial) {
+    return NextResponse.json(
+      {
+        error: `${scopeLabel} access hasn't been granted yet. Please re-authenticate to allow it.`,
+        code: 'MISSING_SCOPE',
+      },
+      { status: 403 },
+    )
+  }
+  return googleApiErrorResponse(err)
+}
+
 export type GoogleAuth =
   | { ok: true; accessToken: string }
   | { ok: false; response: NextResponse }

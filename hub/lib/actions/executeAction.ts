@@ -8,6 +8,59 @@ interface ExecuteActionDeps {
 }
 
 /**
+ * Marker prefix on errors thrown when a Google write route reports a
+ * `MISSING_SCOPE` 403 — i.e. the user's OAuth grant predates a newly-added
+ * scope (Docs/Sheets/Contacts). `handleActionApprove` matches this prefix to
+ * trigger a one-time `signIn('google')` re-consent. It is deliberately
+ * distinct from any other 403 (RBAC / gate token) so ONLY a genuine
+ * insufficient-scope error re-consents — never a legitimate authorization
+ * denial, which re-consent can't fix and would loop on.
+ */
+export const MISSING_SCOPE_MARKER = 'GOOGLE_MISSING_SCOPE'
+
+/**
+ * Build an error message for a failed Google write response. Only a real
+ * `{ code: 'MISSING_SCOPE' }` 403 gets the re-consent marker; every other
+ * failure (including bare 403s) yields a plain diagnostic that does NOT
+ * trigger re-auth.
+ */
+async function scopeAwareError(res: Response, label: string): Promise<string> {
+  let code: string | undefined
+  let serverErr: string | undefined
+  try {
+    const b = await res.json()
+    code = b?.code
+    serverErr = typeof b?.error === 'string' ? b.error : undefined
+  } catch {
+    /* non-JSON body */
+  }
+  if (res.status === 403 && code === 'MISSING_SCOPE') {
+    return `${MISSING_SCOPE_MARKER}: ${serverErr || 'Additional Google permission is needed. Please re-authenticate to grant it.'}`
+  }
+  return `${label} failed: ${res.status}${serverErr ? ` — ${serverErr}` : ''}`
+}
+
+/**
+ * Resolve a recipient reference (name or email) to an email address via the
+ * contacts route. Returns the original reference unchanged if it already looks
+ * like an email or if nothing resolves — the caller/route still validates.
+ */
+async function resolveRecipientEmail(reference: string): Promise<string> {
+  const ref = (reference || '').trim()
+  if (!ref || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ref)) return ref
+  try {
+    const res = await fetch(`/api/google/contacts?q=${encodeURIComponent(ref)}`)
+    if (!res.ok) return ref
+    const data = await res.json()
+    const matches: Array<{ email: string; displayName: string }> = data?.matches ?? []
+    const exact = matches.find((m) => m.displayName?.toLowerCase() === ref.toLowerCase())
+    return (exact ?? matches[0])?.email ?? ref
+  } catch {
+    return ref
+  }
+}
+
+/**
  * Headers for high-stakes Paperclip issue creation. Carries the server-issued
  * quality-gate token (P0-2) so the proxy can verify the context-sufficiency gate
  * was satisfied server-side before the agent is triggered.
@@ -228,6 +281,17 @@ export async function executeAction(
         spec.details.notes || '',
       ].filter(Boolean).join('\n')
 
+      const attendeeList = spec.details.attendees
+        ? spec.details.attendees.split(',').map((e: string) => e.trim()).filter(Boolean)
+        : undefined
+
+      // Auto-attach a Google Meet link when this looks like a real meeting:
+      // either there are attendees, or the details mention a video call. A
+      // solo block on your own calendar doesn't need one. (No new scope — the
+      // existing `calendar` scope covers conferenceData.)
+      const meetSignal = `${spec.details.details || ''} ${spec.details.location || ''} ${eventTitle}`.toLowerCase()
+      const addMeetLink = (attendeeList?.length ?? 0) > 0 || /\b(meet|video|zoom|call|virtual|remote)\b/.test(meetSignal)
+
       const res = await fetch('/api/google/calendar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -236,14 +300,45 @@ export async function executeAction(
           description: eventDesc,
           start: startISO,
           end: endISO,
-          attendees: spec.details.attendees
-            ? spec.details.attendees.split(',').map((e: string) => e.trim())
-            : undefined,
+          attendees: attendeeList,
+          addMeetLink,
         }),
       })
       if (!res.ok) throw new Error(`Event creation failed: ${res.status}`)
       const data = await res.json()
-      resultMsg = `✅ **Event scheduled!**\n\n"${data.event?.summary || eventTitle}" has been added to your Google Calendar for ${startDate.toLocaleDateString()} at ${startDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`
+      const meetLink = data.event?.hangoutLink || data.event?.conferenceData?.entryPoints?.find((e: { uri?: string }) => e.uri)?.uri
+      resultMsg = `✅ **Event scheduled!**\n\n"${data.event?.summary || eventTitle}" has been added to your Google Calendar for ${startDate.toLocaleDateString()} at ${startDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.${meetLink ? `\n\n🎥 Google Meet: ${meetLink}` : ''}`
+      break
+    }
+
+    case 'create_google_doc': {
+      const docTitle = spec.details.title || spec.summary
+      const res = await fetch('/api/google/doc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-AI-Intent': 'create_google_doc' },
+        body: JSON.stringify({ title: docTitle, body: spec.details.content || '' }),
+      })
+      if (!res.ok) throw new Error(await scopeAwareError(res, 'Doc creation'))
+      const data = await res.json()
+      resultMsg = `📄 **Google Doc created!**\n\n"${data.doc?.title || docTitle}" is in your Drive.\n\n▶ [Open the doc](${data.doc?.documentUrl})`
+      break
+    }
+
+    case 'create_google_sheet': {
+      const sheetTitle = spec.details.title || spec.summary
+      // Parse pasted content into rows: split lines, then commas/tabs into cells.
+      const raw = (spec.details.content || '').trim()
+      const rows = raw
+        ? raw.split('\n').map((line) => line.split(/\t|,/).map((c) => c.trim()))
+        : undefined
+      const res = await fetch('/api/google/sheet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-AI-Intent': 'create_google_sheet' },
+        body: JSON.stringify({ title: sheetTitle, rows }),
+      })
+      if (!res.ok) throw new Error(await scopeAwareError(res, 'Sheet creation'))
+      const data = await res.json()
+      resultMsg = `📊 **Google Sheet created!**\n\n"${data.sheet?.title || sheetTitle}" is in your Drive.\n\n▶ [Open the sheet](${data.sheet?.spreadsheetUrl})`
       break
     }
 
@@ -303,10 +398,16 @@ export async function executeAction(
       // the server verifies it and would 403 the send anyway (P0-2, Option B).
       const gmailHeaders = gatedSendHeaders(spec)
 
-      // Interview collects: to, subject, body (entity extraction may prefill)
-      const to = spec.details.to
+      // Interview collects: to, subject, body (entity extraction may prefill).
+      // Resolve a name ("Maria") to an address via contacts so the send doesn't
+      // fail for want of an email; an address passes through unchanged.
+      const to = await resolveRecipientEmail(spec.details.to || '')
       const subject = spec.details.subject || '(no subject)'
       const body = spec.details.body || spec.details.details || spec.summary
+
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+        throw new Error(`I couldn't resolve "${spec.details.to}" to an email address. Edit the action and give me the address directly.`)
+      }
 
       const res = await fetch('/api/google/gmail', {
         method: 'POST',

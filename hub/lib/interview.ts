@@ -26,6 +26,11 @@ const INTENT_PERMISSIONS: Record<InterviewIntent, ActionPermission> = {
   create_task: 'onboarding',
   update_task: 'onboarding',
   schedule_event: 'onboarding',
+  // Docs/Sheets author into the requesting user's OWN Drive (drive.file), so
+  // they sit at the personal-productivity tier alongside tasks/events. Staff+
+  // keeps them off pending/onboarding guests while covering the whole team.
+  create_google_doc: 'staff',
+  create_google_sheet: 'staff',
   // Staff-level (read + create)
   send_communication: 'staff',
   send_gmail: 'staff',
@@ -91,6 +96,16 @@ export const INTENT_DEFINITIONS: Array<{ id: InterviewIntent; description: strin
     id: 'schedule_event',
     description: 'User wants to schedule, book, or set up a meeting or calendar event.',
     expectedEntities: ['details'],
+  },
+  {
+    id: 'create_google_doc',
+    description: 'User wants to create a NEW Google Doc / document — e.g. "draft a Doc with the Q3 decision memo", "make a Google Doc of these meeting notes", "write this up as a doc". Use this when the durable output should be a Google Document.',
+    expectedEntities: ['title', 'content'],
+  },
+  {
+    id: 'create_google_sheet',
+    description: 'User wants to create a NEW Google Sheet / spreadsheet — e.g. "make a spreadsheet of this quarter\'s KPIs", "put these numbers in a Google Sheet", "export this table to Sheets". Use this when the durable output should be a Google Spreadsheet.',
+    expectedEntities: ['title', 'content'],
   },
   {
     id: 'send_communication',
@@ -255,6 +270,38 @@ const INTERVIEW_SEQUENCES: Record<InterviewIntent, InterviewStep[]> = {
     },
     {
       question: 'I\'ll schedule this event with the details above. Confirm? (yes / edit / cancel)',
+      key: '_confirm',
+    },
+  ],
+
+  create_google_doc: [
+    {
+      question: 'What should the document be titled?',
+      key: 'title',
+    },
+    {
+      question: 'What should go in the doc? Paste or describe the content (leave blank for an empty doc).',
+      key: 'content',
+      defaultValue: '',
+    },
+    {
+      question: 'I\'ll create this Google Doc in your Drive. Confirm? (yes / edit / cancel)',
+      key: '_confirm',
+    },
+  ],
+
+  create_google_sheet: [
+    {
+      question: 'What should the spreadsheet be titled?',
+      key: 'title',
+    },
+    {
+      question: 'What data should it hold? Describe the columns/rows, or paste rows (leave blank for an empty sheet).',
+      key: 'content',
+      defaultValue: '',
+    },
+    {
+      question: 'I\'ll create this Google Sheet in your Drive. Confirm? (yes / edit / cancel)',
       key: '_confirm',
     },
   ],
@@ -739,6 +786,8 @@ const INTENT_LABELS: Record<InterviewIntent, string> = {
   create_task: 'Create Task',
   update_task: 'Update Task',
   schedule_event: 'Schedule Event',
+  create_google_doc: 'Create Google Doc',
+  create_google_sheet: 'Create Google Sheet',
   send_communication: 'Send Communication',
   send_gmail: 'Send Gmail',
   post_chat_message: 'Post Chat Message',
@@ -765,6 +814,8 @@ const INTENT_TARGET_SYSTEMS: Record<InterviewIntent, string[]> = {
   create_task: ['Google Tasks', 'Paperclip'],
   update_task: ['Google Tasks'],
   schedule_event: ['Google Calendar'],
+  create_google_doc: ['Google Docs'],
+  create_google_sheet: ['Google Sheets'],
   send_communication: ['Paperclip AI — COO Routed'],
   send_gmail: ['Gmail'],
   post_chat_message: ['Google Chat'],
