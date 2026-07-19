@@ -109,6 +109,8 @@ function useSwipeDismiss(onDismiss: () => void) {
 const INTENT_LABELS: Record<string, string> = {
   create_task: 'Create Task',
   schedule_event: 'Schedule Event',
+  create_google_doc: 'Create Google Doc',
+  create_google_sheet: 'Create Google Sheet',
   send_communication: 'Send Communication',
   send_gmail: 'Send Gmail',
   post_chat_message: 'Post Chat Message',
@@ -236,6 +238,8 @@ export function InterviewBadge({
 const INTENT_DISPLAY_LABELS: Record<string, string> = {
   create_task: '📋 Create Task',
   schedule_event: '📅 Schedule Event',
+  create_google_doc: '📄 Create Google Doc',
+  create_google_sheet: '📊 Create Google Sheet',
   send_communication: '✉️ Send Communication',
   send_gmail: '✉️ Send Gmail',
   post_chat_message: '💬 Post Chat Message',

@@ -293,37 +293,23 @@ const INTERVIEW_SEQUENCES: Record<InterviewIntent, InterviewStep[]> = {
   ],
 
   // Google Docs/Sheets authoring keeps a short guided flow: unlike a one-line
-  // task or email, a document needs a title AND its content, so it collects
-  // those two fields rather than a single "add context?" question.
+  // Docs/Sheets are Google Workspace actions (not Paperclip), so they use the
+  // same lightweight single "add context?" question. The title and any content
+  // come from entity extraction on the request; the added context is folded
+  // into the document body at execution (see lib/actions/executeAction.ts).
   create_google_doc: [
     {
-      question: 'What should the document be titled?',
-      key: 'title',
-    },
-    {
-      question: 'What should go in the doc? Paste or describe the content (leave blank for an empty doc).',
-      key: 'content',
-      defaultValue: '',
-    },
-    {
-      question: 'I\'ll create this Google Doc in your Drive. Confirm? (yes / edit / cancel)',
-      key: '_confirm',
+      question: 'Want to add any more context for this document (a title, or what to include)? Reply with details, or say "go ahead" to continue.',
+      key: 'additionalContext',
+      defaultValue: 'go ahead',
     },
   ],
 
   create_google_sheet: [
     {
-      question: 'What should the spreadsheet be titled?',
-      key: 'title',
-    },
-    {
-      question: 'What data should it hold? Describe the columns/rows, or paste rows (leave blank for an empty sheet).',
-      key: 'content',
-      defaultValue: '',
-    },
-    {
-      question: 'I\'ll create this Google Sheet in your Drive. Confirm? (yes / edit / cancel)',
-      key: '_confirm',
+      question: 'Want to add any more context for this spreadsheet (a title, or the columns/rows)? Reply with details, or say "go ahead" to continue.',
+      key: 'additionalContext',
+      defaultValue: 'go ahead',
     },
   ],
 
@@ -915,6 +901,8 @@ const PERSONAL_ACTION_INTENTS: ReadonlySet<InterviewIntent> = new Set([
   'schedule_event',
   'send_gmail',
   'post_chat_message',
+  'create_google_doc',
+  'create_google_sheet',
 ])
 
 /**
