@@ -33,6 +33,8 @@ $ENV_VARS = @{
   "NEXTAUTH_URL"                  = "https://hub.casatrejo.com"
   "PAPERCLIP_BASE_URL"            = "https://rxfit-paperclip-11747747730.us-central1.run.app"
   "SUPERADMIN_EMAILS"             = "danny@rxfitatx.com"
+  # Individually-invited guests on consumer domains (see lib/auth.ts).
+  "ALLOWED_EMAIL_ADDRESSES"       = "caroljean37@gmail.com"
   "VERTEX_GCP_PROJECT"            = "semantic-brain-desktop"
   "VERTEX_ENGINE_ID"              = "semanticbrain_1779229063037"
   "DEFAULT_PAPERCLIP_COMPANY_ID"  = "8f2acc3d-f2dc-4f8c-897e-7c400e91fd85"
