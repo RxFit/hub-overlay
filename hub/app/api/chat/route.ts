@@ -468,16 +468,50 @@ async function handleChat(req: NextRequest): Promise<Response> {
   if (exaMode) {
     const exaLastUserMsg = boundedMessages.filter(m => m.role === 'user').pop()
     const exaQuery = exaLastUserMsg?.content ?? ''
-    log.info({ hasQuery: Boolean(exaQuery) }, 'EXA Search mode active — running Exa-only pipeline')
-    const exaSearch = exaQuery
-      ? await runExaOnlySearch(exaQuery)
-      : { context: '', failed: false }
+    log.info({ hasQuery: Boolean(exaQuery) }, 'EXA Search mode active — hybrid semantic pipeline (Exa web + Vertex internal)')
+
+    // Hybrid SEMANTIC-ONLY research: Exa (web) + Vertex AI Internal Brain run
+    // CONCURRENTLY, each failing open independently — a Vertex outage must not
+    // kill web results and vice versa. Everything else (pgvector, Paperclip,
+    // Workspace context, attachments, skills) stays disabled in this mode.
+    const [exaSearch, internalSearch] = await Promise.all([
+      exaQuery ? runExaOnlySearch(exaQuery) : Promise.resolve({ context: '', failed: false }),
+      exaQuery
+        ? withTimeout(
+            (async () => {
+              try {
+                const vertexResults = await breaker.execute('vertex-ai', () => searchSemanticBrain(exaQuery))
+                if (vertexResults && vertexResults.length > 0) {
+                  const ctx = vertexResults
+                    .map(r => `**${r.title}** ${r.uri ? `(${r.uri})` : ''}\n${r.snippet}`)
+                    .join('\n\n---\n\n')
+                  return { context: ctx, failed: false }
+                }
+                return { context: '', failed: false } // genuinely zero matches
+              } catch (err) {
+                if (err instanceof CircuitOpenError) {
+                  log.warn({ key: 'vertex-ai' }, 'Vertex circuit OPEN — EXA hybrid runs web-only')
+                } else {
+                  log.warn({ err }, 'EXA hybrid: Vertex internal search failed — web-only')
+                }
+                return { context: '', failed: true }
+              }
+            })(),
+            8_000,
+            { context: '', failed: true },
+            'exa-internal-search',
+          )
+        : Promise.resolve({ context: '', failed: false }),
+    ])
+
     // Parts form → Claude puts a cache breakpoint on the static prefix
     // (persona + policy) so repeat EXA turns read it at 0.1x input price.
     const exaSystemPrompt = buildSystemPromptParts({
       injectedContext: exaSearch.context || undefined,
       exaMode: true,
       exaSearchFailed: exaSearch.failed,
+      exaInternalContext: internalSearch.context || undefined,
+      exaInternalFailed: internalSearch.failed,
     })
     // 'exa_search' routes to the Claude chain (Fable 5 → Sonnet 4.6 → Gemini
     // fallbacks) — research synthesis with citations needs the strongest model,

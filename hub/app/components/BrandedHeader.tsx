@@ -208,7 +208,7 @@ export function BrandedHeader({
           onClick={onExaToggle}
           aria-pressed={exaMode}
           aria-label={exaMode ? 'Turn EXA web search off' : 'Turn EXA web search on'}
-          title={exaMode ? 'EXA Search: ON — chat is a web-search tool' : 'EXA Search: OFF — tap to search the web'}
+          title={exaMode ? 'EXA Search: ON — semantic search across the web + your internal brain' : 'EXA Search: OFF — tap for semantic web + internal search'}
         >
           <span style={{ fontSize: '0.72rem', fontWeight: 800, letterSpacing: '0.03em', lineHeight: 1 }}>
             EXA
