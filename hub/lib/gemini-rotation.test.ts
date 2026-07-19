@@ -129,20 +129,20 @@ describe('cooldown re-entry (Claude chain)', () => {
     }
 
     // Call 1: Fable fails pre-stream → Sonnet serves.
-    const r1 = await collect(streamChat(MESSAGES, 'sys', 'interview'))
+    const r1 = await collect(streamChat(MESSAGES, 'sys', 'deep_dive', true))
     expect(r1.error).toBeNull()
     expect(hoisted.claudeCalls).toEqual(['claude-fable-5', 'claude-sonnet-4-6'])
     expect(r1.models).toEqual(['Claude Fable 5', 'Claude Sonnet 4.6']) // rotation visible to the UI
 
     // Call 2 (inside the 5-min error cooldown): Fable is not even attempted.
-    const r2 = await collect(streamChat(MESSAGES, 'sys', 'interview'))
+    const r2 = await collect(streamChat(MESSAGES, 'sys', 'deep_dive', true))
     expect(r2.error).toBeNull()
     expect(hoisted.claudeCalls).toEqual(['claude-fable-5', 'claude-sonnet-4-6', 'claude-sonnet-4-6'])
 
     // Cooldown expires (error cooldown = 300s) → Fable is tried FIRST again.
     fableUp = true
     vi.advanceTimersByTime(301_000)
-    const r3 = await collect(streamChat(MESSAGES, 'sys', 'interview'))
+    const r3 = await collect(streamChat(MESSAGES, 'sys', 'deep_dive', true))
     expect(r3.error).toBeNull()
     expect(hoisted.claudeCalls.at(-1)).toBe('claude-fable-5')
     expect(r3.text).toBe('claude-fable-5 says hi')
@@ -164,7 +164,7 @@ describe('Claude auth-failure cooldown tier (P2 FIX2)', () => {
 
     // Call 1: Fable auth-fails → the shared-credential break skips Sonnet and
     // hands off to Gemini. Fable is now recorded in the AUTH cooldown tier.
-    const r1 = await collect(streamChat(MESSAGES, 'sys', 'interview'))
+    const r1 = await collect(streamChat(MESSAGES, 'sys', 'deep_dive', true))
     expect(hoisted.claudeCalls).toEqual(['claude-fable-5']) // Sonnet skipped (auth break)
     expect(r1.text).toBe('gem')
 
@@ -175,14 +175,14 @@ describe('Claude auth-failure cooldown tier (P2 FIX2)', () => {
     fableAuthFails = false
     hoisted.claudeCalls.length = 0
     vi.advanceTimersByTime(301_000)
-    const r2 = await collect(streamChat(MESSAGES, 'sys', 'interview'))
+    const r2 = await collect(streamChat(MESSAGES, 'sys', 'deep_dive', true))
     expect(hoisted.claudeCalls).toEqual(['claude-sonnet-4-6']) // Fable STILL cooling → skipped
     expect(r2.text).toBe('claude-sonnet-4-6 says hi')
 
     // Past the full 30-min auth cooldown, Fable is tried FIRST again.
     hoisted.claudeCalls.length = 0
     vi.advanceTimersByTime(1_800_000)
-    const r3 = await collect(streamChat(MESSAGES, 'sys', 'interview'))
+    const r3 = await collect(streamChat(MESSAGES, 'sys', 'deep_dive', true))
     expect(hoisted.claudeCalls[0]).toBe('claude-fable-5')
     expect(r3.text).toBe('claude-fable-5 says hi')
   })

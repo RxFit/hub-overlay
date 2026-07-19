@@ -238,11 +238,26 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    // Claude Fable 5 primary → Gemini 2.5 Pro fallback for scoring
+    // Gemini 3.5 Flash primary → Claude chain fallback for scoring. Operator
+    // decision: Gemini Flash carries basic functionality + tool requests; the
+    // Claude chain is provider redundancy, not the default.
     const prompt = buildScoringPrompt(intent, context, dimensions)
 
-    // Try Claude first (better at structured JSON output): Fable 5 → Sonnet 4.6.
     try {
+      const model = getGenAI().getGenerativeModel({
+        model: 'gemini-3.5-flash',
+        systemInstruction: 'You are a context sufficiency scorer. Return ONLY valid JSON.',
+        generationConfig: { temperature: 0.1, maxOutputTokens: 256 },
+      })
+      const result = await model.generateContent(prompt)
+      const rawText = result.response.text()
+      const scoreResult = parseScoreResponse(rawText)
+      return NextResponse.json(withGateToken(scoreResult, intent, callerEmail))
+    } catch (geminiErr) {
+      console.warn('[score-context] Gemini 3.5 Flash failed, falling back to Claude chain:', geminiErr)
+
+      // Fallback: Claude Fable 5 → Sonnet 4.6 (a Gemini outage must not
+      // disable the quality gate — high-stakes intents would fail closed).
       const { claudeChat, CLAUDE_PRIMARY_MODEL, CLAUDE_BACKUP_MODEL } = await import('@/lib/claude')
       const scorerSystem = 'You are a context sufficiency scorer. Return ONLY valid JSON.'
       const scorerMessages = [{ id: '1', role: 'user' as const, content: prompt, timestamp: new Date().toISOString() }]
@@ -253,18 +268,6 @@ export async function POST(req: NextRequest) {
         console.warn('[score-context] Claude Fable 5 failed, trying Sonnet 4.6:', primaryErr)
         rawText = await claudeChat(scorerMessages, scorerSystem, { model: CLAUDE_BACKUP_MODEL, maxTokens: 256, temperature: 0.1 })
       }
-      const scoreResult = parseScoreResponse(rawText)
-      return NextResponse.json(withGateToken(scoreResult, intent, callerEmail))
-    } catch (claudeErr) {
-      console.warn('[score-context] Claude chain failed, falling back to Gemini 2.5 Pro:', claudeErr)
-
-      // Fallback: Gemini 2.5 Pro
-      const model = getGenAI().getGenerativeModel({
-        model: 'gemini-2.5-pro',
-        generationConfig: { temperature: 0.1, maxOutputTokens: 256 },
-      })
-      const result = await model.generateContent(prompt)
-      const rawText = result.response.text()
       const scoreResult = parseScoreResponse(rawText)
       return NextResponse.json(withGateToken(scoreResult, intent, callerEmail))
     }
