@@ -25,6 +25,9 @@ export interface SwipePanelsProps {
   mobileRightOpen: boolean
   handleClosePanels: () => void
   handleMobileTab: (tab: 'command' | 'execution' | 'chat') => void
+  /** Fully disengage the drawer swipe gesture (e.g. while the Google Chat /
+   *  Gmail overlay is open — horizontal strips there need the finger). */
+  disabled?: boolean
 }
 
 // px of horizontal travel required before the direction lock even considers a
@@ -205,6 +208,7 @@ export function useSwipePanels({
   mobileRightOpen,
   handleClosePanels,
   handleMobileTab,
+  disabled = false,
 }: SwipePanelsProps) {
   const leftPanelRef = useRef<HTMLElement>(null)
   const rightPanelRef = useRef<HTMLElement>(null)
@@ -263,6 +267,7 @@ export function useSwipePanels({
   }, [handleMobileTab, handleClosePanels])
 
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    if (disabled) return
     const touch = e.touches[0]
     const result = gestureReducer(stateRef.current, {
       type: 'start',
@@ -275,9 +280,10 @@ export function useSwipePanels({
     // A pinch that interrupts an in-progress drag lands here as a fresh
     // multi-touch start → idle; clear any drag visuals so it snaps back.
     if (result.state.phase === 'idle') clearDrag()
-  }, [clearDrag])
+  }, [disabled, clearDrag])
 
   const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    if (disabled) return
     const touch = e.touches[0]
     const result = gestureReducer(stateRef.current, {
       type: 'move',
@@ -290,9 +296,10 @@ export function useSwipePanels({
     stateRef.current = result.state
     if (result.state.phase === 'dragging') scheduleDrag(result.drag)
     else clearDrag()
-  }, [mobileLeftOpen, mobileRightOpen, scheduleDrag, clearDrag])
+  }, [disabled, mobileLeftOpen, mobileRightOpen, scheduleDrag, clearDrag])
 
   const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (disabled) return
     const touch = e.changedTouches[0]
     const result = gestureReducer(stateRef.current, {
       type: 'end',
@@ -303,7 +310,16 @@ export function useSwipePanels({
     stateRef.current = result.state
     clearDrag()
     runCommand(result.command)
-  }, [mobileLeftOpen, mobileRightOpen, clearDrag, runCommand])
+  }, [disabled, mobileLeftOpen, mobileRightOpen, clearDrag, runCommand])
+
+  // Disabling mid-gesture (overlay opened under the finger) must drop any
+  // in-flight tracking/drag so no residual visuals or stale state survive.
+  useEffect(() => {
+    if (disabled) {
+      stateRef.current = IDLE
+      clearDrag()
+    }
+  }, [disabled, clearDrag])
 
   // rAF cleanup on unmount.
   useEffect(() => () => {

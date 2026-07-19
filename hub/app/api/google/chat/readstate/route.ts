@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
-import { getSpaceReadState } from '@/lib/google'
+import { getSpaceReadState, updateSpaceReadState } from '@/lib/google'
 
 export const runtime = 'nodejs'
 
@@ -39,6 +39,44 @@ export async function GET(req: NextRequest) {
       )
     }
 
+    return googleApiErrorResponse(err)
+  }
+}
+
+/**
+ * POST /api/google/chat/readstate  { spaceId: "spaces/XXXX" }
+ *
+ * Marks the space read as of now, so opening a chat in the hub clears its
+ * unread badge (here AND in Google Chat proper). Requires the readstate write
+ * scope — sessions consented before the scope upgrade get MISSING_SCOPE (200)
+ * and the client silently skips until the user re-signs-in.
+ */
+export async function POST(req: NextRequest) {
+  const auth = await resolveGoogleAuth(req)
+  if (!auth.ok) return auth.response
+
+  let spaceId: unknown
+  try {
+    spaceId = (await req.json())?.spaceId
+  } catch {
+    spaceId = null
+  }
+  if (typeof spaceId !== 'string' || !/^spaces\/[A-Za-z0-9_-]{1,128}$/.test(spaceId)) {
+    return NextResponse.json({ error: 'A valid spaceId is required' }, { status: 400 })
+  }
+
+  try {
+    const readState = await updateSpaceReadState(auth.accessToken, spaceId)
+    return NextResponse.json({ spaceId, lastReadTime: readState.lastReadTime ?? null })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to update read state'
+    // Same graceful degrade as GET: pre-upgrade tokens lack the write scope.
+    if (message.includes('403') || message.includes('PERMISSION_DENIED')) {
+      return NextResponse.json(
+        { spaceId, lastReadTime: null, code: 'MISSING_SCOPE' },
+        { status: 200 }
+      )
+    }
     return googleApiErrorResponse(err)
   }
 }
