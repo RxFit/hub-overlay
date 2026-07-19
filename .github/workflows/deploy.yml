@@ -102,6 +102,8 @@ jobs:
           ENV_VARS="$ENV_VARS,SUPERADMIN_EMAILS=danny@rxfitatx.com"
           # Individually-invited guests on consumer domains (see lib/auth.ts).
           ENV_VARS="$ENV_VARS,ALLOWED_EMAIL_ADDRESSES=caroljean37@gmail.com"
+          # Display-name corrections (email:Name pairs — see lib/auth.ts).
+          ENV_VARS="$ENV_VARS,USER_DISPLAY_NAME_OVERRIDES=caroljean37@gmail.com:Carol-Jean"
           ENV_VARS="$ENV_VARS,VERTEX_ENGINE_ID=semanticbrain_1779229063037"
           ENV_VARS="$ENV_VARS,VERTEX_GCP_PROJECT=semantic-brain-desktop"
 
