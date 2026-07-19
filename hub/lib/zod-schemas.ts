@@ -135,6 +135,38 @@ export const ProjectsResponseSchema = z.union([
   z.object({ projects: ProjectSchema.array() }).passthrough(),
 ])
 
+/* Company dashboard snapshot (GET /api/companies/:id/dashboard).
+   Deliberately lenient: every section is optional and passthrough because the
+   snapshot's field set varies across Paperclip versions — normalization to a
+   zero-filled shape happens in lib/execution-dashboard.ts, not here. */
+export const DashboardResponseSchema = z.object({
+  companyId: z.string().optional(),
+  agents: z.object({
+    active: z.number().optional(),
+    running: z.number().optional(),
+    paused: z.number().optional(),
+    error: z.number().optional(),
+  }).passthrough().optional(),
+  tasks: z.object({
+    open: z.number().optional(),
+    inProgress: z.number().optional(),
+    blocked: z.number().optional(),
+    done: z.number().optional(),
+  }).passthrough().optional(),
+  costs: z.object({
+    monthSpendCents: z.number().optional(),
+    monthBudgetCents: z.number().optional(),
+    monthUtilizationPercent: z.number().optional(),
+  }).passthrough().optional(),
+  pendingApprovals: z.number().optional(),
+  budgets: z.object({
+    activeIncidents: z.number().optional(),
+    pendingApprovals: z.number().optional(),
+    pausedAgents: z.number().optional(),
+    pausedProjects: z.number().optional(),
+  }).passthrough().optional(),
+}).passthrough()
+
 /* ── HUB API input schemas ── */
 
 export const ChatMessageSchema = z.object({
