@@ -132,18 +132,33 @@ After whichever fix, `resume` the agents above and confirm a manual
 `POST /api/agents/:id/wakeup` produces a `succeeded` run before re-enabling
 heartbeats.
 
-## Pending cleanup — AWAITING OWNER APPROVAL (not yet done)
+## Cleanup EXECUTED — 2026-07-19 (owner approved "option 3: all + archive")
 
-Not executed; needs a scope decision (RxFit-only / +siblings / +archive).
+Done via **soft, reversible** operations (no hard deletes — see quirk #1).
 
-- **15 duplicate agents** — Wellness / Jade CoS / SEO Agent each have an idle
-  `… 2` C-suite set alongside the errored originals. Resolve via
-  `terminate` (delete 500s).
-- **~250 orphaned blocked tasks** — Jade CoS 138, SEO Agent 37, FridgeSnap 33,
-  plus RxFit/others — stuck because no agent can complete them. Clear via
-  `PATCH status:"cancelled"`.
-- **5 sibling companies** — unused by the Hub; candidate for archival now that
-  their `orchestration/` configs were removed from the repo.
+- **5 sibling companies archived** — `PATCH /api/companies/:id {status:"archived"}`
+  on Wellness App, FridgeSnap, Jade CoS, NotebookRx, SEO Agent. RxFit Enterprise
+  stays `active`. Archiving carried their contents with them, so the **15
+  duplicate `… 2` agents** and the **~208 orphaned blocked tasks** in those orgs
+  no longer clutter the active workspace — no per-entity termination needed.
+  **Rollback:** `PATCH /api/companies/:id {status:"active"}` per id below.
+    - Wellness App `130d9582-1926-4b14-bffa-798f3a47d5e9`
+    - FridgeSnap `fe281b7a-23c7-4b10-883c-997eebc841dc`
+    - Jade CoS `f6801930-4c1b-43c0-a983-e5b2a98671b9`
+    - NotebookRx `05ca9da4-5ea1-4dc3-8a17-be9faa821dfb`
+    - SEO Agent `5021a3f7-3de2-442e-a639-7de2867eed17`
+- **RxFit orphaned/test issues cancelled** — all 6 non-terminal RxFit issues were
+  improper-setup junk (3 `stale_active_run_evaluation` recovery artifacts from the
+  broken agents, 1 "Review failed issues" meta-issue, 2 leftover E2E test issues).
+  Set to `cancelled` via `PATCH /api/issues/:id`: RXF-1…RXF-6. RxFit tasks
+  open/blocked/done is now **0/0/0**. **Rollback:** reopen via
+  `PATCH status:"todo"` (they carry no real business work).
+- **No legitimate work destroyed.** RxFit's 14 working agents (SEO/Billing/Stripe/
+  DevOps/etc.) were untouched and all have heartbeats OFF, so the cleared junk will
+  not regenerate. The 6 C-suite agents remain paused pending the adapter fix above.
+
+Post-cleanup RxFit state: 14 active (heartbeat-off) + 6 paused agents, 0 error,
+0 open/blocked tasks. The 5 sibling orgs are archived and out of the active view.
 
 ## Test artifact left behind
 
