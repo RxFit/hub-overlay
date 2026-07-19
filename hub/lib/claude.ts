@@ -1,5 +1,6 @@
 import type { ChatMessage } from '@/types'
 import { CONNECT_TIMEOUT_MS } from './timeout-config'
+import { emit } from './observability'
 
 /* ══════════════════════════════════════════════════════════════════════════════
    CLAUDE FABLE 5 API CLIENT
@@ -144,6 +145,28 @@ export async function claudeChat(
 
 /* ── Streaming: SSE-based for interactive chat ── */
 
+/**
+ * Split system prompt for Anthropic prompt caching (P0, deep-research finding).
+ *
+ * `staticPrefix` must be BYTE-IDENTICAL across requests (persona + policies —
+ * no dates, no injected results): it is sent as its own content block with a
+ * `cache_control` breakpoint, so repeat requests read it from cache at 0.1x
+ * input price. `dynamic` (current date, injected search results, workspace
+ * context) follows in a separate uncached block. Anthropic requires the cached
+ * prefix to be ≥512 tokens on Fable 5 — shorter prefixes silently skip caching
+ * (no error), which is safe. Cache breakpoints survive thinking/effort changes
+ * (system+tools cache is invalidated only by content changes).
+ */
+export interface SystemPromptParts {
+  staticPrefix: string
+  dynamic: string
+}
+
+/** Join either form into the single string the Gemini path (and logs) expect. */
+export function systemPromptText(sp: string | SystemPromptParts): string {
+  return typeof sp === 'string' ? sp : sp.staticPrefix + sp.dynamic
+}
+
 export type ClaudeEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 /** `xhigh` arrived with the Opus 4.7 generation — pre-4.7 models (Sonnet 4.6,
@@ -155,7 +178,7 @@ export function clampEffortForModel(model: string, effort: ClaudeEffort): Claude
 
 export async function* streamClaudeChat(
   messages: ChatMessage[],
-  systemPrompt: string,
+  systemPrompt: string | SystemPromptParts,
   options: { model?: string; maxTokens?: number; temperature?: number; effort?: ClaudeEffort } = {}
 ): AsyncGenerator<string> {
   // maxTokens 16384 (was 4096): thinking-first models (Fable 5) spend their
@@ -194,7 +217,16 @@ export async function* streamClaudeChat(
         ...(modelSupportsSamplingParams(model) ? {} : { thinking: { type: 'adaptive', display: 'summarized' } }),
         ...(effort ? { output_config: { effort: clampEffortForModel(model, effort) } } : {}),
         stream: true,
-        system: systemPrompt,
+        // Split prompts get a cache breakpoint on the static block: cache reads
+        // bill at 0.1x input, and the breakpoint must sit on the last block
+        // whose prefix is byte-identical across requests — never after the
+        // dynamic (date/results) content, which would guarantee cache misses.
+        system: typeof systemPrompt === 'string' || !systemPrompt.staticPrefix
+          ? systemPromptText(systemPrompt)
+          : [
+              { type: 'text', text: systemPrompt.staticPrefix, cache_control: { type: 'ephemeral' } },
+              ...(systemPrompt.dynamic ? [{ type: 'text', text: systemPrompt.dynamic }] : []),
+            ],
         messages: buildAnthropicMessages(messages),
       }),
     })
@@ -243,6 +275,14 @@ export async function* streamClaudeChat(
             // working. Yield '' so withIdleWatchdog resets WITHOUT emitting
             // visible output (the rotation layer skips empty chunks).
             yield ''
+          } else if (parsed.type === 'message_delta' && parsed.delta?.stop_reason === 'max_tokens') {
+            // TRUNCATION TELEMETRY (P0): stop_reason "max_tokens" is Anthropic's
+            // documented signature of a response cut off by the token budget —
+            // on thinking-first models it can also mean the budget went to
+            // reasoning. Surface it as a metric so max_tokens/effort can be
+            // tuned from real data instead of user bug reports.
+            emit({ type: 'ai_truncated', provider: 'claude', model })
+            console.warn(`[claude] response TRUNCATED (stop_reason=max_tokens) model=${model} max_tokens=${maxTokens}`)
           }
         } catch {
           // Skip malformed SSE lines

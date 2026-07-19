@@ -88,19 +88,22 @@ describe('searchWeb', () => {
     await expect(searchWeb('query')).rejects.toThrow('exa is down')
   })
 
-  it('passes the per-result text budget through (default 1000, override 3000)', async () => {
+  it('fetches highlights-only by default; full text only when a caller sizes it', async () => {
+    // Default: highlights only — each Exa content type is billed per page, and
+    // the mapper discards text whenever highlights exist, so fetching both
+    // doubled content cost for nothing.
     searchMock.mockResolvedValueOnce({ results: [] })
     await searchWeb('defaults')
-    expect(searchMock).toHaveBeenLastCalledWith(
-      'defaults',
-      expect.objectContaining({ text: { maxCharacters: 1000 } }),
-    )
+    const defaultOpts = searchMock.mock.calls.at(-1)?.[1] as Record<string, unknown>
+    expect(defaultOpts.highlights).toBe(true)
+    expect(defaultOpts.text).toBeUndefined()
 
+    // Explicit sizing (deep-research path) still gets full text at that budget.
     searchMock.mockResolvedValueOnce({ results: [] })
     await searchWeb('rich', { maxCharacters: 3000 })
     expect(searchMock).toHaveBeenLastCalledWith(
       'rich',
-      expect.objectContaining({ text: { maxCharacters: 3000 } }),
+      expect.objectContaining({ text: { maxCharacters: 3000 }, highlights: true }),
     )
   })
 })

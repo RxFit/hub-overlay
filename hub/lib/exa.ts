@@ -46,11 +46,16 @@ export async function searchWeb(query: string, options?: SearchOptions): Promise
     const searchOpts: Record<string, unknown> = {
       numResults: options?.numResults ?? 5,
       useAutoprompt: options?.useAutoprompt ?? true,
-      text: { maxCharacters: options?.maxCharacters ?? 1000 },
       // Exa's agent guide: highlights carry the most relevant excerpts at ~10x
-      // fewer tokens than full text — keep both; the mapper prefers highlights.
+      // fewer tokens than full text, with no latency penalty — the intended
+      // context-compression mode for agent pipelines. Each content type is
+      // billed per page, so requesting text AND highlights doubled content
+      // cost while the mapper discarded the text whenever highlights existed.
+      // Full text is now fetched ONLY when a caller explicitly sizes it
+      // (maxCharacters) — e.g. the deep-research path's 3000-char excerpts.
       highlights: true,
     }
+    if (options?.maxCharacters) searchOpts.text = { maxCharacters: options.maxCharacters }
     if (options?.type) searchOpts.type = options.type
     if (options?.additionalQueries?.length) searchOpts.additionalQueries = options.additionalQueries
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

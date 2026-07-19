@@ -4,6 +4,15 @@ import { SKILL_CATALOG_PROMPT } from './skills'
 import { fenceUntrusted, UNTRUSTED_CONTENT_POLICY } from './prompt-safety'
 import { IDLE_TIMEOUT_MS, CONNECT_TIMEOUT_MS } from './timeout-config'
 import { emit, newRequestId, startTimer, type AiProvider } from './observability'
+import type { SystemPromptParts } from './claude'
+
+/* Local join for the union prompt form — Gemini's systemInstruction wants one
+   string; the Claude path receives the parts intact for prompt caching. Kept
+   local (not imported from claude.ts) so test mocks of @/lib/claude never need
+   to provide it. */
+function sysText(sp: string | SystemPromptParts): string {
+  return typeof sp === 'string' ? sp : sp.staticPrefix + sp.dynamic
+}
 
 /* Lazy-initialized so the API key is read at runtime, not build time.
    Prevents empty-key 403s when Railway injects env vars after the build step. */
@@ -143,7 +152,7 @@ Hard rules for this mode:
 - If no results were returned, tell the user the search came back empty and suggest rephrasing.
 The user can keep chatting about these results — later turns in this mode continue to summarize whatever new results are provided.`
 
-export function buildSystemPrompt(context: {
+export interface SystemPromptContext {
   projects?: string
   summary?: string
   agentActivity?: string
@@ -167,7 +176,19 @@ export function buildSystemPrompt(context: {
   /** EXA mode only: the Exa.AI request FAILED (vs. genuinely zero results) —
    *  the prompt must disclose that live search didn't run. */
   exaSearchFailed?: boolean
-}): string {
+}
+
+/**
+ * Prompt-caching split (P0, deep-research finding): the base persona + the
+ * untrusted-content policy are BYTE-IDENTICAL on every request, so they form
+ * `staticPrefix` — the Claude client puts a cache_control breakpoint on that
+ * block and repeat requests read it at 0.1x input price. Everything from the
+ * current date down (workspace context, injected search results) is `dynamic`
+ * and must stay AFTER the breakpoint — a timestamp above it would make every
+ * request a guaranteed cache miss. staticPrefix + dynamic concatenates to
+ * exactly the string buildSystemPrompt always produced (locked by test).
+ */
+export function buildSystemPromptParts(context: SystemPromptContext): { staticPrefix: string; dynamic: string } {
   // Always inject the real current date so the model never guesses
   const now = new Date()
   const dateStr = now.toLocaleDateString('en-US', {
@@ -184,9 +205,8 @@ export function buildSystemPrompt(context: {
      suggestedTools instruction so no other "tool" can be triggered while the
      EXA toggle is on (the user's explicit requirement). */
   if (context.exaMode) {
-    let p = EXA_SEARCH_SYSTEM_PROMPT + '\n\n'
-    p += UNTRUSTED_CONTENT_POLICY + '\n\n'
-    p += `Current date and time: ${dateStr}, ${timeStr}\n\n`
+    const staticPrefix = EXA_SEARCH_SYSTEM_PROMPT + '\n\n' + UNTRUSTED_CONTENT_POLICY + '\n\n'
+    let p = `Current date and time: ${dateStr}, ${timeStr}\n\n`
     if (context.injectedContext) {
       p += `## Web Search Results (Exa.AI)\n${fenceUntrusted('Exa results', context.injectedContext)}\n\nSummarize and cite these results to answer the user's query.\n\n`
     } else if (context.exaSearchFailed) {
@@ -194,12 +214,11 @@ export function buildSystemPrompt(context: {
     } else {
       p += `## Web Search Results (Exa.AI)\n\n[No results were returned for this query — tell the user the search came back empty and suggest they rephrase.]\n\n`
     }
-    return p
+    return { staticPrefix, dynamic: p }
   }
 
-  let prompt = HUB_SYSTEM_PROMPT + '\n\n'
-  prompt += UNTRUSTED_CONTENT_POLICY + '\n\n'
-  prompt += `Current date and time: ${dateStr}, ${timeStr}\n\n`
+  const staticPrefix = HUB_SYSTEM_PROMPT + '\n\n' + UNTRUSTED_CONTENT_POLICY + '\n\n'
+  let prompt = `Current date and time: ${dateStr}, ${timeStr}\n\n`
 
   /* ── Role context ── */
   if (context.role) {
@@ -295,7 +314,13 @@ Question sequences by intent:
     prompt += `Currently active context (retrieved on the user's behalf — web results, documents, attachments):\n${fenceUntrusted('retrieved context', context.injectedContext)}\n\nUse this context to inform your response. The user is asking about this specific item.\n\n`
   }
 
-  return prompt
+  return { staticPrefix, dynamic: prompt }
+}
+
+/** Back-compat single-string form — exactly staticPrefix + dynamic. */
+export function buildSystemPrompt(context: SystemPromptContext): string {
+  const parts = buildSystemPromptParts(context)
+  return parts.staticPrefix + parts.dynamic
 }
 
 export function chatMessagesToContents(messages: ChatMessage[]): Content[] {
@@ -565,7 +590,7 @@ export function __resetModelCooldownsForTest(): void {
  */
 export async function* streamChat(
   messages: ChatMessage[],
-  systemPrompt: string,
+  systemPrompt: string | SystemPromptParts,
   useCase: string = 'deep_dive',
   hasActiveSkill: boolean = false,
   requestId: string = newRequestId(),
@@ -616,7 +641,7 @@ export async function* streamChat(
  */
 async function* walkClaudeChain(
   messages: ChatMessage[],
-  systemPrompt: string,
+  systemPrompt: string | SystemPromptParts,
   obs: ObsCtx,
   signal?: AbortSignal,
   claudeOpts: { effort?: import('@/lib/claude').ClaudeEffort; maxTokens?: number } = {},
@@ -715,7 +740,7 @@ async function* walkClaudeChain(
  */
 async function* streamChatRotation(
   messages: ChatMessage[],
-  systemPrompt: string,
+  systemPrompt: string | SystemPromptParts,
   useCase: string,
   hasActiveSkill: boolean,
   obs: ObsCtx,
@@ -838,7 +863,7 @@ async function* streamChatRotation(
  */
 async function* streamGeminiWithFallback(
   messages: ChatMessage[],
-  systemPrompt: string,
+  systemPrompt: string | SystemPromptParts,
   obs: ObsCtx,
   signal?: AbortSignal,
 ): AsyncGenerator<string | { modelUsed: string }> {
@@ -872,7 +897,7 @@ async function* streamGeminiWithFallback(
 
       const model = getGenAI().getGenerativeModel({
         model: modelName,
-        systemInstruction: systemPrompt,
+        systemInstruction: sysText(systemPrompt),
       })
 
       const chat = model.startChat({ history: contents })
