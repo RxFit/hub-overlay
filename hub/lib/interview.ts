@@ -33,6 +33,9 @@ const INTENT_PERMISSIONS: Record<InterviewIntent, ActionPermission> = {
   create_paperclip_issue: 'staff',
   check_agent_status: 'staff',
   view_runs: 'staff',
+  create_google_doc: 'staff',
+  create_google_sheet: 'staff',
+  create_google_presentation: 'staff',
   // Admin-level (manage)
   assign_issue: 'admin',
   update_issue_state: 'admin',
@@ -192,6 +195,21 @@ export const INTENT_DEFINITIONS: Array<{ id: InterviewIntent; description: strin
     description: 'User wants to change an existing goal — mark it achieved, activate it, cancel it, or edit its description.',
     expectedEntities: ['goalRef', 'change'],
   },
+  {
+    id: 'create_google_doc',
+    description: 'User wants to create a new Google Document (Google Doc) in their Drive, or save a memo/brief as a document.',
+    expectedEntities: ['title', 'content'],
+  },
+  {
+    id: 'create_google_sheet',
+    description: 'User wants to create a new Google Sheets spreadsheet in their Drive, or export data/KPIs to a spreadsheet.',
+    expectedEntities: ['title', 'values'],
+  },
+  {
+    id: 'create_google_presentation',
+    description: 'User wants to create a new Google Slides presentation in their Drive.',
+    expectedEntities: ['title'],
+  },
 ]
 
 /**
@@ -305,6 +323,43 @@ const INTERVIEW_SEQUENCES: Record<InterviewIntent, InterviewStep[]> = {
     },
   ],
 
+  create_google_doc: [
+    {
+      question: 'What should the document title be?',
+      key: 'title',
+    },
+    {
+      question: 'What content should be written into the document?',
+      key: 'content',
+    },
+    {
+      question: 'I\'ll create this Google Doc in your Google Drive. Confirm? (yes / edit / cancel)',
+      key: '_confirm',
+    },
+  ],
+
+  create_google_sheet: [
+    {
+      question: 'What should the spreadsheet title be?',
+      key: 'title',
+    },
+    {
+      question: 'I\'ll create this Google Sheet in your Google Drive. Confirm? (yes / edit / cancel)',
+      key: '_confirm',
+    },
+  ],
+
+  create_google_presentation: [
+    {
+      question: 'What should the presentation title be?',
+      key: 'title',
+    },
+    {
+      question: 'I\'ll create this Google Slides presentation in your Google Drive. Confirm? (yes / edit / cancel)',
+      key: '_confirm',
+    },
+  ],
+
   create_paperclip_issue: [
     {
       question: 'What needs to be done? Provide the issue title and context for the agent.',
@@ -315,8 +370,6 @@ const INTERVIEW_SEQUENCES: Record<InterviewIntent, InterviewStep[]> = {
       key: '_confirm',
     },
   ],
-
-  // ── Phase 3: Paperclip Orchestrator Intents ──
 
   check_agent_status: [
     {
@@ -680,24 +733,19 @@ export function advanceInterview(
   if (!state.active || !state.intent) return state
 
   const steps = INTERVIEW_SEQUENCES[state.intent]
-
-  // Post-gate follow-up: when the context-sufficiency gate blocks a completed
-  // interview, the engine re-activates it with `step` already past the last
-  // question. Fold the user's follow-up answer into the context and complete
-  // again so the gate re-runs with the enriched context. Without this branch
-  // the answer was silently discarded and the interview dead-ended — no next
-  // question, no confirm card, no chat send.
+  
   if (state.step >= steps.length) {
-    const priorExtra = state.context.additionalContext
-    const mergedContext = {
+    const existing = state.context.additionalContext || ''
+    const folded = existing ? `${existing}\n${answer}` : answer
+    const updatedContext = {
       ...state.context,
-      additionalContext: [priorExtra, answer].filter(Boolean).join('\n'),
+      additionalContext: folded,
     }
     return {
       ...state,
-      context: mergedContext,
       active: false,
-      spec: buildConfirmationSpec(state.intent, mergedContext),
+      context: updatedContext,
+      spec: buildConfirmationSpec(state.intent, updatedContext),
     }
   }
 
@@ -754,9 +802,12 @@ const INTENT_LABELS: Record<InterviewIntent, string> = {
   create_workspace: 'Create Workspace',
   delete_workspace: 'Delete Workspace',
   delete_agent: 'Delete Agent',
+  create_google_doc: 'Create Google Doc',
+  create_google_sheet: 'Create Google Sheet',
+  create_google_presentation: 'Create Google Presentation',
   create_routine: 'Create Routine',
   update_routine: 'Update Routine',
-  run_routine: 'Run Routine Now',
+  run_routine: 'Run Routine',
   create_goal: 'Create Goal',
   update_goal: 'Update Goal',
 }
@@ -780,6 +831,9 @@ const INTENT_TARGET_SYSTEMS: Record<InterviewIntent, string[]> = {
   create_workspace: ['Paperclip AI'],
   delete_workspace: ['Paperclip AI'],
   delete_agent: ['Paperclip AI'],
+  create_google_doc: ['Google Drive', 'Google Docs'],
+  create_google_sheet: ['Google Drive', 'Google Sheets'],
+  create_google_presentation: ['Google Drive', 'Google Slides'],
   create_routine: ['Paperclip AI'],
   update_routine: ['Paperclip AI'],
   run_routine: ['Paperclip AI'],
@@ -850,9 +904,9 @@ export function isHighStakesIntent(intent: InterviewIntent): boolean {
     intent === 'send_gmail' ||
     intent === 'post_chat_message' ||
     intent === 'create_paperclip_issue' ||
-    // Phase 3 creation intents: both stand up durable orchestration objects
-    // (recurring agent work / the goal tree), so they carry gate tokens and
-    // the proxy fails closed without one.
+    intent === 'create_google_doc' ||
+    intent === 'create_google_sheet' ||
+    intent === 'create_google_presentation' ||
     intent === 'create_routine' ||
     intent === 'create_goal'
   )

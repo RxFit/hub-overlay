@@ -124,6 +124,9 @@ const INTENT_LABELS: Record<string, string> = {
   delete_workspace: 'Delete Workspace',
   delete_agent: 'Delete Agent',
   create_task_for_agent: 'Create Agent Task',
+  create_google_doc: 'Create Google Doc',
+  create_google_sheet: 'Create Google Sheet',
+  create_google_presentation: 'Create Google Presentation',
 }
 
 export function InterviewBadge({
@@ -243,6 +246,9 @@ const INTENT_DISPLAY_LABELS: Record<string, string> = {
   delete_workspace: '🗑️ Delete Workspace',
   delete_agent: '🗑️ Delete Agent',
   create_task_for_agent: '📋 Create Agent Task',
+  create_google_doc: '📄 Create Google Doc',
+  create_google_sheet: '📊 Create Google Sheet',
+  create_google_presentation: '🖼️ Create Google Presentation',
 }
 
 export function ActionConfirmCard({

@@ -255,6 +255,9 @@ export type InterviewIntent =
   // F3: Direct human-confirmed send actions (Gmail + Google Chat)
   | 'send_gmail'
   | 'post_chat_message'
+  | 'create_google_doc'
+  | 'create_google_sheet'
+  | 'create_google_presentation'
   // Right-panel Phase 3: Routines + Goals orchestration
   | 'create_routine'
   | 'update_routine'
@@ -401,6 +404,7 @@ export interface FounderLensCustomSection {
   competitiveAdvantages?: string
   idealCustomer?: string
   quarterlyGoals?: string
+  quarterlyGoalsDetails?: string
   annualGoals?: string
   tonePreferences?: string
   uniqueInstructions?: string
@@ -475,4 +479,3 @@ export interface ToolArtifactRecord {
   createdAt: string
   updatedAt: string
 }
-

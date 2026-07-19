@@ -19,6 +19,7 @@ const { state } = vi.hoisted(() => ({
     listUpcomingEvents: vi.fn(),
     createCalendarEvent: vi.fn(),
     deleteCalendarEvent: vi.fn(),
+    resolveRecipient: vi.fn(async (token: string, r: string) => r),
   },
 }))
 
@@ -30,6 +31,7 @@ vi.mock('@/lib/google', () => ({
   listUpcomingEvents: (...a: unknown[]) => state.listUpcomingEvents(...a),
   createCalendarEvent: (...a: unknown[]) => state.createCalendarEvent(...a),
   deleteCalendarEvent: (...a: unknown[]) => state.deleteCalendarEvent(...a),
+  resolveRecipient: (...a: unknown[]) => state.resolveRecipient(...a),
 }))
 
 import { GET, POST, DELETE } from '@/app/api/google/calendar/route'

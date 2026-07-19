@@ -91,6 +91,10 @@ const GOOGLE_SCOPES = [
   // KPI sources — GA4 Data API + Google Search Console
   'https://www.googleapis.com/auth/analytics.readonly',
   'https://www.googleapis.com/auth/webmasters.readonly',
+  // Google Docs, Sheets, Presentations creation/edit (newly added scopes)
+  'https://www.googleapis.com/auth/documents',
+  'https://www.googleapis.com/auth/spreadsheets',
+  'https://www.googleapis.com/auth/presentations',
 ].join(' ')
 
 

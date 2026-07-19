@@ -4,6 +4,9 @@ import {
   GoogleCalendarCreateSchema,
   GoogleGmailSendSchema,
   GoogleChatSendSchema,
+  GoogleDocCreateSchema,
+  GoogleSheetCreateSchema,
+  GooglePresentationCreateSchema,
 } from './zod-schemas'
 
 /* Bound user input on Google mutations (audit P1/P2). */
@@ -52,5 +55,19 @@ describe('Google write-request schemas', () => {
     expect(GoogleChatSendSchema.safeParse({ spaceId: 'spaces/x', text: 'hello' }).success).toBe(true)
     expect(GoogleChatSendSchema.safeParse({ spaceId: 'spaces/x', text: '   ' }).success).toBe(false)
     expect(GoogleChatSendSchema.safeParse({ spaceId: 'spaces/x', text: 'x'.repeat(5000) }).success).toBe(false)
+  })
+
+  it('validates google doc, sheet, and presentation schemas', () => {
+    expect(GoogleDocCreateSchema.safeParse({ title: 'My Doc' }).success).toBe(true)
+    expect(GoogleDocCreateSchema.safeParse({ title: 'My Doc', content: 'hello' }).success).toBe(true)
+    expect(GoogleDocCreateSchema.safeParse({ title: '' }).success).toBe(false)
+
+    expect(GoogleSheetCreateSchema.safeParse({ title: 'My Sheet' }).success).toBe(true)
+    expect(GoogleSheetCreateSchema.safeParse({ title: 'My Sheet', values: [['a', 'b']] }).success).toBe(true)
+    expect(GoogleSheetCreateSchema.safeParse({ title: '' }).success).toBe(false)
+
+    expect(GooglePresentationCreateSchema.safeParse({ title: 'My Pres' }).success).toBe(true)
+    expect(GooglePresentationCreateSchema.safeParse({ title: 'My Pres', slides: [{ title: 'Slide 1', content: 'hello' }] }).success).toBe(true)
+    expect(GooglePresentationCreateSchema.safeParse({ title: '' }).success).toBe(false)
   })
 })

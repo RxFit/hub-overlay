@@ -116,41 +116,6 @@ export async function completeTask(
   )
 }
 
-/** Update a task's title, notes, and/or due date (only provided fields change) */
-export async function updateTask(
-  accessToken: string,
-  taskListId: string,
-  taskId: string,
-  patch: { title?: string; notes?: string; due?: string }
-): Promise<GoogleTask> {
-  return googleFetch<GoogleTask>(
-    `${TASKS_BASE}/lists/${taskListId}/tasks/${taskId}`,
-    accessToken,
-    {
-      method: 'PATCH',
-      body: JSON.stringify(patch),
-    }
-  )
-}
-
-/** Permanently delete a task. Google returns 204 with an empty body, so this
- *  bypasses googleFetch's res.json() and checks the status directly. */
-export async function deleteTask(
-  accessToken: string,
-  taskListId: string,
-  taskId: string
-): Promise<void> {
-  const res = await fetch(`${TASKS_BASE}/lists/${taskListId}/tasks/${taskId}`, {
-    signal: AbortSignal.timeout(GOOGLE_API_TIMEOUT_MS),
-    method: 'DELETE',
-    headers: { Authorization: `Bearer ${accessToken}` },
-  })
-  if (!res.ok) {
-    const body = await res.text().catch(() => 'Unknown error')
-    throw new Error(`Google API error ${res.status}: ${body}`)
-  }
-}
-
 /** Mark a task as needing action (uncomplete/restore) */
 export async function uncompleteTask(
   accessToken: string,
@@ -250,6 +215,7 @@ export async function createCalendarEvent(
     location?: string
     timeZone?: string  // IANA tz, e.g. "America/Chicago"; required for correct timed events
     calendarId?: string
+    createMeetLink?: boolean
   }
 ): Promise<GoogleCalendarEvent> {
   const calId = encodeURIComponent(event.calendarId ?? 'primary')
@@ -277,8 +243,21 @@ export async function createCalendarEvent(
     body.attendees = event.attendees.map(email => ({ email }))
   }
 
+  if (event.createMeetLink) {
+    body.conferenceData = {
+      createRequest: {
+        requestId: `meet-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+        conferenceSolutionKey: {
+          type: 'hangoutsMeet',
+        },
+      },
+    }
+  }
+
+  const queryParams = event.createMeetLink ? '?conferenceDataVersion=1' : ''
+
   return googleFetch<GoogleCalendarEvent>(
-    `${CALENDAR_BASE}/calendars/${calId}/events`,
+    `${CALENDAR_BASE}/calendars/${calId}/events${queryParams}`,
     accessToken,
     {
       method: 'POST',
@@ -356,7 +335,6 @@ export interface GmailMessage {
   labelIds?: string[]
   snippet?: string
   payload?: {
-    mimeType?: string
     headers?: { name: string; value: string }[]
     body?: { data?: string }
     parts?: { mimeType: string; body?: { data?: string } }[]
@@ -608,4 +586,300 @@ export async function updateSpaceReadState(
     accessToken,
     { method: 'PATCH', body: JSON.stringify({ lastReadTime }) }
   )
+}
+
+export interface GoogleContact {
+  name: string
+  email: string
+}
+
+/** Search/resolve contacts by query using Google People API */
+export async function searchContacts(
+  accessToken: string,
+  query: string
+): Promise<GoogleContact[]> {
+  const params = new URLSearchParams({
+    query,
+    readMask: 'names,emailAddresses',
+  })
+  try {
+    const data = await googleFetch<{
+      results?: {
+        person: {
+          names?: { displayName: string }[]
+          emailAddresses?: { value: string }[]
+        }
+      }[]
+    }>(
+      `https://people.googleapis.com/v1/people:searchContacts?${params}`,
+      accessToken
+    )
+    const contacts: GoogleContact[] = []
+    if (data.results) {
+      for (const res of data.results) {
+        const name = res.person.names?.[0]?.displayName || ''
+        const email = res.person.emailAddresses?.[0]?.value || ''
+        if (email) {
+          contacts.push({ name, email })
+        }
+      }
+    }
+    return contacts
+  } catch (error) {
+    console.error('[google] searchContacts error:', error)
+    return []
+  }
+}
+
+/** Search users in the Workspace Directory (Admin SDK Directory API) */
+export async function searchDirectoryUsers(
+  accessToken: string,
+  query: string
+): Promise<GoogleContact[]> {
+  const params = new URLSearchParams({
+    customer: 'my_customer',
+    query,
+    viewType: 'domain_public',
+  })
+  try {
+    const data = await googleFetch<{
+      users?: {
+        primaryEmail: string
+        name?: { fullName: string }
+      }[]
+    }>(
+      `https://admin.googleapis.com/admin/directory/v1/users?${params}`,
+      accessToken
+    )
+    const contacts: GoogleContact[] = []
+    if (data.users) {
+      for (const u of data.users) {
+        contacts.push({
+          name: u.name?.fullName || '',
+          email: u.primaryEmail,
+        })
+      }
+    }
+    return contacts
+  } catch (error) {
+    console.error('[google] searchDirectoryUsers error:', error)
+    return []
+  }
+}
+
+/** Resolve a recipient string (name or email) to an email address */
+export async function resolveRecipient(
+  accessToken: string,
+  recipient: string
+): Promise<string> {
+  const clean = recipient.trim()
+  const EMAIL_RE = /^[^\s@,<>]+@[^\s@,<>]+\.[^\s@,<>]+$/
+  if (EMAIL_RE.test(clean)) {
+    return clean
+  }
+
+  // 1. Search personal contacts
+  const contacts = await searchContacts(accessToken, clean)
+  if (contacts.length > 0) {
+    return contacts[0].email
+  }
+
+  // 2. Try Workspace Directory
+  const dirUsers = await searchDirectoryUsers(accessToken, clean)
+  if (dirUsers.length > 0) {
+    return dirUsers[0].email
+  }
+
+  return recipient
+}
+
+/** Create a new Google Document */
+export async function createGoogleDoc(
+  accessToken: string,
+  title: string,
+  content: string
+): Promise<{ documentId: string; url: string }> {
+  const doc = await googleFetch<{ documentId: string }>(
+    'https://docs.googleapis.com/v1/documents',
+    accessToken,
+    {
+      method: 'POST',
+      body: JSON.stringify({ title }),
+    }
+  )
+
+  if (content) {
+    await googleFetch<void>(
+      `https://docs.googleapis.com/v1/documents/${doc.documentId}:batchUpdate`,
+      accessToken,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          requests: [
+            {
+              insertText: {
+                text: content,
+                location: { index: 1 },
+              },
+            },
+          ],
+        }),
+      }
+    )
+  }
+
+  return {
+    documentId: doc.documentId,
+    url: `https://docs.google.com/document/d/${doc.documentId}/edit`,
+  }
+}
+
+/** Create a new Google Sheet */
+export async function createGoogleSheet(
+  accessToken: string,
+  title: string,
+  values: string[][]
+): Promise<{ spreadsheetId: string; url: string }> {
+  const sheet = await googleFetch<{ spreadsheetId: string }>(
+    'https://sheets.googleapis.com/v4/spreadsheets',
+    accessToken,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        properties: { title },
+      }),
+    }
+  )
+
+  if (values && values.length > 0) {
+    await googleFetch<void>(
+      `https://sheets.googleapis.com/v4/spreadsheets/${sheet.spreadsheetId}/values/Sheet1!A1?valueInputOption=USER_ENTERED`,
+      accessToken,
+      {
+        method: 'PUT',
+        body: JSON.stringify({
+          range: 'Sheet1!A1',
+          majorDimension: 'ROWS',
+          values,
+        }),
+      }
+    )
+  }
+
+  return {
+    spreadsheetId: sheet.spreadsheetId,
+    url: `https://docs.google.com/spreadsheets/d/${sheet.spreadsheetId}/edit`,
+  }
+}
+
+/** Create a new Google Slides presentation */
+export async function createGooglePresentation(
+  accessToken: string,
+  title: string,
+  slides: { title: string; content?: string }[]
+): Promise<{ presentationId: string; url: string }> {
+  const pres = await googleFetch<{ presentationId: string }>(
+    'https://slides.googleapis.com/v1/presentations',
+    accessToken,
+    {
+      method: 'POST',
+      body: JSON.stringify({ title }),
+    }
+  )
+
+  if (slides && slides.length > 0) {
+    const requests: any[] = []
+    for (let i = 0; i < slides.length; i++) {
+      const slide = slides[i]
+      const slideId = `slide_page_${i}`
+      
+      requests.push({
+        createSlide: {
+          objectId: slideId,
+          slideLayoutReference: {
+            predefinedLayout: 'TITLE_AND_BODY',
+          },
+        },
+      })
+
+      const titleId = `title_${i}`
+      const bodyId = `body_${i}`
+      
+      requests.push(
+        {
+          createShape: {
+            objectId: titleId,
+            shapeType: 'TEXT_BOX',
+            elementProperties: {
+              pageObjectId: slideId,
+              size: {
+                width: { magnitude: 6000000, unit: 'EMU' },
+                height: { magnitude: 1000000, unit: 'EMU' },
+              },
+              transform: {
+                scaleX: 1,
+                scaleY: 1,
+                translateX: 500000,
+                translateY: 500000,
+                unit: 'EMU',
+              },
+            },
+          },
+        },
+        {
+          insertText: {
+            objectId: titleId,
+            text: slide.title,
+          },
+        }
+      )
+
+      if (slide.content) {
+        requests.push(
+          {
+            createShape: {
+              objectId: bodyId,
+              shapeType: 'TEXT_BOX',
+              elementProperties: {
+                pageObjectId: slideId,
+                size: {
+                  width: { magnitude: 6000000, unit: 'EMU' },
+                  height: { magnitude: 4000000, unit: 'EMU' },
+                },
+                transform: {
+                  scaleX: 1,
+                  scaleY: 1,
+                  translateX: 500000,
+                  translateY: 2000000,
+                  unit: 'EMU',
+                },
+              },
+            },
+          },
+          {
+            insertText: {
+              objectId: bodyId,
+              text: slide.content,
+            },
+          }
+        )
+      }
+    }
+
+    if (requests.length > 0) {
+      await googleFetch<void>(
+        `https://slides.googleapis.com/v1/presentations/${pres.presentationId}:batchUpdate`,
+        accessToken,
+        {
+          method: 'POST',
+          body: JSON.stringify({ requests }),
+        }
+      )
+    }
+  }
+
+  return {
+    presentationId: pres.presentationId,
+    url: `https://docs.google.com/presentation/d/${pres.presentationId}/edit`,
+  }
 }

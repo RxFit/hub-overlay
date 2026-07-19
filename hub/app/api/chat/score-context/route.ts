@@ -95,6 +95,9 @@ const INTENT_DIMENSIONS: Record<string, string[]> = {
   create_workspace: ['name', 'template'],
   delete_workspace: ['confirmation'],
   delete_agent: ['confirmation'],
+  create_google_doc: ['title', 'content'],
+  create_google_sheet: ['title', 'values'],
+  create_google_presentation: ['title'],
   // Right-panel Phase 3: routines + goals. A routine passes only when the spec
   // is actually executable — clear recurring work, an owner, and a schedule.
   create_routine: ['task_clarity', 'assignee', 'schedule', 'success_criteria'],
@@ -271,7 +274,6 @@ export async function POST(req: NextRequest) {
       const scoreResult = parseScoreResponse(rawText)
       return NextResponse.json(withGateToken(scoreResult, intent, callerEmail))
     }
-
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Scoring failed'
     console.error('[API] POST /api/chat/score-context error:', err)
@@ -283,6 +285,7 @@ export async function POST(req: NextRequest) {
       'create_paperclip_issue', 'create_agent', 'launch_campaign',
       'assign_issue', 'update_issue_state', 'restart_agent',
       'create_workspace', 'delete_workspace', 'delete_agent',
+      'create_google_doc', 'create_google_sheet', 'create_google_presentation',
     ]
     if (failClosedIntents.includes(intent)) {
       const blocked: ContextScoreResult = {

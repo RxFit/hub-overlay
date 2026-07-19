@@ -304,6 +304,7 @@ export const GoogleCalendarCreateSchema = z.object({
   // value can't reach Google. Optional: all-day events omit it.
   timeZone: z.string().max(64).optional(),
   calendarId: z.string().max(1024).optional(),
+  createMeetLink: z.boolean().optional(),
 })
 
 export const GoogleGmailSendSchema = z.object({
@@ -326,4 +327,24 @@ export const GoogleChatSendSchema = z.object({
   spaceId: z.string().trim().min(1).max(256),
   text: z.string().trim().min(1).max(4096),
   threadKey: z.string().max(256).optional(),
+})
+
+export const GoogleDocCreateSchema = z.object({
+  title: z.string().trim().min(1).max(1024),
+  content: z.string().max(1_000_000).optional(),
+})
+
+export const GoogleSheetCreateSchema = z.object({
+  title: z.string().trim().min(1).max(1024),
+  values: z.array(z.array(z.string().max(4096))).max(10000).optional(),
+})
+
+export const GooglePresentationCreateSchema = z.object({
+  title: z.string().trim().min(1).max(1024),
+  slides: z.array(
+    z.object({
+      title: z.string().trim().min(1).max(1024),
+      content: z.string().max(8192).optional(),
+    })
+  ).max(100).optional(),
 })

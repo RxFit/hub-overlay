@@ -4,7 +4,7 @@ import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
 import { clampInt } from '@/lib/num'
 import { GoogleCalendarCreateSchema } from '@/lib/zod-schemas'
 import { authOptions } from '@/lib/auth'
-import { listUpcomingEvents, createCalendarEvent, deleteCalendarEvent, listCalendars, GoogleCalendarEvent } from '@/lib/google'
+import { listUpcomingEvents, createCalendarEvent, deleteCalendarEvent, listCalendars, GoogleCalendarEvent, resolveRecipient } from '@/lib/google'
 
 export const runtime = 'nodejs'
 
@@ -92,7 +92,14 @@ export async function POST(req: NextRequest) {
   const body = parsed.data
 
   try {
-    const event = await createCalendarEvent(accessToken, body)
+    const resolvedAttendees = body.attendees
+      ? await Promise.all(body.attendees.map(a => resolveRecipient(accessToken, a)))
+      : undefined
+
+    const event = await createCalendarEvent(accessToken, {
+      ...body,
+      attendees: resolvedAttendees,
+    })
     return NextResponse.json({ event })
   } catch (error) {
     return googleApiErrorResponse(error)

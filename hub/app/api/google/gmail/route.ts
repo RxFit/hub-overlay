@@ -5,6 +5,7 @@ import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
 import {
   getGmailHeader as getHeader,
   parseGmailThreadMeta as parseThreadMeta,
+  resolveRecipient,
   type GmailMessage,
   type GmailThread,
 } from '@/lib/google'
@@ -115,18 +116,17 @@ export async function GET(req: NextRequest) {
   }
 }
 
-/* ── POST /api/google/gmail — send or reply ── */
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions)
-  if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!session?.user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
 
   const auth = await resolveGoogleAuth(req)
   if (!auth.ok) return auth.response
   const accessToken = auth.accessToken
 
-  // P0-2 (Option B): AI-originated sends (X-AI-Intent present) must carry a
-  // valid server-issued quality-gate token — missing/forged/expired/mismatched
-  // tokens fail closed. Manual composer sends carry no AI marker and pass.
+  // Gated check for AI-originated sends — manual composer sends bypass this.
   const gate = requireAiGate(req.headers, ['send_gmail'])
   if (!gate.ok) {
     return NextResponse.json({ error: gate.error }, { status: gate.status })
@@ -147,6 +147,17 @@ export async function POST(req: NextRequest) {
   }
   const { to, subject, message, threadId, inReplyTo } = parsed.data
 
+  // Resolve recipient names (e.g., "Maria") to emails using the Contacts/Directory API
+  let resolvedTo = to
+  if (to && !to.includes('@') && !to.includes(',')) {
+    try {
+      const email = await resolveRecipient(accessToken, to)
+      resolvedTo = email
+    } catch (err) {
+      console.warn('[gmail] Recipient resolution failed, using raw string:', err)
+    }
+  }
+
   // ── Header-injection guard ──
   // Any value interpolated into an RFC-2822 header line must not contain
   // CR/LF, or an attacker could inject extra headers (e.g. a silent Bcc).
@@ -159,7 +170,7 @@ export async function POST(req: NextRequest) {
   // comma (`"Lopez, Maria" <m@x.com>`) are split apart here and rejected —
   // not supported at the route layer, which fails closed.
   const EMAIL_RE = /^[^\s@,<>]+@[^\s@,<>]+\.[^\s@,<>]+$/
-  const recipients = stripHeader(to).split(',').map(r => extractEmail(r)).filter(Boolean)
+  const recipients = stripHeader(resolvedTo).split(',').map(r => extractEmail(r)).filter(Boolean)
   if (recipients.length === 0 || !recipients.every(r => EMAIL_RE.test(r))) {
     return NextResponse.json({ error: 'Invalid recipient address' }, { status: 400 })
   }

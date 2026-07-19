@@ -138,63 +138,39 @@ export async function executeAction(
         throw new Error(`Multiple tasks match "${spec.details.taskRef}": ${utMatches.slice(0, 6).map((t) => `"${t}"`).join(', ')}. Please edit and use the exact title.`)
       }
 
-      const utChange = (spec.details.change || '').toLowerCase().trim()
-      const utHeaders = { 'Content-Type': 'application/json', 'X-AI-Intent': 'update_task' }
-      const utBase = { taskListId: utFound.listId, taskId: utFound.id }
+      // Action description mapping: mark done vs reopen vs edit priority/deadline
+      const urChange = (spec.details.change || '').toLowerCase().trim()
+      let reqBody: Record<string, unknown> = {}
+      let actionLabel = ''
 
-      if (/\b(done|complete|completed|finish|finished|check(ed)? off)\b/.test(utChange)) {
-        const res = await fetch('/api/google/tasks', {
-          method: 'POST', headers: utHeaders,
-          body: JSON.stringify({ action: 'complete', ...utBase }),
-        })
-        if (!res.ok) throw new Error(`Task completion failed: ${res.status}`)
-        resultMsg = `✅ **Task completed!**\n\n"${utFound.title}" has been marked done in your Google Tasks.`
-      } else if (/\b(reopen|uncomplete|not done|undo|restore)\b/.test(utChange)) {
-        const res = await fetch('/api/google/tasks', {
-          method: 'POST', headers: utHeaders,
-          body: JSON.stringify({ action: 'uncomplete', ...utBase }),
-        })
-        if (!res.ok) throw new Error(`Task reopen failed: ${res.status}`)
-        resultMsg = `↩️ **Task reopened.**\n\n"${utFound.title}" is back on your list.`
-      } else if (/\b(delete|remove|trash)\b/.test(utChange)) {
-        const res = await fetch('/api/google/tasks', {
-          method: 'POST', headers: utHeaders,
-          body: JSON.stringify({ action: 'delete', ...utBase }),
-        })
-        if (!res.ok) throw new Error(`Task deletion failed: ${res.status}`)
-        resultMsg = `🗑️ **Task deleted.**\n\n"${utFound.title}" has been removed from your Google Tasks.`
-      } else if (spec.details.change?.trim()) {
-        // Rename or reschedule. A parseable date → due-date change; otherwise
-        // treat the text as the new title.
-        const rawChange = spec.details.change.trim()
-        const dueMatch = rawChange.match(/(?:due|move|reschedule)[^a-z0-9]*(?:to|for|on)?\s*(.+)/i)
-        const dateText = dueMatch ? dueMatch[1] : rawChange
-        const parsedDue = Date.parse(dateText)
-        const payload: Record<string, string> = { action: 'update', ...utBase }
-        let changeLabel: string
-        if (!isNaN(parsedDue) && (dueMatch || /^\d{4}-\d{2}-\d{2}/.test(dateText))) {
-          payload.due = new Date(parsedDue).toISOString()
-          changeLabel = `due date moved to ${new Date(parsedDue).toLocaleDateString()}`
-        } else {
-          payload.title = rawChange.replace(/^(rename( it)?( to)?|retitle( to)?|call it)\s+/i, '').trim() || rawChange
-          changeLabel = `renamed to "${payload.title}"`
-        }
-        const res = await fetch('/api/google/tasks', {
-          method: 'POST', headers: utHeaders,
-          body: JSON.stringify(payload),
-        })
-        if (!res.ok) throw new Error(`Task update failed: ${res.status}`)
-        resultMsg = `✏️ **Task updated.**\n\n"${utFound.title}" — ${changeLabel}.`
+      if (/\b(done|complete|finish|resolve)\b/.test(urChange)) {
+        reqBody = { action: 'update', taskListId: utFound.listId, taskId: utFound.id, status: 'completed' }
+        actionLabel = `marked "${utFound.title}" completed`
+      } else if (/\b(reopen|open|activate|incomplete)\b/.test(urChange)) {
+        reqBody = { action: 'update', taskListId: utFound.listId, taskId: utFound.id, status: 'needsAction' }
+        actionLabel = `reopened "${utFound.title}"`
+      } else if (urChange) {
+        // Assume anything else is a text edit / notes update
+        reqBody = { action: 'update', taskListId: utFound.listId, taskId: utFound.id, notes: urChange }
+        actionLabel = `updated notes on "${utFound.title}"`
       } else {
-        throw new Error('Tell me what to change: mark done, reopen, delete, a new title, or a new due date.')
+        throw new Error('Tell me what to change on the task (e.g. mark done).')
       }
+
+      const res = await fetch('/api/google/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-AI-Intent': 'update_task' },
+        body: JSON.stringify(reqBody),
+      })
+      if (!res.ok) throw new Error(`Task update failed: ${res.status}`)
+      resultMsg = `✅ **Task updated!**\n\nI have ${actionLabel} in your Google Tasks.`
       break
     }
 
     case 'schedule_event': {
       // Interview collects: title, when, attendees, location, duration
       const whenText = spec.details.when || spec.details.start || spec.details.date || ''
-      
+
       // Try to parse the "when" into an ISO string
       let startDate: Date
       const parsed = Date.parse(whenText)
@@ -239,6 +215,7 @@ export async function executeAction(
           attendees: spec.details.attendees
             ? spec.details.attendees.split(',').map((e: string) => e.trim())
             : undefined,
+          createMeetLink: true,
         }),
       })
       if (!res.ok) throw new Error(`Event creation failed: ${res.status}`)
@@ -248,47 +225,53 @@ export async function executeAction(
     }
 
     case 'send_communication': {
-      if (!activeCompany) throw new Error('No workspace available — please select a project first.')
+      if (!activeCompany) throw new Error('Select a workspace before triggering an agent')
 
-      const commDetails = spec.details.details || spec.details.description || spec.summary
-      const commTo = spec.details.to || spec.details.recipient || ''
-      const commChannel = spec.details.channel || spec.details.medium || 'email'
-      const commTitle = `Communication Request: ${(commDetails || commTo).slice(0, 80)}`
-      const commDesc = [
-        `## Communication Request`,
-        ``,
-        commTo ? `**To:** ${commTo}` : '',
-        `**Channel:** ${commChannel}`,
-        `**Details:** ${commDetails}`,
-        ``,
-        `### Directive`,
-        `The human operator has requested a communication be sent. COO: compose the message based on the details above and execute delivery via ${commChannel}. Report back with confirmation of what was sent, to whom, and when.`,
-      ].filter(Boolean).join('\n')
+      const commTitle = spec.details.recipient || spec.summary
+      const commContent = spec.details.message_content || ''
+      const commChannel = (spec.details.channel || 'email').toLowerCase().trim()
+      const commTone = spec.details.tone || 'professional'
 
-      // Find the COO agent dynamically in the target workspace
+      // Map communication channel to the right agent
       let commAssigneeId: string | undefined
-      try {
-        const agentsRes = await fetch(`/api/paperclip/companies/${activeCompany.id}/agents`)
+      let commAssigneeName: string | undefined
+      if (commChannel === 'email' || commChannel === 'gmail' || commChannel === 'outreach') {
+        const agentsRes = await fetch(`/api/paperclip/agents?companyId=${encodeURIComponent(activeCompany.id)}`)
         if (agentsRes.ok) {
           const agents = pickList<{ id: string; name: string }>(await agentsRes.json(), 'agents')
-          const coo = agents.find((a) => a.name.toLowerCase().includes('coo') || a.name.toLowerCase().includes('operations'))
-          if (coo) commAssigneeId = coo.id
+          // COO Agent delegates communications/outbound ops (e.g. Brokered email runs)
+          const coo = agents.find((a) => a.name?.toLowerCase().includes('coo'))
+          if (coo) { commAssigneeId = coo.id; commAssigneeName = coo.name }
         }
-      } catch { /* will fall through to server-side CEO resolution */ }
+      }
 
-      const scIssueRes = await fetch('/api/paperclip/issues', {
+      const issueTitle = `Communication Outreach: ${commTitle.slice(0, 80)}`
+      const issueDesc = [
+        `## Outbound Communication Directive`,
+        ``,
+        `**Recipient:** ${spec.details.recipient}`,
+        `**Channel:** ${commChannel}`,
+        `**Tone:** ${commTone}`,
+        `**Workspace:** ${activeCompany.name}`,
+        `**Draft/Context:** ${commContent}`,
+        ``,
+        `### Directive`,
+        `COO Agent: orchestrate the outbound run to this recipient. Compile the draft, verify details, and queue/dispatch using authorized channel handlers.`,
+      ].join('\n')
+
+      const res = await fetch('/api/paperclip/issues', {
         method: 'POST',
         headers: issueHeaders(spec),
         body: JSON.stringify({
-          title: commTitle,
-          description: commDesc,
-          priority: 'high',
+          title: issueTitle,
+          description: issueDesc,
+          priority: 'medium',
           companyId: activeCompany.id,
-          ...(commAssigneeId ? { assigneeId: commAssigneeId } : {}),
+          assigneeId: commAssigneeId || undefined,
         }),
       })
-      if (!scIssueRes.ok) throw new Error(`Communication issue creation failed: ${scIssueRes.status}`)
-      const scIssueData = await scIssueRes.json()
+      if (!res.ok) throw new Error(`Communication issue creation failed: ${res.status}`)
+      const scIssueData = await res.json()
       
       const issueId = scIssueData.issue?.identifier || scIssueData.issue?.id || ''
       const inboxUrl = `${PAPERCLIP_BASE_URL}/${activeCompany.identifier}/inbox/mine`
@@ -315,6 +298,65 @@ export async function executeAction(
       })
       if (!res.ok) throw new Error(`Email send failed: ${res.status}`)
       resultMsg = `✉️ **Email sent** to ${to} — "${subject}".`
+      break
+    }
+
+    case 'create_google_doc': {
+      const docHeaders = gatedSendHeaders(spec)
+      const title = spec.details.title
+      const content = spec.details.content || ''
+      const res = await fetch('/api/google/doc', {
+        method: 'POST',
+        headers: docHeaders,
+        body: JSON.stringify({ title, content }),
+      })
+      if (!res.ok) throw new Error(`Google Doc creation failed: ${res.status}`)
+      const data = await res.json()
+      resultMsg = `✅ **Google Doc created!**\n\nLink: [${title}](${data.url})`
+      break
+    }
+
+    case 'create_google_sheet': {
+      const sheetHeaders = gatedSendHeaders(spec)
+      const title = spec.details.title
+      let values: string[][] = []
+      if (spec.details.values) {
+        try {
+          values = JSON.parse(spec.details.values)
+        } catch {
+          values = spec.details.values.split('\n').map(line => line.split(','))
+        }
+      }
+      const res = await fetch('/api/google/sheet', {
+        method: 'POST',
+        headers: sheetHeaders,
+        body: JSON.stringify({ title, values }),
+      })
+      if (!res.ok) throw new Error(`Google Sheet creation failed: ${res.status}`)
+      const data = await res.json()
+      resultMsg = `✅ **Google Sheet created!**\n\nLink: [${title}](${data.url})`
+      break
+    }
+
+    case 'create_google_presentation': {
+      const presHeaders = gatedSendHeaders(spec)
+      const title = spec.details.title
+      let slides: any[] = []
+      if (spec.details.slides) {
+        try {
+          slides = JSON.parse(spec.details.slides)
+        } catch {
+          slides = [{ title: 'Slide 1', content: spec.details.slides }]
+        }
+      }
+      const res = await fetch('/api/google/presentation', {
+        method: 'POST',
+        headers: presHeaders,
+        body: JSON.stringify({ title, slides }),
+      })
+      if (!res.ok) throw new Error(`Google Presentation creation failed: ${res.status}`)
+      const data = await res.json()
+      resultMsg = `✅ **Google Presentation created!**\n\nLink: [${title}](${data.url})`
       break
     }
 
@@ -380,7 +422,9 @@ export async function executeAction(
       const issuePrefix = issueCompany?.identifier || 'RXF'
       const inboxUrl = `${PAPERCLIP_BASE_URL}/${issuePrefix}/inbox/mine`
       
-      resultMsg = `✅ **Agent Triggered!**\n\nIssue **${issueId}** ("${data.issue?.title || issueTitle}") has been assigned to the CEO Agent in **${issueCompany?.name || 'your workspace'}**.\n\n▶ Track progress in the **Execution Feed** (right panel) or view it directly in your [Paperclip Inbox](${inboxUrl}).`
+      resultMsg = `✅ **Agent Triggered!**\n\n` +
+        `Issue **${issueId}** ("${data.issue?.title || issueTitle}") has been assigned to the CEO Agent in **${issueCompany?.name || 'your workspace'}**.\n\n` +
+        `▶ Track progress in the **Execution Feed** (right panel) or view it directly in your [Paperclip Inbox](${inboxUrl}).`
       
       mutate('/api/feed')
       break

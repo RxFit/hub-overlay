@@ -312,6 +312,9 @@ Question sequences by intent:
 • create_workspace: Name? → Issue Prefix? → Brand Color? → Template? → Confirm (🔒 admin+)
 • delete_workspace: Name? → Type name to confirm → Final confirm (🔴 destructive, admin+)
 • delete_agent: Project? → Agent? → Type name to confirm → Final confirm (🔴 destructive)
+• create_google_doc: Title? → Content? → Confirm
+• create_google_sheet: Title? → Confirm
+• create_google_presentation: Title? → Confirm
 
 `
   }

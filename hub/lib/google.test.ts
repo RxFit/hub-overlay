@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { createCalendarEvent, listRecentGmailThreads, type GmailThread } from './google'
+import {
+  createCalendarEvent,
+  listRecentGmailThreads,
+  resolveRecipient,
+  createGoogleDoc,
+  createGoogleSheet,
+  createGooglePresentation,
+  type GmailThread,
+} from './google'
 
 /* ════════════════════════════════════════════════════════════════════════════
    createCalendarEvent body construction (audit C-P0-1 / C-P0-2)
@@ -230,3 +238,56 @@ describe('listRecentGmailThreads', () => {
     await expect(listRecentGmailThreads('token')).rejects.toThrow(/Google API error 403/)
   })
 })
+
+describe('createCalendarEvent meet link', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('appends conferenceDataVersion=1 and createRequest when createMeetLink is true', async () => {
+    const fetchMock = stubFetch()
+    await createCalendarEvent('token', {
+      summary: 'Meet sync',
+      start: '2026-06-24T09:00:00',
+      end: '2026-06-24T10:00:00',
+      createMeetLink: true,
+    })
+    const callUrl = (fetchMock.mock.calls[0] as unknown[])[0] as string
+    expect(callUrl).toContain('conferenceDataVersion=1')
+    const body = capturedBody(fetchMock)
+    expect(body.conferenceData.createRequest.conferenceSolutionKey.type).toBe('hangoutsMeet')
+  })
+})
+
+describe('resolveRecipient', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('resolves raw emails directly', async () => {
+    const email = await resolveRecipient('token', 'billing@acme.com')
+    expect(email).toBe('billing@acme.com')
+  })
+
+  it('searches contacts and directory for names', async () => {
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('people:searchContacts')) {
+        return new Response(JSON.stringify({
+          results: [{
+            person: {
+              names: [{ displayName: 'Maria Lopez' }],
+              emailAddresses: [{ value: 'maria@acme.com' }],
+            }
+          }]
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({}), { status: 200 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const email = await resolveRecipient('token', 'Maria')
+    expect(email).toBe('maria@acme.com')
+  })
+})
+

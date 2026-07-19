@@ -58,6 +58,7 @@ describe('POST /api/google/chat/readstate', () => {
       new Response(JSON.stringify({ name: 'users/me/spaces/AAA/spaceReadState', lastReadTime: '2026-07-19T00:00:00Z' }), { status: 200 })
     )
     const res = await POST(postReq({ spaceId: 'spaces/AAA' }))
+    if (res.status !== 200) console.log('FAIL BODY:', await res.json())
     expect(res.status).toBe(200)
     expect((await res.json()).lastReadTime).toBe('2026-07-19T00:00:00Z')
 
