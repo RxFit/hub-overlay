@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   normalizeComments,
+  normalizeRoutineRuns,
+  buildGoalTree,
   wireStatusForState,
   availableAgentActions,
   ISSUE_STATE_OPTIONS,
@@ -31,6 +33,50 @@ describe('normalizeComments', () => {
     expect(normalizeComments(null)).toEqual([])
     expect(normalizeComments({ nope: true })).toEqual([])
     expect(normalizeComments('x')).toEqual([])
+  })
+})
+
+describe('normalizeRoutineRuns', () => {
+  it('handles bare arrays and wrapped { runs } with defaults', () => {
+    const raw = [{ id: 'r1', status: 'dispatched', source: 'schedule', linkedIssueId: 'i1', createdAt: 't1', completedAt: 't2' }]
+    expect(normalizeRoutineRuns(raw)[0]).toMatchObject({ id: 'r1', status: 'dispatched', linkedIssueId: 'i1' })
+    expect(normalizeRoutineRuns({ runs: raw })).toHaveLength(1)
+    const bare = normalizeRoutineRuns([{}])[0]
+    expect(bare.status).toBe('unknown')
+    expect(bare.linkedIssueId).toBeNull()
+    expect(normalizeRoutineRuns(null)).toEqual([])
+  })
+})
+
+describe('buildGoalTree', () => {
+  const g = (id: string, parentId: string | null, level: string, title = id) => ({ id, parentId, level, title })
+
+  it('orders parents before children with correct depths', () => {
+    const tree = buildGoalTree([
+      g('t1', 'c1', 'team'),
+      g('c1', null, 'company'),
+      g('a1', 't1', 'agent'),
+    ])
+    expect(tree.map((n) => [n.goal.id, n.depth])).toEqual([['c1', 0], ['t1', 1], ['a1', 2]])
+  })
+
+  it('treats orphaned parentIds as roots so nothing disappears', () => {
+    const tree = buildGoalTree([g('x', 'missing-parent', 'team')])
+    expect(tree).toEqual([{ goal: expect.objectContaining({ id: 'x' }), depth: 0 }])
+  })
+
+  it('sorts siblings by level order (company→team→agent→task) then title', () => {
+    const tree = buildGoalTree([
+      g('b-task', null, 'task', 'B'),
+      g('a-team', null, 'team', 'A'),
+      g('z-team', null, 'team', 'Z'),
+    ])
+    expect(tree.map((n) => n.goal.id)).toEqual(['a-team', 'z-team', 'b-task'])
+  })
+
+  it('breaks parentId cycles instead of hanging', () => {
+    const tree = buildGoalTree([g('a', 'b', 'team'), g('b', 'a', 'team')])
+    expect(tree).toHaveLength(2)
   })
 })
 

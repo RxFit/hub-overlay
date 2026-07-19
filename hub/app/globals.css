@@ -4490,6 +4490,11 @@ a:hover .rx-arrow {
 }
 
 .exec-row__state[data-state-group="started"] { color: var(--accent); border-color: var(--accent); }
+.exec-row__state[data-routine-status="active"] { color: #7dbb8a; border-color: rgba(125, 187, 138, 0.5); }
+.exec-row__state[data-routine-status="paused"] { color: var(--text-muted); }
+.exec-row__state[data-goal-status="active"] { color: var(--accent); border-color: var(--accent); }
+.exec-row__state[data-goal-status="achieved"] { color: #7dbb8a; border-color: rgba(125, 187, 138, 0.5); }
+.exec-row__state[data-goal-status="cancelled"] { color: var(--text-muted); }
 .exec-row__state[data-state-name="blocked"] { color: #e06c6c; border-color: rgba(224, 108, 108, 0.5); }
 .exec-row__state[data-state-group="completed"] { color: #7dbb8a; border-color: rgba(125, 187, 138, 0.5); }
 

@@ -39,6 +39,12 @@ const INTENT_PERMISSIONS: Record<InterviewIntent, ActionPermission> = {
   create_workspace: 'admin',
   delete_workspace: 'admin',
   delete_agent: 'superadmin',
+  // Right-panel Phase 3: routines + goals
+  create_routine: 'admin',
+  update_routine: 'admin',
+  run_routine: 'staff',
+  create_goal: 'admin',
+  update_goal: 'admin',
 }
 
 const ROLE_HIERARCHY: Record<string, number> = {
@@ -150,6 +156,31 @@ export const INTENT_DEFINITIONS: Array<{ id: InterviewIntent; description: strin
     id: 'delete_agent',
     description: 'User wants to permanently delete or decommission an agent.',
     expectedEntities: ['project', 'agent'],
+  },
+  {
+    id: 'create_routine',
+    description: 'User wants to set up recurring or scheduled agent work — e.g. "every morning have the CFO reconcile Stripe" or "create a weekly SEO report routine".',
+    expectedEntities: ['description', 'agent', 'schedule'],
+  },
+  {
+    id: 'update_routine',
+    description: 'User wants to pause, resume, rename, or otherwise change an existing routine (recurring scheduled work).',
+    expectedEntities: ['routineRef', 'change'],
+  },
+  {
+    id: 'run_routine',
+    description: 'User wants to manually fire or trigger an existing routine right now, outside its schedule.',
+    expectedEntities: ['routineRef'],
+  },
+  {
+    id: 'create_goal',
+    description: 'User wants to define a new business goal, objective, or mission for the company, a team, or an agent.',
+    expectedEntities: ['description', 'level'],
+  },
+  {
+    id: 'update_goal',
+    description: 'User wants to change an existing goal — mark it achieved, activate it, cancel it, or edit its description.',
+    expectedEntities: ['goalRef', 'change'],
   },
 ]
 
@@ -460,6 +491,87 @@ const INTERVIEW_SEQUENCES: Record<InterviewIntent, InterviewStep[]> = {
       key: '_confirm',
     },
   ],
+
+  create_routine: [
+    {
+      question: 'What should this routine do on each run? Describe the recurring work and any context the agent needs.',
+      key: 'description',
+    },
+    {
+      question: 'Which agent should own this routine? (e.g. CFO, CMO, or an agent name)',
+      key: 'agent',
+    },
+    {
+      question: 'What schedule should it run on? Give a cron expression (e.g. "0 9 * * *" for daily at 9am UTC), or say "manual" for on-demand only.',
+      key: 'schedule',
+    },
+    {
+      question: 'I\'ll create this routine with the schedule and owner above. Confirm? (yes / edit / cancel)',
+      key: '_confirm',
+    },
+  ],
+
+  update_routine: [
+    {
+      question: 'Which routine should I change? (name or part of its title)',
+      key: 'routineRef',
+    },
+    {
+      question: 'What should change? (pause / resume, or a new title)',
+      key: 'change',
+    },
+    {
+      question: 'I\'ll apply this change to the routine. Confirm? (yes / edit / cancel)',
+      key: '_confirm',
+    },
+  ],
+
+  run_routine: [
+    {
+      question: 'Which routine should I fire right now? (name or part of its title)',
+      key: 'routineRef',
+    },
+    {
+      question: 'I\'ll trigger a manual run of this routine — its own concurrency policy still applies. Confirm? (yes / edit / cancel)',
+      key: '_confirm',
+    },
+  ],
+
+  create_goal: [
+    {
+      question: 'What is the goal? State the objective and why it matters (what success looks like).',
+      key: 'description',
+    },
+    {
+      question: 'What level is this goal? (company / team / agent / task — default: team)',
+      key: 'level',
+      defaultValue: 'team',
+    },
+    {
+      question: 'Should a specific agent own this goal? (agent name, or "none")',
+      key: 'owner',
+      defaultValue: 'none',
+    },
+    {
+      question: 'I\'ll create this goal in the workspace goal tree. Confirm? (yes / edit / cancel)',
+      key: '_confirm',
+    },
+  ],
+
+  update_goal: [
+    {
+      question: 'Which goal should I change? (name or part of its title)',
+      key: 'goalRef',
+    },
+    {
+      question: 'What should change? (activate / achieved / cancel, or a new description)',
+      key: 'change',
+    },
+    {
+      question: 'I\'ll apply this change to the goal. Confirm? (yes / edit / cancel)',
+      key: '_confirm',
+    },
+  ],
 }
 
 /**
@@ -595,6 +707,11 @@ const INTENT_LABELS: Record<InterviewIntent, string> = {
   create_workspace: 'Create Workspace',
   delete_workspace: 'Delete Workspace',
   delete_agent: 'Delete Agent',
+  create_routine: 'Create Routine',
+  update_routine: 'Update Routine',
+  run_routine: 'Run Routine Now',
+  create_goal: 'Create Goal',
+  update_goal: 'Update Goal',
 }
 
 const INTENT_TARGET_SYSTEMS: Record<InterviewIntent, string[]> = {
@@ -615,6 +732,11 @@ const INTENT_TARGET_SYSTEMS: Record<InterviewIntent, string[]> = {
   create_workspace: ['Paperclip AI'],
   delete_workspace: ['Paperclip AI'],
   delete_agent: ['Paperclip AI'],
+  create_routine: ['Paperclip AI'],
+  update_routine: ['Paperclip AI'],
+  run_routine: ['Paperclip AI'],
+  create_goal: ['Paperclip AI'],
+  update_goal: ['Paperclip AI'],
 }
 
 /**
@@ -679,7 +801,12 @@ export function isHighStakesIntent(intent: InterviewIntent): boolean {
     intent === 'send_communication' ||
     intent === 'send_gmail' ||
     intent === 'post_chat_message' ||
-    intent === 'create_paperclip_issue'
+    intent === 'create_paperclip_issue' ||
+    // Phase 3 creation intents: both stand up durable orchestration objects
+    // (recurring agent work / the goal tree), so they carry gate tokens and
+    // the proxy fails closed without one.
+    intent === 'create_routine' ||
+    intent === 'create_goal'
   )
 }
 

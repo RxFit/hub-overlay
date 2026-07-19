@@ -48,6 +48,15 @@ export function requiredWriteRank(method: string, apiPath: string): number {
     m === 'POST' && /^\/api\/issues\/[a-f0-9-]+\/comments$/.test(path)
   const isAgentLifecycle =
     m === 'POST' && /^\/api\/agents\/[a-f0-9-]+\/(wakeup|pause|resume|clear-error)$/.test(path)
+  // Right-panel Phase 3 writes: routines + goals
+  const isRoutineRun =
+    m === 'POST' && /^\/api\/routines\/[a-f0-9-]+\/run$/.test(path)
+  const isRoutineManage =
+    ((m === 'PATCH' || m === 'DELETE') && /^\/api\/routines\/[a-f0-9-]+$/.test(path)) ||
+    (m === 'POST' && (/^\/api\/companies\/[a-f0-9-]+\/routines$/.test(path) || /^\/api\/routines\/[a-f0-9-]+\/triggers$/.test(path)))
+  const isGoalManage =
+    ((m === 'PATCH' || m === 'DELETE') && /^\/api\/goals\/[a-f0-9-]+$/.test(path)) ||
+    (m === 'POST' && /^\/api\/companies\/[a-f0-9-]+\/goals$/.test(path))
   const isCompanyResource = /^\/api\/companies\/[a-f0-9-]+$/.test(path)
   const isIssueResource = /^\/api\/issues\/[a-f0-9-]+$/.test(path)
   const isAgentCreate =
@@ -78,6 +87,14 @@ export function requiredWriteRank(method: string, apiPath: string): number {
   // already admin via the fail-closed default; listed explicitly so the tier
   // is documented and unit-tested rather than incidental.
   if (isAgentLifecycle) return ROLE_RANK.admin
+  // Routine run-now → staff. Firing an existing, already-configured routine is
+  // the recurring-work analog of commenting: it triggers only work the org has
+  // already approved, and the routine's own concurrency policy bounds it.
+  if (isRoutineRun) return ROLE_RANK.staff
+  // Routine and goal CRUD (create/update/delete, trigger creation) → admin.
+  // Creation paths are additionally gate-token-guarded in the proxy.
+  if (isRoutineManage) return ROLE_RANK.admin
+  if (isGoalManage) return ROLE_RANK.admin
 
   // Sole staff-tier write: issue creation (create_paperclip_issue /
   // send_communication). POST /api/issues is additionally gated by the

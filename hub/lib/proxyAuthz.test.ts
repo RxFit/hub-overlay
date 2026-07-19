@@ -59,6 +59,23 @@ describe('requiredWriteRank', () => {
     expect(requiredWriteRank('POST', '/api/agents/abc-123/terminate')).toBe(ROLE_RANK.admin)
   })
 
+  it('lets staff fire an existing routine, but requires admin to manage routines (Phase 3)', () => {
+    expect(requiredWriteRank('POST', '/api/routines/abc-123/run')).toBe(ROLE_RANK.staff)
+    expect(requiredWriteRank('POST', '/api/routines/ABC-123/run')).toBe(ROLE_RANK.staff)
+    expect(requiredWriteRank('PATCH', '/api/routines/abc-123')).toBe(ROLE_RANK.admin)
+    expect(requiredWriteRank('DELETE', '/api/routines/abc-123')).toBe(ROLE_RANK.admin)
+    expect(requiredWriteRank('POST', '/api/companies/abc-123/routines')).toBe(ROLE_RANK.admin)
+    expect(requiredWriteRank('POST', '/api/routines/abc-123/triggers')).toBe(ROLE_RANK.admin)
+    // routine-trigger mutations stay fail-closed at admin
+    expect(requiredWriteRank('PATCH', '/api/routine-triggers/abc-123')).toBe(ROLE_RANK.admin)
+  })
+
+  it('requires admin for goal CRUD (Phase 3)', () => {
+    expect(requiredWriteRank('POST', '/api/companies/abc-123/goals')).toBe(ROLE_RANK.admin)
+    expect(requiredWriteRank('PATCH', '/api/goals/abc-123')).toBe(ROLE_RANK.admin)
+    expect(requiredWriteRank('DELETE', '/api/goals/abc-123')).toBe(ROLE_RANK.admin)
+  })
+
   it('lets staff create an issue', () => {
     expect(requiredWriteRank('POST', '/api/issues')).toBe(ROLE_RANK.staff)
   })
