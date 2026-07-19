@@ -21,14 +21,19 @@ const isLocal = PAPERCLIP_BASE_URL.includes('127.0.0.1') || PAPERCLIP_BASE_URL.i
 export const RXFIT_COMPANY_ID = isLocal ? '05787964-7240-4851-b7df-d006f0d8001c' : '829b2493-97ed-4cb9-8775-ff8298dcf650'
 
 /**
- * The CEO's default company. NOTE: this is a SIBLING Paperclip company to
- * RXFIT_COMPANY_ID — Paperclip companies are mutually isolated with no
- * cross-company delegation; there is no "triage then delegate to officer
- * workspaces" routing (verified against the live instance, 2026-06 audit
- * P1-3). It exists only as the default landing company for Hub-created
- * issues when no workspace is selected.
+ * The default company for Hub-created issues. This is the SAME company as
+ * RXFIT_COMPANY_ID — RxFit Enterprise — because that is where the CEO agent
+ * (RXFIT_CEO_AGENT_ID) actually lives and the only RxFit company the Hub's
+ * board user can access.
+ *
+ * FIXED 2026-07-19 (live-instance audit): this previously pointed at
+ * 8f2acc3d-f2dc-4f8c-897e-7c400e91fd85, a phantom "CEO sibling company" that
+ * the board user gets 403 on and where the CEO agent does NOT live. Assigning
+ * the CEO agent to an issue in that company is a cross-company error, so the
+ * issue-creation fallback (app/api/paperclip/issues/route.ts) 403'd whenever
+ * DEFAULT_PAPERCLIP_COMPANY_ID was unset. There is one RxFit company, not two.
  */
-export const RXFIT_CEO_COMPANY_ID = isLocal ? '05787964-7240-4851-b7df-d006f0d8001c' : '8f2acc3d-f2dc-4f8c-897e-7c400e91fd85'
+export const RXFIT_CEO_COMPANY_ID = RXFIT_COMPANY_ID
 
 /**
  * CEO — the default assignee for Hub-created issues when no agent match is
