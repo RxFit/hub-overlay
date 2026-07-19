@@ -3,7 +3,8 @@ import { getServerSession } from 'next-auth'
 import { getToken } from 'next-auth/jwt'
 import { authOptions } from '@/lib/auth'
 import { createLogger } from '@/lib/logger'
-import { streamChat, buildSystemPrompt, friendlyModelError } from '@/lib/gemini'
+import { streamChat, buildSystemPromptParts, friendlyModelError } from '@/lib/gemini'
+import type { SystemPromptParts } from '@/lib/claude'
 import { getCompanies, getIssues, getAgents, getRuns } from '@/lib/paperclip'
 import { searchSemanticBrain } from '@/lib/vertex'
 import { searchWeb, parseSubQueries, mergeExaResults, type ExaSearchResult } from '@/lib/exa'
@@ -296,7 +297,7 @@ async function runExaOnlySearch(query: string): Promise<{ context: string; faile
  */
 function streamModelResponse(
   boundedMessages: ChatMessage[],
-  systemPrompt: string,
+  systemPrompt: SystemPromptParts,
   effectiveUseCase: string,
   hasActiveSkill: boolean,
   req: NextRequest,
@@ -471,7 +472,9 @@ async function handleChat(req: NextRequest): Promise<Response> {
     const exaSearch = exaQuery
       ? await runExaOnlySearch(exaQuery)
       : { context: '', failed: false }
-    const exaSystemPrompt = buildSystemPrompt({
+    // Parts form → Claude puts a cache breakpoint on the static prefix
+    // (persona + policy) so repeat EXA turns read it at 0.1x input price.
+    const exaSystemPrompt = buildSystemPromptParts({
       injectedContext: exaSearch.context || undefined,
       exaMode: true,
       exaSearchFailed: exaSearch.failed,
@@ -647,7 +650,9 @@ async function handleChat(req: NextRequest): Promise<Response> {
     if (content) activeSkillContent = content
   }
 
-  const systemPrompt = buildSystemPrompt({
+  // Parts form for prompt caching — static persona/policy prefix cached,
+  // dynamic context (date, workspace, search results) after the breakpoint.
+  const systemPrompt = buildSystemPromptParts({
     projects: projectContext,
     agentActivity,
     googleWorkspace: Object.keys(googleWorkspaceCounts).length > 0 ? googleWorkspaceCounts : undefined,

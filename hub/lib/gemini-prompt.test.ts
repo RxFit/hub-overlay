@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildSystemPrompt, chatMessagesToContents } from './gemini'
+import { buildSystemPrompt, buildSystemPromptParts, chatMessagesToContents } from './gemini'
 import type { ChatMessage } from '@/types'
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -165,6 +165,39 @@ describe('buildSystemPrompt — EXA Search mode', () => {
     const prompt = buildSystemPrompt({ exaMode: true })
     expect(prompt).toContain('No results were returned')
     expect(prompt).not.toContain('## Available Skills')
+  })
+})
+
+describe('buildSystemPromptParts — prompt-caching split contract', () => {
+  it('staticPrefix + dynamic concatenates to exactly the legacy single string (both modes)', () => {
+    for (const ctx of [
+      {},
+      { exaMode: true, injectedContext: 'result: Exa raised a round' },
+      { role: 'admin', projects: 'p1', injectedContext: 'ctx', activeSkill: 'prioritization', activeSkillContent: 'Rank.' },
+    ]) {
+      const parts = buildSystemPromptParts(ctx)
+      expect(parts.staticPrefix + parts.dynamic).toBe(buildSystemPrompt(ctx))
+    }
+  })
+
+  it('staticPrefix is byte-identical across requests and carries NO per-request content', () => {
+    // Cache breakpoints only hit when the prefix is identical across requests —
+    // a date or injected result in the static block guarantees 100% cache misses.
+    const a = buildSystemPromptParts({ injectedContext: 'result A' })
+    const b = buildSystemPromptParts({ role: 'staff', injectedContext: 'result B' })
+    expect(a.staticPrefix).toBe(b.staticPrefix)
+    expect(a.staticPrefix).not.toContain('Current date and time')
+    expect(a.staticPrefix).not.toContain('result A')
+    // The dynamic tail carries the per-request content.
+    expect(a.dynamic).toContain('Current date and time')
+    expect(a.dynamic).toContain('result A')
+
+    // Same invariants for EXA mode (its own static persona).
+    const e1 = buildSystemPromptParts({ exaMode: true, injectedContext: 'hit 1' })
+    const e2 = buildSystemPromptParts({ exaMode: true, exaSearchFailed: true })
+    expect(e1.staticPrefix).toBe(e2.staticPrefix)
+    expect(e1.staticPrefix).not.toContain('Current date and time')
+    expect(e1.dynamic).toContain('hit 1')
   })
 })
 
