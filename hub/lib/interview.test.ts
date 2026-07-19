@@ -127,6 +127,56 @@ describe('update_task intent', () => {
   })
 })
 
+describe('Google authoring intents (create_google_doc / create_google_sheet)', () => {
+  it('registers both intents in the classifier definitions', () => {
+    const ids = INTENT_DEFINITIONS.map(d => d.id)
+    expect(ids).toContain('create_google_doc')
+    expect(ids).toContain('create_google_sheet')
+    expect(INTENT_DEFINITIONS.find(d => d.id === 'create_google_doc')?.expectedEntities).toEqual(['title', 'content'])
+    expect(INTENT_DEFINITIONS.find(d => d.id === 'create_google_sheet')?.expectedEntities).toEqual(['title', 'content'])
+  })
+
+  it('requires staff permission (own-Drive authoring), denies onboarding', () => {
+    expect(hasPermission('staff', 'create_google_doc')).toBe(true)
+    expect(hasPermission('admin', 'create_google_sheet')).toBe(true)
+    expect(hasPermission('onboarding', 'create_google_doc')).toBe(false)
+    expect(hasPermission('onboarding', 'create_google_sheet')).toBe(false)
+  })
+
+  it('advances a doc through title + content to a spec', () => {
+    let state = startInterview('create_google_doc')
+    expect(getTotalQuestions('create_google_doc')).toBe(3)
+    state = advanceInterview(state, 'Q3 Decision Memo')
+    state = advanceInterview(state, 'Recommendation: proceed.')
+    expect(state.active).toBe(true) // parked on _confirm
+    state = advanceInterview(state, 'yes')
+    expect(state.active).toBe(false)
+    expect(state.spec?.intent).toBe('create_google_doc')
+    expect(state.spec?.details.title).toBe('Q3 Decision Memo')
+    expect(state.spec?.targetSystems).toEqual(['Google Docs'])
+  })
+
+  it('fast-forwards a sheet with only a title (content defaults to empty)', () => {
+    // content has a '' defaultValue, so a title-only spec is still executable.
+    let state = startInterview('create_google_sheet', { title: 'KPI Snapshot' })
+    // parked on the content question (empty default) — answer blank to accept.
+    state = advanceInterview(state, '')
+    expect(state.active).toBe(true) // _confirm
+    state = advanceInterview(state, 'yes')
+    expect(state.spec?.intent).toBe('create_google_sheet')
+    expect(state.spec?.details.title).toBe('KPI Snapshot')
+    expect(state.spec?.targetSystems).toEqual(['Google Sheets'])
+  })
+
+  it('are not high-stakes (no gate token) and not destructive/read-only', () => {
+    for (const intent of ['create_google_doc', 'create_google_sheet'] as const) {
+      expect(isHighStakesIntent(intent)).toBe(false)
+      expect(isDestructiveIntent(intent)).toBe(false)
+      expect(isReadOnlyIntent(intent)).toBe(false)
+    }
+  })
+})
+
 describe('post-gate follow-up answers (context-score block recovery)', () => {
   it('folds an answer given past the last step into additionalContext and completes with a spec', () => {
     // Simulate the state the engine creates when the context gate blocks a

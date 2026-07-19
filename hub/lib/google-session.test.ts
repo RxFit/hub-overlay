@@ -3,6 +3,7 @@ import type { NextRequest } from 'next/server'
 import {
   mapGoogleErrorToStatus,
   googleApiErrorResponse,
+  googleWriteErrorResponse,
   resolveGoogleAuth,
 } from './google-session'
 
@@ -36,6 +37,40 @@ describe('mapGoogleErrorToStatus', () => {
   it('reads the status code, not an incidental number in the body', () => {
     // First 3-digit token is the upstream status; trailing body numbers ignored.
     expect(mapGoogleErrorToStatus('Google API error 401: user 403 lacks scope 200')).toBe(401)
+  })
+})
+
+/* The newly-scoped write routes (Docs/Sheets/Contacts) must return a
+   discriminating 403 { code: 'MISSING_SCOPE' } ONLY for genuine Google
+   insufficient-scope errors — so the client re-consents on those and NEVER on
+   a bare RBAC/gate 403 (which re-consent can't fix and would loop on). */
+describe('googleWriteErrorResponse', () => {
+  it('returns 403 { code: MISSING_SCOPE } for a Google insufficient-scope error', async () => {
+    const res = googleWriteErrorResponse(
+      new Error('Google API error 403: Request had insufficient authentication scopes.'),
+      'Google Docs',
+    )
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body.code).toBe('MISSING_SCOPE')
+    expect(body.error).toMatch(/Google Docs/)
+  })
+
+  it('does NOT tag a 403 that lacks a scope/permission reason (falls through to generic mapping)', async () => {
+    // A bare 403 with no insufficient/permission/scope wording is not a scope
+    // denial — it must not become MISSING_SCOPE. (Generic mapper folds Google
+    // 403 → 401 reauth; the key assertion is that it's not MISSING_SCOPE.)
+    const res = googleWriteErrorResponse(new Error('Google API error 403: rateLimitExceeded'), 'Google Sheets')
+    const body = await res.json()
+    expect(body.code).toBeUndefined()
+  })
+
+  it('passes non-403 failures straight through to the generic mapper', async () => {
+    const res = googleWriteErrorResponse(new Error('Google API error 404: not found'), 'Google Docs')
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.code).toBeUndefined()
+    expect(body.error).toBe('Google API error 404: not found')
   })
 })
 
