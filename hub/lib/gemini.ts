@@ -161,7 +161,6 @@ export interface SystemPromptContext {
   /** Detailed live Google Workspace data (task titles, event summaries, file names, chat spaces). */
   googleWorkspaceDetail?: string
   injectedContext?: string
-  interviewMode?: boolean
   activeSkill?: string
   activeSkillContent?: string
   /** EXA Search mode — hybrid semantic research (Exa web + Vertex internal);
@@ -273,37 +272,14 @@ export function buildSystemPromptParts(context: SystemPromptContext): { staticPr
     prompt += `Recent agent activity:\n${fenceUntrusted('Recent agent activity', context.agentActivity)}\n\n`
   }
 
-  /* ── Interview Mode instructions ── */
-  if (context.interviewMode) {
-    prompt += `INTERVIEW MODE IS CURRENTLY ACTIVE.
-You are walking the user through a structured question sequence to build a complete action specification.
-Rules while interview mode is active:
-- Ask ONE question at a time from the sequence.
-- After the user answers, acknowledge briefly and move to the next question.
-- If the user gives a vague answer, ask for clarification before moving on.
-- Show recommended defaults when available (e.g., "Priority? (default: medium)").
-- After all questions are answered, present a final confirmation summary.
-- If the user says "cancel" or "stop", exit interview mode immediately.
-
-Question sequences by intent:
-• create_task: What exactly? → Priority? → Deadline? → Assign to? → Confirm
-• schedule_event: What event? → When? → Who? → Where? → Duration? → Confirm
-• send_communication: To whom? → Channel? → Content? → Tone? → Confirm
-• send_gmail: To whom (email)? → Subject? → Body? → Confirm
-• post_chat_message: Which Chat space? → Message? → Confirm
-• check_agent_status: Which project? → Which agent? → Confirm
-• view_runs: Which project? → Time range? → Confirm
-• assign_issue: Which issue? → Which agent? → Confirm
-• update_issue_state: Which issue? → New state? → Confirm
-• create_agent: Which project? → Name? → Instructions? → Confirm
-• restart_agent: Which project? → Which agent? → Confirm
-• run_audit: Which project? → Scope? → Confirm
-• create_workspace: Name? → Issue Prefix? → Brand Color? → Template? → Confirm (🔒 admin+)
-• delete_workspace: Name? → Type name to confirm → Final confirm (🔴 destructive, admin+)
-• delete_agent: Project? → Agent? → Type name to confirm → Final confirm (🔴 destructive)
-
-`
-  }
+  /* ── Interview Mode ──
+     Interview Mode is driven entirely by the app (the deterministic flow in
+     useChatEngine + lib/interview.ts renders each question and the Confirm
+     Card). The model must NOT simulate it or draft specs (see the
+     HUB_SYSTEM_PROMPT action policy above), so no interview instructions are
+     injected here. The prior injected block described a multi-step,
+     model-run interview that both contradicted the app flow and taught the
+     model to fabricate specs/cards — it has been removed. */
 
   /* ── Active Skill Protocol ── */
   if (context.activeSkill && context.activeSkillContent) {

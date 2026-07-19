@@ -114,10 +114,19 @@ describe('buildSystemPrompt — conditional sections', () => {
     expect(closes(prompt)).toBe(closes(buildSystemPrompt({})) + 1)
   })
 
-  it('activates the interview-mode protocol block only when interviewMode is set', () => {
-    const prompt = buildSystemPrompt({ interviewMode: true })
-    expect(prompt).toContain('INTERVIEW MODE IS CURRENTLY ACTIVE')
-    expect(prompt).toContain('• send_gmail: To whom (email)? → Subject? → Body? → Confirm')
+  it('never injects a model-run interview protocol (the app owns the interview + Confirm Card)', () => {
+    // The old injected interview block taught the model to run a multi-step
+    // interview and "build a complete action specification" — exactly the
+    // behavior that produced fabricated Confirm Cards. It has been removed, and
+    // the base prompt must never tell the model to draft specs or claim a card.
+    const prompt = buildSystemPrompt({})
+    expect(prompt).not.toContain('INTERVIEW MODE IS CURRENTLY ACTIVE')
+    expect(prompt).not.toContain('build a complete action specification')
+    expect(prompt).not.toContain('• send_gmail: To whom (email)? → Subject? → Body? → Confirm')
+    expect(prompt).not.toContain('MANDATORY INTERVIEW PROTOCOL')
+    // The new policy is present instead.
+    expect(prompt).toContain('NEVER FABRICATE ACTIONS, SPECS, OR CONFIRM CARDS')
+    expect(prompt).toContain('the app does this automatically')
   })
 
   it('activates a skill protocol only when BOTH the skill id and its content are present', () => {
