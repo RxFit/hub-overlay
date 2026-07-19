@@ -1,8 +1,8 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { createLogger } from '@/lib/logger'
-import { createIssue, getAgents, isAgentMemberOfCompany } from '@/lib/paperclip'
+import { createIssue, getAgents, getIssues, isAgentMemberOfCompany } from '@/lib/paperclip'
 import { recordEvent } from '@/lib/event-logger'
 import { RXFIT_CEO_COMPANY_ID, RXFIT_CEO_AGENT_ID } from '@/lib/paperclipConfig'
 import { CreateIssueRequestSchema } from '@/lib/zod-schemas'
@@ -16,6 +16,57 @@ export const runtime = 'nodejs'
 
 // Default company for issues when no companyId is specified — always the RxFit org.
 const DEFAULT_COMPANY_ID = process.env.DEFAULT_PAPERCLIP_COMPANY_ID || RXFIT_CEO_COMPANY_ID
+
+/**
+ * GET /api/paperclip/issues?companyId=<id>&limit=<n>&stateGroup=<group>
+ *
+ * Normalized issue list for the right panel's Issues tab. The [...path] proxy
+ * would return Paperclip's raw wire shapes; this route reuses
+ * lib/paperclip.getIssues so the client receives the Hub's Linear-style
+ * Issue objects (state group, priority vocabulary). Access scoping matches
+ * the runs route: non-wildcard users must be assigned to the company.
+ */
+export async function GET(req: NextRequest) {
+  const session = await getServerSession(authOptions)
+  if (!session?.user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const companyId = req.nextUrl.searchParams.get('companyId')
+  if (!companyId) {
+    return NextResponse.json({ error: 'companyId is required' }, { status: 400 })
+  }
+
+  const scopedUser = session.user as Record<string, unknown>
+  const scopedRole = scopedUser.role as string
+  const scopedProjects = (scopedUser.assignedProjects as string[]) ?? []
+  if (
+    scopedRole !== 'superadmin' &&
+    !scopedProjects.includes('*') &&
+    !scopedProjects.includes(companyId)
+  ) {
+    return NextResponse.json(
+      { error: 'Access denied: not assigned to this project' },
+      { status: 403 }
+    )
+  }
+
+  const rawLimit = Number(req.nextUrl.searchParams.get('limit') ?? '50')
+  const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 100) : 50
+  const stateGroup = req.nextUrl.searchParams.get('stateGroup') ?? undefined
+
+  try {
+    const issues = await getIssues(companyId, { limit, stateGroup })
+    return NextResponse.json(
+      { issues },
+      { headers: { 'Cache-Control': 'private, max-age=20' } }
+    )
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Failed to load issues'
+    log.error({ err: error, companyId }, 'Issue list fetch failed')
+    return NextResponse.json({ error: message }, { status: 500 })
+  }
+}
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions)

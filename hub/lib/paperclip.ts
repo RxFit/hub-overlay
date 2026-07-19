@@ -175,6 +175,7 @@ function normalizeAgent(raw: Record<string, unknown>): Agent {
     ...(raw as unknown as Agent),
     adapter: (raw.adapter as string) ?? (raw.adapterType as string) ?? 'unknown',
     status: AGENT_STATUS_MAP[rawStatus] ?? 'inactive',
+    rawStatus,
     lastHeartbeat: (raw.lastHeartbeat as string | null)
       ?? (raw.lastHeartbeatAt as string | null)
       ?? null,

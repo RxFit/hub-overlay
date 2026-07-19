@@ -43,6 +43,22 @@ describe('requiredWriteRank', () => {
     expect(requiredWriteRank('POST', '/api/companies')).toBe(ROLE_RANK.admin)
   })
 
+  it('lets staff comment on an issue (right-panel Phase 2)', () => {
+    expect(requiredWriteRank('POST', '/api/issues/abc-123/comments')).toBe(ROLE_RANK.staff)
+    // Uppercase-UUID form must resolve identically (case-insensitive matching)
+    expect(requiredWriteRank('POST', '/api/issues/ABC-123/comments')).toBe(ROLE_RANK.staff)
+    // Deeper subpaths are NOT comments and fall closed to admin
+    expect(requiredWriteRank('POST', '/api/issues/abc-123/comments/extra')).toBe(ROLE_RANK.admin)
+  })
+
+  it('requires admin for agent lifecycle actions (wake/pause/resume/clear-error)', () => {
+    for (const action of ['wakeup', 'pause', 'resume', 'clear-error']) {
+      expect(requiredWriteRank('POST', `/api/agents/abc-123/${action}`)).toBe(ROLE_RANK.admin)
+    }
+    // Unlisted agent subpath writes stay fail-closed at admin
+    expect(requiredWriteRank('POST', '/api/agents/abc-123/terminate')).toBe(ROLE_RANK.admin)
+  })
+
   it('lets staff create an issue', () => {
     expect(requiredWriteRank('POST', '/api/issues')).toBe(ROLE_RANK.staff)
   })

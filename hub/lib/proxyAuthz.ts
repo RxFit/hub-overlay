@@ -43,6 +43,11 @@ export function requiredWriteRank(method: string, apiPath: string): number {
   const path = apiPath.toLowerCase()
 
   const isAgentResource = /^\/api\/agents\/[a-f0-9-]+$/.test(path)
+  // Right-panel Phase 2 writes (docs/architecture/RIGHT_PANEL_ARCHITECTURE_*.md §5.2)
+  const isIssueComment =
+    m === 'POST' && /^\/api\/issues\/[a-f0-9-]+\/comments$/.test(path)
+  const isAgentLifecycle =
+    m === 'POST' && /^\/api\/agents\/[a-f0-9-]+\/(wakeup|pause|resume|clear-error)$/.test(path)
   const isCompanyResource = /^\/api\/companies\/[a-f0-9-]+$/.test(path)
   const isIssueResource = /^\/api\/issues\/[a-f0-9-]+$/.test(path)
   const isAgentCreate =
@@ -65,6 +70,14 @@ export function requiredWriteRank(method: string, apiPath: string): number {
   if (isAgentCreate) return ROLE_RANK.admin
   // workspace/company creation via proxy → admin
   if (isCompanyCreate) return ROLE_RANK.admin
+
+  // Issue comments → staff. Conversational, non-destructive, and fully
+  // audited upstream (@-mentions wake the assignee — that is the point).
+  if (isIssueComment) return ROLE_RANK.staff
+  // Agent lifecycle (wake / pause / resume / clear-error) → admin. These were
+  // already admin via the fail-closed default; listed explicitly so the tier
+  // is documented and unit-tested rather than incidental.
+  if (isAgentLifecycle) return ROLE_RANK.admin
 
   // Sole staff-tier write: issue creation (create_paperclip_issue /
   // send_communication). POST /api/issues is additionally gated by the

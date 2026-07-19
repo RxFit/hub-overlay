@@ -6,6 +6,8 @@ import { useRouter } from 'next/navigation'
 import { TasksSection, CalendarSection, DocumentsSection, KPISection, ProjectHealthSection, SectionErrorBoundary } from '@/app/components/LeftPanelSections'
 import { ExecutionFeed } from '@/app/components/RightPanelSections'
 import { RightPanelTabsNav, PulseStrip, AttentionStrip, TabPlaceholder, type RightPanelTab } from '@/app/components/RightPanelWorkspace'
+import { IssuesTabView } from '@/app/components/IssuesTabView'
+import { AgentsTabView } from '@/app/components/AgentsTabView'
 import { useExecutionDashboard } from '@/app/hooks/useHubData'
 import { InterviewBadge, ActionConfirmCard, SkillBadge } from '@/app/components/ChatEnhancements'
 import { ToolPanel } from '@/app/components/ToolPanel'
@@ -207,6 +209,10 @@ function RightPanel({
                 now-removed activeOrgId prop — both resolved to this exact value). */}
             <ExecutionFeed onInjectChat={onInjectChat} onInjectAction={onInjectAction} onCustomizeCSuite={onCustomizeCSuite} orgId={activeCompany?.companyId} />
           </>
+        ) : activeTab === 'issues' ? (
+          <IssuesTabView orgId={activeCompany?.companyId} userRole={userRole} onInjectChat={onInjectChat} />
+        ) : activeTab === 'agents' ? (
+          <AgentsTabView orgId={activeCompany?.companyId} userRole={userRole} onInjectChat={onInjectChat} />
         ) : (
           <TabPlaceholder tab={activeTab} paperclipUrl={paperclipUrl} onInjectChat={onInjectChat} />
         )}

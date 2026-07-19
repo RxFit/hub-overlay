@@ -56,6 +56,10 @@ export interface Agent {
   description: string | null
   adapter: string
   status: 'active' | 'inactive' | 'error'
+  /** Paperclip's native 7-value status (idle/paused/running/…), kept alongside
+      the Hub's 3-state model so the agent roster can distinguish paused from
+      idle and offer the right lifecycle action. */
+  rawStatus?: string
   companyId: string
   createdAt: string
   lastHeartbeat: string | null
