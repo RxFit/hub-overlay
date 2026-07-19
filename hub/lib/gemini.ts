@@ -1054,17 +1054,4 @@ export async function geminiGenerateText(
   throw lastErr instanceof Error ? lastErr : new Error('All Gemini models failed or cooling down')
 }
 
-/**
- * Legacy export — preserved for backward compatibility.
- * Filters out modelUsed events and yields only text.
- */
-export async function* streamGeminiChat(
-  messages: ChatMessage[],
-  systemPrompt: string,
-  useCase: string = 'deep_dive'
-): AsyncGenerator<string> {
-  for await (const chunk of streamChat(messages, systemPrompt, useCase, false)) {
-    if (typeof chunk === 'string') yield chunk
-  }
-}
 

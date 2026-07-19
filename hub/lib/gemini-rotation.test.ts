@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { ChatMessage } from '@/types'
-import { streamChat, streamGeminiChat, friendlyModelError, __resetModelCooldownsForTest } from './gemini'
+import { streamChat, friendlyModelError, __resetModelCooldownsForTest } from './gemini'
 
 /* ════════════════════════════════════════════════════════════════════════════
    Rotation branches NS-8 left uncovered (NS-11): cooldown re-entry after
@@ -241,12 +241,4 @@ describe('input contract + legacy wrapper', () => {
     expect(error?.message).toBe('Last message must be from the user')
   })
 
-  it('streamGeminiChat (legacy) yields ONLY text — modelUsed events are filtered out', async () => {
-    process.env.GEMINI_API_KEY = 'test-key'
-    hoisted.geminiBehavior = () => geminiStream(['a', 'b'])
-    const chunks: string[] = []
-    for await (const c of streamGeminiChat(MESSAGES, 'sys', 'recall')) chunks.push(c)
-    expect(chunks).toEqual(['a', 'b'])
-    for (const c of chunks) expect(typeof c).toBe('string')
-  })
 })
