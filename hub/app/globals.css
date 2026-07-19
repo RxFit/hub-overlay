@@ -8544,6 +8544,27 @@ details[open] > .settings-collapsible__trigger .settings-collapsible__arrow {
   overflow: hidden;
 }
 
+/* "Load older emails" — full-width row at the bottom of the thread list.
+   48px min-height keeps it an easy mobile touch target. */
+.gmail-load-more {
+  display: block;
+  width: 100%;
+  min-height: 48px;
+  padding: 12px;
+  background: var(--surface-2);
+  border: none;
+  border-top: 1px solid var(--border);
+  color: var(--accent);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.gmail-load-more:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
 .gmail-thread-header {
   display: flex;
   align-items: center;

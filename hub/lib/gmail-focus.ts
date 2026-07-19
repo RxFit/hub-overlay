@@ -107,6 +107,41 @@ Respond with ONLY a JSON array (no markdown, no prose) of at most ${MAX_FOCUS_IT
 Only include threads genuinely worth attention — an empty array [] is a valid answer for an inbox of pure noise.`
 }
 
+/* Senders that are clearly automated — never "reply to this person". */
+const AUTOMATED_SENDER_RE =
+  /no-?reply|notifications?@|newsletters?@|marketing@|updates?@|info@|support@|billing@|receipts?@|do-not-reply|mailer|invoice|@e\.|@em\.|@mail\.|@email\./i
+
+/**
+ * Deterministic fallback ranking for when the AI ranker fails, times out, or
+ * returns nothing. Real signals only: unread state, human-vs-automated sender,
+ * active conversation, recency. Guarantees the Focus strip renders from live
+ * inbox data even during a total model outage.
+ */
+export function heuristicFocusItems(threads: GmailThreadSummary[], max = 3): FocusItem[] {
+  const now = Date.now()
+  const scored: FocusItem[] = threads.map(t => {
+    const automated = AUTOMATED_SENDER_RE.test(t.from)
+    let score = 0
+    if (t.isUnread) score += 40
+    if (!automated) score += 30
+    if (t.messageCount > 1) score += 20
+    const ageMs = now - new Date(t.date).getTime()
+    if (Number.isFinite(ageMs) && ageMs >= 0 && ageMs < 24 * 3600_000) score += 10
+
+    const action: FocusItem['action'] = !automated && t.messageCount > 1 ? 'reply' : 'read'
+    const reason = !automated
+      ? t.messageCount > 1
+        ? 'Active conversation — likely awaiting your reply'
+        : 'Unread message from a real person'
+      : 'Recent unread update'
+    return { id: t.id, priority: Math.min(100, score), reason, action }
+  })
+  return scored
+    .filter(s => s.priority >= 60)
+    .sort((a, b) => b.priority - a.priority)
+    .slice(0, max)
+}
+
 /**
  * Parse + harden the model's ranking. Never throws on bad model output —
  * malformed JSON returns []. Unknown ids, duplicate ids, bogus actions, and

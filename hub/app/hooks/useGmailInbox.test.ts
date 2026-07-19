@@ -9,7 +9,7 @@ vi.mock('next-auth/react', () => ({
   signIn: (...args: unknown[]) => signInMock(...args),
 }))
 
-import { useGmailInbox, parseInboxResponse } from './useGmailInbox'
+import { useGmailInbox, parseInboxResponse, combineThreadPages } from './useGmailInbox'
 
 // React 18 concurrent rendering requires an act environment flag.
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -59,18 +59,49 @@ function errorResponse(status: number, body: unknown = {}) {
 }
 
 describe('parseInboxResponse (unread mapping)', () => {
-  it('maps threads and unread count from the inbox payload', () => {
+  it('maps threads, unread count, and pagination cursor from the inbox payload', () => {
     const threads = [
       { id: 'a', subject: 's', from: 'f', date: 'd', snippet: 'x', isUnread: true, messageCount: 1 },
     ]
-    expect(parseInboxResponse({ threads, unreadCount: 4 })).toEqual({ threads, unreadCount: 4 })
+    expect(parseInboxResponse({ threads, unreadCount: 4, nextPageToken: 'tok' })).toEqual({
+      threads,
+      unreadCount: 4,
+      nextPageToken: 'tok',
+    })
   })
 
-  it('defaults to empty list and zero unread when fields are missing or null', () => {
-    expect(parseInboxResponse({})).toEqual({ threads: [], unreadCount: 0 })
-    expect(parseInboxResponse(null)).toEqual({ threads: [], unreadCount: 0 })
-    expect(parseInboxResponse(undefined)).toEqual({ threads: [], unreadCount: 0 })
-    expect(parseInboxResponse({ threads: null, unreadCount: null })).toEqual({ threads: [], unreadCount: 0 })
+  it('defaults to empty list, zero unread, and no cursor when fields are missing or null', () => {
+    const empty = { threads: [], unreadCount: 0, nextPageToken: null }
+    expect(parseInboxResponse({})).toEqual(empty)
+    expect(parseInboxResponse(null)).toEqual(empty)
+    expect(parseInboxResponse(undefined)).toEqual(empty)
+    expect(parseInboxResponse({ threads: null, unreadCount: null, nextPageToken: null })).toEqual(empty)
+  })
+})
+
+describe('combineThreadPages (pagination dedupe)', () => {
+  const t = (id: string, over: Partial<import('./useGmailInbox').GmailThread> = {}) => ({
+    id, subject: 's', from: 'f', date: 'd', snippet: 'x', isUnread: false, messageCount: 1, ...over,
+  })
+
+  it('appends older pages after the first page', () => {
+    expect(combineThreadPages([t('a'), t('b')], [t('c'), t('d')]).map(x => x.id)).toEqual([
+      'a', 'b', 'c', 'd',
+    ])
+  })
+
+  it('drops older duplicates — the fresher first-page copy wins', () => {
+    const combined = combineThreadPages(
+      [t('a', { isUnread: true })],
+      [t('a', { isUnread: false }), t('b')]
+    )
+    expect(combined.map(x => x.id)).toEqual(['a', 'b'])
+    expect(combined[0].isUnread).toBe(true)
+  })
+
+  it('handles empty pages on either side', () => {
+    expect(combineThreadPages([], [t('z')]).map(x => x.id)).toEqual(['z'])
+    expect(combineThreadPages([t('a')], [])).toEqual([t('a')])
   })
 })
 

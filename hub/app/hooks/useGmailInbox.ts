@@ -60,12 +60,23 @@ export interface SelectedThread {
  * selectedThread / compose / reply — the #28 guarantee).
  */
 export function parseInboxResponse(
-  d: { threads?: GmailThread[] | null; unreadCount?: number | null } | null | undefined,
-): { threads: GmailThread[]; unreadCount: number } {
+  d: { threads?: GmailThread[] | null; unreadCount?: number | null; nextPageToken?: string | null } | null | undefined,
+): { threads: GmailThread[]; unreadCount: number; nextPageToken: string | null } {
   return {
     threads: d?.threads ?? [],
     unreadCount: d?.unreadCount ?? 0,
+    nextPageToken: d?.nextPageToken ?? null,
   }
+}
+
+/**
+ * Combine the polled first page with locally accumulated older pages, deduping
+ * by thread id (first-page wins — it's fresher). A thread that migrates into
+ * the first page (new reply) therefore doesn't appear twice.
+ */
+export function combineThreadPages(firstPage: GmailThread[], older: GmailThread[]): GmailThread[] {
+  const seen = new Set(firstPage.map(t => t.id))
+  return [...firstPage, ...older.filter(t => !seen.has(t.id))]
 }
 
 export type MobileGmailView = 'list' | 'thread'
@@ -80,6 +91,14 @@ export function useGmailInbox({ onUnreadCount }: UseGmailInboxOptions) {
   // optimistically mark a thread read; a background refetch resyncs it from the
   // server (same as the pre-NS-6 poll overwrote the list wholesale).
   const [threads, setThreads] = useState<GmailThread[]>([])
+  // Older pages accumulated via "Load older emails". Kept separate from the
+  // polled first page so the 60s refetch refreshes page 1 without discarding
+  // what the user paged in. `olderToken` is the cursor for the NEXT older
+  // page: undefined = haven't paged yet (use the first page's token),
+  // null = Gmail said there are no more pages.
+  const [olderThreads, setOlderThreads] = useState<GmailThread[]>([])
+  const [olderToken, setOlderToken] = useState<string | null | undefined>(undefined)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [selectedThread, setSelectedThread] = useState<SelectedThread | null>(null)
   const [threadLoading, setThreadLoading] = useState(false)
   // Distinct thread-open error so a failed open surfaces feedback + retry
@@ -134,13 +153,55 @@ export function useGmailInbox({ onUnreadCount }: UseGmailInboxOptions) {
   // useQuery `onSuccess`, so we derive from `data` in an effect.
   useEffect(() => {
     if (!data) return
-    setThreads(data.threads)
+    // Bail out on an identical combined list (element-wise — thread objects are
+    // stable refs) so an unstable onUnreadCount callback can't spin an
+    // effect → setState → re-render loop: setThreads(prev) skips the re-render.
+    setThreads(prev => {
+      const next = combineThreadPages(data.threads, olderThreads)
+      return next.length === prev.length && next.every((t, i) => t === prev[i]) ? prev : next
+    })
     onUnreadCount(data.unreadCount)
-  }, [data, onUnreadCount])
+  }, [data, olderThreads, onUnreadCount])
 
   // Single refresh path for callers (post-send). Delegates to the query so the
   // 60s poll and manual refresh share one cache entry.
   const refreshInbox = () => refetch()
+
+  /* ── Pagination: "Load older emails" ──
+   * The first page (20 threads) stays on the 60s poll; older pages are
+   * fetched on demand with Gmail's pageToken cursor and accumulated locally.
+   * The effective cursor is the last loadMore response's token, or — before
+   * the first loadMore — the first page's token. */
+  const effectiveNextToken = olderToken === undefined ? (data?.nextPageToken ?? null) : olderToken
+  const hasMore = effectiveNextToken !== null
+
+  const loadMore = async () => {
+    if (!effectiveNextToken || loadingMore) return
+    setLoadingMore(true)
+    try {
+      const r = await fetch(
+        `/api/google/gmail?view=inbox&maxResults=50&pageToken=${encodeURIComponent(effectiveNextToken)}`
+      )
+      if (r.status === 401) {
+        const body = await r.json().catch(() => ({}))
+        if (body?.reauth !== false) signIn('google')
+        throw new Error(body?.error || 'Session expired — please sign in again')
+      }
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}))
+        throw new Error(body?.error || `Failed to load older emails (${r.status})`)
+      }
+      const page = parseInboxResponse(await r.json())
+      setOlderThreads(prev => {
+        const seen = new Set(prev.map(t => t.id))
+        return [...prev, ...page.threads.filter(t => !seen.has(t.id))]
+      })
+      setOlderToken(page.nextPageToken)
+    } catch (err) {
+      flashNotice(err instanceof Error ? `⚠️ ${err.message}` : '⚠️ Failed to load older emails')
+    }
+    setLoadingMore(false)
+  }
 
   const openThread = async (id: string) => {
     lastThreadIdRef.current = id
@@ -200,6 +261,7 @@ export function useGmailInbox({ onUnreadCount }: UseGmailInboxOptions) {
       old => (old ? { ...old, threads: old.threads.filter(t => t.id !== id) } : old)
     )
     setThreads(prev => prev.filter(t => t.id !== id))
+    setOlderThreads(prev => prev.filter(t => t.id !== id))
     if (selectedThread?.id === id) {
       setSelectedThread(null)
       setMobileView('list')
@@ -366,6 +428,10 @@ export function useGmailInbox({ onUnreadCount }: UseGmailInboxOptions) {
     setIsComposing,
     setComposeTo,
     setComposeSubject,
+    // ── Pagination ──
+    loadMore,
+    hasMore,
+    loadingMore,
     // ── Thread actions (action menu) ──
     actionBusy,
     actionNotice,
