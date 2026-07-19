@@ -556,3 +556,21 @@ export async function getSpaceReadState(
     accessToken
   )
 }
+
+/**
+ * Mark a space read up to `lastReadTime` (defaults to now). Requires the
+ * chat.users.readstate WRITE scope — with only the readonly scope Google
+ * returns 403, which callers surface as MISSING_SCOPE.
+ */
+export async function updateSpaceReadState(
+  accessToken: string,
+  spaceId: string,
+  lastReadTime: string = new Date().toISOString()
+): Promise<SpaceReadState> {
+  const spaceName = spaceId.startsWith('spaces/') ? spaceId : `spaces/${spaceId}`
+  return googleFetch<SpaceReadState>(
+    `${CHAT_BASE}/users/me/${spaceName}/spaceReadState?updateMask=lastReadTime`,
+    accessToken,
+    { method: 'PATCH', body: JSON.stringify({ lastReadTime }) }
+  )
+}

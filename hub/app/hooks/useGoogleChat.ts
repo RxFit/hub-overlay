@@ -1,7 +1,7 @@
 'use client'
 
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 
 /* ── Shared fetcher (reuses the same error contract as useHubData) ── */
 
@@ -220,6 +220,53 @@ export function useSpaceMembers(spaceId: string | null) {
     isLoading,
     error: error ?? undefined,
   }
+}
+
+/* ══════════════════════════════════════════
+   useMarkSpaceRead — clear a space's unread badge on open
+   ══════════════════════════════════════════ */
+
+/**
+ * Marks a space read (server-side, via the Chat readstate API) and
+ * optimistically zeroes its count in every cached unread entry so the badge
+ * clears immediately instead of on the next 60s poll. Fire-and-forget: a
+ * failed write (e.g. pre-upgrade token without the write scope) just leaves
+ * the badge to the next poll's truth.
+ */
+export function useMarkSpaceRead() {
+  const queryClient = useQueryClient()
+  // One mark per (space, open) — the caller's effect can re-run on poll
+  // refetches; only re-mark when new messages actually arrived.
+  const lastMarkedRef = useRef<string>('')
+
+  const markRead = useCallback(async (spaceId: string, latestMessageName?: string) => {
+    const markKey = `${spaceId}|${latestMessageName ?? ''}`
+    if (lastMarkedRef.current === markKey) return
+    lastMarkedRef.current = markKey
+
+    queryClient.setQueriesData<UnreadResponse>(
+      { queryKey: ['chat', 'unread'] },
+      old => {
+        if (!old || !(spaceId in old.unread)) return old
+        const cleared = old.unread[spaceId] ?? 0
+        return {
+          unread: { ...old.unread, [spaceId]: 0 },
+          total: Math.max(0, old.total - cleared),
+        }
+      }
+    )
+    try {
+      await fetch('/api/google/chat/readstate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ spaceId }),
+      })
+    } catch {
+      // Non-fatal — the 60s unread poll remains the source of truth.
+    }
+  }, [queryClient])
+
+  return { markRead }
 }
 
 /* ══════════════════════════════════════════

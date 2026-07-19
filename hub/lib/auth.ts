@@ -55,9 +55,11 @@ const GOOGLE_SCOPES = [
   'https://www.googleapis.com/auth/chat.spaces.readonly',
   'https://www.googleapis.com/auth/chat.messages',
   'https://www.googleapis.com/auth/chat.messages.create',
-  // Google Chat — member listing + read state (for unread badges)
+  // Google Chat — member listing + read state (for unread badges).
+  // readstate is the FULL scope (read + write): opening a chat in the hub
+  // marks it read so the unread badge clears here and in Google Chat.
   'https://www.googleapis.com/auth/chat.memberships.readonly',
-  'https://www.googleapis.com/auth/chat.users.readstate.readonly',
+  'https://www.googleapis.com/auth/chat.users.readstate',
   // KPI sources — GA4 Data API + Google Search Console
   'https://www.googleapis.com/auth/analytics.readonly',
   'https://www.googleapis.com/auth/webmasters.readonly',

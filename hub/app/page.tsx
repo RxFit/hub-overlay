@@ -464,6 +464,9 @@ export default function HubPage() {
     mobileRightOpen,
     handleClosePanels,
     handleMobileTab,
+    // The Google Chat / Gmail overlay owns horizontal touch movement (Focus
+    // strip, email rows) — drawer swipes are fully disengaged while it's open.
+    disabled: chatPanelOpen,
   })
 
   /* ── Mobile drawer a11y: dialog focus management, scroll-lock, Escape ── */
