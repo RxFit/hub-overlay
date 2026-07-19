@@ -84,6 +84,111 @@ export function wireStatusForState(state: { group: string; name: string }): stri
   }
 }
 
+/* ── Routine runs ── */
+
+export interface RoutineRun {
+  id: string
+  /** created | dispatched | coalesced | skipped | failed | … (wire vocabulary kept open) */
+  status: string
+  source: string
+  linkedIssueId: string | null
+  createdAt: string
+  completedAt: string | null
+  failureReason: string | null
+}
+
+/**
+ * Normalize GET /api/routines/:id/runs (bare array or `{ runs: [...] }`).
+ * Field presence varies by Paperclip version — everything degrades to
+ * empty/null rather than throwing.
+ */
+export function normalizeRoutineRuns(data: unknown): RoutineRun[] {
+  const arr = Array.isArray(data)
+    ? data
+    : data && typeof data === 'object' && Array.isArray((data as Record<string, unknown>).runs)
+      ? ((data as Record<string, unknown>).runs as unknown[])
+      : []
+
+  return arr
+    .filter((r): r is Record<string, unknown> => !!r && typeof r === 'object')
+    .map((r, i) => ({
+      id: str(r.id, `run-${i}`),
+      status: str(r.status, 'unknown'),
+      source: str(r.source, 'schedule'),
+      linkedIssueId: typeof r.linkedIssueId === 'string' ? r.linkedIssueId : null,
+      createdAt: str(r.createdAt),
+      completedAt: typeof r.completedAt === 'string' ? r.completedAt : null,
+      failureReason: typeof r.failureReason === 'string' ? r.failureReason : null,
+    }))
+}
+
+/* ── Goal hierarchy ── */
+
+export interface GoalNode<T extends { id: string; parentId: string | null; level: string }> {
+  goal: T
+  depth: number
+}
+
+const GOAL_LEVEL_ORDER: Record<string, number> = { company: 0, team: 1, agent: 2, task: 3 }
+
+/**
+ * Flatten a goal list into depth-first render order (parents before their
+ * children, siblings ordered company→team→agent→task then alphabetically by
+ * id-stable title where available). Orphaned parentIds (pointing at a goal
+ * outside the list) are treated as roots so nothing silently disappears.
+ * Cycles are broken by the visited set.
+ */
+export function buildGoalTree<T extends { id: string; parentId: string | null; level: string; title?: string }>(
+  goals: T[]
+): Array<GoalNode<T>> {
+  const byId = new Map(goals.map((g) => [g.id, g]))
+  const children = new Map<string, T[]>()
+  const roots: T[] = []
+
+  for (const g of goals) {
+    if (g.parentId && byId.has(g.parentId)) {
+      const list = children.get(g.parentId) ?? []
+      list.push(g)
+      children.set(g.parentId, list)
+    } else {
+      roots.push(g)
+    }
+  }
+
+  const sortGroup = (list: T[]) =>
+    [...list].sort(
+      (a, b) =>
+        (GOAL_LEVEL_ORDER[a.level] ?? 9) - (GOAL_LEVEL_ORDER[b.level] ?? 9) ||
+        (a.title ?? '').localeCompare(b.title ?? '')
+    )
+
+  const out: Array<GoalNode<T>> = []
+  const visited = new Set<string>()
+  const walk = (nodes: T[], depth: number) => {
+    for (const g of sortGroup(nodes)) {
+      if (visited.has(g.id)) continue
+      visited.add(g.id)
+      out.push({ goal: g, depth })
+      walk(children.get(g.id) ?? [], depth + 1)
+    }
+  }
+  walk(roots, 0)
+  // A pure parentId cycle (a→b→a) leaves every member out of `roots`; sweep
+  // up anything unvisited so cyclic subgraphs still render (at depth 0).
+  for (const g of goals) {
+    if (!visited.has(g.id)) walk([g], 0)
+  }
+  return out
+}
+
+/** Goal status-change options offered in the drawer (wire vocabulary). */
+export const GOAL_STATUS_OPTIONS: Array<{ status: string; label: string }> = [
+  { status: 'planned', label: 'Planned' },
+  { status: 'active', label: 'Active' },
+  { status: 'achieved', label: 'Achieved' },
+  { status: 'cancelled', label: 'Cancelled' },
+]
+
 /* ── Agent lifecycle affordances ── */
 
 export type AgentLifecycleAction = 'wakeup' | 'pause' | 'resume' | 'clear-error'

@@ -94,6 +94,13 @@ const INTENT_DIMENSIONS: Record<string, string[]> = {
   create_workspace: ['name', 'template'],
   delete_workspace: ['confirmation'],
   delete_agent: ['confirmation'],
+  // Right-panel Phase 3: routines + goals. A routine passes only when the spec
+  // is actually executable — clear recurring work, an owner, and a schedule.
+  create_routine: ['task_clarity', 'assignee', 'schedule', 'success_criteria'],
+  update_routine: ['routine_identity', 'change'],
+  run_routine: ['routine_identity'],
+  create_goal: ['goal_clarity', 'level', 'ownership'],
+  update_goal: ['goal_identity', 'change'],
 }
 
 function buildScoringPrompt(

@@ -65,6 +65,35 @@ export interface Agent {
   lastHeartbeat: string | null
 }
 
+export interface Routine {
+  id: string
+  title: string
+  description: string | null
+  /** Paperclip routine status — 'active' | 'paused' (kept open for drift). */
+  status: string
+  assigneeAgentId: string | null
+  assigneeName: string | null
+  projectId: string | null
+  companyId: string
+  createdAt: string | null
+  updatedAt: string | null
+}
+
+export interface Goal {
+  id: string
+  title: string
+  description: string | null
+  /** 'company' | 'team' | 'agent' | 'task' (kept open for drift). */
+  level: string
+  /** 'planned' | 'active' | 'achieved' | 'cancelled' (kept open for drift). */
+  status: string
+  parentId: string | null
+  ownerAgentId: string | null
+  companyId: string
+  createdAt: string | null
+  updatedAt: string | null
+}
+
 export interface Project {
   id: string
   name: string
@@ -225,6 +254,12 @@ export type InterviewIntent =
   // F3: Direct human-confirmed send actions (Gmail + Google Chat)
   | 'send_gmail'
   | 'post_chat_message'
+  // Right-panel Phase 3: Routines + Goals orchestration
+  | 'create_routine'
+  | 'update_routine'
+  | 'run_routine'
+  | 'create_goal'
+  | 'update_goal'
 
 export interface InterviewStep {
   question: string

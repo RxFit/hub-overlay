@@ -135,6 +135,45 @@ export const ProjectsResponseSchema = z.union([
   z.object({ projects: ProjectSchema.array() }).passthrough(),
 ])
 
+/* Routines and Goals (right-panel Phase 3). Lenient: only `id` and `title`
+   are required on the wire; everything else normalizes with defaults in
+   lib/paperclip.ts. */
+export const RoutineSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  description: z.string().nullable().optional(),
+  status: z.string().optional(),
+  assigneeAgentId: z.string().nullable().optional(),
+  assigneeName: z.string().nullable().optional(),
+  projectId: z.string().nullable().optional(),
+  companyId: z.string().optional(),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
+}).passthrough()
+
+export const RoutinesResponseSchema = z.union([
+  RoutineSchema.array(),
+  z.object({ routines: RoutineSchema.array() }).passthrough(),
+])
+
+export const GoalSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  description: z.string().nullable().optional(),
+  level: z.string().optional(),
+  status: z.string().optional(),
+  parentId: z.string().nullable().optional(),
+  ownerAgentId: z.string().nullable().optional(),
+  companyId: z.string().optional(),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
+}).passthrough()
+
+export const GoalsResponseSchema = z.union([
+  GoalSchema.array(),
+  z.object({ goals: GoalSchema.array() }).passthrough(),
+])
+
 /* Company dashboard snapshot (GET /api/companies/:id/dashboard).
    Deliberately lenient: every section is optional and passthrough because the
    snapshot's field set varies across Paperclip versions — normalization to a

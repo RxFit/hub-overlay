@@ -710,6 +710,194 @@ export async function executeAction(
       break
     }
 
+    case 'create_routine': {
+      if (!activeCompany) throw new Error('Select a workspace before creating a routine')
+
+      // Resolve the owning agent by name within the active workspace
+      const crAgentRef = (spec.details.agent || '').toLowerCase()
+      const crAgentsRes = await fetch(`/api/paperclip/agents?companyId=${encodeURIComponent(activeCompany.id)}`)
+      if (!crAgentsRes.ok) throw new Error('Failed to fetch agents for this workspace')
+      const crAgents = pickList<{ id: string; name: string }>(await crAgentsRes.json(), 'agents')
+      const crOwner = crAgents.find((a) => a.name?.toLowerCase().includes(crAgentRef))
+      if (!crOwner) throw new Error(`Could not find an agent matching "${spec.details.agent}" in ${activeCompany.name}`)
+
+      // Create the routine (gate-token-guarded creation path)
+      const crRes = await fetch(`/api/paperclip/companies/${activeCompany.id}/routines`, {
+        method: 'POST',
+        headers: issueHeaders(spec),
+        body: JSON.stringify({
+          title: (spec.details.description || '').slice(0, 80) || 'Hub routine',
+          description: spec.details.description,
+          assigneeAgentId: crOwner.id,
+          status: 'active',
+        }),
+      })
+      if (!crRes.ok) {
+        const errText = await crRes.text().catch(() => '')
+        throw new Error(`Routine creation failed: ${crRes.status}${errText ? ` — ${errText.slice(0, 200)}` : ''}`)
+      }
+      const crData = await crRes.json()
+      const crRoutineId = crData.routine?.id || crData.id
+
+      // Attach a schedule trigger when a cron expression was provided.
+      // "manual" (or anything non-cron-shaped) → on-demand routine, no trigger.
+      const crSchedule = (spec.details.schedule || '').trim()
+      const looksLikeCron = /^(\S+\s+){4}\S+$/.test(crSchedule) && crSchedule.toLowerCase() !== 'manual'
+      let crTriggerNote = 'It runs on demand (no schedule trigger).'
+      if (looksLikeCron && crRoutineId) {
+        const trigRes = await fetch(`/api/paperclip/routines/${crRoutineId}/triggers`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind: 'schedule', cron: crSchedule }),
+        })
+        crTriggerNote = trigRes.ok
+          ? `It runs on schedule \`${crSchedule}\`.`
+          : `⚠️ The routine was created, but attaching the schedule trigger failed (${trigRes.status}) — add the schedule in Paperclip, or ask me to retry.`
+      }
+
+      resultMsg = `✅ **Routine Created**\n\n"${crData.routine?.title || spec.details.description}" is now owned by **${crOwner.name}** in **${activeCompany.name}**. ${crTriggerNote}\n\nEach run creates a tracked issue — watch them land in the right panel's Routines tab.`
+      mutate('/api/feed')
+      break
+    }
+
+    case 'update_routine':
+    case 'run_routine': {
+      if (!activeCompany) throw new Error('Select a workspace first')
+
+      // Resolve the routine by (partial) title within the active workspace
+      const urRef = (spec.details.routineRef || '').toLowerCase()
+      const urListRes = await fetch(`/api/paperclip/routines?companyId=${encodeURIComponent(activeCompany.id)}`)
+      if (!urListRes.ok) throw new Error('Failed to fetch routines for this workspace')
+      const urRoutines = pickList<{ id: string; title: string; status?: string }>(await urListRes.json(), 'routines')
+      const urMatch = urRoutines.find((r) => r.title?.toLowerCase().includes(urRef))
+      if (!urMatch) {
+        const available = urRoutines.slice(0, 8).map((r) => `"${r.title}"`).join(', ') || 'none'
+        throw new Error(`Could not find a routine matching "${spec.details.routineRef}". Available: ${available}`)
+      }
+
+      if (spec.intent === 'run_routine') {
+        const runRes = await fetch(`/api/paperclip/routines/${urMatch.id}/run`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source: 'manual' }),
+        })
+        if (!runRes.ok) throw new Error(`Manual run failed: ${runRes.status}`)
+        resultMsg = `✅ **Routine Fired**\n\n"${urMatch.title}" has been triggered manually. If another run is already active, the routine's concurrency policy may coalesce or skip this one — check the Routines tab for the outcome.`
+        mutate('/api/feed')
+        break
+      }
+
+      // update_routine: pause / resume / rename
+      const urChange = (spec.details.change || '').toLowerCase()
+      const urPayload: Record<string, unknown> = {}
+      let urChangeLabel = ''
+      if (/\bpause|stop|disable\b/.test(urChange)) {
+        urPayload.status = 'paused'
+        urChangeLabel = 'paused'
+      } else if (/\bresume|activate|enable|unpause|start\b/.test(urChange)) {
+        urPayload.status = 'active'
+        urChangeLabel = 'resumed'
+      } else if (spec.details.change?.trim()) {
+        urPayload.title = spec.details.change.trim()
+        urChangeLabel = `renamed to "${urPayload.title}"`
+      } else {
+        throw new Error('Tell me what to change: pause, resume, or a new title.')
+      }
+
+      const urRes = await fetch(`/api/paperclip/routines/${urMatch.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(urPayload),
+      })
+      if (!urRes.ok) throw new Error(`Routine update failed: ${urRes.status}`)
+      resultMsg = `✅ **Routine Updated**\n\n"${urMatch.title}" has been ${urChangeLabel}.`
+      break
+    }
+
+    case 'create_goal': {
+      if (!activeCompany) throw new Error('Select a workspace before creating a goal')
+
+      const cgLevelRaw = (spec.details.level || 'team').toLowerCase().trim()
+      const cgLevel = ['company', 'team', 'agent', 'task'].includes(cgLevelRaw) ? cgLevelRaw : 'team'
+
+      // Optional owner agent resolved by name
+      let cgOwnerId: string | undefined
+      let cgOwnerName: string | undefined
+      const cgOwnerRef = (spec.details.owner || '').toLowerCase().trim()
+      if (cgOwnerRef && cgOwnerRef !== 'none') {
+        const cgAgentsRes = await fetch(`/api/paperclip/agents?companyId=${encodeURIComponent(activeCompany.id)}`)
+        if (cgAgentsRes.ok) {
+          const cgAgents = pickList<{ id: string; name: string }>(await cgAgentsRes.json(), 'agents')
+          const cgOwner = cgAgents.find((a) => a.name?.toLowerCase().includes(cgOwnerRef))
+          if (cgOwner) { cgOwnerId = cgOwner.id; cgOwnerName = cgOwner.name }
+        }
+      }
+
+      const cgRes = await fetch(`/api/paperclip/companies/${activeCompany.id}/goals`, {
+        method: 'POST',
+        headers: issueHeaders(spec),
+        body: JSON.stringify({
+          title: (spec.details.description || '').slice(0, 80) || 'Hub goal',
+          description: spec.details.description,
+          level: cgLevel,
+          status: 'active',
+          ...(cgOwnerId ? { ownerAgentId: cgOwnerId } : {}),
+        }),
+      })
+      if (!cgRes.ok) {
+        const errText = await cgRes.text().catch(() => '')
+        throw new Error(`Goal creation failed: ${cgRes.status}${errText ? ` — ${errText.slice(0, 200)}` : ''}`)
+      }
+      const cgData = await cgRes.json()
+      resultMsg = `✅ **Goal Created**\n\n"${cgData.goal?.title || cgData.title || spec.details.description}" is now an active **${cgLevel}-level** goal in **${activeCompany.name}**${cgOwnerName ? `, owned by **${cgOwnerName}**` : ''}.\n\nAgents see goal ancestry on every task they pick up — work created under this goal traces back to it.`
+      break
+    }
+
+    case 'update_goal': {
+      if (!activeCompany) throw new Error('Select a workspace first')
+
+      const ugRef = (spec.details.goalRef || '').toLowerCase()
+      const ugListRes = await fetch(`/api/paperclip/goals?companyId=${encodeURIComponent(activeCompany.id)}`)
+      if (!ugListRes.ok) throw new Error('Failed to fetch goals for this workspace')
+      const ugGoals = pickList<{ id: string; title: string; status?: string }>(await ugListRes.json(), 'goals')
+      const ugMatch = ugGoals.find((g) => g.title?.toLowerCase().includes(ugRef))
+      if (!ugMatch) {
+        const available = ugGoals.slice(0, 8).map((g) => `"${g.title}"`).join(', ') || 'none'
+        throw new Error(`Could not find a goal matching "${spec.details.goalRef}". Available: ${available}`)
+      }
+
+      const ugChange = (spec.details.change || '').toLowerCase()
+      const ugPayload: Record<string, unknown> = {}
+      let ugChangeLabel = ''
+      if (/\bachiev|complete|done\b/.test(ugChange)) {
+        ugPayload.status = 'achieved'
+        ugChangeLabel = 'marked achieved 🎉'
+      } else if (/\bcancel|drop|abandon\b/.test(ugChange)) {
+        ugPayload.status = 'cancelled'
+        ugChangeLabel = 'cancelled'
+      } else if (/\bactivate|active|start\b/.test(ugChange)) {
+        ugPayload.status = 'active'
+        ugChangeLabel = 'activated'
+      } else if (/\bplan\b/.test(ugChange)) {
+        ugPayload.status = 'planned'
+        ugChangeLabel = 'moved back to planned'
+      } else if (spec.details.change?.trim()) {
+        ugPayload.description = spec.details.change.trim()
+        ugChangeLabel = 'description updated'
+      } else {
+        throw new Error('Tell me what to change: activate, achieved, cancel, or a new description.')
+      }
+
+      const ugRes = await fetch(`/api/paperclip/goals/${ugMatch.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(ugPayload),
+      })
+      if (!ugRes.ok) throw new Error(`Goal update failed: ${ugRes.status}`)
+      resultMsg = `✅ **Goal Updated**\n\n"${ugMatch.title}" — ${ugChangeLabel}.`
+      break
+    }
+
     default:
       throw new Error(`Unsupported action intent: ${spec.intent}`)
   }

@@ -8,6 +8,8 @@ import { ExecutionFeed } from '@/app/components/RightPanelSections'
 import { RightPanelTabsNav, PulseStrip, AttentionStrip, TabPlaceholder, type RightPanelTab } from '@/app/components/RightPanelWorkspace'
 import { IssuesTabView } from '@/app/components/IssuesTabView'
 import { AgentsTabView } from '@/app/components/AgentsTabView'
+import { RoutinesTabView } from '@/app/components/RoutinesTabView'
+import { GoalsTabView } from '@/app/components/GoalsTabView'
 import { useExecutionDashboard } from '@/app/hooks/useHubData'
 import { InterviewBadge, ActionConfirmCard, SkillBadge } from '@/app/components/ChatEnhancements'
 import { ToolPanel } from '@/app/components/ToolPanel'
@@ -213,6 +215,10 @@ function RightPanel({
           <IssuesTabView orgId={activeCompany?.companyId} userRole={userRole} onInjectChat={onInjectChat} />
         ) : activeTab === 'agents' ? (
           <AgentsTabView orgId={activeCompany?.companyId} userRole={userRole} onInjectChat={onInjectChat} />
+        ) : activeTab === 'routines' ? (
+          <RoutinesTabView orgId={activeCompany?.companyId} userRole={userRole} onInjectChat={onInjectChat} onInjectAction={onInjectAction} />
+        ) : activeTab === 'goals' ? (
+          <GoalsTabView orgId={activeCompany?.companyId} userRole={userRole} onInjectChat={onInjectChat} onInjectAction={onInjectAction} />
         ) : (
           <TabPlaceholder tab={activeTab} paperclipUrl={paperclipUrl} onInjectChat={onInjectChat} />
         )}

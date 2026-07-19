@@ -53,6 +53,9 @@ const ALLOWED_PREFIXES = [
   '/api/agents',            // agent status + management
   '/api/runs',              // agent run history
   '/api/projects',          // project lookups by ID or shortname
+  '/api/routines',          // routine detail, pause/resume, run-now, runs, triggers (Phase 3)
+  '/api/routine-triggers',  // trigger mutations (wildcard/superadmin only — see below)
+  '/api/goals',             // goal detail + mutations (Phase 3)
 ]
 
 export async function GET(
@@ -171,7 +174,10 @@ async function proxyRequest(
   // executeAction (high-stakes intents: create issue / send comm / create agent
   // / launch campaign). Without a valid, unexpired, above-threshold token we
   // fail closed — the gate is no longer bypassable from the browser.
-  if (method.toUpperCase() === 'POST' && matchPath === '/api/issues') {
+  const isGatedCreatePath =
+    matchPath === '/api/issues' ||
+    /^\/api\/companies\/[a-f0-9-]+\/(routines|goals)$/.test(matchPath)
+  if (method.toUpperCase() === 'POST' && isGatedCreatePath) {
     // Single-use (jti) + caller-binding (email): a gate token is consumed on
     // first use and is bound to the user it was minted for, so it cannot be
     // replayed within its 5-min TTL or lifted from another user's session.
@@ -239,14 +245,35 @@ async function proxyRequest(
   const issueMatch = matchPath.match(/\/api\/issues\/([a-f0-9-]+)/)
   const agentMatch = matchPath.match(/\/api\/agents\/([a-f0-9-]+)/)
   const projectMatch = matchPath.match(/\/api\/projects\/([a-f0-9-]+)/)
+  const routineMatch = matchPath.match(/\/api\/routines\/([a-f0-9-]+)/)
+  const goalMatch = matchPath.match(/\/api\/goals\/([a-f0-9-]+)/)
 
-  const needPreCheck = method !== 'GET' && method !== 'HEAD' && (issueMatch || agentMatch || projectMatch)
+  // /api/routine-triggers/{id} mutations cannot be company-resolved without an
+  // extra hop through the owning routine, so scoped users are blocked outright.
+  // Trigger creation stays available to them via POST /api/routines/{id}/triggers,
+  // which IS ownership-pre-checked below.
+  if (
+    role !== 'superadmin' &&
+    !assignedProjects.includes('*') &&
+    method !== 'GET' && method !== 'HEAD' &&
+    matchPath.startsWith('/api/routine-triggers')
+  ) {
+    return NextResponse.json(
+      { error: 'Access denied: manage triggers via the owning routine' },
+      { status: 403 }
+    )
+  }
+
+  const needPreCheck = method !== 'GET' && method !== 'HEAD' &&
+    (issueMatch || agentMatch || projectMatch || routineMatch || goalMatch)
 
   if (role !== 'superadmin' && !assignedProjects.includes('*') && needPreCheck) {
     let checkPath = ''
     if (issueMatch) checkPath = `/api/issues/${issueMatch[1]}`
     else if (agentMatch) checkPath = `/api/agents/${agentMatch[1]}`
     else if (projectMatch) checkPath = `/api/projects/${projectMatch[1]}`
+    else if (routineMatch) checkPath = `/api/routines/${routineMatch[1]}`
+    else if (goalMatch) checkPath = `/api/goals/${goalMatch[1]}`
 
     try {
       const checkUrl = `${PAPERCLIP_BASE}${checkPath}`
@@ -258,7 +285,7 @@ async function proxyRequest(
         )
       }
       const checkData = await checkRes.json()
-      const companyId = checkData.companyId || checkData.issue?.companyId || checkData.agent?.companyId || checkData.project?.companyId
+      const companyId = checkData.companyId || checkData.issue?.companyId || checkData.agent?.companyId || checkData.project?.companyId || checkData.routine?.companyId || checkData.goal?.companyId
       if (!companyId || !assignedProjects.includes(companyId)) {
         return NextResponse.json(
           { error: 'Access denied: not assigned to this project' },
