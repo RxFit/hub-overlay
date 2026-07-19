@@ -43,6 +43,7 @@ import { useCompanies } from '@/app/hooks/useCompanies'
 import type { ChatAttachment } from '@/types'
 import { useChatEngine, type ChatMsg, type MobileTab } from '@/app/hooks/useChatEngine'
 import { useSwipePanels } from '@/app/hooks/useSwipePanels'
+import { resolveRole } from '@/lib/roles'
 import { MessageContent, parseInlineMarkdown } from '@/app/components/MessageContent'
 
 
@@ -309,7 +310,10 @@ export default function HubPage() {
   // Derive current user role from session
   const userRole = (session?.user as Record<string, unknown>)?.role as string ?? 'onboarding'
   const isOnboarding = userRole === 'onboarding'
-  const canUseInterviewMode = !isOnboarding
+  // From the role config (single source of truth) — onboarding users now get
+  // Interview Mode too, so personal Google actions (own Tasks/Calendar) work;
+  // per-intent permissions still deny org-level actions with a clear message.
+  const canUseInterviewMode = resolveRole(userRole).canUseInterviewMode
   const canAccessAdmin = userRole === 'admin' || userRole === 'superadmin'
 
   // Dynamic suggestions based on the user's actual projects/workspace

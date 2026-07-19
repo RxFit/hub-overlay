@@ -52,6 +52,15 @@ export function resolveChatError(err: unknown): { content: string; reauth: boole
   if (status === 401) {
     return { content: "Your session expired. Please sign in again to continue.", reauth: true }
   }
+  // 413: the request body outgrew the server cap — realistic in a long
+  // document-discussion thread. Actionable copy beats the generic bubble:
+  // starting a fresh chat genuinely fixes it, retrying the same send never will.
+  if (status === 413) {
+    return { content: "This conversation has grown too large to send. Start a new chat (or remove large attachments) and try again — your Drive files and history are unaffected.", reauth: false }
+  }
+  if (status === 429) {
+    return { content: "You're sending messages a little too quickly. Give it a few seconds and try again.", reauth: false }
+  }
   // 5xx / network / unknown. The raw detail/status suffix is dev-only —
   // production users must never see internal error text in the bubble.
   const diag = process.env.NODE_ENV === 'development'

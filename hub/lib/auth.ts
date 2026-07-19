@@ -49,6 +49,24 @@ const ALLOWED_EMAIL_DOMAINS: string[] = (() => {
 const ALLOWED_EMAIL_ADDRESSES = (process.env.ALLOWED_EMAIL_ADDRESSES || '')
   .split(',').map(e => e.trim().toLowerCase()).filter(Boolean)
 
+/**
+ * Per-user display-name overrides: "email:Name,email2:Name2". The hub shows
+ * `session.user.name` (the Google profile name) everywhere; this lets the
+ * operator correct how a user is addressed (e.g. "Carol-Jean", not "Carol")
+ * without touching their Google account. Applied in the session callback.
+ */
+const USER_DISPLAY_NAME_OVERRIDES: Record<string, string> = (() => {
+  const map: Record<string, string> = {}
+  for (const pair of (process.env.USER_DISPLAY_NAME_OVERRIDES || '').split(',')) {
+    const sep = pair.indexOf(':')
+    if (sep <= 0) continue
+    const email = pair.slice(0, sep).trim().toLowerCase()
+    const name = pair.slice(sep + 1).trim()
+    if (email && name) map[email] = name
+  }
+  return map
+})()
+
 /* ── Google Workspace OAuth scopes ── */
 const GOOGLE_SCOPES = [
   'openid',
@@ -284,6 +302,10 @@ export const authOptions: NextAuthOptions = {
         u.assignedProjects = token.assignedProjects
         u.id = token.sub
         u.error = token.error
+        // Operator display-name override (see USER_DISPLAY_NAME_OVERRIDES).
+        const email = (session.user.email || '').toLowerCase()
+        const nameOverride = USER_DISPLAY_NAME_OVERRIDES[email]
+        if (nameOverride) u.name = nameOverride
       }
       return session
     },

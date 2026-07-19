@@ -19,9 +19,13 @@ import type {
 /* ── Role Permissions ── */
 
 const INTENT_PERMISSIONS: Record<InterviewIntent, ActionPermission> = {
+  // Personal productivity — writes ONLY to the requesting user's own Google
+  // account (their Tasks list / their Calendar), never to org data. Pending
+  // (onboarding) users like invited guests may run these; everything touching
+  // shared systems (Gmail sends, Chat posts, Paperclip) stays staff+.
+  create_task: 'onboarding',
+  schedule_event: 'onboarding',
   // Staff-level (read + create)
-  create_task: 'staff',
-  schedule_event: 'staff',
   send_communication: 'staff',
   send_gmail: 'staff',
   post_chat_message: 'staff',

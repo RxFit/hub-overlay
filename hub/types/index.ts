@@ -292,8 +292,10 @@ export interface ActionSpec {
   gateToken?: string
 }
 
-/** Minimum Hub role required to execute an action */
-export type ActionPermission = 'staff' | 'admin' | 'superadmin'
+/** Minimum Hub role required to execute an action. 'onboarding' marks
+ *  personal-productivity actions (the user's OWN Google account — Tasks,
+ *  Calendar) that even unassigned pending users may run. */
+export type ActionPermission = 'onboarding' | 'staff' | 'admin' | 'superadmin'
 
 /* ── Multi-Tenant KPI Types ── */
 

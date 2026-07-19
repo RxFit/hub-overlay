@@ -35,6 +35,8 @@ $ENV_VARS = @{
   "SUPERADMIN_EMAILS"             = "danny@rxfitatx.com"
   # Individually-invited guests on consumer domains (see lib/auth.ts).
   "ALLOWED_EMAIL_ADDRESSES"       = "caroljean37@gmail.com"
+  # Display-name corrections (email:Name pairs — see lib/auth.ts).
+  "USER_DISPLAY_NAME_OVERRIDES"   = "caroljean37@gmail.com:Carol-Jean"
   "VERTEX_GCP_PROJECT"            = "semantic-brain-desktop"
   "VERTEX_ENGINE_ID"              = "semanticbrain_1779229063037"
   "DEFAULT_PAPERCLIP_COMPANY_ID"  = "8f2acc3d-f2dc-4f8c-897e-7c400e91fd85"

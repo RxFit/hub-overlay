@@ -12,14 +12,26 @@ import {
 } from '@/lib/interview'
 
 describe('hasPermission', () => {
-  it('grants staff-level intents to staff and above', () => {
-    expect(hasPermission('staff', 'create_task')).toBe(true)
-    expect(hasPermission('admin', 'create_task')).toBe(true)
-    expect(hasPermission('superadmin', 'create_task')).toBe(true)
+  it('grants personal-productivity intents (own Google account) to every role, onboarding included', () => {
+    // The Carol-Jean case: pending users must be able to create Google Tasks /
+    // calendar events on THEIR OWN account.
+    for (const role of ['onboarding', 'staff', 'admin', 'superadmin']) {
+      expect(hasPermission(role, 'create_task')).toBe(true)
+      expect(hasPermission(role, 'schedule_event')).toBe(true)
+    }
   })
 
-  it('denies staff-level intents to onboarding', () => {
-    expect(hasPermission('onboarding', 'create_task')).toBe(false)
+  it('grants staff-level intents to staff and above', () => {
+    expect(hasPermission('staff', 'send_gmail')).toBe(true)
+    expect(hasPermission('admin', 'send_gmail')).toBe(true)
+    expect(hasPermission('superadmin', 'send_gmail')).toBe(true)
+  })
+
+  it('denies org-level (staff+) intents to onboarding', () => {
+    expect(hasPermission('onboarding', 'send_gmail')).toBe(false)
+    expect(hasPermission('onboarding', 'post_chat_message')).toBe(false)
+    expect(hasPermission('onboarding', 'create_paperclip_issue')).toBe(false)
+    expect(hasPermission('onboarding', 'send_communication')).toBe(false)
   })
 
   it('gates admin and superadmin intents correctly', () => {
@@ -74,7 +86,7 @@ describe('intent classification helpers', () => {
     expect(spec.intent).toBe('create_task')
     expect(spec.details.description).toBe('Do X')
     expect(spec.details._confirm).toBeUndefined() // _confirm is stripped
-    expect(spec.requiredPermission).toBe('staff')
+    expect(spec.requiredPermission).toBe('onboarding') // create_task is a personal-productivity intent
     expect(getTotalQuestions('create_task')).toBe(2)
   })
 })
