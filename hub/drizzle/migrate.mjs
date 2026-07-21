@@ -255,6 +255,14 @@ async function run() {
         ON document_chunks USING hnsw (embedding vector_cosine_ops);
       `
       console.log('[migrate] ✓ document_chunks HNSW index')
+
+      // Tag each embedding with the model that produced it. gemini-embedding-001
+      // (EOL 2026-07-14) and its successor gemini-embedding-2 produce INCOMPATIBLE
+      // vector spaces; lib/vector-store filters search to the active model so old
+      // and new vectors never mix. Existing rows stay NULL (implicitly old) until
+      // scripts/reembed-document-chunks.mjs backfills them. Idempotent.
+      await sql`ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS embedding_model TEXT`
+      console.log('[migrate] ✓ document_chunks embedding_model column check')
     } catch (err) {
       console.warn(`[migrate] ⚠️ pgvector schema failed (${err.code ?? ''} ${err.message}) — skipping document_chunks. Semantic search degraded; rest of schema continues.`)
     }

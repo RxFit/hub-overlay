@@ -16,9 +16,29 @@ export const SIMILARITY_THRESHOLD = Number(process.env.SIMILARITY_THRESHOLD) || 
 /**
  * Maximum character length accepted by the embedding model.
  * Inputs longer than this are truncated to prevent token-limit errors.
- * gemini-embedding-001 supports ~2048 tokens ≈ 8000 chars conservatively.
+ * The gemini-embedding family supports ~2048 tokens ≈ 8000 chars conservatively.
  */
 const MAX_EMBEDDING_INPUT_CHARS = 8_000
+
+/**
+ * Active embedding model + output dimensionality.
+ *
+ * gemini-embedding-001 reached end-of-life on 2026-07-14; gemini-embedding-2 is
+ * its GA successor. The two produce vectors in INCOMPATIBLE spaces, so a stored
+ * vector is only comparable to a query vector from the SAME model. We therefore
+ * tag every stored row with the model that produced it
+ * (document_chunks.embedding_model) and restrict search to rows on the ACTIVE
+ * model — a cross-space comparison can never happen, and rows still on the old
+ * model stay invisible until the backfill re-embeds them
+ * (scripts/reembed-document-chunks.mjs).
+ *
+ * EMBEDDING_MODEL is overridable so the exact API id can be corrected without a
+ * code change. 768 dims — a supported Matryoshka truncation of the model's 3072
+ * default — keeps the existing vector(768) column and HNSW cosine index as-is
+ * (cosine is scale-invariant, so a truncated vector needs no re-normalization).
+ */
+export const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || 'gemini-embedding-2'
+export const EMBEDDING_DIMENSIONS = 768
 
 let genAI: GoogleGenerativeAI | null = null
 
@@ -48,10 +68,10 @@ export async function generateEmbedding(text: string): Promise<number[]> {
         'Input text truncated before embedding generation')
     }
 
-    const model = getGenAI().getGenerativeModel({ model: 'gemini-embedding-001' })
+    const model = getGenAI().getGenerativeModel({ model: EMBEDDING_MODEL })
     const result = await model.embedContent({
       content: { parts: [{ text: safeText }] },
-      outputDimensionality: 768,
+      outputDimensionality: EMBEDDING_DIMENSIONS,
     } as any)
     return result.embedding.values
   } catch (err) {
@@ -79,7 +99,11 @@ export async function searchSimilarDocuments(tenantId: string, query: string, li
         similarity,
       })
       .from(documentChunks)
-      .where(sql`${documentChunks.tenantId} = ${tenantId} AND 1 - (${documentChunks.embedding} <=> ${JSON.stringify(queryEmbedding)}::vector) > ${SIMILARITY_THRESHOLD}`)
+      // Restrict to rows produced by the ACTIVE model: a stored embedding is only
+      // comparable to a query vector from the same model, so old-model (and legacy
+      // NULL) rows are excluded until the backfill re-embeds them — never a
+      // cross-space match.
+      .where(sql`${documentChunks.tenantId} = ${tenantId} AND ${documentChunks.embeddingModel} = ${EMBEDDING_MODEL} AND 1 - (${documentChunks.embedding} <=> ${JSON.stringify(queryEmbedding)}::vector) > ${SIMILARITY_THRESHOLD}`)
       .orderBy(desc(similarity))
       .limit(limit)
 
@@ -126,6 +150,7 @@ export async function upsertDocumentChunk(tenantId: string, sourceUrl: string, c
           sourceUrl,
           content,
           embedding,
+          embeddingModel: EMBEDDING_MODEL,
         })
         .returning()
 

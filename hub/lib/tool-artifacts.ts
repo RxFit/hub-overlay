@@ -1,7 +1,7 @@
 import { db } from './db'
 import { toolArtifacts, documentChunks } from './schema'
 import { eq, and, desc } from 'drizzle-orm'
-import { generateEmbedding } from './vector-store'
+import { generateEmbedding, EMBEDDING_MODEL } from './vector-store'
 import { createLogger } from './logger'
 
 const log = createLogger('tool-artifacts')
@@ -45,6 +45,7 @@ export async function saveToolArtifact(data: {
       sourceUrl: `tool-artifact:${artifact.id}`,
       content: chunkContent,
       embedding,
+      embeddingModel: EMBEDDING_MODEL,
     })
 
     log.info({ artifactId: artifact.id, toolId: data.toolId }, 'Tool artifact saved with embedding')
@@ -140,7 +141,7 @@ export async function updateToolArtifact(
 
     await db
       .update(documentChunks)
-      .set({ content: chunkContent, embedding })
+      .set({ content: chunkContent, embedding, embeddingModel: EMBEDDING_MODEL })
       .where(eq(documentChunks.sourceUrl, `tool-artifact:${id}`))
 
     log.info({ artifactId: id }, 'Tool artifact updated with re-embedding')

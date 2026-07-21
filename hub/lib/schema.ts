@@ -123,7 +123,8 @@ export const documentChunks = pgTable('document_chunks', {
   tenantId:   text('tenant_id').notNull().references(() => tenants.id),
   sourceUrl:  text('source_url').notNull(),                        // Link to Google Doc/Email
   content:    text('content').notNull(),                           // The raw text chunk
-  embedding:  vector('embedding', { dimensions: 768 }),            // Google Gemini text-embedding-004
+  embedding:  vector('embedding', { dimensions: 768 }),            // 768-dim MRL truncation — see lib/vector-store EMBEDDING_MODEL
+  embeddingModel: text('embedding_model'),                          // model that produced `embedding`; search only trusts rows on the active model
   createdAt:  timestamp('created_at').defaultNow().notNull(),
 }, (table) => ({
   embeddingIndex: index('document_chunks_embedding_hnsw_idx').using('hnsw', table.embedding.op('vector_cosine_ops'))
