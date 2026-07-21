@@ -102,6 +102,15 @@ const GOOGLE_SCOPES = [
   // People API — resolve a contact name to an email so "email Maria …" works
   // instead of failing for want of an address. Read-only + SENSITIVE.
   'https://www.googleapis.com/auth/contacts.readonly',
+  // Slides authoring — turn the deck skills (Deck Pipeline, Gamma Deck) into a
+  // real Google Slides deck. SENSITIVE (not restricted); pairs with drive.file
+  // so the deck lands in the user's Drive.
+  'https://www.googleapis.com/auth/presentations',
+  // Admin SDK Directory (read-only) — resolve a colleague's name to their work
+  // email across the org directory when they aren't in personal contacts.
+  // SENSITIVE. NOTE: enabling this needs a Workspace admin to turn on the Admin
+  // SDK API; non-admins can still read via viewType=domain_public.
+  'https://www.googleapis.com/auth/admin.directory.user.readonly',
 ].join(' ')
 
 

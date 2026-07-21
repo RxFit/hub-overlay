@@ -297,3 +297,38 @@ describe('executeAction: post_chat_message', () => {
     ).rejects.toThrow('Chat message failed: 500')
   })
 })
+
+/* ── Google Docs/Sheets (lightweight flow: extracted title/content + additionalContext) ── */
+
+describe('executeAction: create_google_doc', () => {
+  it('POSTs title + body, folding a real additionalContext into the doc body', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ doc: { title: 'Q3 Memo', documentUrl: 'http://doc' } }))
+
+    await executeAction(
+      specFor('create_google_doc', {
+        title: 'Q3 Memo',
+        content: 'Recommendation: proceed.',
+        additionalContext: 'Add a risks section.',
+      }),
+      deps
+    )
+
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/google/doc')
+    expect(JSON.parse(init.body)).toEqual({
+      title: 'Q3 Memo',
+      body: 'Recommendation: proceed.\n\nAdd a risks section.',
+    })
+  })
+
+  it('creates a doc from a title alone (content empty, no context added)', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ doc: { title: 'Notes', documentUrl: 'http://doc' } }))
+
+    // Skip phrases like "go ahead" are stripped in buildConfirmationSpec, so by
+    // the time executeAction runs there is no additionalContext to fold.
+    await executeAction(specFor('create_google_doc', { title: 'Notes' }), deps)
+
+    const [, init] = fetchMock.mock.calls[0]
+    expect(JSON.parse(init.body)).toEqual({ title: 'Notes', body: '' })
+  })
+})

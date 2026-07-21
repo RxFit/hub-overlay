@@ -240,6 +240,7 @@ export type InterviewIntent =
   | 'schedule_event'
   | 'create_google_doc'
   | 'create_google_sheet'
+  | 'create_google_presentation'
   | 'send_communication'
   | 'create_paperclip_issue'
   // Phase 3: Paperclip orchestrator intents

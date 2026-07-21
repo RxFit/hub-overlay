@@ -116,18 +116,46 @@ export function useVoiceInput({ getInput, setInput }: UseVoiceInputOptions) {
   useEffect(() => { setInputRef.current = setInput }, [setInput])
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // ── Frame-coalesced transcript flush (freeze fix) ──
+  // The browser speech engine fires `onresult` many times per second during
+  // continuous dictation (interim results), and some engines (notably iOS
+  // Safari) fire in tight bursts. Applying each event synchronously did a full
+  // page re-render AND forced a textarea reflow (scrollHeight) PER EVENT, which
+  // saturated the main thread and froze the UI mid-dictation. Instead we stash
+  // the newest transcript and flush it into the input at most once per animation
+  // frame, so a burst of N events collapses to a single re-render + reflow.
+  const pendingTranscriptRef = useRef<string | null>(null)
+  const rafRef = useRef<number | null>(null)
+
+  const flushTranscript = useCallback(() => {
+    // Cancel any queued frame so synchronous callers (stop / onend) don't leave
+    // a stale frame pending; harmless when invoked as the rAF callback itself.
+    if (rafRef.current !== null && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(rafRef.current)
+    }
+    rafRef.current = null
+    if (pendingTranscriptRef.current !== null) {
+      setInputRef.current(mergeTranscript(baseTextRef.current, pendingTranscriptRef.current))
+      pendingTranscriptRef.current = null
+    }
+  }, [])
+
   // Feature-detect once on mount (guarded — SSR has no window).
   useEffect(() => {
     const w = window as unknown as Record<string, unknown>
     setIsSupported(Boolean(w.SpeechRecognition || w.webkitSpeechRecognition))
   }, [])
 
-  // Cleanup: kill any live session and pending error timer on unmount.
+  // Cleanup: kill any live session, pending error timer, and queued frame on unmount.
   useEffect(() => {
     return () => {
       recognitionRef.current?.abort()
       recognitionRef.current = null
       if (errorTimerRef.current) clearTimeout(errorTimerRef.current)
+      if (rafRef.current !== null && typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(rafRef.current)
+        rafRef.current = null
+      }
     }
   }, [])
 
@@ -139,11 +167,14 @@ export function useVoiceInput({ getInput, setInput }: UseVoiceInputOptions) {
   }, [])
 
   const stop = useCallback(() => {
+    // Apply any frame-pending transcript now so the final words land the moment
+    // the user stops, not a frame later (and never after the input is cleared).
+    flushTranscript()
     recognitionRef.current?.stop()
     // onend fires asynchronously; flip the UI immediately so the button
     // doesn't feel stuck.
     setIsListening(false)
-  }, [])
+  }, [flushTranscript])
 
   const start = useCallback(() => {
     const w = window as unknown as {
@@ -155,6 +186,12 @@ export function useVoiceInput({ getInput, setInput }: UseVoiceInputOptions) {
 
     // Tear down any prior session before starting fresh.
     recognitionRef.current?.abort()
+    // Drop any stale pending transcript / queued frame from a prior session.
+    if (rafRef.current !== null && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(rafRef.current)
+    }
+    rafRef.current = null
+    pendingTranscriptRef.current = null
 
     const recognition = new Ctor()
     recognition.continuous = true
@@ -164,8 +201,15 @@ export function useVoiceInput({ getInput, setInput }: UseVoiceInputOptions) {
     baseTextRef.current = getInputRef.current()
 
     recognition.onresult = (event) => {
-      const transcript = buildTranscript(event.results)
-      setInputRef.current(mergeTranscript(baseTextRef.current, transcript))
+      // Cheap: build the transcript and stash it; the expensive setInput +
+      // reflow is deferred to a single per-frame flush so a rapid burst of
+      // events can't lock up the main thread (see flushTranscript).
+      pendingTranscriptRef.current = buildTranscript(event.results)
+      if (typeof requestAnimationFrame !== 'function') {
+        flushTranscript() // non-browser env (tests/SSR): apply immediately
+      } else if (rafRef.current === null) {
+        rafRef.current = requestAnimationFrame(flushTranscript)
+      }
     }
     recognition.onerror = (event) => {
       const message = resolveVoiceError(event.error)
@@ -173,6 +217,9 @@ export function useVoiceInput({ getInput, setInput }: UseVoiceInputOptions) {
       setIsListening(false)
     }
     recognition.onend = () => {
+      // Flush any frame-pending transcript so the last words aren't lost when
+      // the engine ends the session on its own.
+      flushTranscript()
       setIsListening(false)
       recognitionRef.current = null
     }
@@ -186,7 +233,7 @@ export function useVoiceInput({ getInput, setInput }: UseVoiceInputOptions) {
       // start() throws if a session is somehow already active — reset state.
       setIsListening(false)
     }
-  }, [showError])
+  }, [showError, flushTranscript])
 
   const toggle = useCallback(() => {
     if (isListening) stop()

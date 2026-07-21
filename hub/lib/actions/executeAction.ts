@@ -337,10 +337,12 @@ export async function executeAction(
 
     case 'create_google_doc': {
       const docTitle = spec.details.title || spec.summary
+      // Lightweight flow: any real "add context?" answer enriches the doc body.
+      const docBody = withExtraContext(spec.details.content || '', spec.details.additionalContext)
       const res = await fetch('/api/google/doc', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-AI-Intent': 'create_google_doc' },
-        body: JSON.stringify({ title: docTitle, body: spec.details.content || '' }),
+        body: JSON.stringify({ title: docTitle, body: docBody }),
       })
       if (!res.ok) throw new Error(await scopeAwareError(res, 'Doc creation'))
       const data = await res.json()
@@ -351,7 +353,8 @@ export async function executeAction(
     case 'create_google_sheet': {
       const sheetTitle = spec.details.title || spec.summary
       // Parse pasted content into rows: split lines, then commas/tabs into cells.
-      const raw = (spec.details.content || '').trim()
+      // A real "add context?" answer is folded in as additional row content.
+      const raw = withExtraContext(spec.details.content || '', spec.details.additionalContext).trim()
       const rows = raw
         ? raw.split('\n').map((line) => line.split(/\t|,/).map((c) => c.trim()))
         : undefined
@@ -363,6 +366,19 @@ export async function executeAction(
       if (!res.ok) throw new Error(await scopeAwareError(res, 'Sheet creation'))
       const data = await res.json()
       resultMsg = `📊 **Google Sheet created!**\n\n"${data.sheet?.title || sheetTitle}" is in your Drive.\n\n▶ [Open the sheet](${data.sheet?.spreadsheetUrl})`
+      break
+    }
+
+    case 'create_google_presentation': {
+      const deckTitle = spec.details.title || spec.summary
+      const res = await fetch('/api/google/presentation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-AI-Intent': 'create_google_presentation' },
+        body: JSON.stringify({ title: deckTitle, body: spec.details.content || '' }),
+      })
+      if (!res.ok) throw new Error(await scopeAwareError(res, 'Presentation creation'))
+      const data = await res.json()
+      resultMsg = `🖼️ **Google Slides deck created!**\n\n"${data.presentation?.title || deckTitle}" is in your Drive.\n\n▶ [Open the deck](${data.presentation?.presentationUrl})`
       break
     }
 
