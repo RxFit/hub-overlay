@@ -10,7 +10,7 @@ import { buildChunkDeleteLikePattern } from '@/lib/chunk-delete-pattern';
  * Rather than processing the entire payload synchronously, it acknowledges
  * the webhook immediately and kicks off an async Paperclip AI task to:
  * 1. Read the delta (new doc, updated event).
- * 2. Generate a vector embedding via text-embedding API.
+ * 2. Generate a vector embedding via the active Gemini embedding model.
  * 3. Store the chunk in the `documentChunks` pgvector table.
  * 4. Create explicit Graph edges in `entityLinks` connecting the new data to existing KPIs/Nodes.
  */

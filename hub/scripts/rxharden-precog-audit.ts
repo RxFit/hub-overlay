@@ -53,18 +53,22 @@ async function phase1_TechnicalAnalysis() {
       ? 'GenAI uses lazy singleton pattern via getGenAI()'
       : 'MISSING: GenAI should use lazy initialization')
 
-  // T3: Verify embedding model is gemini-embedding-001
-  const hasNewModel = vectorStoreCode.includes('gemini-embedding-001')
-  record('Technical', 'Updated embedding model', hasNewModel,
-    hasNewModel
-      ? 'Uses gemini-embedding-001 (latest Gemini embedding model)'
-      : 'MISSING: Still using old text-embedding-004')
+  // T3: Verify the embedding model is the current, non-EOL model. gemini-embedding-001
+  // reached end-of-life 2026-07-14; the app now uses gemini-embedding-2 (overridable
+  // via EMBEDDING_MODEL). Fail if the dead model is still hardcoded.
+  const usesCurrentModel = vectorStoreCode.includes('gemini-embedding-2')
+    && !vectorStoreCode.includes("'gemini-embedding-001'")
+  record('Technical', 'Current embedding model', usesCurrentModel,
+    usesCurrentModel
+      ? 'Uses gemini-embedding-2 (current; gemini-embedding-001 is EOL)'
+      : 'MISSING: still references EOL gemini-embedding-001')
 
   // T4: Verify outputDimensionality is set to 768  
-  const hasDimensionality = vectorStoreCode.includes('outputDimensionality: 768')
+  const hasDimensionality = vectorStoreCode.includes('outputDimensionality: EMBEDDING_DIMENSIONS')
+    && vectorStoreCode.includes('EMBEDDING_DIMENSIONS = 768')
   record('Technical', 'Output dimensionality set', hasDimensionality,
     hasDimensionality
-      ? 'outputDimensionality explicitly set to 768'
+      ? 'outputDimensionality pinned to EMBEDDING_DIMENSIONS (768)'
       : 'MISSING: outputDimensionality not explicitly set')
 
   // T5: Check that the cosine expression is not duplicated between select/where
