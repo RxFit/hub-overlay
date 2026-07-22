@@ -154,6 +154,29 @@ export const founderLensSections = pgTable(
   })
 )
 
+/* ── Focus Preferences (per-user Gmail Focus-queue personalization) ─────── */
+/**
+ * One row per user (tenant + email) holding the personalization the Focus
+ * ranker injects: a unified VIP list (each tagged business|personal) and a
+ * short free-text "what matters to me now" goals string. Reads are FAIL-OPEN
+ * (see lib/focus-preferences.ts) so the ranker still works when the row — or
+ * the whole DB — is unavailable.
+ */
+export const focusPreferences = pgTable(
+  'focus_preferences',
+  {
+    id:        text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+    tenantId:  text('tenant_id').notNull().references(() => tenants.id),
+    email:     text('email').notNull(),
+    vips:      jsonb('vips').$type<{ value: string; category: 'business' | 'personal' }[]>().notNull().default([]),
+    goals:     text('goals').notNull().default(''),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  },
+  (t) => ({
+    emailTenantUniq: uniqueIndex('focus_preferences_email_tenant_uniq').on(t.tenantId, t.email),
+  })
+)
+
 /* ── Tool Artifacts (Structured output from skill sessions) ────────────── */
 
 export const toolArtifacts = pgTable('tool_artifacts', {

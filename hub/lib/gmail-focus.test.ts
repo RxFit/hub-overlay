@@ -69,7 +69,7 @@ describe('heuristicFocusItems (AI-outage fallback)', () => {
     )
     // Default now matches the AI path so the strip length doesn't jump on failover.
     expect(heuristicFocusItems(many)).toHaveLength(MAX_FOCUS_ITEMS)
-    expect(heuristicFocusItems(many, 3)).toHaveLength(3)
+    expect(heuristicFocusItems(many, { max: 3 })).toHaveLength(3)
   })
 
   it('treats an unparseable date as no recency bonus, not NaN', () => {
@@ -77,6 +77,40 @@ describe('heuristicFocusItems (AI-outage fallback)', () => {
       thread({ id: 'x', from: 'A <a@example.com>', isUnread: true, messageCount: 1, date: 'not-a-date' }),
     ])
     expect(item.priority).toBe(70) // unread(40) + human(30), no recency
+  })
+
+  it('surfaces a VIP even when the sender looks automated and the mail is read/old', () => {
+    // A VIP at a role-looking address (billing@) that would normally be filtered:
+    // read + old + "automated" → 0. The VIP flag overrides automated (+30 human)
+    // and adds +40, so it crosses the ≥60 bar and gets a reply action.
+    const vips = [{ value: 'accountant@billing.myfirm.com', category: 'business' as const }]
+    const [item] = heuristicFocusItems(
+      [thread({ id: 'vip', from: 'My Accountant <accountant@billing.myfirm.com>', isUnread: false, messageCount: 1, date: stale() })],
+      { vips },
+    )
+    expect(item.id).toBe('vip')
+    expect(item.priority).toBe(70) // human(30, VIP overrides automated) + vip(40)
+    expect(item.action).toBe('reply')
+    expect(item.reason).toMatch(/VIP/)
+
+    // A personal VIP is labeled as such.
+    const [personal] = heuristicFocusItems(
+      [thread({ id: 'p', from: 'Mom <mom@family.com>', isUnread: true, messageCount: 1, date: fresh() })],
+      { vips: [{ value: 'mom@family.com', category: 'personal' }] },
+    )
+    expect(personal.reason).toMatch(/personal VIP/i)
+  })
+
+  it('ranks a VIP above an equally-fresh non-VIP human', () => {
+    const items = heuristicFocusItems(
+      [
+        thread({ id: 'vip', from: 'Client <ceo@bigclient.com>', isUnread: true, messageCount: 1, date: fresh() }),
+        thread({ id: 'other', from: 'Someone <someone@example.com>', isUnread: true, messageCount: 1, date: fresh() }),
+      ],
+      { vips: [{ value: 'ceo@bigclient.com', category: 'business' }] },
+    )
+    expect(items[0].id).toBe('vip')
+    expect(items[0].priority).toBeGreaterThan(items[1].priority)
   })
 
   it('does not misclassify real people whose address merely contains automated substrings', () => {
@@ -116,6 +150,30 @@ describe('buildFocusPrompt', () => {
   it('clips oversized fields so one giant subject cannot flood the prompt', () => {
     const prompt = buildFocusPrompt('u@x.com', [thread({ snippet: 'x'.repeat(5000) })])
     expect(prompt.length).toBeLessThan(2500)
+  })
+
+  it('omits the priorities block entirely when no preferences are set', () => {
+    const prompt = buildFocusPrompt('u@x.com', [thread()])
+    expect(prompt).not.toContain('VIP senders')
+    expect(prompt).not.toContain('What matters to this user')
+  })
+
+  it('injects VIPs + goals as TRUSTED guidance outside the untrusted email_data wall', () => {
+    const prompt = buildFocusPrompt('u@x.com', [thread()], {
+      goals: 'Close the SBG deal; anything about my daughter',
+      vips: [
+        { value: 'ceo@bigclient.com', category: 'business' },
+        { value: 'school@kids.edu', category: 'personal' },
+      ],
+    })
+    const dataBlock = prompt.slice(prompt.indexOf('<email_data>'), prompt.indexOf('</email_data>'))
+    // Preferences appear in the prompt but NOT inside the sender-controlled wall.
+    expect(prompt).toContain('Close the SBG deal')
+    expect(prompt).toContain('ceo@bigclient.com')
+    expect(prompt).toContain('Business VIPs:')
+    expect(prompt).toContain('Personal VIPs:')
+    expect(dataBlock).not.toContain('ceo@bigclient.com')
+    expect(dataBlock).not.toContain('Close the SBG deal')
   })
 })
 

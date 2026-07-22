@@ -17,6 +17,8 @@ import { withTimeout } from '@/lib/timeout'
 import { recordAiAction } from '@/lib/ai-audit'
 import { newRequestId } from '@/lib/observability'
 import { geminiGenerateText } from '@/lib/gemini'
+import { focusPreferencesSignature } from '@/lib/focus-preferences'
+import { getFocusPreferences } from '@/lib/focus-preferences-db'
 
 export const runtime = 'nodejs'
 export const maxDuration = 30
@@ -71,8 +73,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ items: [], generatedAt: new Date().toISOString(), cached: false })
   }
 
-  // Serve from cache while the inbox composition is unchanged and fresh.
-  const signature = threadsSignature(threads)
+  // Per-user personalization (VIP list + goals). FAIL-OPEN: an outage or an
+  // empty row returns EMPTY prefs, so ranking degrades to the pre-feature
+  // behavior instead of failing the request.
+  const prefs = await getFocusPreferences(userEmail)
+
+  // Serve from cache while the inbox composition AND the preferences are
+  // unchanged and fresh — editing VIPs/goals must invalidate a cached ranking.
+  const signature = `${threadsSignature(threads)}#${focusPreferencesSignature(prefs)}`
   const cached = getCachedFocus(userEmail, signature)
   if (cached) {
     return NextResponse.json({
@@ -107,7 +115,7 @@ export async function GET(req: NextRequest) {
   // reserved for real failures: timeout, exception, or unparseable output.
   let aiRanked = false
   try {
-    const prompt = buildFocusPrompt(userEmail, threads)
+    const prompt = buildFocusPrompt(userEmail, threads, prefs)
     const ranked = await withTimeout(
       geminiGenerateText(
         'You are an inbox triage assistant. Follow the instructions in the user message exactly and respond with ONLY the requested JSON array — no markdown, no prose.',
@@ -134,9 +142,10 @@ export async function GET(req: NextRequest) {
   }
 
   // Heuristic fallback ONLY on a real AI failure — never to override a valid
-  // (possibly empty) model ranking.
+  // (possibly empty) model ranking. The heuristic still honors VIPs so flagged
+  // senders surface even during a total model outage.
   if (!aiRanked) {
-    items = heuristicFocusItems(threads)
+    items = heuristicFocusItems(threads, { vips: prefs.vips })
   }
 
   const generatedAt = new Date().toISOString()

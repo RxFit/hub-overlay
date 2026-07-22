@@ -8322,6 +8322,39 @@ a:hover .rx-arrow {
   line-height: 1.5;
 }
 
+/* Focus preferences editor (VIP list + goals) */
+.settings-field-label {
+  display: block;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+.settings-field-hint {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  line-height: 1.45;
+  margin: 4px 0 0 0;
+}
+
+.settings-textarea {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  font-family: inherit;
+  line-height: 1.5;
+}
+
+.settings-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 /* Scope warning */
 .settings-scope-warning {
   display: flex;

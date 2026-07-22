@@ -7,6 +7,7 @@ import Link from 'next/link'
 import { useSpaces, setPinnedSpaces, getPinnedSpaces } from '@/app/hooks/useGoogleChat'
 import type { ChatSpace } from '@/app/hooks/useGoogleChat'
 import { InfoPopover } from '@/app/components/InfoPopover'
+import { FocusPreferencesSettings } from '@/app/settings/components/FocusPreferencesSettings'
 import { useCompanies } from '@/app/hooks/useCompanies'
 import type { Company } from '@/types'
 
@@ -1600,6 +1601,9 @@ export default function SettingsPage() {
           </>
         )}
       </section>
+
+      {/* ── Email Focus Priorities (VIP list + goals) — every user ── */}
+      <FocusPreferencesSettings />
 
       {/* ── Connected Services / API Keys (admin + superadmin) ── */}
       {isAdmin && (
