@@ -21,6 +21,7 @@ const { state } = vi.hoisted(() => ({
     threads: [] as unknown[],
     gemini: null as null | { text: string; model: string } | (() => never),
     auditRows: [] as Record<string, unknown>[],
+    prefs: { vips: [] as { value: string; category: 'business' | 'personal' }[], goals: '' },
   },
 }))
 
@@ -40,6 +41,10 @@ vi.mock('@/lib/gemini', () => ({
     if (typeof state.gemini === 'function') return state.gemini()
     return state.gemini
   }),
+}))
+// The pure helpers (focusPreferencesSignature) run real; only the DB read is stubbed.
+vi.mock('@/lib/focus-preferences-db', () => ({
+  getFocusPreferences: vi.fn(async () => state.prefs),
 }))
 
 import { GET } from '@/app/api/google/gmail/focus/route'
@@ -65,6 +70,7 @@ beforeEach(() => {
   state.threads = [hotThread]
   state.gemini = null
   state.auditRows = []
+  state.prefs = { vips: [], goals: '' }
 })
 afterEach(() => vi.clearAllMocks())
 
@@ -118,6 +124,17 @@ describe('GET /api/google/gmail/focus', () => {
     expect(row.status).toBe('failed')
     expect(row.error).toBe('unparseable model output')
     expect((row.target as Record<string, unknown>).model).toBe('heuristic')
+  })
+
+  it('flows VIP preferences through to the heuristic fallback path', async () => {
+    // A VIP matching the thread + an AI failure → the heuristic honors the VIP.
+    state.prefs = { vips: [{ value: 'sarah@example.com', category: 'business' }], goals: '' }
+    state.gemini = () => { throw new Error('down') }
+
+    const json = await (await GET(req())).json()
+    expect(json.items.map((i: { id: string }) => i.id)).toEqual(['hot'])
+    expect(json.items[0].reason).toMatch(/VIP/)
+    expect(json.items[0].action).toBe('reply')
   })
 
   it('returns an empty strip (no audit) for a truly empty inbox', async () => {

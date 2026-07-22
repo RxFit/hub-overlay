@@ -306,6 +306,24 @@ async function run() {
   `
   console.log('[migrate] ✓ founder_lens_sections table')
 
+  // Focus Preferences — per-user Gmail Focus-queue personalization (VIP list +
+  // goals). One row per (tenant, email); reads are fail-open in the app.
+  await sql`
+    CREATE TABLE IF NOT EXISTS focus_preferences (
+      id         TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id  TEXT NOT NULL REFERENCES tenants(id),
+      email      TEXT NOT NULL,
+      vips       JSONB NOT NULL DEFAULT '[]'::jsonb,
+      goals      TEXT NOT NULL DEFAULT '',
+      updated_at TIMESTAMPTZ DEFAULT now() NOT NULL
+    )
+  `
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS focus_preferences_email_tenant_uniq
+    ON focus_preferences(tenant_id, email)
+  `
+  console.log('[migrate] ✓ focus_preferences table')
+
   // AI Action Log — append-only provenance for AI-initiated actions (NS-2).
   // Strictly additive; no backfill. `target` holds routing metadata only (no
   // bodies); `gate_token_id` is a token fingerprint (never the full token).
