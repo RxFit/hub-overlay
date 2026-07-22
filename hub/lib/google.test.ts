@@ -178,13 +178,14 @@ describe('listRecentGmailThreads', () => {
 
     const threads = await listRecentGmailThreads('token', { maxResults: 2 })
     expect(threads).toHaveLength(2)
-    // Headers + unread flag come from the LAST message; snippet from the FIRST.
+    // Headers + unread flag AND snippet all come from the LAST message, so a
+    // multi-message thread previews its latest reply (matching Gmail's list).
     expect(threads[0]).toMatchObject({
       id: 't1',
       subject: 'Re: Old subject',
       from: 'Bob <b@x.com>',
       date: 'Fri, 03 Jul 2026 10:00:00 -0500',
-      snippet: 'first message snippet',
+      snippet: 'latest reply snippet',
       isUnread: true,
       messageCount: 2,
     })

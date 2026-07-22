@@ -64,8 +64,11 @@ export function __resetFocusCacheForTest(): void {
  * changes (new thread, read-state flip) or the cache TTL lapses — the 60s
  * inbox poll must not turn into a 60s model call.
  */
-export function threadsSignature(threads: Pick<GmailThreadSummary, 'id' | 'isUnread'>[]): string {
-  return threads.map(t => `${t.id}:${t.isUnread ? 'u' : 'r'}`).join('|')
+export function threadsSignature(threads: Pick<GmailThreadSummary, 'id' | 'isUnread' | 'messageCount'>[]): string {
+  // messageCount is part of the key so a new reply landing on an ALREADY-unread
+  // thread (the unread flag doesn't flip) still invalidates the cached ranking
+  // instead of serving a stale one for up to the full TTL.
+  return threads.map(t => `${t.id}:${t.isUnread ? 'u' : 'r'}:${t.messageCount}`).join('|')
 }
 
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
@@ -107,9 +110,13 @@ Respond with ONLY a JSON array (no markdown, no prose) of at most ${MAX_FOCUS_IT
 Only include threads genuinely worth attention — an empty array [] is a valid answer for an inbox of pure noise.`
 }
 
-/* Senders that are clearly automated — never "reply to this person". */
+/* Senders that are clearly automated — never "reply to this person".
+   Role prefixes are anchored to `@` and the bulk-mail tokens are specific
+   (`mailer-daemon`, `invoice(s)@`) so real people aren't misclassified: bare
+   `mailer` matched `retailer@`/`emailer@`, and bare `invoice` matched any
+   address or display name containing the substring. */
 const AUTOMATED_SENDER_RE =
-  /no-?reply|notifications?@|newsletters?@|marketing@|updates?@|info@|support@|billing@|receipts?@|do-not-reply|mailer|invoice|@e\.|@em\.|@mail\.|@email\./i
+  /no-?reply|notifications?@|newsletters?@|marketing@|updates?@|info@|support@|billing@|receipts?@|do-not-reply|mailer-daemon|invoices?@|@e\.|@em\.|@mail\.|@email\./i
 
 /**
  * Deterministic fallback ranking for when the AI ranker fails, times out, or
@@ -117,7 +124,7 @@ const AUTOMATED_SENDER_RE =
  * active conversation, recency. Guarantees the Focus strip renders from live
  * inbox data even during a total model outage.
  */
-export function heuristicFocusItems(threads: GmailThreadSummary[], max = 3): FocusItem[] {
+export function heuristicFocusItems(threads: GmailThreadSummary[], max = MAX_FOCUS_ITEMS): FocusItem[] {
   const now = Date.now()
   const scored: FocusItem[] = threads.map(t => {
     const automated = AUTOMATED_SENDER_RE.test(t.from)
@@ -147,17 +154,28 @@ export function heuristicFocusItems(threads: GmailThreadSummary[], max = 3): Foc
  * malformed JSON returns []. Unknown ids, duplicate ids, bogus actions, and
  * oversized reasons are corrected or dropped rather than trusted.
  */
-export function parseFocusResponse(raw: string, validIds: ReadonlySet<string>): FocusItem[] {
+/**
+ * Parse + harden the model's ranking, distinguishing a VALID ranking (even an
+ * empty one — a legitimate "nothing matters" verdict, which the prompt
+ * explicitly permits) from UNPARSEABLE output. `parsed` is true iff the model
+ * returned a syntactically valid JSON array, so the route can honor a genuine
+ * empty verdict instead of overriding it with the heuristic fallback (which is
+ * reserved for real failures: timeout, exception, garbage output).
+ */
+export function parseFocusResult(
+  raw: string,
+  validIds: ReadonlySet<string>,
+): { items: FocusItem[]; parsed: boolean } {
   const match = raw.match(/\[[\s\S]*\]/)
-  if (!match) return []
+  if (!match) return { items: [], parsed: false }
 
   let parsed: unknown
   try {
     parsed = JSON.parse(match[0])
   } catch {
-    return []
+    return { items: [], parsed: false }
   }
-  if (!Array.isArray(parsed)) return []
+  if (!Array.isArray(parsed)) return { items: [], parsed: false }
 
   const seen = new Set<string>()
   const items: FocusItem[] = []
@@ -187,5 +205,13 @@ export function parseFocusResponse(raw: string, validIds: ReadonlySet<string>): 
     items.push({ id, priority, reason, action })
   }
 
-  return items.sort((a, b) => b.priority - a.priority)
+  return { items: items.sort((a, b) => b.priority - a.priority), parsed: true }
+}
+
+/**
+ * Back-compat wrapper returning just the hardened items. Callers that must
+ * distinguish a genuine empty ranking from garbage use parseFocusResult.
+ */
+export function parseFocusResponse(raw: string, validIds: ReadonlySet<string>): FocusItem[] {
+  return parseFocusResult(raw, validIds).items
 }

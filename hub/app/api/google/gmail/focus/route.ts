@@ -6,7 +6,7 @@ import { listRecentGmailThreads } from '@/lib/google'
 import { clampInt } from '@/lib/num'
 import {
   buildFocusPrompt,
-  parseFocusResponse,
+  parseFocusResult,
   threadsSignature,
   getCachedFocus,
   setCachedFocus,
@@ -101,6 +101,11 @@ export async function GET(req: NextRequest) {
   let items: FocusItem[] = []
   let model = 'heuristic'
   let aiFailure: string | null = null
+  // True once the model returns a VALID ranking — even an empty one. A genuine
+  // empty verdict ("inbox of pure noise", which buildFocusPrompt explicitly
+  // permits) must be honored, NOT overridden by the heuristic. The heuristic is
+  // reserved for real failures: timeout, exception, or unparseable output.
+  let aiRanked = false
   try {
     const prompt = buildFocusPrompt(userEmail, threads)
     const ranked = await withTimeout(
@@ -113,8 +118,14 @@ export async function GET(req: NextRequest) {
       'gmail-focus-rank',
     )
     if (ranked) {
-      items = parseFocusResponse(ranked.text, new Set(threads.map(t => t.id)))
-      if (items.length > 0) model = ranked.model
+      const result = parseFocusResult(ranked.text, new Set(threads.map(t => t.id)))
+      if (result.parsed) {
+        aiRanked = true
+        items = result.items
+        model = ranked.model // credit the model even for a valid empty ranking
+      } else {
+        aiFailure = 'unparseable model output'
+      }
     } else {
       aiFailure = 'rank timeout (20s)'
     }
@@ -122,7 +133,9 @@ export async function GET(req: NextRequest) {
     aiFailure = err instanceof Error ? err.message.slice(0, 200) : 'unknown error'
   }
 
-  if (items.length === 0) {
+  // Heuristic fallback ONLY on a real AI failure — never to override a valid
+  // (possibly empty) model ranking.
+  if (!aiRanked) {
     items = heuristicFocusItems(threads)
   }
 
@@ -139,7 +152,9 @@ export async function GET(req: NextRequest) {
 
   await recordAiAction({
     ...auditBase,
-    status: aiFailure && model === 'heuristic' ? 'failed' : 'success',
+    // A failure means the AI never produced a valid ranking (aiRanked stayed
+    // false and we fell back to the heuristic). A valid empty verdict is success.
+    status: aiFailure ? 'failed' : 'success',
     target: { ...auditBase.target, model, itemCount: items.length },
     ...(aiFailure ? { error: aiFailure } : {}),
   })

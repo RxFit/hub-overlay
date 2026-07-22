@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import {
   buildFocusPrompt,
   parseFocusResponse,
+  parseFocusResult,
   threadsSignature,
   getCachedFocus,
   setCachedFocus,
@@ -25,12 +26,15 @@ const thread = (over: Partial<GmailThreadSummary> = {}): GmailThreadSummary => (
 })
 
 describe('threadsSignature', () => {
-  it('changes when a thread is added or read-state flips', () => {
-    const a = [thread({ id: 'a', isUnread: true })]
+  it('changes when a thread is added, read-state flips, or a reply arrives', () => {
+    const a = [thread({ id: 'a', isUnread: true, messageCount: 2 })]
     const sigA = threadsSignature(a)
     expect(threadsSignature([...a, thread({ id: 'b' })])).not.toBe(sigA)
-    expect(threadsSignature([thread({ id: 'a', isUnread: false })])).not.toBe(sigA)
-    expect(threadsSignature([thread({ id: 'a', isUnread: true })])).toBe(sigA)
+    expect(threadsSignature([thread({ id: 'a', isUnread: false, messageCount: 2 })])).not.toBe(sigA)
+    // A new reply on an already-unread thread (messageCount 2 → 3) must
+    // invalidate the cached ranking even though the unread flag didn't flip.
+    expect(threadsSignature([thread({ id: 'a', isUnread: true, messageCount: 3 })])).not.toBe(sigA)
+    expect(threadsSignature([thread({ id: 'a', isUnread: true, messageCount: 2 })])).toBe(sigA)
   })
 })
 
@@ -59,12 +63,13 @@ describe('heuristicFocusItems (AI-outage fallback)', () => {
     ).toEqual([])
   })
 
-  it('caps output at max (default 3) even when more threads qualify', () => {
-    const many = ['a', 'b', 'c', 'd', 'e'].map(id =>
+  it('caps output at MAX_FOCUS_ITEMS by default (aligned with the AI path) and honors an explicit lower cap', () => {
+    const many = ['a', 'b', 'c', 'd', 'e', 'f'].map(id =>
       thread({ id, from: `${id} <${id}@example.com>`, isUnread: true, messageCount: 2, date: fresh() })
     )
-    expect(heuristicFocusItems(many)).toHaveLength(3)
-    expect(heuristicFocusItems(many, 5)).toHaveLength(5)
+    // Default now matches the AI path so the strip length doesn't jump on failover.
+    expect(heuristicFocusItems(many)).toHaveLength(MAX_FOCUS_ITEMS)
+    expect(heuristicFocusItems(many, 3)).toHaveLength(3)
   })
 
   it('treats an unparseable date as no recency bonus, not NaN', () => {
@@ -72,6 +77,28 @@ describe('heuristicFocusItems (AI-outage fallback)', () => {
       thread({ id: 'x', from: 'A <a@example.com>', isUnread: true, messageCount: 1, date: 'not-a-date' }),
     ])
     expect(item.priority).toBe(70) // unread(40) + human(30), no recency
+  })
+
+  it('does not misclassify real people whose address merely contains automated substrings', () => {
+    // Tightened AUTOMATED_SENDER_RE: bare `mailer`/`invoice` no longer match
+    // `retailer@` or an address that just contains the substring — these humans
+    // keep the +30 non-automated bonus and a `reply` action.
+    const humans = heuristicFocusItems([
+      thread({ id: 'retail', from: 'Dana <retailer@shop.com>', isUnread: true, messageCount: 2, date: fresh() }),
+      thread({ id: 'ninja', from: 'Sam <sam@invoiceninja.com>', isUnread: true, messageCount: 2, date: fresh() }),
+    ])
+    expect(humans.map(i => i.id).sort()).toEqual(['ninja', 'retail'])
+    expect(humans.every(i => i.action === 'reply')).toBe(true)
+
+    // Genuinely automated role addresses are still filtered out. Both are
+    // unread + recent (40+10=50), so they'd cross the ≥60 bar ONLY if the +30
+    // human bonus were wrongly applied — proving they're still flagged automated.
+    expect(
+      heuristicFocusItems([
+        thread({ id: 'inv', from: 'Billing <invoices@vendor.com>', isUnread: true, messageCount: 1, date: fresh() }),
+        thread({ id: 'daemon', from: 'Mail Delivery <mailer-daemon@host.com>', isUnread: true, messageCount: 1, date: fresh() }),
+      ])
+    ).toEqual([])
   })
 })
 
@@ -153,6 +180,32 @@ describe('parseFocusResponse', () => {
     expect(parseFocusResponse('total garbage', ids)).toEqual([])
     expect(parseFocusResponse('{"id":"t1"}', ids)).toEqual([])
     expect(parseFocusResponse('[]', ids)).toEqual([])
+  })
+})
+
+describe('parseFocusResult (valid-empty vs unparseable)', () => {
+  const ids = new Set(['t1'])
+
+  it('flags a genuine empty ranking as parsed (a valid "nothing matters" verdict)', () => {
+    // The route relies on this to honor the AI verdict instead of overriding it
+    // with the heuristic fallback.
+    expect(parseFocusResult('[]', ids)).toEqual({ items: [], parsed: true })
+    expect(parseFocusResult('Here you go: []', ids)).toEqual({ items: [], parsed: true })
+  })
+
+  it('flags garbage / non-array / no-array output as NOT parsed (real failure → fall back)', () => {
+    expect(parseFocusResult('total garbage', ids).parsed).toBe(false)
+    expect(parseFocusResult('{"id":"t1"}', ids).parsed).toBe(false)
+    expect(parseFocusResult('[unterminated', ids).parsed).toBe(false)
+  })
+
+  it('parses a valid non-empty ranking with items and parsed=true', () => {
+    const res = parseFocusResult(
+      JSON.stringify([{ id: 't1', priority: 80, reason: 'r', action: 'reply' }]),
+      ids,
+    )
+    expect(res.parsed).toBe(true)
+    expect(res.items.map(i => i.id)).toEqual(['t1'])
   })
 })
 
