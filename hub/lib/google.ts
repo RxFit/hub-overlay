@@ -419,7 +419,10 @@ export function parseGmailThreadMeta(thread: GmailThread): GmailThreadSummary | 
     subject: getGmailHeader(lastMsg, 'Subject') || '(no subject)',
     from: getGmailHeader(lastMsg, 'From') || '',
     date: getGmailHeader(lastMsg, 'Date') || '',
-    snippet: thread.messages?.[0]?.snippet ?? '',
+    // Snippet from the LAST message (like subject/from/date/unread), so a
+    // multi-message thread previews its latest reply — matching Gmail's own
+    // list — instead of the oldest message the thread opened with.
+    snippet: lastMsg.snippet ?? '',
     isUnread,
     messageCount: thread.messages?.length ?? 1,
   }
