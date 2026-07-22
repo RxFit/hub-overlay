@@ -9,7 +9,7 @@ vi.mock('next-auth/react', () => ({
   signIn: (...args: unknown[]) => signInMock(...args),
 }))
 
-import { resolveChatError, resolvePreCogVerdict } from './useChatEngine'
+import { resolveChatError, resolvePreCogVerdict, buildQuotedReplyContext } from './useChatEngine'
 
 describe('resolveChatError (chat error → bubble + reauth decision)', () => {
   it('flags a 401 for reauth (routes chat 401 through signIn like the other hooks)', () => {
@@ -52,6 +52,36 @@ describe('resolveChatError (chat error → bubble + reauth decision)', () => {
     expect(reauth).toBe(false)
     expect(content).toMatch(/too quickly|few seconds/i)
     expect(content).not.toMatch(/went wrong on my end/i)
+  })
+})
+
+describe('buildQuotedReplyContext (Reply → context fed into the next prompt)', () => {
+  it('returns an empty prefix when there is no quote (unconditional concat is safe)', () => {
+    expect(buildQuotedReplyContext(null)).toBe('')
+    expect(buildQuotedReplyContext(undefined)).toBe('')
+    expect(buildQuotedReplyContext('')).toBe('')
+    expect(buildQuotedReplyContext('   \n  ')).toBe('')
+  })
+
+  it('feeds the ENTIRE quoted message as context — no truncation', () => {
+    // A long assistant reply (was previously clipped to 200 chars). The whole
+    // thing must survive so it is real context for the next prompt.
+    const long = 'A'.repeat(1000)
+    const prefix = buildQuotedReplyContext(long)
+    expect(prefix).toContain(long)
+    expect(prefix).not.toContain('...')
+    expect(prefix.startsWith('> Replying to: ')).toBe(true)
+    expect(prefix.endsWith('\n\n')).toBe(true)
+  })
+
+  it('prefixes every line so a multi-line quote renders as one blockquote', () => {
+    const prefix = buildQuotedReplyContext('line one\nline two\nline three')
+    expect(prefix).toBe('> Replying to: line one\n> line two\n> line three\n\n')
+  })
+
+  it('prepends cleanly before the user message (full round-trip shape)', () => {
+    const full = buildQuotedReplyContext('Send the invoice') + 'Email this to Danny'
+    expect(full).toBe('> Replying to: Send the invoice\n\nEmail this to Danny')
   })
 })
 

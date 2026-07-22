@@ -128,6 +128,21 @@ export function resolvePreCogVerdict(rawText: string, evalOk: boolean): PreCogVe
 }
 
 /**
+ * Build the context prefix prepended to a message when the user hit "Reply" on
+ * an assistant chat bubble. The ENTIRE quoted message is fed as context (no
+ * truncation) so it becomes direct context for the next prompt. Every line is
+ * `> ` prefixed so a multi-line quote renders as a single markdown blockquote
+ * (markdown only quotes lines that begin with `>`). Returns '' when there is no
+ * quote, so callers can unconditionally concatenate. Extracted as a pure
+ * function so the "feed the whole message" contract is unit-tested.
+ */
+export function buildQuotedReplyContext(quoteContent: string | null | undefined): string {
+  const quote = quoteContent?.trim()
+  if (!quote) return ''
+  return `> Replying to: ${quote.replace(/\n/g, '\n> ')}\n\n`
+}
+
+/**
  * useChatEngine — the chat / interview / skill engine extracted from page.tsx.
  *
  * This is a behavior-preserving MOVE: the function bodies below are identical to
@@ -409,13 +424,11 @@ export function useChatEngine(options: UseChatEngineOptions) {
     // this turn toward the inter-suggestion gap (guardrail 1).
     setSolutionSuggestion(null)
     turnsSinceCardRef.current += 1
-    // If there's a quoted reply, prepend it as context
-    const quoteText = quotedReply?.content ?? ''
-    const isTruncated = quoteText.length > 200
-    const contextPrefix = quotedReply
-      ? `> Replying to: ${quoteText.slice(0, 200)}${isTruncated ? '...' : ''}\n\n`
-      : ''
-    const fullMessage = contextPrefix + message
+    // If there's a quoted reply, prepend the WHOLE quoted message as context so
+    // the model sees exactly what the user is replying to (see
+    // buildQuotedReplyContext — no truncation, multi-line safe). "Reply" is meant
+    // to feed the entire message as direct context for the next prompt.
+    const fullMessage = buildQuotedReplyContext(quotedReply?.content) + message
     if (quotedReply) setQuotedReply(null)
 
     const newMessage: ChatMsg = {

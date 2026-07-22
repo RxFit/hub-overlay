@@ -8736,8 +8736,12 @@ a:hover .rx-arrow {
 
 /* ── Reply Quote Button ── */
 .chat-reply-btn {
-  opacity: 0;
-  transition: opacity 0.15s ease;
+  /* Always visible by default. Touch devices have no reliable :hover, so a
+     hover-only reveal (opacity:0 until .chat-message:hover) left this button
+     invisible/flaky on mobile — the exact reason it read as "not working".
+     Desktop keeps the subtle declutter via the @media (hover: hover) block. */
+  opacity: 1;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
   background: none;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
@@ -8750,8 +8754,14 @@ a:hover .rx-arrow {
   gap: 4px;
   margin-top: 4px;
 }
-.chat-message:hover .chat-reply-btn {
-  opacity: 1;
+/* Hover-capable pointers (desktop): de-emphasize until the row is hovered. */
+@media (hover: hover) and (pointer: fine) {
+  .chat-reply-btn {
+    opacity: 0.6;
+  }
+  .chat-message:hover .chat-reply-btn {
+    opacity: 1;
+  }
 }
 .chat-reply-btn:hover {
   background: var(--surface-hover);
