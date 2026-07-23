@@ -240,25 +240,62 @@ function RightPanel({
 
 // `MobileTab` and `ChatMsg` types now live in and are imported from useChatEngine.
 
+/**
+ * Copy `text` to the clipboard, resilient to mobile Safari / in-app webviews /
+ * insecure contexts where `navigator.clipboard` is missing or rejects. Falls
+ * back to a hidden-textarea + execCommand('copy'). Returns whether it worked so
+ * the caller can surface success/failure instead of failing silently.
+ */
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch {
+    // Modern API blocked (insecure context, permissions, older iOS webview) —
+    // fall through to the legacy path rather than leaving the user with nothing.
+  }
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.setAttribute('readonly', '')
+    ta.style.position = 'fixed'
+    ta.style.top = '-9999px'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.focus()
+    ta.select()
+    ta.setSelectionRange(0, text.length)
+    const ok = document.execCommand('copy')
+    document.body.removeChild(ta)
+    return ok
+  } catch {
+    return false
+  }
+}
+
 function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false)
-  
-  const handleCopy = () => {
+  const [status, setStatus] = useState<'idle' | 'copied' | 'failed'>('idle')
+
+  const handleCopy = async () => {
     // Copy what the bubble SHOWS — the raw content still carries the hidden
     // <!--suggestedTools--> metadata comment, which must not leak into pastes.
-    navigator.clipboard.writeText(stripSuggestedTools(text).trimEnd())
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+    const ok = await copyToClipboard(stripSuggestedTools(text).trimEnd())
+    setStatus(ok ? 'copied' : 'failed')
+    setTimeout(() => setStatus('idle'), 2000)
   }
 
+  const label = status === 'copied' ? 'Copied!' : status === 'failed' ? 'Copy failed' : 'Copy'
+
   return (
-    <button 
-      onClick={handleCopy} 
-      className="chat-copy-btn" 
+    <button
+      onClick={handleCopy}
+      className="chat-copy-btn"
       aria-label="Copy message"
       title="Copy message"
     >
-      {copied ? (
+      {status === 'copied' ? (
         <span className="rx-icon rx-icon--sm">
           <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
             <polyline points="20 6 9 17 4 12" />
@@ -272,7 +309,7 @@ function CopyButton({ text }: { text: string }) {
           </svg>
         </span>
       )}
-      <span style={{ fontSize: '10px', marginLeft: '4px' }}>{copied ? 'Copied!' : 'Copy'}</span>
+      <span style={{ fontSize: '10px', marginLeft: '4px' }}>{label}</span>
     </button>
   )
 }
@@ -846,7 +883,7 @@ export default function HubPage() {
                         <CopyButton text={msg.content} />
                         <button
                           className="chat-reply-btn"
-                          onClick={() => setQuotedReply({ id: msg.id, content: stripSuggestedTools(msg.content).trimEnd().slice(0, 200) })}
+                          onClick={() => setQuotedReply({ id: msg.id, content: stripSuggestedTools(msg.content).trimEnd() })}
                           aria-label="Reply to this message"
                         >
                           ↩️ Reply
