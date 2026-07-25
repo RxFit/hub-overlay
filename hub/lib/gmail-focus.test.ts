@@ -8,6 +8,8 @@ import {
   setCachedFocus,
   __resetFocusCacheForTest,
   heuristicFocusItems,
+  focusTier,
+  selectNewUrgentItems,
   MAX_FOCUS_ITEMS,
   MAX_REASON_LENGTH,
   type FocusItem,
@@ -35,6 +37,43 @@ describe('threadsSignature', () => {
     // invalidate the cached ranking even though the unread flag didn't flip.
     expect(threadsSignature([thread({ id: 'a', isUnread: true, messageCount: 3 })])).not.toBe(sigA)
     expect(threadsSignature([thread({ id: 'a', isUnread: true, messageCount: 2 })])).toBe(sigA)
+  })
+})
+
+describe('focusTier (priority → display tier)', () => {
+  it('maps the Impact Matrix bands at their exact boundaries', () => {
+    expect(focusTier(100).id).toBe('urgent')
+    expect(focusTier(85).id).toBe('urgent')
+    expect(focusTier(84).id).toBe('important')
+    expect(focusTier(60).id).toBe('important')
+    expect(focusTier(59).id).toBe('routine')
+    expect(focusTier(30).id).toBe('routine')
+    expect(focusTier(29).id).toBe('low')
+    expect(focusTier(0).id).toBe('low')
+  })
+
+  it('clamps out-of-range and non-finite input instead of throwing', () => {
+    expect(focusTier(999).id).toBe('urgent')
+    expect(focusTier(-5).id).toBe('low')
+    expect(focusTier(NaN).id).toBe('low')
+  })
+})
+
+describe('selectNewUrgentItems (desktop-alert selection)', () => {
+  const item = (id: string, priority: number) => ({ id, priority })
+
+  it('selects only urgent-tier items not already notified, capped at 3', () => {
+    const items = [
+      item('a', 95), item('b', 90), item('c', 88), item('d', 86), // 4 urgent
+      item('e', 80), // important — never alerted
+    ]
+    const picked = selectNewUrgentItems(items, new Set(['b']))
+    expect(picked.map(i => i.id)).toEqual(['a', 'c', 'd']) // b excluded, capped at 3
+  })
+
+  it('returns [] when nothing is urgent or everything was already notified', () => {
+    expect(selectNewUrgentItems([item('x', 70)], new Set())).toEqual([])
+    expect(selectNewUrgentItems([item('y', 95)], new Set(['y']))).toEqual([])
   })
 })
 
@@ -150,6 +189,12 @@ describe('buildFocusPrompt', () => {
   it('clips oversized fields so one giant subject cannot flood the prompt', () => {
     const prompt = buildFocusPrompt('u@x.com', [thread({ snippet: 'x'.repeat(5000) })])
     expect(prompt.length).toBeLessThan(2500)
+  })
+
+  it('anchors the 0-100 priority scale to the tier bands the UI displays', () => {
+    const prompt = buildFocusPrompt('u@x.com', [thread()])
+    expect(prompt).toContain('85-100 = urgent')
+    expect(prompt).toContain('60-84 = important')
   })
 
   it('omits the priorities block entirely when no preferences are set', () => {

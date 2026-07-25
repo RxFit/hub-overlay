@@ -143,6 +143,9 @@ test('the Focus strip renders ranked cards from live thread data', async ({ page
   // Card content joins the ranked item with the LIVE thread (sender + reason).
   await expect(strip.getByText('Sarah Allen')).toBeVisible()
   await expect(strip.getByText('Sarah is waiting on your review')).toBeVisible()
+  // Priority 95 → urgent tier: accent class + visible "Urgent" chip (display-only).
+  await expect(strip.locator('.gmail-focus-card--tier-urgent')).toBeVisible()
+  await expect(strip.getByText('Urgent')).toBeVisible()
 })
 
 test('Load older emails appends the next Gmail page and stops at the end', async ({ page }) => {

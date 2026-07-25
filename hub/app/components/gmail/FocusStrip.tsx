@@ -1,6 +1,6 @@
 'use client'
 
-import type { FocusItem, FocusAction } from '@/lib/gmail-focus'
+import { focusTier, type FocusItem, type FocusAction } from '@/lib/gmail-focus'
 import type { GmailThread } from '@/app/hooks/useGmailInbox'
 
 /**
@@ -47,22 +47,31 @@ export function FocusStrip({ items, threads, onOpen }: FocusStripProps) {
         <span className="gmail-focus__hint">AI-suggested priorities</span>
       </div>
       <div className="gmail-focus__rail">
-        {cards.map(({ item, thread }) => (
-          <button
-            key={item.id}
-            className="gmail-focus-card"
-            onClick={() => onOpen(item.id)}
-          >
-            <div className="gmail-focus-card__top">
-              <span className="gmail-focus-card__from">{extractName(thread.from)}</span>
-              <span className={`gmail-focus-card__action gmail-focus-card__action--${item.action}`}>
-                {ACTION_LABEL[item.action]}
-              </span>
-            </div>
-            <div className="gmail-focus-card__subject">{thread.subject}</div>
-            {item.reason && <div className="gmail-focus-card__reason">{item.reason}</div>}
-          </button>
-        ))}
+        {cards.map(({ item, thread }) => {
+          // Tier is display-only (color + label) — it never acts on the mail.
+          const tier = focusTier(item.priority)
+          return (
+            <button
+              key={item.id}
+              className={`gmail-focus-card gmail-focus-card--tier-${tier.id}`}
+              onClick={() => onOpen(item.id)}
+            >
+              <div className="gmail-focus-card__top">
+                <span className="gmail-focus-card__from">{extractName(thread.from)}</span>
+                {(tier.id === 'urgent' || tier.id === 'important') && (
+                  <span className={`gmail-focus-card__tier gmail-focus-card__tier--${tier.id}`}>
+                    {tier.label}
+                  </span>
+                )}
+                <span className={`gmail-focus-card__action gmail-focus-card__action--${item.action}`}>
+                  {ACTION_LABEL[item.action]}
+                </span>
+              </div>
+              <div className="gmail-focus-card__subject">{thread.subject}</div>
+              {item.reason && <div className="gmail-focus-card__reason">{item.reason}</div>}
+            </button>
+          )
+        })}
       </div>
     </section>
   )

@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import type { FocusPreferences, FocusVip, FocusVipCategory } from '@/lib/focus-preferences'
 import { MAX_VIPS, MAX_GOALS_LENGTH } from '@/lib/focus-preferences'
+import { FOCUS_NOTIFY_KEY, isFocusNotifyEnabled } from '@/app/hooks/useFocusNotifications'
 
 /**
  * FocusPreferencesSettings — editor for the per-user Gmail Focus personalization
@@ -21,6 +22,34 @@ export function FocusPreferencesSettings() {
   const [goals, setGoals] = useState('')
   const [status, setStatus] = useState<SaveStatus>('idle')
   const [error, setError] = useState<string | null>(null)
+  // Desktop-alert toggle — client-side (localStorage), applies immediately,
+  // no Save needed. The page-level watcher reads it on mount.
+  const [notifyOn, setNotifyOn] = useState(false)
+  const [notifyHint, setNotifyHint] = useState<string | null>(null)
+  useEffect(() => { setNotifyOn(isFocusNotifyEnabled()) }, [])
+
+  const toggleNotify = useCallback(async () => {
+    setNotifyHint(null)
+    if (notifyOn) {
+      try { localStorage.setItem(FOCUS_NOTIFY_KEY, '0') } catch {}
+      setNotifyOn(false)
+      return
+    }
+    if (typeof window === 'undefined' || !('Notification' in window)) {
+      setNotifyHint('This browser does not support desktop notifications.')
+      return
+    }
+    // Permission must be requested from a user gesture — this click is one.
+    const permission = Notification.permission === 'granted'
+      ? 'granted'
+      : await Notification.requestPermission()
+    if (permission !== 'granted') {
+      setNotifyHint('Notifications are blocked for this site — allow them in your browser settings, then try again.')
+      return
+    }
+    try { localStorage.setItem(FOCUS_NOTIFY_KEY, '1') } catch {}
+    setNotifyOn(true)
+  }, [notifyOn])
 
   useEffect(() => {
     let live = true
@@ -167,6 +196,35 @@ export function FocusPreferencesSettings() {
           >
             + Add VIP
           </button>
+
+          {/* Desktop alerts for urgent emails — instant, no Save needed. The
+              alert is the ONLY tier action: nothing is archived or forwarded. */}
+          <label className="settings-space-row" style={{ marginTop: '18px' }}>
+            <div className="settings-space-row__info">
+              <span className="settings-space-row__icon" aria-hidden="true">🔔</span>
+              <span className="settings-space-row__name">Desktop alerts for urgent emails</span>
+            </div>
+            <div
+              role="switch"
+              aria-checked={notifyOn}
+              tabIndex={0}
+              className={`settings-toggle ${notifyOn ? 'settings-toggle--on' : ''}`}
+              onClick={toggleNotify}
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleNotify() } }}
+              aria-label={`${notifyOn ? 'Disable' : 'Enable'} desktop alerts for urgent emails`}
+            >
+              <span className="settings-toggle__thumb" />
+            </div>
+          </label>
+          <p className="settings-field-hint">
+            One-time alert per urgent thread (a VIP waiting on you, a hard deadline) while the
+            Hub is open — even in a background tab. Alert only; nothing touches your mail.
+          </p>
+          {notifyHint && (
+            <p className="settings-field-hint" role="alert" style={{ color: 'var(--danger)' }}>
+              ⚠️ {notifyHint}
+            </p>
+          )}
 
           <div className="settings-save-row" style={{ marginTop: '16px' }}>
             <button

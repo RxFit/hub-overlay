@@ -103,6 +103,24 @@ describe('GET /api/google/gmail/focus', () => {
     expect((state.auditRows[0].target as Record<string, unknown>).model).toBe('gemini-3.5-flash')
   })
 
+  it('enriches items with sender/subject from LIVE thread data (fresh AND cached responses)', async () => {
+    state.gemini = {
+      text: JSON.stringify([{ id: 'hot', priority: 95, reason: 'r', action: 'reply' }]),
+      model: 'gemini-3.5-flash',
+    }
+    // Fresh ranking: display fields come from the Gmail thread, not the model.
+    const fresh = await (await GET(req())).json()
+    expect(fresh.cached).toBe(false)
+    expect(fresh.items[0].from).toBe(hotThread.from)
+    expect(fresh.items[0].subject).toBe(hotThread.subject)
+
+    // Second request hits the cache — enrichment must still be applied.
+    const second = await (await GET(req())).json()
+    expect(second.cached).toBe(true)
+    expect(second.items[0].from).toBe(hotThread.from)
+    expect(second.items[0].subject).toBe(hotThread.subject)
+  })
+
   it('falls back to the heuristic on an AI exception and logs a failure', async () => {
     state.gemini = () => { throw new Error('gemini exploded') }
 

@@ -31,6 +31,7 @@ import { FounderLensWizard } from '@/app/components/FounderLensWizard'
 import { useTenant } from '@/app/components/TenantProvider'
 import { useKPIData } from '@/app/hooks/useKPIData'
 import { useSpaces, useUnreadCounts } from '@/app/hooks/useGoogleChat'
+import { useFocusNotifications } from '@/app/hooks/useFocusNotifications'
 import {
   restartInterview,
   getCurrentQuestionWithDefaults,
@@ -344,6 +345,9 @@ export default function HubPage() {
 
   // Google Chat unread badge — uses visible spaces from useSpaces hook
   const { visibleSpaces: chatVisibleSpaces } = useSpaces()
+  // Opt-in desktop alerts for urgent Focus emails (display/notify only — never
+  // acts on mail). Inert unless the Settings toggle + browser permission are on.
+  useFocusNotifications()
   const { totalUnread: chatTotalUnread } = useUnreadCounts(chatVisibleSpaces)
   // Derive current user role from session
   const userRole = (session?.user as Record<string, unknown>)?.role as string ?? 'onboarding'
