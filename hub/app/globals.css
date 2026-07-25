@@ -9301,6 +9301,42 @@ details[open] > .settings-collapsible__trigger .settings-collapsible__arrow {
   border: 1px solid var(--border);
 }
 
+/* Priority tiers — display-only (border accent + chip); tiers never act on mail. */
+.gmail-focus-card--tier-urgent {
+  border-left: 3px solid var(--danger);
+}
+
+.gmail-focus-card--tier-important {
+  border-left: 3px solid var(--accent);
+}
+
+.gmail-focus-card--tier-routine,
+.gmail-focus-card--tier-low {
+  border-left: 3px solid var(--border);
+}
+
+.gmail-focus-card__tier {
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+
+.gmail-focus-card__tier--urgent {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
+}
+
+.gmail-focus-card__tier--important {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
 .gmail-focus-card__subject {
   font-size: 0.82rem;
   color: var(--text-primary);

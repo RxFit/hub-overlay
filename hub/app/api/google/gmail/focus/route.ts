@@ -78,13 +78,24 @@ export async function GET(req: NextRequest) {
   // behavior instead of failing the request.
   const prefs = await getFocusPreferences(userEmail)
 
+  // Display enrichment for notifications: sender/subject come from the LIVE
+  // Gmail thread data (already fetched above), never from model output — the
+  // same trust posture as the FocusStrip's display join. Items whose thread
+  // left the list simply carry no display fields.
+  const threadById = new Map(threads.map(t => [t.id, t]))
+  const enrich = (list: FocusItem[]) =>
+    list.map(i => {
+      const t = threadById.get(i.id)
+      return t ? { ...i, from: t.from, subject: t.subject } : i
+    })
+
   // Serve from cache while the inbox composition AND the preferences are
   // unchanged and fresh — editing VIPs/goals must invalidate a cached ranking.
   const signature = `${threadsSignature(threads)}#${focusPreferencesSignature(prefs)}`
   const cached = getCachedFocus(userEmail, signature)
   if (cached) {
     return NextResponse.json({
-      items: cached.items,
+      items: enrich(cached.items),
       generatedAt: cached.generatedAt,
       cached: true,
     })
@@ -167,6 +178,6 @@ export async function GET(req: NextRequest) {
     target: { ...auditBase.target, model, itemCount: items.length },
     ...(aiFailure ? { error: aiFailure } : {}),
   })
-  return NextResponse.json({ items, generatedAt, cached: false })
+  return NextResponse.json({ items: enrich(items), generatedAt, cached: false })
 }
 
