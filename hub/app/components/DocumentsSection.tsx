@@ -60,7 +60,7 @@ export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string,
   }
 
   return (
-    <CollapsibleSection title="Documents" protocolNum="04" defaultOpen={false}>
+    <CollapsibleSection title="Documents" protocolNum="03" defaultOpen>
       {/* Filter tabs */}
       <div className="doc-filter-tabs" role="tablist" aria-label="Document filters">
         {DOC_FILTERS.map((f) => (

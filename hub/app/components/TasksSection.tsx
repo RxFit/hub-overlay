@@ -65,7 +65,7 @@ function TasksSectionImpl({ onInjectChat, onInjectAction }: { onInjectChat: (msg
 
   if (isLoading) {
     return (
-      <CollapsibleSection title="Tasks" protocolNum="03" defaultOpen>
+      <CollapsibleSection title="Tasks" protocolNum="04" defaultOpen>
         <SkeletonBlock lines={4} />
       </CollapsibleSection>
     )
@@ -74,7 +74,7 @@ function TasksSectionImpl({ onInjectChat, onInjectAction }: { onInjectChat: (msg
   const isAuthError = error && (error as any)?.status === 401
   if (isAuthError) {
     return (
-      <CollapsibleSection title="Tasks" protocolNum="03" defaultOpen>
+      <CollapsibleSection title="Tasks" protocolNum="04" defaultOpen>
         <SectionMessage message="Session expired — please sign in again" type="error" />
       </CollapsibleSection>
     )
@@ -82,7 +82,7 @@ function TasksSectionImpl({ onInjectChat, onInjectAction }: { onInjectChat: (msg
 
   if (error) {
     return (
-      <CollapsibleSection title="Tasks" protocolNum="03" defaultOpen>
+      <CollapsibleSection title="Tasks" protocolNum="04" defaultOpen>
         <SectionMessage message="Unable to load tasks — try refreshing" type="error" />
       </CollapsibleSection>
     )
@@ -164,7 +164,7 @@ function TasksSectionImpl({ onInjectChat, onInjectAction }: { onInjectChat: (msg
   const activeListName = taskLists.find(l => l.id === resolvedListId)?.title ?? 'Tasks'
 
   return (
-    <CollapsibleSection title="Tasks" protocolNum="03" defaultOpen>
+    <CollapsibleSection title="Tasks" protocolNum="04" defaultOpen>
       {/* List tab strip */}
       {taskLists.length > 1 && (
         <div className="doc-filter-tabs" role="tablist" aria-label="Task lists" style={{ marginBottom: '6px' }}>

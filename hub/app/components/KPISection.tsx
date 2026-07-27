@@ -30,7 +30,7 @@ function KPISectionImpl({
 
   if (isLoading) {
     return (
-      <CollapsibleSection title="KPIs" protocolNum="01" defaultOpen>
+      <CollapsibleSection title="KPIs" protocolNum="01" defaultOpen={false}>
         <SkeletonBlock lines={4} />
       </CollapsibleSection>
     )
@@ -40,7 +40,7 @@ function KPISectionImpl({
   // "configure in Settings" empty copy when the cause is an error.
   if (error) {
     return (
-      <CollapsibleSection title="KPIs" protocolNum="01" defaultOpen>
+      <CollapsibleSection title="KPIs" protocolNum="01" defaultOpen={false}>
         <SectionError message="Unable to load KPIs — try again." onRetry={onRetry} />
       </CollapsibleSection>
     )
@@ -48,14 +48,14 @@ function KPISectionImpl({
 
   if (kpis.length === 0) {
     return (
-      <CollapsibleSection title="KPIs" protocolNum="01" defaultOpen>
+      <CollapsibleSection title="KPIs" protocolNum="01" defaultOpen={false}>
         <SectionMessage message="No business KPIs configured — configure KPIs in Settings" type="empty" />
       </CollapsibleSection>
     )
   }
 
   return (
-    <CollapsibleSection title="Business KPIs" protocolNum="01" defaultOpen>
+    <CollapsibleSection title="Business KPIs" protocolNum="01" defaultOpen={false}>
       <div className="kpi-grid" role="list" aria-label="Business KPIs">
         {kpis.map((kpi: LiveKPI, i: number) => {
           const trendClass =
