@@ -1,15 +1,47 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
 import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
 import { listChatSpaces } from '@/lib/google'
+import { classifyChatSpace, isDefaultVisibleSpace, EMPTY_CHAT_SPACE_PREFERENCES } from '@/lib/chat-spaces'
+import { getChatSpacePreferences } from '@/lib/chat-space-preferences-db'
 
+/**
+ * GET /api/google/chat/spaces
+ *
+ * Returns EVERY space the user belongs to, each annotated with its classified
+ * `kind` and whether the default rule shows it, PLUS the user's saved
+ * visibility overrides — in one round trip.
+ *
+ * Shipping the preferences alongside the spaces (instead of leaving the client
+ * to fetch them separately) is deliberate: the panel can compute the visible
+ * set on first paint, so the user never sees a flash of every Meet chat before
+ * their preferences load.
+ */
 export async function GET(req: NextRequest) {
   const auth = await resolveGoogleAuth(req)
   if (!auth.ok) return auth.response
 
   try {
-    const spaces = await listChatSpaces(auth.accessToken)
-    return NextResponse.json({ spaces })
+    const [spaces, preferences] = await Promise.all([
+      listChatSpaces(auth.accessToken),
+      // Preferences are per-user; resolveGoogleAuth only proves a Google token,
+      // so read the session for the email. Fail-open to defaults if absent.
+      (async () => {
+        const session = await getServerSession(authOptions)
+        const email = session?.user?.email
+        return email ? getChatSpacePreferences(email) : EMPTY_CHAT_SPACE_PREFERENCES
+      })(),
+    ])
+
+    const annotated = spaces.map(space => ({
+      ...space,
+      kind: classifyChatSpace(space),
+      defaultVisible: isDefaultVisibleSpace(space),
+    }))
+
+    return NextResponse.json({ spaces: annotated, preferences })
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error'
     console.error('[api/google/chat/spaces]', msg)

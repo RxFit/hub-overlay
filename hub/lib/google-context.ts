@@ -22,6 +22,11 @@ import {
   listChatMessages,
   type ChatMessage,
 } from './google'
+import {
+  EMPTY_CHAT_SPACE_PREFERENCES,
+  resolveVisibleSpaces,
+  type ChatSpacePreferences,
+} from './chat-spaces'
 
 export interface GoogleWorkspaceContext {
   detail: string
@@ -57,6 +62,7 @@ function fmtDate(iso?: string): string {
  */
 export async function buildGoogleWorkspaceContext(
   accessToken: string,
+  chatSpacePreferences: ChatSpacePreferences = EMPTY_CHAT_SPACE_PREFERENCES,
 ): Promise<GoogleWorkspaceContext> {
   const counts: GoogleWorkspaceContext['counts'] = {}
 
@@ -161,7 +167,11 @@ export async function buildGoogleWorkspaceContext(
   // ── Chat: spaces the user belongs to, plus recent messages for the first few ──
   const chatSection = (async () => {
     try {
-      const spaces = await listChatSpaces(accessToken)
+      // Respect the user's Chat panel visibility choices here too. Without this
+      // the model's context is dominated by whatever Google auto-created — the
+      // first 3 spaces get their messages quoted, and a Meet chat from this
+      // morning would outrank the team's actual space purely by list order.
+      const spaces = resolveVisibleSpaces(await listChatSpaces(accessToken), chatSpacePreferences)
       if (spaces.length === 0) return '### Chat\nNo spaces.'
       // Last few messages for the first spaces, fetched in parallel; a failed
       // space just renders as names-only instead of blanking the section.

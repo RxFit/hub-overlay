@@ -1,15 +1,31 @@
 'use client'
 
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
+import { refreshSessionCookie } from '@/app/hooks/useHubData'
+import {
+  EMPTY_CHAT_SPACE_PREFERENCES,
+  LEGACY_PINNED_SPACES_KEY,
+  migrateLegacyPinnedSpaces,
+  normalizeChatSpacePreferences,
+  resolveVisibleSpaces,
+  type ChatSpaceKind,
+  type ChatSpacePreferences,
+} from '@/lib/chat-spaces'
 
 /* ── Shared fetcher (reuses the same error contract as useHubData) ── */
 
 async function fetcher<T>(url: string): Promise<T> {
   const res = await fetch(url)
   if (res.status === 401) {
-    const err = new Error('Unauthorized')
+    const body = await res.json().catch(() => ({} as Record<string, unknown>))
+    // A merely-stale access token is repairable: rotate the session cookie so
+    // the query's retry succeeds, rather than surfacing an auth error that
+    // ends in a forced sign-in. See refreshSessionCookie.
+    if (body?.refresh === true) await refreshSessionCookie()
+    const err = new Error(typeof body?.error === 'string' ? body.error : 'Unauthorized')
     ;(err as any).status = 401
+    ;(err as any).reauth = body?.reauth
     throw err
   }
   if (!res.ok) {
@@ -33,6 +49,10 @@ export interface ChatSpace {
   spaceType?: string
   singleUserBotDm?: boolean
   spaceDetails?: { description?: string }
+  /** Server-annotated classification (see lib/chat-spaces.ts). */
+  kind?: ChatSpaceKind
+  /** Whether the default rule shows this space with no override. */
+  defaultVisible?: boolean
 }
 
 export interface ChatMessage {
@@ -49,60 +69,171 @@ export interface ChatMessage {
 }
 
 /* ══════════════════════════════════════════
-   Pinned spaces — localStorage
+   Legacy pinned spaces — localStorage (read-only, migration source)
    ══════════════════════════════════════════ */
 
-const STORAGE_KEY = 'hub-chat-pinned-spaces'
-
-export function getPinnedSpaces(): string[] | null {
+/**
+ * Read the pre-server pinned-space list.
+ *
+ * Kept ONLY as a migration source. Space visibility now lives in Postgres
+ * (`/api/google/chat/spaces/preferences`) because a browser-local list is lost
+ * on every sign-out, new browser, new device and cleared profile — which is
+ * exactly why these settings appeared to "reset on every login".
+ */
+export function getLegacyPinnedSpaces(): string[] | null {
   if (typeof window === 'undefined') return null
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    return raw ? JSON.parse(raw) : null
+    const raw = localStorage.getItem(LEGACY_PINNED_SPACES_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.filter((n): n is string => typeof n === 'string') : null
   } catch {
     return null
   }
 }
 
-export function setPinnedSpaces(spaceNames: string[]): void {
+function clearLegacyPinnedSpaces(): void {
   if (typeof window === 'undefined') return
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(spaceNames))
+  try { localStorage.removeItem(LEGACY_PINNED_SPACES_KEY) } catch {}
 }
 
 /* ══════════════════════════════════════════
-   useSpaces — all spaces + pinned filter
+   useSpaces — all spaces + server-side visibility preferences
    ══════════════════════════════════════════ */
+
+export const spacesQueryKey = ['chat', 'spaces'] as const
 
 interface SpacesResponse {
   spaces: ChatSpace[]
+  preferences?: ChatSpacePreferences
   error?: string
   code?: string
 }
 
+/**
+ * All spaces, the user's saved overrides, and the resolved visible set.
+ *
+ * `visibleSpaces` is now derived from the default rule in lib/chat-spaces.ts
+ * (named spaces on; DMs, Meet/ad-hoc group chats and bot DMs off) with the
+ * user's explicit per-space overrides applied on top — NOT from a stored
+ * snapshot of names. That is what keeps a Meet chat created five minutes ago
+ * out of the panel without the user touching Settings again.
+ */
 export function useSpaces() {
   const { data, error, isLoading, refetch } = useQuery<SpacesResponse>({
-    queryKey: ['chat', 'spaces'],
+    queryKey: spacesQueryKey,
     queryFn: () => fetcher<SpacesResponse>('/api/google/chat/spaces'),
     refetchInterval: 120_000,
     refetchOnWindowFocus: false,
   })
 
-  const allSpaces = data?.spaces ?? []
-  const pinnedNames = getPinnedSpaces()
-
-  // If user has never configured pinned spaces → show all
-  const visibleSpaces = pinnedNames === null
-    ? allSpaces
-    : allSpaces.filter(s => pinnedNames.includes(s.name))
+  // Memoized on the query result (which react-query keeps referentially stable)
+  // so `preferences` / `visibleSpaces` don't get a new identity every render
+  // and churn the effects and memos downstream of them.
+  const { allSpaces, preferences, visibleSpaces } = useMemo(() => {
+    const spaces = data?.spaces ?? []
+    const prefs = normalizeChatSpacePreferences(data?.preferences ?? EMPTY_CHAT_SPACE_PREFERENCES)
+    return { allSpaces: spaces, preferences: prefs, visibleSpaces: resolveVisibleSpaces(spaces, prefs) }
+  }, [data])
 
   return {
     allSpaces,
     visibleSpaces,
+    preferences,
     isLoading,
     error: error ?? undefined,
     missingScope: (error as any)?.code === 'MISSING_SCOPE',
     refetch,
   }
+}
+
+/* ══════════════════════════════════════════
+   useSaveChatSpacePreferences — persist visibility choices
+   ══════════════════════════════════════════ */
+
+/**
+ * Persist the user's space visibility overrides and reflect the server-
+ * normalized result into the spaces cache, so the panel and the Settings list
+ * update together without a refetch.
+ */
+export function useSaveChatSpacePreferences() {
+  const queryClient = useQueryClient()
+  const [isSaving, setIsSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+
+  const save = useCallback(async (prefs: ChatSpacePreferences): Promise<boolean> => {
+    setIsSaving(true)
+    setSaveError(null)
+    try {
+      const res = await fetch('/api/google/chat/spaces/preferences', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(prefs),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body?.error ?? `Save failed (${res.status})`)
+      }
+      const saved: ChatSpacePreferences = await res.json()
+      queryClient.setQueryData<SpacesResponse>(spacesQueryKey, old =>
+        old ? { ...old, preferences: saved } : old
+      )
+      return true
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Failed to save')
+      return false
+    } finally {
+      setIsSaving(false)
+    }
+  }, [queryClient])
+
+  return { save, isSaving, saveError, clearError: () => setSaveError(null) }
+}
+
+/* ══════════════════════════════════════════
+   useLegacyPinnedSpaceMigration — one-time localStorage → DB lift
+   ══════════════════════════════════════════ */
+
+/** Once per page load; the migration is idempotent but need only run once. */
+let legacyMigrationAttempted = false
+
+/** Test-only: reset the once-per-load latch. */
+export function __resetLegacyMigration(): void {
+  legacyMigrationAttempted = false
+}
+
+/**
+ * Lift a surviving browser-local pinned list into the server-side preferences,
+ * exactly once, then delete it.
+ *
+ * Runs only when the user has NO server-side overrides yet, so it can never
+ * clobber a real saved choice. A legacy list that covered every space is
+ * discarded rather than imported (see migrateLegacyPinnedSpaces) — that was the
+ * old "Show all" default, and importing it would re-admit precisely the Meet/DM
+ * clutter this change removes.
+ */
+export function useLegacyPinnedSpaceMigration(
+  allSpaces: ChatSpace[],
+  preferences: ChatSpacePreferences,
+  isLoading: boolean,
+): void {
+  const { save } = useSaveChatSpacePreferences()
+  const hasOverrides = preferences.shown.length > 0 || preferences.hidden.length > 0
+
+  useEffect(() => {
+    if (legacyMigrationAttempted || isLoading || allSpaces.length === 0 || hasOverrides) return
+    const legacy = getLegacyPinnedSpaces()
+    if (legacy === null) return
+
+    legacyMigrationAttempted = true
+    const migrated = migrateLegacyPinnedSpaces(legacy, allSpaces)
+    if (!migrated) {
+      clearLegacyPinnedSpaces()
+      return
+    }
+    // Only drop the local copy once the server has actually accepted it.
+    void save(migrated).then(ok => { if (ok) clearLegacyPinnedSpaces() })
+  }, [allSpaces, hasOverrides, isLoading, save])
 }
 
 /* ══════════════════════════════════════════

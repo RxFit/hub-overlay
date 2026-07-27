@@ -324,6 +324,44 @@ async function run() {
   `
   console.log('[migrate] ✓ focus_preferences table')
 
+  // Chat Space Preferences — per-user Google Chat panel visibility, stored as
+  // overrides on the default rule (named spaces on; DMs / Meet group chats /
+  // bot DMs off). One row per (tenant, email); reads are fail-open in the app.
+  await sql`
+    CREATE TABLE IF NOT EXISTS chat_space_preferences (
+      id         TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id  TEXT NOT NULL REFERENCES tenants(id),
+      email      TEXT NOT NULL,
+      shown      JSONB NOT NULL DEFAULT '[]'::jsonb,
+      hidden     JSONB NOT NULL DEFAULT '[]'::jsonb,
+      updated_at TIMESTAMPTZ DEFAULT now() NOT NULL
+    )
+  `
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS chat_space_prefs_email_tenant_uniq
+    ON chat_space_preferences(tenant_id, email)
+  `
+  console.log('[migrate] ✓ chat_space_preferences table')
+
+  // Google OAuth Tokens — durable per-user REFRESH token so a lost session
+  // cookie no longer costs the user their offline grant (and a forced consent
+  // screen). Server-side read/write only; never leaves the backend.
+  await sql`
+    CREATE TABLE IF NOT EXISTS google_oauth_tokens (
+      id            TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id     TEXT NOT NULL REFERENCES tenants(id),
+      email         TEXT NOT NULL,
+      refresh_token TEXT NOT NULL,
+      scope         TEXT,
+      updated_at    TIMESTAMPTZ DEFAULT now() NOT NULL
+    )
+  `
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS google_oauth_tokens_email_tenant_uniq
+    ON google_oauth_tokens(tenant_id, email)
+  `
+  console.log('[migrate] ✓ google_oauth_tokens table')
+
   // AI Action Log — append-only provenance for AI-initiated actions (NS-2).
   // Strictly additive; no backfill. `target` holds routing metadata only (no
   // bodies); `gate_token_id` is a token fingerprint (never the full token).

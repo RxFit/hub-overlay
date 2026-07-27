@@ -16,6 +16,7 @@ import { ChatRequestSchema } from '@/lib/zod-schemas'
 import { boundHistory, MAX_HISTORY_MESSAGES } from '@/lib/history-window'
 import { extractSuggestedToolsJson, sanitizeAssistantHistoryContent } from '@/lib/model-output'
 import { buildGoogleWorkspaceContext } from '@/lib/google-context'
+import { getChatSpacePreferences } from '@/lib/chat-space-preferences-db'
 import { withTimeout } from '@/lib/timeout'
 import { chatErrorBody } from '@/lib/chat-error'
 import { breaker, CircuitOpenError } from '@/lib/circuit-breaker'
@@ -643,7 +644,12 @@ async function handleChat(req: NextRequest): Promise<Response> {
     // Branch 2: Google Workspace context (6s timeout) — runs in parallel
     googleAccessToken
       ? withTimeout(
-          buildGoogleWorkspaceContext(googleAccessToken).catch((err) => {
+          // The Chat section of this context honors the user's space visibility
+          // preferences, so the model sees their real spaces instead of a wall
+          // of auto-created Meet conversations. Fail-open to defaults.
+          getChatSpacePreferences(session.user.email ?? '')
+            .then(prefs => buildGoogleWorkspaceContext(googleAccessToken, prefs))
+            .catch((err) => {
             log.warn({ err }, 'Google Workspace context fetch failed — proceeding without it')
             return null
           }),

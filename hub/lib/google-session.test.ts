@@ -132,4 +132,69 @@ describe('resolveGoogleAuth', () => {
     expect(auth.ok).toBe(false)
     if (!auth.ok) expect(auth.response.status).toBe(401)
   })
+
+  it('answers 503 retryable — NOT 401 reauth — for a transient refresh failure', async () => {
+    // A Google outage must never log the user out: the session and refresh
+    // token are both intact and the next request retries.
+    getTokenMock.mockResolvedValueOnce({
+      accessToken: 'ya29.something',
+      error: 'RefreshTransientError',
+    })
+    const auth = await resolveGoogleAuth(req)
+    expect(auth.ok).toBe(false)
+    if (!auth.ok) {
+      expect(auth.response.status).toBe(503)
+      const body = await auth.response.json()
+      expect(body.reauth).toBe(false)
+      expect(body.retryable).toBe(true)
+    }
+  })
+
+  it('asks the client to REFRESH (not re-login) when the cookie holds an expired access token', async () => {
+    // getToken() only decodes the cookie, and getServerSession() discards the
+    // token it rotates in the App Router — so a stale access token sits in the
+    // cookie until /api/auth/session runs. Handing it to Google would earn a
+    // 401 the client escalates into a forced sign-in.
+    getTokenMock.mockResolvedValueOnce({
+      accessToken: 'ya29.expired',
+      accessTokenExpires: Date.now() - 60_000,
+    })
+    const auth = await resolveGoogleAuth(req)
+    expect(auth.ok).toBe(false)
+    if (!auth.ok) {
+      expect(auth.response.status).toBe(401)
+      const body = await auth.response.json()
+      expect(body.refresh).toBe(true)
+      expect(body.reauth).toBe(false)
+    }
+  })
+
+  it('passes through a token whose expiry is still in the future', async () => {
+    getTokenMock.mockResolvedValueOnce({
+      accessToken: 'ya29.fresh',
+      accessTokenExpires: Date.now() + 30 * 60_000,
+    })
+    expect(await resolveGoogleAuth(req)).toEqual({ ok: true, accessToken: 'ya29.fresh' })
+  })
+
+  it('passes through a legacy session that records no expiry at all', async () => {
+    // Sessions minted before accessTokenExpires was written must keep working
+    // rather than be declared expired.
+    getTokenMock.mockResolvedValueOnce({ accessToken: 'ya29.legacy' })
+    expect(await resolveGoogleAuth(req)).toEqual({ ok: true, accessToken: 'ya29.legacy' })
+  })
+})
+
+describe('mapGoogleErrorToStatus — quota 403s are not credential failures', () => {
+  it('maps a rate-limit 403 to a retryable 502 instead of a reauth 401', () => {
+    // Re-consenting cannot fix a quota; treating it as an auth failure logged
+    // the user out for using the app too fast.
+    expect(mapGoogleErrorToStatus('Google API error 403: rateLimitExceeded')).toBe(502)
+    expect(mapGoogleErrorToStatus('Google API error 403: Quota exceeded for quota metric')).toBe(502)
+    expect(mapGoogleErrorToStatus('Google API error 403: userRateLimitExceeded')).toBe(502)
+  })
+
+  it('still maps a genuine permission 403 to a reauth 401', () => {
+    expect(mapGoogleErrorToStatus('Google API error 403: insufficientPermissions')).toBe(401)
+  })
 })

@@ -8424,6 +8424,51 @@ a:hover .rx-arrow {
   color: var(--accent-bright);
 }
 
+/* Space kind group (Spaces / Group & Meet chats / DMs / Apps) — the Chat space
+   picker groups by what a conversation actually IS, so the ad-hoc buckets that
+   are hidden by default are visibly separated from real named spaces. */
+.settings-space-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.settings-space-group + .settings-space-group {
+  margin-top: var(--space-4);
+}
+
+.settings-space-group__title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.settings-space-group__count {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.settings-space-group__hint {
+  margin: 0 0 var(--space-1) 0;
+  font-size: var(--text-2xs);
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+/* Inline save failure under a settings section */
+.settings-error {
+  margin: var(--space-2) 0 0 0;
+  font-size: var(--text-xs);
+  color: var(--danger);
+}
+
 /* Space row */
 .settings-space-row {
   display: flex;

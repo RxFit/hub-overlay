@@ -1,12 +1,13 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback, useReducer } from 'react'
-import { useSpaces, useMessages, useSendMessage, useSpaceMembers, useUnreadCounts, useMarkSpaceRead } from '@/app/hooks/useGoogleChat'
+import { useSpaces, useMessages, useSendMessage, useSpaceMembers, useUnreadCounts, useMarkSpaceRead, useLegacyPinnedSpaceMigration } from '@/app/hooks/useGoogleChat'
 import type { ChatSpace, ChatMessage, SpaceMember } from '@/app/hooks/useGoogleChat'
 import { MentionPicker, useMentionTrigger } from '@/app/components/MentionPicker'
 import { InfoPopover } from '@/app/components/InfoPopover'
 import { GmailView } from '@/app/components/gmail/GmailView'
 import { useModalA11y } from '@/app/hooks/useModalA11y'
+import { classifyChatSpace, type ChatSpaceKind } from '@/lib/chat-spaces'
 
 
 /* ══════════════════════════════════════════
@@ -17,7 +18,10 @@ function SpaceAvatar({ space }: { space: ChatSpace }) {
   const initials = space.displayName
     ? space.displayName.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
     : '#'
-  const isDM = space.type === 'DM'
+  // Classify rather than test `type === 'DM'`: in the Chat API that deprecated
+  // value means a Chat-APP conversation, while a human DM reports `ROOM`. The
+  // old check therefore never matched a real person-to-person DM.
+  const isDM = spaceKind(space) === 'dm'
   return (
     <span className={`chat-space-avatar ${isDM ? 'chat-space-avatar--dm' : ''}`} aria-hidden="true">
       {isDM ? (
@@ -32,12 +36,24 @@ function SpaceAvatar({ space }: { space: ChatSpace }) {
   )
 }
 
-const SECTION_ORDER: { type: string; label: string; icon: string }[] = [
-  { type: 'SPACE', label: 'Spaces', icon: '#' },
-  { type: 'ROOM', label: 'Rooms', icon: '#' },
-  { type: 'GROUP_CHAT', label: 'Group Chats', icon: '👥' },
-  { type: 'DM', label: 'Direct Messages', icon: '👤' },
+/**
+ * Sidebar sections, keyed by the classifier in lib/chat-spaces.ts rather than
+ * by the Chat API's deprecated `type` field. That field reports `ROOM` for
+ * named spaces, group chats AND human DMs alike, so the previous grouping filed
+ * every direct message under "Rooms" and left "Direct Messages" permanently
+ * empty.
+ */
+const SECTION_ORDER: { kind: ChatSpaceKind; label: string; icon: string }[] = [
+  { kind: 'named', label: 'Spaces', icon: '#' },
+  { kind: 'group', label: 'Group & Meet Chats', icon: '👥' },
+  { kind: 'dm', label: 'Direct Messages', icon: '👤' },
+  { kind: 'bot', label: 'Apps', icon: '🤖' },
 ]
+
+/** A space's kind — server-annotated when available, computed otherwise. */
+function spaceKind(space: ChatSpace): ChatSpaceKind {
+  return space.kind ?? classifyChatSpace(space)
+}
 
 function SpacesList({
   spaces,
@@ -54,13 +70,13 @@ function SpacesList({
   missingScope: boolean
   unreadMap: Map<string, number>
 }) {
-  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
+  const [collapsedSections, setCollapsedSections] = useState<Set<ChatSpaceKind>>(new Set())
 
-  const toggleSection = (type: string) => {
+  const toggleSection = (kind: ChatSpaceKind) => {
     setCollapsedSections(prev => {
       const next = new Set(prev)
-      if (next.has(type)) next.delete(type)
-      else next.add(type)
+      if (next.has(kind)) next.delete(kind)
+      else next.add(kind)
       return next
     })
   }
@@ -106,35 +122,31 @@ function SpacesList({
     return unreadB - unreadA
   })
 
-  // Group by type
-  const grouped = new Map<string, ChatSpace[]>()
+  // Group by classified kind
+  const grouped = new Map<ChatSpaceKind, ChatSpace[]>()
   for (const space of sortedSpaces) {
-    const type = space.type || 'SPACE'
-    if (!grouped.has(type)) grouped.set(type, [])
-    grouped.get(type)!.push(space)
+    const kind = spaceKind(space)
+    if (!grouped.has(kind)) grouped.set(kind, [])
+    grouped.get(kind)!.push(space)
   }
 
-  // Build ordered sections (only show sections that have spaces)
-  const sections = SECTION_ORDER.filter(s => grouped.has(s.type))
-  // Add any types not in SECTION_ORDER
-  for (const type of Array.from(grouped.keys())) {
-    if (!SECTION_ORDER.find(s => s.type === type)) {
-      sections.push({ type, label: type, icon: '#' })
-    }
-  }
+  // Build ordered sections (only show sections that have spaces). Every kind
+  // the classifier can return is covered by SECTION_ORDER, so there is no
+  // unlabeled remainder to append.
+  const sections = SECTION_ORDER.filter(s => grouped.has(s.kind))
 
   return (
     <div className="chat-spaces-list" role="listbox" aria-label="Google Chat spaces">
       {sections.map(section => {
-        const sectionSpaces = grouped.get(section.type) ?? []
-        const isCollapsed = collapsedSections.has(section.type)
+        const sectionSpaces = grouped.get(section.kind) ?? []
+        const isCollapsed = collapsedSections.has(section.kind)
         const sectionUnread = sectionSpaces.reduce((sum, s) => sum + (unreadMap.get(s.name) ?? 0), 0)
 
         return (
-          <div key={section.type} className="chat-space-section">
+          <div key={section.kind} className="chat-space-section">
             <button
               className="chat-space-section__header"
-              onClick={() => toggleSection(section.type)}
+              onClick={() => toggleSection(section.kind)}
               aria-expanded={!isCollapsed}
             >
               <span className="chat-space-section__arrow" style={{ transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▾</span>
@@ -416,7 +428,11 @@ export function GoogleChatPanel({
   /** Injects an email summary into the AI assistant chat (page.tsx wiring). */
   onDiscussEmail?: (text: string) => void
 }) {
-  const { visibleSpaces, isLoading, missingScope } = useSpaces()
+  const { allSpaces, visibleSpaces, preferences, isLoading, missingScope } = useSpaces()
+  // One-time lift of any surviving browser-local pinned list into the durable
+  // server-side preferences. Mounted here (above the isOpen early return) so it
+  // runs whether or not the user ever opens the panel.
+  useLegacyPinnedSpaceMigration(allSpaces, preferences, isLoading)
   const { unreadMap } = useUnreadCounts(visibleSpaces)
   const [selectedSpace, setSelectedSpace] = useState<ChatSpace | null>(null)
   const [mobileView, setMobileView] = useState<'spaces' | 'thread'>('spaces')

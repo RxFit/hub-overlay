@@ -9,9 +9,20 @@ const tenant = getTenantConfig()
 export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false)
 
+  /**
+   * Deliberate sign-in — the ONE place that asks Google for consent explicitly.
+   *
+   * The provider config no longer sets `prompt` (see lib/auth.ts), so the
+   * automatic re-auth the data hooks fire completes silently against an
+   * existing grant. But Google only returns a `refresh_token` when consent is
+   * actually granted, so the intentional "Sign in with Google" click keeps
+   * `prompt: 'consent'` to guarantee the Hub ends up holding a durable offline
+   * credential. Paying the consent screen once, here, is what buys silent
+   * recovery everywhere else.
+   */
   const handleSignIn = () => {
     setIsLoading(true)
-    signIn('google', { callbackUrl: '/' })
+    signIn('google', { callbackUrl: '/' }, { prompt: 'consent' })
   }
 
   return (

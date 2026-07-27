@@ -4,9 +4,8 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useSession, signOut, signIn } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { useSpaces, setPinnedSpaces, getPinnedSpaces } from '@/app/hooks/useGoogleChat'
-import type { ChatSpace } from '@/app/hooks/useGoogleChat'
 import { InfoPopover } from '@/app/components/InfoPopover'
+import { ChatSpacesSettings } from '@/app/settings/components/ChatSpacesSettings'
 import { FocusPreferencesSettings } from '@/app/settings/components/FocusPreferencesSettings'
 import { useCompanies } from '@/app/hooks/useCompanies'
 import type { Company } from '@/types'
@@ -1415,22 +1414,6 @@ export default function SettingsPage() {
     }
   }, [status, router])
 
-  /* ── Google Chat Spaces state (must be above early returns — Rules of Hooks) ── */
-  const { allSpaces, isLoading: spacesLoading, missingScope } = useSpaces()
-  const [pinnedSpaces, setPinnedSpacesState] = useState<string[] | null>(null)
-  const [chatSaveStatus, setChatSaveStatus] = useState<'idle' | 'saved'>('idle')
-
-  useEffect(() => {
-    const current = getPinnedSpaces()
-    setPinnedSpacesState(current)
-  }, [])
-
-  useEffect(() => {
-    if (allSpaces.length > 0 && pinnedSpaces === null) {
-      setPinnedSpacesState(allSpaces.map(s => s.name))
-    }
-  }, [allSpaces, pinnedSpaces])
-
   /* ── Loading / Auth guard ── */
   if (status === 'loading') {
     return (
@@ -1444,24 +1427,6 @@ export default function SettingsPage() {
 
   const userRole = (session.user as Record<string, unknown>)?.role as string | undefined
   const isAdmin = userRole === 'admin' || userRole === 'superadmin'
-
-  const toggleChatSpace = (spaceName: string) => {
-    setChatSaveStatus('idle')
-    setPinnedSpacesState(prev => {
-      const current = prev ?? allSpaces.map(s => s.name)
-      return current.includes(spaceName)
-        ? current.filter(n => n !== spaceName)
-        : [...current, spaceName]
-    })
-  }
-
-  const handleSaveChatSpaces = () => {
-    if (pinnedSpaces !== null) {
-      setPinnedSpaces(pinnedSpaces)
-      setChatSaveStatus('saved')
-      setTimeout(() => setChatSaveStatus('idle'), 2000)
-    }
-  }
 
   const userEmail = (session?.user as Record<string, unknown>)?.email as string ?? ''
   const userName = session?.user?.name ?? ''
@@ -1517,90 +1482,8 @@ export default function SettingsPage() {
 
 
 
-      {/* ── Google Chat Spaces ── */}
-      <section className="settings-section" aria-label="Google Chat spaces">
-        <h2 className="settings-section-title">
-          <span className="rx-comment-label">01.5 //</span> Google Chat Spaces
-        </h2>
-        <p className="settings-section-desc">Choose which spaces appear in your Chat panel.</p>
-
-        {missingScope ? (
-          <div className="settings-scope-warning">
-            <span style={{ fontSize: '1.5rem' }}>🔐</span>
-            <div>
-              <strong>Google Chat not yet authorized.</strong>
-              <p style={{ margin: '4px 0 12px 0', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>To view and send messages to your Google Chat spaces, please grant Chat permissions.</p>
-              <button
-                className="settings-auth-btn"
-                onClick={() => signIn('google', { callbackUrl: '/settings' }, { prompt: 'consent' })}
-              >
-                Authorize Google Chat
-              </button>
-            </div>
-          </div>
-        ) : spacesLoading ? (
-          <div className="settings-spaces-loading" role="status">
-            {[1,2,3].map(i => <div key={i} className="settings-space-skeleton" />)}
-          </div>
-        ) : allSpaces.length === 0 ? (
-          <p className="settings-empty">No Google Chat spaces found.</p>
-        ) : (
-          <>
-            <div className="settings-spaces-actions">
-              <button className="settings-link-btn" onClick={() => { setChatSaveStatus('idle'); setPinnedSpacesState(allSpaces.map(s => s.name)) }}>Show all</button>
-              <button className="settings-link-btn" onClick={() => { setChatSaveStatus('idle'); setPinnedSpacesState([]) }}>Hide all</button>
-            </div>
-            <details
-              className="settings-collapsible"
-              open={(() => { try { return localStorage.getItem('hub-settings-spaces-open') === 'true' } catch { return false } })()}
-              onToggle={(e: React.SyntheticEvent<HTMLDetailsElement>) => {
-                try { localStorage.setItem('hub-settings-spaces-open', String((e.target as HTMLDetailsElement).open)) } catch {}
-              }}
-            >
-              <summary className="settings-collapsible__trigger">
-                <span className="settings-collapsible__arrow">▶</span>
-                {allSpaces.length} spaces · {(pinnedSpaces ?? allSpaces.map(s => s.name)).length} visible
-              </summary>
-              <div className="settings-spaces-list" role="list">
-                {allSpaces.map((space: ChatSpace) => {
-                  const isPinned = (pinnedSpaces ?? allSpaces.map(s => s.name)).includes(space.name)
-                  const label = space.displayName || space.name.split('/')[1]
-                  const isDM = space.type === 'DM'
-                  return (
-                    <label key={space.name} className="settings-space-row">
-                      <div className="settings-space-row__info">
-                        <span className="settings-space-row__icon" aria-hidden="true">{isDM ? '👤' : '#'}</span>
-                        <span className="settings-space-row__name">{label}</span>
-                      </div>
-                      <div
-                        role="switch"
-                        aria-checked={isPinned}
-                        tabIndex={0}
-                        className={`settings-toggle ${isPinned ? 'settings-toggle--on' : ''}`}
-                        onClick={() => toggleChatSpace(space.name)}
-                        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleChatSpace(space.name) } }}
-                        aria-label={`${isPinned ? 'Hide' : 'Show'} ${label}`}
-                      >
-                        <span className="settings-toggle__thumb" />
-                      </div>
-                    </label>
-                  )
-                })}
-              </div>
-            </details>
-            <div className="settings-save-row">
-              <button
-                id="settings-save-chat-btn"
-                className="settings-save-btn"
-                onClick={handleSaveChatSpaces}
-                disabled={chatSaveStatus === 'saved'}
-              >
-                {chatSaveStatus === 'saved' ? '✓ Saved' : 'Save Chat Preferences'}
-              </button>
-            </div>
-          </>
-        )}
-      </section>
+      {/* ── Google Chat Spaces (visibility, saved to your account) ── */}
+      <ChatSpacesSettings />
 
       {/* ── Email Focus Priorities (VIP list + goals) — every user ── */}
       <FocusPreferencesSettings />
