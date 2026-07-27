@@ -1,0 +1,157 @@
+---
+title: "Runbook — Adding & activating Google OAuth scopes"
+created: 2026-07-27
+tags:
+  - runbook
+  - oauth
+  - google-workspace
+  - deploy
+status: active
+related:
+  - "[[ai-provider-outage]]"
+  - "[[protected-workspaces]]"
+aliases:
+  - Google scopes runbook
+  - OAuth consent runbook
+---
+
+# Runbook — Adding & activating Google OAuth scopes
+
+> [!summary]
+> The Hub asks Google for a fixed list of OAuth scopes at sign-in
+> (`GOOGLE_SCOPES` in `hub/lib/auth.ts`). Adding a capability that touches a new
+> Google API is **two-sided**: the scope goes in the code *and* the scope must be
+> registered + its API enabled in the Google Cloud Console. Do the Console side
+> **before** the code deploys, or sign-in can break for everyone.
+
+## When to use this
+
+- You added (or plan to add) a Google API capability — Docs, Sheets, Slides,
+  Contacts, Directory, etc. — and need to take it live.
+- Users report a feature returning **"One-time permission needed"** / a Google
+  re-consent prompt, or a `MISSING_SCOPE` error.
+- Sign-in suddenly fails with `invalid_scope` / `access blocked` after a deploy.
+
+## The golden rule (deploy ordering)
+
+```
+Console (enable API + register scope)   ─►   merge code that requests the scope
+        FIRST                                          SECOND
+```
+
+Merging to `master` auto-deploys to Cloud Run (see [[../../README#Deployment]]).
+If the code that *requests* a scope ships before the consent screen knows about
+it, Google can reject the authorization request → **broken login**. Always land
+the Console change first, then flip the code PR ready.
+
+## Code side (one place)
+
+All scopes live in a single array — `GOOGLE_SCOPES` in **`hub/lib/auth.ts`**.
+The provider is already configured for clean re-consent:
+
+```ts
+authorization: {
+  params: {
+    scope: GOOGLE_SCOPES,
+    access_type: 'offline',       // issue a refresh token
+    prompt: 'consent',            // re-show consent so new scopes are granted
+    include_granted_scopes: 'true' // roll old grants into the new one (no drop)
+  }
+}
+```
+
+Adding a scope = add the URL to that array. Nothing else in the auth layer
+changes.
+
+## Console side (the checklist)
+
+For **each** new scope:
+
+1. **Enable the API** — Cloud Console → *APIs & Services → Enable APIs & services*.
+   Enabling the API is **separate** from the scope; the feature 500s without it.
+2. **Register the scope** — *APIs & Services → OAuth consent screen → Add or
+   remove scopes* → paste the scope URL → Save.
+3. **Trust the client** — Admin console → *Security → API controls → App access
+   control* → mark the Hub's OAuth client **Trusted**, so a future org-wide
+   "block unconfigured apps" policy can't silently break it.
+4. **Check posture (decides verification)** — OAuth consent screen → **User type**
+   + **Publishing status**:
+   - *Internal* → no verification, ever (even restricted scopes).
+   - *External + Testing* → any scope, ≤100 users, "unverified app" notice.
+   - *External + In production* → **sensitive** scopes need a brand + sensitive
+     review (days, **no CASA**); **restricted** scopes (full `drive`, `gmail.*`)
+     need restricted review **+ annual CASA**.
+
+> [!tip]
+> Prefer **sensitive-or-lighter** scopes. `drive.file` (non-sensitive) covers
+> "create a file in the user's Drive" without the restricted full-`drive` scope
+> and its CASA obligation.
+
+## Activating for existing users (re-consent)
+
+Sessions are 30-day JWTs; a token refresh **reuses the old grant**, so existing
+users don't get a new scope until they re-authenticate. This is handled
+gracefully:
+
+- Google **scope failures** surface as HTTP **401 `{ reauth: true }`** via
+  `mapGoogleErrorToStatus` (`hub/lib/google-session.ts`) → the client re-runs
+  `signIn('google')` automatically.
+- The **new write routes** (Docs/Sheets/Slides/Contacts) return a discriminating
+  **403 `{ code: 'MISSING_SCOPE' }`** (`googleWriteErrorResponse`) → the client
+  re-consents **only** on that marker, never on a bare 403 (RBAC / gate-token /
+  Paperclip proxy denials, which re-consent can't fix and would loop on).
+
+To force it proactively: **sign out and back in once**.
+
+**Verify a user actually has the scope:** their Google Account → *Security →
+Third-party access → CT Hub*, or decode the access token via `tokeninfo`.
+
+## Scope inventory (as of 2026-07-27)
+
+### Pre-existing
+`openid` · `email` · `profile` · `tasks` · `calendar` · `drive.readonly` ·
+`gmail.readonly` · `gmail.send` · `gmail.modify` · `chat.spaces.readonly` ·
+`chat.messages` · `chat.messages.create` · `chat.memberships.readonly` ·
+`chat.users.readstate` · `analytics.readonly` · `webmasters.readonly`
+
+### Added — PR #135 (Docs / Sheets / Contacts / Meet)
+
+| Scope | API to enable | Class | Unlocks |
+|---|---|---|---|
+| `…/auth/documents` | Google Docs API | sensitive | Create/edit Google Docs from chat (Decision Memo, meeting notes) |
+| `…/auth/spreadsheets` | Google Sheets API | sensitive | Create/edit Sheets (KPI snapshots, exports) |
+| `…/auth/drive.file` | Drive API | **non-sensitive** | Lets created Docs/Sheets/Slides land in the user's Drive (per-file only) |
+| `…/auth/contacts.readonly` | People API | sensitive | Resolve a name → email so "email Maria" works |
+| *(Google Meet)* | *(none — existing `calendar`)* | — | Auto-attach a Meet link on scheduled meetings (`conferenceDataVersion=1`) |
+
+### Added — PR #136 (Slides / Directory)
+
+| Scope | API to enable | Class | Unlocks |
+|---|---|---|---|
+| `…/auth/presentations` | Google Slides API | sensitive | Create Google Slides decks from chat (Deck Pipeline, Gamma Deck) |
+| `…/auth/admin.directory.user.readonly` | **Admin SDK API** (needs Workspace super-admin) | sensitive | Resolve a colleague → work email via the org directory (best-effort fallback after contacts) |
+
+> [!note]
+> The directory lookup is **best-effort**: if the Admin SDK isn't enabled, a
+> missing-scope error is swallowed and recipient resolution falls back to
+> personal contacts — nothing hard-breaks.
+
+## Gotchas
+
+- **Three separate things:** enable the API ≠ register the scope ≠ build the
+  feature. Miss one and it silently doesn't work.
+- **Don't add full `…/auth/drive`** — the only addition here that would start a
+  ~6-week restricted review + annual CASA. Use `drive.file`.
+- **`drive.file` can't open *existing* arbitrary files** — fine for *creating*
+  Docs/Sheets/Slides; editing an existing arbitrary doc relies on the
+  `documents`/`spreadsheets` scope.
+- **Bare 403 ≠ scope problem.** Only Google `insufficientPermissions` maps to
+  `MISSING_SCOPE`; RBAC/gate 403s must never trigger re-consent (loop risk).
+
+## Related
+
+- [[ai-provider-outage]] — AI key / provider remediation
+- [[protected-workspaces]] — workspace deletion guardrails
+- Code: `hub/lib/auth.ts` (`GOOGLE_SCOPES`), `hub/lib/google-session.ts`
+  (`googleWriteErrorResponse`, `mapGoogleErrorToStatus`), `hub/lib/google.ts`
+  (API wrappers)
