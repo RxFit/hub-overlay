@@ -122,8 +122,16 @@ export function classifyChatSpace(space: ClassifiableSpace): ChatSpaceKind {
   if (spaceType === 'DIRECT_MESSAGE') return 'dm'
   if (spaceType === 'GROUP_CHAT') return 'group'
 
-  // No spaceType: fall back to the deprecated field, where DM means an app DM.
-  if (!spaceType && (space.type ?? '').trim().toUpperCase() === 'DM') return 'bot'
+  // No spaceType: fall back to the deprecated field.
+  //
+  // Read literally, `DM` there means a human↔Chat-app conversation. In practice
+  // the v1 API is observed to use it for person-to-person DMs as well, and the
+  // evidence is contradictory enough not to rely on. It doesn't matter much:
+  // `singleUserBotDm` above is the authoritative bot marker and has already
+  // returned, so anything reaching here is NOT a bot — and both kinds are
+  // hidden by default anyway, so this only picks the Settings section label.
+  // 'dm' is the safer of the two.
+  if (!spaceType && (space.type ?? '').trim().toUpperCase() === 'DM') return 'dm'
 
   // SPACE / ROOM (or an unrecognized future enum) — a real space only if it
   // actually carries a human-chosen name.

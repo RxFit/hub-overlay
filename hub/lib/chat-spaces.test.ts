@@ -62,12 +62,24 @@ describe('classifyChatSpace', () => {
   })
 
   it('falls back to the deprecated type when spaceType is absent', () => {
-    // The deprecated `DM` value means a human↔Chat-APP conversation, not a
-    // person-to-person DM — so it classifies as a bot conversation.
-    expect(classifyChatSpace({ name: 'spaces/FFF', displayName: '', type: 'DM' })).toBe('bot')
+    // `singleUserBotDm` has already returned for real bot DMs, so a legacy
+    // `DM` reaching the fallback is treated as a person-to-person message.
+    expect(classifyChatSpace({ name: 'spaces/FFF', displayName: '', type: 'DM' })).toBe('dm')
     // `ROOM` is too coarse to decide on its own; the display name settles it.
     expect(classifyChatSpace({ name: 'spaces/GGG', displayName: 'Ops', type: 'ROOM' })).toBe('named')
     expect(classifyChatSpace({ name: 'spaces/HHH', displayName: '', type: 'ROOM' })).toBe('group')
+  })
+
+  it('lets spaceType win over a legacy type:DM on the same space', () => {
+    // The ordering bug to avoid: checking the deprecated `DM` before spaceType
+    // would file every human 1:1 DM under "Apps & bots".
+    expect(classifyChatSpace({
+      name: 'spaces/JJJ', displayName: '', spaceType: 'DIRECT_MESSAGE', type: 'DM',
+    })).toBe('dm')
+    // And a genuine bot DM is still caught first, by its positive marker.
+    expect(classifyChatSpace({
+      name: 'spaces/KKK', displayName: 'Drive', spaceType: 'DIRECT_MESSAGE', type: 'DM', singleUserBotDm: true,
+    })).toBe('bot')
   })
 
   it('classifies a Meet conversation by spaceType even though it HAS a display name', () => {
