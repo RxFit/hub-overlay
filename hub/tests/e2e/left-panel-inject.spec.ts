@@ -169,6 +169,19 @@ async function captureChatPost(page: Page, action: () => Promise<void>) {
   }
 }
 
+/**
+ * Expand a collapsible left-panel section by title, tolerating either default
+ * state — the header button toggles, so clicking an already-open section would
+ * close it.
+ */
+async function expandSection(page: Page, title: RegExp) {
+  const header = page.getByRole('button', { name: title })
+  await expect(header).toBeVisible({ timeout: 30_000 })
+  if ((await header.getAttribute('aria-expanded')) !== 'true') {
+    await header.click()
+  }
+}
+
 test.beforeEach(async ({ page, context, baseURL }) => {
   const sessionToken = await encode({
     token: {
@@ -245,7 +258,7 @@ test('calendar delete sends the event source calendarId', async ({ page }) => {
 })
 
 test('document tap attaches the real Drive fileId', async ({ page }) => {
-  await page.getByRole('button', { name: /Documents/ }).click()
+  await expandSection(page, /Documents/)
   const row = page.getByRole('listitem', { name: /Document: Q3 Plan/ })
   await expect(row).toBeVisible({ timeout: 30_000 })
 
@@ -262,7 +275,7 @@ test('document tap attaches the real Drive fileId', async ({ page }) => {
 })
 
 test('transcript tap uses the summarize prompt and attaches the fileId', async ({ page }) => {
-  await page.getByRole('button', { name: /Documents/ }).click()
+  await expandSection(page, /Documents/)
   await page.getByRole('tab', { name: 'Transcripts' }).click()
   const row = page.getByRole('listitem', { name: /Document: Standup 7\/2/ })
   await expect(row).toBeVisible({ timeout: 30_000 })
@@ -274,7 +287,7 @@ test('transcript tap uses the summarize prompt and attaches the fileId', async (
 })
 
 test('artifact tap attaches the resolvable [artifact:id] marker', async ({ page }) => {
-  await page.getByRole('button', { name: /Documents/ }).click()
+  await expandSection(page, /Documents/)
   await page.getByRole('tab', { name: 'Artifacts' }).click()
   const row = page.getByRole('listitem', { name: 'Artifact: Pricing Memo' })
   await expect(row).toBeVisible({ timeout: 30_000 })

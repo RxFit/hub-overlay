@@ -104,11 +104,11 @@ function LeftPanelImpl({ isOpen, onClose, onInjectChat, onInjectAction, panelRef
         <SectionErrorBoundary label="Calendar">
           <CalendarSection onInjectChat={onInjectChat} />
         </SectionErrorBoundary>
-        <SectionErrorBoundary label="Tasks">
-          <TasksSection onInjectChat={onInjectChat} onInjectAction={onInjectAction} />
-        </SectionErrorBoundary>
         <SectionErrorBoundary label="Documents">
           <DocumentsSection onInjectChat={onInjectChat} />
+        </SectionErrorBoundary>
+        <SectionErrorBoundary label="Tasks">
+          <TasksSection onInjectChat={onInjectChat} onInjectAction={onInjectAction} />
         </SectionErrorBoundary>
       </div>
     </aside>

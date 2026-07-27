@@ -32,7 +32,7 @@ export function ProjectHealthSection({
 }) {
   if (isLoading) {
     return (
-      <CollapsibleSection title="Project Health" protocolNum="05" defaultOpen>
+      <CollapsibleSection title="Project Health" protocolNum="05" defaultOpen={false}>
         <div className={styles.lpsSkeletonBlock} aria-label="Loading project health" role="status">
           {[1, 2, 3].map(i => (
             <div key={i} className={styles.lpsSkeletonLine} style={{ width: `${85 - i * 10}%`, height: '38px', marginBottom: '6px', borderRadius: '8px' }} />
@@ -46,7 +46,7 @@ export function ProjectHealthSection({
   // the empty copy when the cause is an error.
   if (error) {
     return (
-      <CollapsibleSection title="Project Health" protocolNum="05" defaultOpen>
+      <CollapsibleSection title="Project Health" protocolNum="05" defaultOpen={false}>
         <SectionError message="Unable to load project health — try again." onRetry={onRetry} />
       </CollapsibleSection>
     )
@@ -61,7 +61,7 @@ export function ProjectHealthSection({
           ? 'No projects assigned — contact your admin to get access.'
           : 'No project data'
     return (
-      <CollapsibleSection title="Project Health" protocolNum="05" defaultOpen>
+      <CollapsibleSection title="Project Health" protocolNum="05" defaultOpen={false}>
         <SectionMessage message={emptyMsg} type="empty" />
         {isStaff && (
           <div style={{ marginTop: '6px', paddingLeft: '2px', fontSize: '0.72rem' }}>
@@ -73,7 +73,7 @@ export function ProjectHealthSection({
   }
 
   return (
-    <CollapsibleSection title="Project Health" protocolNum="05" defaultOpen>
+    <CollapsibleSection title="Project Health" protocolNum="05" defaultOpen={false}>
       <div className={styles.projectHealthList} role="list" aria-label="Project health status">
         {projects.map((p) => {
           const statusColor = HEALTH_COLORS[p.health] ?? 'var(--text-muted)'
