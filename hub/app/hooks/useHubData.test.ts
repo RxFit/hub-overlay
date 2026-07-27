@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act } from 'react'
-import { renderQueryHook, settleQueries as settle, jsonResponse } from './query-test-utils'
+import { renderQueryHook, settleQueries as settle, settleUntil, jsonResponse } from './query-test-utils'
 
 const signInMock = vi.fn()
 const getSessionMock = vi.fn(async () => ({ user: { email: 'danny@rxfitatx.com' } }))
@@ -187,7 +187,11 @@ describe('useHubData hooks (TanStack Query-backed)', () => {
     ) as unknown as typeof fetch
 
     const { result, unmount } = renderQueryHook(() => useCalendar())
-    await settle()
+    // This fetcher awaits three times before it rejects (res.json, then
+    // getSession inside refreshSessionCookie, then the throw), so a single
+    // fixed-tick flush can finish while the query is still in flight. Wait on
+    // the error actually landing instead.
+    await settleUntil(() => !!result.current.error)
 
     // getSession() hits /api/auth/session — the only path that persists a
     // rotated cookie — so the query's retry lands on a live token.
