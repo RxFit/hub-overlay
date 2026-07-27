@@ -41,6 +41,24 @@ export const settleQueries = () => act(async () => {
   await new Promise(r => setTimeout(r, 0))
 })
 
+/**
+ * Settle repeatedly until `done()` holds, or give up after `maxFlushes`.
+ *
+ * `settleQueries` flushes a fixed number of ticks, which is enough for a
+ * queryFn that awaits once. A fetcher that awaits several times before
+ * rejecting — e.g. reading the error body AND rotating the session cookie
+ * before it throws — can still be in flight when that fixed budget runs out,
+ * which makes the assertion racy rather than wrong. Waiting on the observable
+ * condition instead of on a tick count removes the race without slowing the
+ * common path: it returns as soon as the condition holds.
+ */
+export async function settleUntil(done: () => boolean, maxFlushes = 25): Promise<void> {
+  for (let i = 0; i < maxFlushes; i++) {
+    if (done()) return
+    await settleQueries()
+  }
+}
+
 export function jsonResponse(body: unknown, status = 200) {
   return {
     ok: status >= 200 && status < 300,
