@@ -177,6 +177,73 @@ export const focusPreferences = pgTable(
   })
 )
 
+/* ── Chat Space Preferences (per-user Google Chat panel visibility) ─────── */
+/**
+ * One row per user (tenant + email) holding which Google Chat spaces they want
+ * in the Hub's Chat panel, stored as OVERRIDES on top of the default rule in
+ * lib/chat-spaces.ts (named spaces visible; DMs / Meet group chats / bot DMs
+ * hidden) rather than as a snapshot list.
+ *
+ * Overrides — not a snapshot — because Google Chat keeps auto-creating spaces:
+ * a snapshot says nothing about a Meet chat that did not exist when it was
+ * saved, whereas the default rule hides it on sight. Reads are FAIL-OPEN (see
+ * lib/chat-space-preferences-db.ts): a DB outage falls back to the defaults, so
+ * the panel degrades to "named spaces only" instead of erroring.
+ *
+ * This lives in Postgres and not localStorage so the choice survives sign-out,
+ * a new browser, a new device and a redeploy.
+ */
+export const chatSpacePreferences = pgTable(
+  'chat_space_preferences',
+  {
+    id:        text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+    tenantId:  text('tenant_id').notNull().references(() => tenants.id),
+    email:     text('email').notNull(),
+    /** Space names forced VISIBLE despite the default rule hiding them. */
+    shown:     jsonb('shown').$type<string[]>().notNull().default([]),
+    /** Space names forced HIDDEN despite the default rule showing them. */
+    hidden:    jsonb('hidden').$type<string[]>().notNull().default([]),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  },
+  (t) => ({
+    emailTenantUniq: uniqueIndex('chat_space_prefs_email_tenant_uniq').on(t.tenantId, t.email),
+  })
+)
+
+/* ── Google OAuth Tokens (durable offline-access credential) ────────────── */
+/**
+ * The user's Google REFRESH token, kept server-side so the Hub can mint fresh
+ * access tokens without dragging the user back through the OAuth consent screen.
+ *
+ * WHY: the refresh token used to live ONLY inside the NextAuth JWT cookie.
+ * Anything that lost that cookie — a new browser, a cleared profile, a phone,
+ * an expired session — lost offline access with it, and the only recovery was a
+ * full interactive re-consent. That is the "many forced relogins" complaint.
+ * With the token durably stored, a re-auth can complete SILENTLY against the
+ * grant Google already has on file.
+ *
+ * SECURITY: this is a bearer credential for the user's Google account. It is
+ * written and read exclusively by server-side code (lib/google-token-store.ts),
+ * is never returned by an API route, never reaches the session object, and
+ * never appears in a log line. Rows are keyed by (tenant, email) — the same
+ * scoping every other per-user table uses.
+ */
+export const googleOauthTokens = pgTable(
+  'google_oauth_tokens',
+  {
+    id:           text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+    tenantId:     text('tenant_id').notNull().references(() => tenants.id),
+    email:        text('email').notNull(),
+    refreshToken: text('refresh_token').notNull(),
+    /** Space-separated scope list the token was granted with, for diagnostics. */
+    scope:        text('scope'),
+    updatedAt:    timestamp('updated_at').defaultNow().notNull(),
+  },
+  (t) => ({
+    emailTenantUniq: uniqueIndex('google_oauth_tokens_email_tenant_uniq').on(t.tenantId, t.email),
+  })
+)
+
 /* ── Tool Artifacts (Structured output from skill sessions) ────────────── */
 
 export const toolArtifacts = pgTable('tool_artifacts', {

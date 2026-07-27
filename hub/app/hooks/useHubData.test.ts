@@ -4,8 +4,10 @@ import { act } from 'react'
 import { renderQueryHook, settleQueries as settle, jsonResponse } from './query-test-utils'
 
 const signInMock = vi.fn()
+const getSessionMock = vi.fn(async () => ({ user: { email: 'danny@rxfitatx.com' } }))
 vi.mock('next-auth/react', () => ({
   signIn: (...args: unknown[]) => signInMock(...args),
+  getSession: () => getSessionMock(),
 }))
 
 import {
@@ -14,6 +16,8 @@ import {
   useDrive,
   useFeed,
   useAuthErrorRecovery,
+  shouldTriggerReauth,
+  __resetAuthErrorRecovery,
 } from './useHubData'
 
 describe('useHubData hooks (TanStack Query-backed)', () => {
@@ -22,6 +26,11 @@ describe('useHubData hooks (TanStack Query-backed)', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     signInMock.mockClear()
+    getSessionMock.mockClear()
+    // The redirect latch is module-scoped (one sign-in per page load), so it
+    // must be cleared between cases or the first test to arm it would mask
+    // every later one.
+    __resetAuthErrorRecovery()
     global.fetch = originalFetch
   })
 
@@ -156,5 +165,45 @@ describe('useHubData hooks (TanStack Query-backed)', () => {
     expect(result.current).toBe(false)
     expect(signInMock).not.toHaveBeenCalled()
     unmount()
+  })
+
+  it('useAuthErrorRecovery does NOT sign the user out for a 401 marked reauth:false', async () => {
+    // A recoverable 401 (stale-but-refreshable token) must never escalate into
+    // a login — that escalation is the forced-relogin bug.
+    const err = Object.assign(new Error('stale'), { status: 401, reauth: false })
+
+    const { result, unmount } = renderQueryHook(() => useAuthErrorRecovery(err))
+    expect(result.current).toBe(false)
+
+    await act(async () => { await new Promise(r => setTimeout(r, 2100)) })
+    expect(signInMock).not.toHaveBeenCalled()
+
+    unmount()
+  })
+
+  it('a 401 with refresh:true rotates the session cookie instead of re-authenticating', async () => {
+    global.fetch = vi.fn().mockResolvedValue(
+      jsonResponse({ error: 'expired', reauth: false, refresh: true }, 401),
+    ) as unknown as typeof fetch
+
+    const { result, unmount } = renderQueryHook(() => useCalendar())
+    await settle()
+
+    // getSession() hits /api/auth/session — the only path that persists a
+    // rotated cookie — so the query's retry lands on a live token.
+    expect(getSessionMock).toHaveBeenCalled()
+    expect((result.current.error as any)?.reauth).toBe(false)
+    expect(shouldTriggerReauth(result.current.error)).toBe(false)
+
+    unmount()
+  })
+
+  it('shouldTriggerReauth: only an un-opted-out 401 qualifies', () => {
+    expect(shouldTriggerReauth({ status: 401 })).toBe(true)
+    expect(shouldTriggerReauth({ status: 401, reauth: true })).toBe(true)
+    expect(shouldTriggerReauth({ status: 401, reauth: false })).toBe(false)
+    expect(shouldTriggerReauth({ status: 503, retryable: true })).toBe(false)
+    expect(shouldTriggerReauth(null)).toBe(false)
+    expect(shouldTriggerReauth('nope')).toBe(false)
   })
 })

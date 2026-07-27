@@ -8,6 +8,7 @@ import {
   useSendMessage,
   useSpaceMembers,
   useUnreadCounts,
+  __resetLegacyMigration,
   type ChatSpace,
 } from './useGoogleChat'
 
@@ -20,7 +21,7 @@ describe('useGoogleChat hooks (TanStack Query-backed)', () => {
     localStorage.clear()
   })
 
-  it('useSpaces maps spaces and keeps the visible/pinned filtering', async () => {
+  it('useSpaces maps spaces and applies the visibility filter', async () => {
     const s1 = { name: 'spaces/1', displayName: 'Ops', type: 'ROOM' }
     global.fetch = vi.fn().mockResolvedValue(
       jsonResponse({ spaces: [s1] }),
@@ -161,6 +162,84 @@ describe('useGoogleChat hooks (TanStack Query-backed)', () => {
 
     expect(fetchMock).not.toHaveBeenCalled()
     expect(result.current.totalUnread).toBe(0)
+
+    unmount()
+  })
+})
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   Default visibility — the Meet/DM clutter fix.
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+describe('useSpaces default visibility', () => {
+  const originalFetch = global.fetch
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    global.fetch = originalFetch
+    localStorage.clear()
+    __resetLegacyMigration()
+  })
+
+  const OPS = { name: 'spaces/ops', displayName: 'RxFit Ops', type: 'ROOM', spaceType: 'SPACE' }
+  const MEET = { name: 'spaces/meet', displayName: 'Standup - Nov 8', type: 'ROOM', spaceType: 'GROUP_CHAT' }
+  const DM = { name: 'spaces/dm', displayName: '', type: 'ROOM', spaceType: 'DIRECT_MESSAGE' }
+
+  it('hides Meet chats and DMs by default while keeping named spaces', async () => {
+    global.fetch = vi.fn().mockResolvedValue(
+      jsonResponse({ spaces: [OPS, MEET, DM] }),
+    ) as unknown as typeof fetch
+
+    const { result, unmount } = renderQueryHook(() => useSpaces())
+    await settle()
+
+    // Settings still needs the full list; the panel only gets the named space.
+    expect(result.current.allSpaces).toHaveLength(3)
+    expect(result.current.visibleSpaces.map(s => s.name)).toEqual(['spaces/ops'])
+
+    unmount()
+  })
+
+  it('applies server-side overrides from the same response', async () => {
+    global.fetch = vi.fn().mockResolvedValue(
+      jsonResponse({
+        spaces: [OPS, MEET, DM],
+        preferences: { shown: ['spaces/dm'], hidden: ['spaces/ops'] },
+      }),
+    ) as unknown as typeof fetch
+
+    const { result, unmount } = renderQueryHook(() => useSpaces())
+    await settle()
+
+    expect(result.current.visibleSpaces.map(s => s.name)).toEqual(['spaces/dm'])
+
+    unmount()
+  })
+
+  it('classifies locally when the response omits the server annotations', async () => {
+    // e2e mocks and older cached payloads carry no `kind`/`defaultVisible`.
+    global.fetch = vi.fn().mockResolvedValue(
+      jsonResponse({ spaces: [{ name: 'spaces/x', displayName: 'Marketing', type: 'ROOM' }] }),
+    ) as unknown as typeof fetch
+
+    const { result, unmount } = renderQueryHook(() => useSpaces())
+    await settle()
+
+    expect(result.current.visibleSpaces.map(s => s.name)).toEqual(['spaces/x'])
+
+    unmount()
+  })
+
+  it('normalizes a malformed preferences payload instead of trusting it', async () => {
+    global.fetch = vi.fn().mockResolvedValue(
+      jsonResponse({ spaces: [OPS], preferences: { shown: 'nope', hidden: null } }),
+    ) as unknown as typeof fetch
+
+    const { result, unmount } = renderQueryHook(() => useSpaces())
+    await settle()
+
+    expect(result.current.preferences).toEqual({ shown: [], hidden: [] })
+    expect(result.current.visibleSpaces.map(s => s.name)).toEqual(['spaces/ops'])
 
     unmount()
   })

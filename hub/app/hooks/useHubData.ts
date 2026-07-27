@@ -1,30 +1,95 @@
 'use client'
 
 import { useQuery } from '@tanstack/react-query'
-import { signIn } from 'next-auth/react'
+import { getSession, signIn } from 'next-auth/react'
 import { useEffect, useRef } from 'react'
 
 /* ── Auth error recovery ── */
 
 /**
- * Detects 401 errors from data hooks and auto-redirects to sign-in.
+ * Process-wide single-flight latch for the automatic re-auth redirect.
+ *
+ * A Hub page mounts many data hooks at once (tasks, calendar, KPIs, Gmail,
+ * Chat…). When a session really does die they ALL 401 at the same instant, and
+ * each one used to arm its own `signIn()` timer — a pile of competing redirects
+ * for one underlying cause. Latching at module scope means the first one wins
+ * and the rest are no-ops.
+ */
+let reauthRedirectArmed = false
+
+/** Test-only: clear the module-level latch between cases. */
+export function __resetAuthErrorRecovery(): void {
+  reauthRedirectArmed = false
+}
+
+/**
+ * Force NextAuth to re-issue the session cookie with a fresh Google access
+ * token.
+ *
+ * `getSession()` calls `/api/auth/session`, which is the ONLY request in the
+ * app that runs the `jwt` callback with a response object able to write
+ * Set-Cookie — route handlers using `getServerSession()` compute the rotated
+ * token and drop it (no-op setCookie in next-auth's App Router path). So this
+ * is the repair mechanism for a stale token, and it costs one same-origin call.
+ *
+ * In-flight calls are shared: a page full of hooks that all 401 at once must
+ * trigger exactly one refresh, not a dozen.
+ */
+let sessionRefreshInFlight: Promise<unknown> | null = null
+
+export async function refreshSessionCookie(): Promise<void> {
+  if (!sessionRefreshInFlight) {
+    sessionRefreshInFlight = getSession().finally(() => { sessionRefreshInFlight = null })
+  }
+  try {
+    await sessionRefreshInFlight
+  } catch {
+    // Best-effort — the caller still throws, and the query retries.
+  }
+}
+
+/**
+ * Decide whether a failed request should bounce the user to Google sign-in.
+ *
+ * Only a 401 qualifies, and only when the route did not explicitly opt out with
+ * `reauth: false`. That opt-out matters: a transient Google outage no longer
+ * arrives as a 401 at all (routes answer 503 `{ retryable: true }` — see
+ * lib/google-session.ts), but any route that does return a non-credential 401
+ * can now say so instead of getting the user logged out for it.
+ *
+ * Pure and exported so the policy is unit-testable without a DOM.
+ */
+export function shouldTriggerReauth(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const e = error as { status?: unknown; reauth?: unknown }
+  if (e.status !== 401) return false
+  return e.reauth !== false
+}
+
+/**
+ * Detects genuine auth failures from data hooks and re-authenticates.
+ *
  * Returns true if an auth error was detected (for UI display).
  */
 export function useAuthErrorRecovery(error: Error | undefined | null): boolean {
   const redirected = useRef(false)
 
   useEffect(() => {
-    if (error && (error as any).status === 401 && !redirected.current) {
+    if (shouldTriggerReauth(error) && !redirected.current && !reauthRedirectArmed) {
       redirected.current = true
+      reauthRedirectArmed = true
       // Brief delay to show the error banner before redirecting
       const timer = setTimeout(() => {
+        // No `prompt` — with the grant already on file Google completes this
+        // silently, so a recoverable expiry costs the user nothing. Only a
+        // genuinely revoked grant surfaces the consent screen.
         signIn('google')
       }, 2000)
       return () => clearTimeout(timer)
     }
   }, [error])
 
-  return !!(error && (error as any).status === 401)
+  return shouldTriggerReauth(error)
 }
 
 /* ── Generic JSON fetcher ── */
@@ -33,8 +98,19 @@ async function fetcher<T>(url: string): Promise<T> {
   const res = await fetch(url)
 
   if (res.status === 401) {
-    const err = new Error('Unauthorized — Google token may have expired')
+    // Read the route's reauth signal so `{ reauth: false }` can suppress the
+    // automatic sign-in redirect (see shouldTriggerReauth).
+    const body = await res.json().catch(() => ({} as Record<string, unknown>))
+    // `refresh: true` means the cookie's access token is merely stale, not
+    // dead. Rotate it first (see refreshSessionCookie) so the retry TanStack
+    // Query is about to make lands on a live token — instead of the old
+    // behavior, where a stale token became a logout.
+    if (body?.refresh === true) await refreshSessionCookie()
+    const err = new Error(
+      (typeof body?.error === 'string' && body.error) || 'Unauthorized — Google token may have expired',
+    )
     ;(err as any).status = 401
+    ;(err as any).reauth = body?.reauth
     throw err
   }
 
