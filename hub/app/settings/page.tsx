@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { InfoPopover } from '@/app/components/InfoPopover'
 import { ChatSpacesSettings } from '@/app/settings/components/ChatSpacesSettings'
+import { AnalyticsSettings } from '@/app/settings/components/AnalyticsSettings'
 import { FocusPreferencesSettings } from '@/app/settings/components/FocusPreferencesSettings'
 import { useCompanies } from '@/app/hooks/useCompanies'
 import type { Company } from '@/types'
@@ -713,7 +714,7 @@ function KPIEditorCard({ isAdmin }: { isAdmin: boolean }) {
             <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '6px' }}>Auto-synced</div>
             {autoKpis.length === 0 ? (
               <div style={{ padding: '12px', background: 'rgba(255,255,255,0.02)', border: '1px dashed var(--border)', borderRadius: '7px', fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', lineHeight: 1.6 }}>
-                No live data yet.{isAdmin ? <> Add <code style={{ background: 'rgba(255,255,255,0.06)', padding: '1px 4px', borderRadius: '3px' }}>GA4_PROPERTY_ID</code>, <code style={{ background: 'rgba(255,255,255,0.06)', padding: '1px 4px', borderRadius: '3px' }}>STRIPE_SECRET_KEY</code>, <code style={{ background: 'rgba(255,255,255,0.06)', padding: '1px 4px', borderRadius: '3px' }}>GSC_SITE_URL</code> to Railway, then click <strong>⟳ Sync Now</strong>.</> : ' Contact your admin.'}
+                No live data yet.{isAdmin ? <> Pick your property and site under <strong>Analytics Sources</strong> below (and add <code style={{ background: 'rgba(255,255,255,0.06)', padding: '1px 4px', borderRadius: '3px' }}>STRIPE_SECRET_KEY</code> for revenue), then click <strong>⟳ Sync Now</strong>.</> : ' Contact your admin.'}
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
@@ -1484,6 +1485,10 @@ export default function SettingsPage() {
 
       {/* ── Google Chat Spaces (visibility, saved to your account) ── */}
       <ChatSpacesSettings />
+
+      {/* ── Analytics sources (GA4 property + GSC site) — admin only; the
+             component hides itself when the API answers 403 for staff ── */}
+      <AnalyticsSettings />
 
       {/* ── Email Focus Priorities (VIP list + goals) — every user ── */}
       <FocusPreferencesSettings />
