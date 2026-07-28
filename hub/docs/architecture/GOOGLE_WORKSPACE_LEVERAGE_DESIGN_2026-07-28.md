@@ -34,7 +34,7 @@ related: ["[[google-oauth-scopes]]", "[[DESIGN_CONTEXT_2026-07-05]]"]
 | Tasks | `tasks` | Full CRUD (`hub/lib/google.ts:61-171`) | List creation; bulk "extract action items" |
 | Calendar | `calendar` (full) | List/create(+Meet)/delete (`google.ts:201-334`) | No `events.patch` update; no free/busy |
 | Drive | `drive.readonly`, `drive.file` | Recent-files list + export download | **No folders, no uploads, no organization, no search tool** |
-| Gmail | `gmail.readonly/send/modify` | Threads list/read, send, trash, mark-read | No drafts flow, no threading headers, no labels, no attachments |
+| Gmail | `gmail.readonly/send/modify` | Threads list/read, send (with threading headers), trash, mark-read | No drafts flow, no labels, no attachments |
 | Google Chat | `chat.*` (5 scopes) | Spaces/messages/members, send, read-state | Digest posts; space creation (deliberately deferred) |
 | Docs | `documents` | Create + one plain-text `insertText` (`google.ts:657-685`) | **No formatting, no markdown fidelity, no edits of existing docs** |
 | Sheets | `spreadsheets` | Create + naive comma-split rows (`google.ts:704-727`) | No formatting/charts; no analytics export |
@@ -336,9 +336,12 @@ First 1 TB/month on-demand processing is free.
   (10 quota units) → `EmailPreviewCard` shows the *actual* draft (already sanitized via
   DOMPurify) → confirm → `drafts.send` (100 units). The draft survives in Gmail if the user
   walks away — nothing is lost, nothing sent silently. This is strictly better HITL than today.
-- **Reply threading**: replies must set all three of `threadId`, `In-Reply-To`, `References`
-  (+ matching `Subject`) in the RFC 2822 raw payload — today's send route sets none, so "reply"
-  starts new threads.
+- **Reply threading**: CORRECTION (verified 2026-07-28) — this doc originally claimed the send
+  route set none of `threadId`, `In-Reply-To`, `References`. That was wrong: it sets all three,
+  and replies thread correctly. The real defect found on inspection was narrower — a reply with
+  no explicit subject built one out of `inReplyTo`, which is a *Message-ID*, so the recipient saw
+  `Subject: Re: <CAKx8s...@mail.gmail.com>`. Fixed in PR #159 (`lib/gmail-subject.ts`); callers
+  wanting "Re: …" pass the real subject, which the thread GET already returns.
 - **Attachments from the workspace**: "email the deck to Maria" → `files.export` (pptx/pdf,
   ≤35 MB Gmail limit) → multipart MIME. Recipient resolution already exists
   (`resolveRecipient`, `google.ts:776`).
