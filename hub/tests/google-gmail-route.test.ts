@@ -352,12 +352,25 @@ describe('POST /api/google/gmail — RFC-2822 assembly (decoded from the real ra
     expect(raw).not.toMatch(/^Bcc:/m) // no injected header line
   })
 
-  it('falls back to "Re: <inReplyTo>" when replying without a subject', async () => {
+  it('does NOT build a subject out of the Message-ID when replying without one', async () => {
+    // BEHAVIOR CHANGE (was: `Subject: Re: <mid-9>`).
+    //
+    // `inReplyTo` is a Message-ID, not a subject — the GET handler populates it
+    // from the message's Message-ID header. The old fallback interpolated it,
+    // so a subject-less reply reached the recipient as
+    // "Re: <CAKx8s...@mail.gmail.com>". The previous expectation captured that
+    // as-is rather than endorsing it.
+    //
+    // Threading is unaffected: it rides on threadId + In-Reply-To + References,
+    // all still asserted below. A caller wanting "Re: …" passes the real
+    // subject, which the thread GET already returns.
     stubSendOk()
     const res = await POST(postReq({ to: 'a@b.co', message: 'm', inReplyTo: '<mid-9>', subject: '' }))
     expect(res.status).toBe(200)
     const raw = decodeRaw(JSON.parse(String(fetchCalls[0].init?.body)).raw)
-    expect(raw).toContain('Subject: Re: <mid-9>')
+    expect(raw).toContain('Subject: (no subject)')
+    expect(raw).not.toContain('Subject: Re: <mid-9>')
+    // Threading headers must survive the change — that is the load-bearing part.
     expect(raw).toContain('In-Reply-To: <mid-9>')
     expect(raw).toContain('References: <mid-9>')
   })
