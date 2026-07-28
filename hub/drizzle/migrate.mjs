@@ -406,6 +406,30 @@ async function run() {
   `
   console.log('[migrate] ✓ drive_workspaces table')
 
+  // Google prefs — per-tenant GA4 property / GSC site selection and scheduled
+  // report configuration. Replaces the single-property env vars (kept as a
+  // fallback so existing deploys keep working until an admin picks one).
+  await sql`
+    CREATE TABLE IF NOT EXISTS google_prefs (
+      id                  TEXT PRIMARY KEY,
+      tenant_id           TEXT NOT NULL REFERENCES tenants(id),
+      ga4_property_id     TEXT,
+      gsc_site_url        TEXT,
+      bigquery_project_id TEXT,
+      gbp_account_id      TEXT,
+      gbp_location_ids    JSONB NOT NULL DEFAULT '[]'::jsonb,
+      reports             JSONB NOT NULL DEFAULT '[]'::jsonb,
+      timezone            TEXT,
+      updated_by          TEXT,
+      updated_at          TIMESTAMPTZ DEFAULT now() NOT NULL
+    )
+  `
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS google_prefs_tenant_uniq
+    ON google_prefs(tenant_id)
+  `
+  console.log('[migrate] ✓ google_prefs table')
+
   // Seed rxfit tenant
   await sql`
     INSERT INTO tenants (id, name, domain)

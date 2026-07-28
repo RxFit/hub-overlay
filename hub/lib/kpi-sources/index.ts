@@ -28,11 +28,21 @@ export interface SyncResult {
   }
 }
 
-export async function runAllSources(accessToken?: string): Promise<SyncResult> {
+/** Which GA4 property / GSC site to read. Resolved by the caller from tenant
+ *  prefs; omitting either falls back to the corresponding env var. */
+export interface KpiSourceTargets {
+  ga4PropertyId?: string
+  gscSiteUrl?: string
+}
+
+export async function runAllSources(
+  accessToken?: string,
+  targets: KpiSourceTargets = {},
+): Promise<SyncResult> {
   const [ga4Result, stripeResult, gscResult] = await Promise.allSettled([
-    accessToken ? fetchGA4KPIs(accessToken) : Promise.resolve([]),
+    accessToken ? fetchGA4KPIs(accessToken, targets.ga4PropertyId) : Promise.resolve([]),
     fetchStripeKPIs(),
-    accessToken ? fetchGSCKPIs(accessToken) : Promise.resolve([]),
+    accessToken ? fetchGSCKPIs(accessToken, targets.gscSiteUrl) : Promise.resolve([]),
   ])
 
   const kpis: SyncedKPI[] = []

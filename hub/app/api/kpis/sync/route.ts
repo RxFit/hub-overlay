@@ -11,6 +11,7 @@ import { createLogger } from '@/lib/logger'
 import { recordEvent } from '@/lib/event-logger'
 import { pruneExpiredMemories, pruneOldEventLogs } from '@/lib/agent-memory'
 import { getTenantId } from '@/lib/tenant-context'
+import { getEffectivePrefs } from '@/lib/google/prefs-db'
 
 export const runtime = 'nodejs'
 
@@ -88,8 +89,16 @@ export async function POST(req: NextRequest) {
     await ensureTenant(TENANT_ID)
     const now = new Date()
 
+    // Which GA4 property / GSC site this tenant reads from. Falls back to the
+    // legacy env vars when no admin has picked one, so existing deploys are
+    // unaffected.
+    const prefs = await getEffectivePrefs(TENANT_ID)
+
     // Run all sources in parallel (each handles its own missing-credential case)
-    const { kpis: syncedKPIs, sources } = await runAllSources(accessToken)
+    const { kpis: syncedKPIs, sources } = await runAllSources(accessToken, {
+      ga4PropertyId: prefs.ga4PropertyId,
+      gscSiteUrl: prefs.gscSiteUrl,
+    })
 
     // Annotate which sources were skipped due to missing access token
     if (!accessToken) {

@@ -53,15 +53,29 @@ The provider is already configured for clean re-consent:
 authorization: {
   params: {
     scope: GOOGLE_SCOPES,
-    access_type: 'offline',       // issue a refresh token
-    prompt: 'consent',            // re-show consent so new scopes are granted
+    access_type: 'offline',        // issue a refresh token
     include_granted_scopes: 'true' // roll old grants into the new one (no drop)
+    // NOTE: no static `prompt` — see below.
   }
 }
 ```
 
 Adding a scope = add the URL to that array. Nothing else in the auth layer
 changes.
+
+**There is deliberately no static `prompt: 'consent'` here.** It used to be, and
+it forced the full consent screen on *every* authorization — including the
+automatic ones the app fires to self-heal an expired token, turning a
+recoverable blip into a visible "sign in again and re-approve 20 scopes"
+interruption. Omitting it lets Google complete an existing grant silently. The
+deliberate sign-in button (`app/login/page.tsx`) still passes `prompt: 'consent'`
+**per call**, which is what guarantees a fresh `refresh_token`.
+
+So a newly-added scope is picked up when the user next signs in through that
+button (or any flow that re-prompts), with `include_granted_scopes` preserving
+everything already granted. Users who don't re-consent keep working: each
+capability gates on its own scope and surfaces `MISSING_SCOPE` rather than
+failing the session.
 
 ## Console side (the checklist)
 
@@ -135,6 +149,29 @@ Third-party access → CT Hub*, or decode the access token via `tokeninfo`.
 > The directory lookup is **best-effort**: if the Admin SDK isn't enabled, a
 > missing-scope error is swallowed and recipient resolution falls back to
 > personal contacts — nothing hard-breaks.
+
+## Consent screen configuration (record this)
+
+Several downstream decisions hinge on how the OAuth app itself is configured,
+and the answer isn't inferable from code. Read it at Cloud Console → project
+`rxfit-automation` → **APIs & Services → OAuth consent screen**, and record:
+
+| Field | Observed | Why it matters |
+|---|---|---|
+| **User type** | _(fill in)_ | Internal removes verification/CASA entirely, but only admits accounts inside the owning Workspace org |
+| **Publishing status** | _(fill in)_ | Testing mode expires refresh tokens after **7 days** |
+| **Verification status** | _(fill in)_ | Restricted scopes (`gmail.readonly`/`modify`) need verification once External + in production |
+
+**Expect External.** Internal is effectively ruled out: sign-in deliberately
+admits guests on consumer domains (see `ALLOWED_EMAIL_DOMAINS` handling in
+`lib/auth.ts`) and the tenant roadmap spans multiple orgs — neither works under
+an Internal app. Corroborating evidence: stored-refresh-token KPI sync keeps
+working across weeks, which Testing mode's 7-day expiry would break.
+
+Consequence to plan for: restricted-scope verification plus an annual CASA
+assessment (Tier 2 self-scan suffices at this size) once the user count passes
+the unverified cap of 100. Keeping server-side Gmail data handling minimal keeps
+the assessed surface small.
 
 ## Gotchas
 
