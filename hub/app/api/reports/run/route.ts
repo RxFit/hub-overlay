@@ -8,6 +8,7 @@ import { getEffectivePrefs } from '@/lib/google/prefs-db'
 import { normalizeReports, dueReports, reportWindow, DEFAULT_REPORTS } from '@/lib/reports/config'
 import { buildDigestMarkdown } from '@/lib/reports/digest'
 import { resolveTenantToken } from '@/lib/reports/access-token'
+import { deliverDigest } from '@/lib/reports/deliver'
 import { runGA4Report } from '@/lib/google/analytics'
 import { querySearchConsole } from '@/lib/google/search-console'
 import { createDocFromMarkdown } from '@/lib/google/docs'
@@ -182,18 +183,46 @@ export async function POST(req: NextRequest) {
           tenantId,
         })
 
+        // Delivery is best-effort and reported, never fatal: the Doc exists and
+        // is linked from Drive regardless, so a Gmail hiccup must not turn a
+        // successful generation into a failed run.
+        const delivered = await deliverDigest(
+          token.accessToken,
+          report.delivery,
+          admins.map(a => a.email),
+          {
+            from: token.email,
+            title,
+            startDate: window.startDate,
+            endDate: window.endDate,
+            documentUrl: doc.documentUrl,
+            notes,
+          },
+        )
+
         await recordAiAction({
           userEmail: token.email,
           actor: 'system:cron',
           actionType: 'report_generated',
-          target: { reportId: report.id, documentId: doc.documentId, window },
+          target: {
+            reportId: report.id,
+            documentId: doc.documentId,
+            window,
+            emailed: delivered.emailed,
+            chatPosted: delivered.chatPosted,
+          },
           intent: null,
           gateToken: null,
           requestId,
           status: 'success',
         }).catch(() => {})
 
-        results.push({ reportId: report.id, status: 'created', documentId: doc.documentId })
+        results.push({
+          reportId: report.id,
+          status: 'created',
+          documentId: doc.documentId,
+          ...(delivered.problems.length ? { reason: delivered.problems.join('; ') } : {}),
+        })
       } catch (err) {
         const reason = err instanceof Error ? err.message : 'unknown error'
         console.error(`[reports] ${report.id} failed:`, reason)
