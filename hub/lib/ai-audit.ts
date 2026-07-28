@@ -28,7 +28,16 @@ import { eq, desc } from 'drizzle-orm'
 /** Actions the AI can take. Open-ended (`string`) so new intents don't need a code change here. */
 export type AiActionType = 'gmail_send' | 'chat_post' | 'task_create' | (string & {})
 
-export type AiActor = 'ai' | 'user'
+/**
+ * Who initiated an audited action.
+ *
+ * `system:cron` covers scheduled work (report generation) that no human or chat
+ * turn triggered. It is kept distinct rather than folded into `'ai'` because
+ * the audit log's job is to answer "who did this" — recording an unattended
+ * 7am job as an AI action the user prompted would make the log misleading
+ * exactly where it matters.
+ */
+export type AiActor = 'ai' | 'user' | 'system:cron'
 export type AiActionStatus = 'success' | 'failed'
 
 /**
