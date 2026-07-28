@@ -81,7 +81,8 @@ For non-action queries (status checks, questions, summaries, research), respond 
 
 CRITICAL — NEVER FABRICATE DIAGNOSTICS OR STATUS DATA:
 You do NOT have the ability to run live infrastructure diagnostics, check auth tokens, inspect webhook handshakes, or query backend system health directly.
-The ONLY real-time data you have is what appears in your system prompt context (Active projects, Recent agent activity, Live Google Workspace, etc.).
+The ONLY real-time data you have is what appears in your system prompt context (Active projects, Recent agent activity, Live Google Workspace, Live Analytics, etc.).
+When a "Live Analytics" section is present, those figures WERE retrieved from Google just now on the user's behalf — state them as fact and cite them. This is the one exception to "you cannot fetch data": you did not fetch it, the app did, and the result is in front of you. It does NOT let you claim to have performed any write.
 This rule is about PAPERCLIP ORCHESTRATION data ONLY (projects, agents, issues, runs):
 1. If the Paperclip "Active projects" / "Recent agent activity" sections are empty or timed out, tell the user honestly: "I couldn't retrieve live Paperclip orchestration data right now — the API may be warming up." Use this line ONLY for Paperclip data, NEVER for a Google Tasks/Calendar/Drive/Chat/Gmail question.
 2. NEVER invent diagnostic findings like "Auth Error", "Missing Token", "Broken Handshake", "Orphaned Workers", or any infrastructure failure you did not directly observe in your context.
@@ -160,6 +161,9 @@ export interface SystemPromptContext {
   }
   /** Detailed live Google Workspace data (task titles, event summaries, file names, chat spaces). */
   googleWorkspaceDetail?: string
+  /** Analytics retrieved by read-tools THIS TURN (GA4 / Search Console),
+   *  already fenced by the tool layer. See lib/ai-tools/. */
+  liveAnalytics?: string
   injectedContext?: string
   activeSkill?: string
   activeSkillContent?: string
@@ -252,6 +256,12 @@ export function buildSystemPromptParts(context: SystemPromptContext): { staticPr
   }
 
   /* ── Live Google Workspace detail (the user's real tasks/events/files/mail/chat) ── */
+  if (context.liveAnalytics) {
+    // Already fenced by the tool layer — GA4 page paths/titles and GSC queries
+    // are third-party text. Not re-fenced here (that would nest the markers).
+    prompt += `## Live Analytics (retrieved from Google just now, on this turn)\n${context.liveAnalytics}\n\nThese are the user's REAL current numbers. Answer using them, cite the specific figures, and respect any caveat included alongside the data. If a figure the user asked for is not present, say so rather than estimating.\n\n`
+  }
+
   if (context.googleWorkspaceDetail) {
     prompt += `## Live Google Workspace (real-time, the user's actual data)\n${fenceUntrusted('Live Google Workspace', context.googleWorkspaceDetail)}\n\nThis is the user's REAL current Tasks, Calendar, Drive, Gmail, and Chat data. Use it directly to answer any question about their tasks, schedule, files, email, or conversations — including when they tap an item like "Tell me about task: …". Cite specific titles, dates, and notes from this section. When answering email questions, cite the exact subjects and senders shown in the Gmail section; if a message the user asks about is not in this snapshot, say so and point them to the Gmail panel — NEVER invent mail. If a specific item they asked about is not listed here, say you don't see it in their current pending items and offer to look another way — do NOT blame Paperclip or claim a system is "warming up".\n\n`
   }
