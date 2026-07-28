@@ -2,7 +2,7 @@
 title: Google Workspace Leverage Design — from granted scopes to working features
 created: 2026-07-28
 tags: [design, google, oauth, drive, ai-chat, analytics]
-status: proposed
+status: accepted — §12 questions resolved by Danny 2026-07-28
 related: ["[[google-oauth-scopes]]", "[[DESIGN_CONTEXT_2026-07-05]]"]
 ---
 
@@ -109,6 +109,11 @@ HUB Overlay/                    ← root, name per-tenant configurable
 File naming: `YYYY-MM-DD — <Title>`. Every file and folder carries private, app-only Drive
 metadata: `appProperties: { hubOverlay: 'root' | 'artifact', kind, tenantId, artifactId? }`
 (≤124 bytes/pair, invisible to other apps, survives rename/move).
+
+Decision (2026-07-28): the default root name is **"HUB Overlay"** — the app's placeholder name
+until an official product name exists. The per-tenant override stays in `TenantConfig`. A later
+product rename is a one-line default change plus a `files.update` rename of existing roots;
+nothing else moves, because everything is tracked by ID (§3.2).
 
 ### 3.2 Provisioning algorithm (`hub/lib/google/drive-workspace.ts`)
 
@@ -274,8 +279,9 @@ per-tenant configuration, discovered from the APIs the user already authorized:
   `analytics.readonly`) → Settings picker → `google_prefs.ga4_property_id`.
 - GSC: `GET /webmasters/v3/sites` → picker → `google_prefs.gsc_site_url`.
 - New table `google_prefs` (tenant_id UNIQUE, ga4_property_id, gsc_site_url, bigquery_project_id,
-  gbp_account_id, gbp_location_ids jsonb, updated_by, updated_at). KPI sync
-  (`app/api/kpis/sync/route.ts`) reads tenant prefs with env-var fallback.
+  gbp_account_id, gbp_location_ids jsonb, reports jsonb, timezone, updated_by, updated_at). KPI
+  sync (`app/api/kpis/sync/route.ts`) reads tenant prefs with env-var fallback. Pickers and all
+  other columns are admin-edited — per-tenant, not per-user (decision 3).
 
 ### 5.2 Read tools (executed inside the model loop, no confirm card)
 
@@ -358,12 +364,30 @@ deferred (`spaces.create` write scope intentionally not requested; revisit on de
 
 New route `POST /api/reports/run` guarded by the existing constant-time `x-cron-secret` check
 (`app/api/kpis/sync/route.ts:30`), fired by Cloud Scheduler (project `rxfit-automation`, same as
-deploy). Per-tenant report configs (stored in `google_prefs.reports jsonb`): weekly GA4+GSC
-digest, monthly business review deck. Pipeline: analytics tools → markdown/DeckSpec → artifact
-engine → `Reports/2026-MM/` → optional Gmail draft-or-send + Chat post. Uses the **stored
-refresh token** (`google_oauth_tokens`) to mint access tokens server-side — the same mechanism
-the session refresh already uses, so no new token plumbing. Each run logs to `ai_action_log`
-with actor `system:cron`.
+deploy). Pipeline: analytics tools → markdown/DeckSpec → artifact engine → `Reports/2026-MM/` →
+optional Gmail draft-or-send + Chat post. Uses the **stored refresh token**
+(`google_oauth_tokens`) to mint access tokens server-side — the same mechanism the session
+refresh already uses, so no new token plumbing. Each run logs to `ai_action_log` with actor
+`system:cron`.
+
+Cadence and recipients are **user-configurable per tenant** (decision 6), not hardcoded. Cloud
+Scheduler fires the route hourly; the route loads every tenant's report configs and runs the
+ones due in that hour (evaluated in the tenant's timezone). Config shape, admin-editable in
+**Settings › Reports**:
+
+```jsonc
+// google_prefs.reports
+[
+  { "id": "weekly-digest",  "kind": "ga4_gsc_digest",      "cadence": "weekly",  "day": "mon",
+    "hourLocal": 7, "deliver": { "email": ["admins"], "chatSpaceId": null }, "enabled": true },
+  { "id": "monthly-review", "kind": "business_review_deck", "cadence": "monthly", "day": 1,
+    "hourLocal": 7, "deliver": { "email": ["admins"] },                       "enabled": true }
+]
+```
+
+The two entries above are the seeded defaults (weekly GA4+GSC digest emailed to tenant admins,
+monthly business-review deck); admins can retime, redirect (explicit email list or a Chat
+space, or Drive-only), or disable each independently.
 
 ### 6.5 Tasks — bulk extraction
 
@@ -479,6 +503,14 @@ but no client.
 **Action item (no code, do during Phase 1):** submit the GBP API access application for
 `rxfit-automation`.
 
+Ownership (decision 4): the **application** is a one-time, per-Cloud-project step and stays
+with the orchestrator — Danny submits it from an email that is owner/manager on a verified,
+60-day-active profile. Per-org GBP **linking** is a different act and belongs to each
+**tenant admin**: at Phase 4 the admin grants `business.manage` via incremental consent and
+picks their account/locations into `google_prefs.gbp_account_id` / `gbp_location_ids`. Since
+admins only exist once their org has cleared the onboarding chain (§12.1), GBP linking is
+automatically gated on orchestrator approval of the org.
+
 Once approved (Phase 4 code): Account Management + Business Information APIs for
 accounts/locations; **reviews inbox** (legacy v4 `accounts/*/locations/*/reviews` — list + AI-
 drafted `reply` behind confirm cards); **performance metrics** (Business Profile Performance API
@@ -508,10 +540,19 @@ KPI board + digests); local posts via v4 `localPosts` (still API-supported; Q&A 
   cap of 100 live refresh tokens per account per client.
 - **Verification/compliance**: `gmail.readonly/modify` are **restricted** scopes — an External
   production app storing message data server-side triggers restricted-scope verification + an
-  annual CASA assessment. The Hub's sign-in is a closed allowlist (`auth.ts:412-440`) of org
-  users; if all users share the Workspace org, marking the OAuth app **Internal** removes
-  verification/CASA entirely (and the 100-user cap and testing-mode 7-day token expiry never
-  apply). Confirm the console setting during Phase 0.
+  annual CASA assessment. Decision 5: the current console setting is unknown from memory, but
+  **Internal is effectively ruled out** — the sign-in gate deliberately admits guests on
+  consumer domains (gmail.com allowlist, `auth.ts:57-58`) and the tenant roadmap spans multiple
+  orgs (`rxfit`, `rosepop`, future onboarded orgs), while Internal apps only accept accounts
+  inside the one Workspace org that owns the Cloud project. Plan under **External** assumptions.
+  To read the actual setting (Phase 0, record in the runbook): Cloud Console → project
+  `rxfit-automation` → **APIs & Services → OAuth consent screen** → note **User type**
+  (Internal/External), **Publishing status** (Testing/In production), and **Verification
+  status**. Testing mode expires refresh tokens after 7 days — the fact that stored-token KPI
+  sync keeps working suggests it is already External + In production. Consequence: expect
+  restricted-scope verification + annual CASA (Tier 2 self-scan suffices at our size) as user
+  count grows past the unverified cap (100); keep server-side Gmail data handling minimal so
+  the assessed surface stays small.
 - **New-API enablement** (Console, per `google-oauth-scopes.md` runbook ordering): Analytics
   Admin API (for accountSummaries) now; Forms/GBP/BigQuery APIs at Phase 4.
 
@@ -530,7 +571,7 @@ flowchart LR
 
 | Phase | Delivers | Scopes | Key files |
 |---|---|---|---|
-| **0** | Split `lib/google.ts` (30 KB) into `lib/google/*` per-API modules + shared client/backoff; `MISSING_SCOPE` on read routes; drop legacy token column; fix stale runbook; confirm Internal app type | none | `lib/google/*`, `lib/google-session.ts`, migration |
+| **0** | Split `lib/google.ts` (30 KB) into `lib/google/*` per-API modules + shared client/backoff; `MISSING_SCOPE` on read routes; drop legacy token column; fix stale runbook; record OAuth user type + publishing status (expect External — §10) | none | `lib/google/*`, `lib/google-session.ts`, migration |
 | **1** | `drive_workspaces` + `ensureWorkspace`; markdown→Doc; DeckSpec→Slides compiler + outline confirm + thumbnails + signed asset route; Sheets formatting; artifact cards; Settings folder row; panel "Export to Doc" | none | `lib/google/{drive-workspace,docs,slides,slides-compiler,sheets}.ts`, `app/api/google/*`, `app/api/assets/`, `executeAction.ts:338-383` upgrades |
 | **2** | `@google/genai` migration; `lib/ai-tools/` registry + bounded tool loop + tool-group routing; GA4/GSC pickers (`google_prefs`); metadata validation + quota guards; export-to-Sheet / add-to-KPI actions; insights panel | none | `lib/gemini.ts`, `app/api/chat/route.ts`, `lib/ai-tools/*`, `app/settings/…` |
 | **3** | `/api/reports/run` + Cloud Scheduler; report configs; Gmail drafts-first + threading + labels + attachments; `events.patch` + freebusy; bulk task extraction | none | `app/api/reports/`, `lib/google/{gmail,calendar}.ts` |
@@ -541,18 +582,59 @@ golden-file DeckSpec→requests tests; workspace provisioning gets a mocked-Driv
 covering rename/trash/delete), Playwright e2e with mocked `/api/google/*`, coverage ratchet
 respected, prompt changes update `gemini-prompt.test.ts` deliberately.
 
-## 12. Open questions for Danny
+## 12. Decisions — resolved 2026-07-28
 
-1. **Folder naming**: "HUB Overlay" as the root folder name, or tenant-branded ("Casa Trejo
-   Hub")? Per-tenant setting proposed, default "HUB Overlay".
-2. **Permissions mapping**: artifact creation stays `staff` (like today's create intents);
-   analytics read tools available to `staff`; BigQuery/NL-SQL `admin` — confirm.
-3. **GA4/GSC defaults**: one property/site per tenant (proposed) or per user?
-4. **GBP application**: who owns submitting it (needs an owner/manager email on the profile)?
-5. **OAuth app user type**: is the Cloud Console consent screen currently Internal or External?
-   (Determines the CASA question in §10.)
-6. Scheduled digests: which cadence/recipients to start — weekly GA4+GSC email to admins +
-   monthly review deck?
+The open questions were answered by Danny on 2026-07-28. Recorded here as decisions of record;
+the affected sections above were amended in place.
+
+1. **Folder naming** — root folder defaults to **"HUB Overlay"**, the app's placeholder name
+   (no official product name exists yet). Per-tenant override stays in the design; a future
+   rename is a default-string change + `files.update` on existing roots (§3.1).
+2. **Permissions mapping** — **confirmed as proposed**: artifact creation `staff`+, analytics
+   read tools `staff`+, BigQuery/NL-SQL `admin`+ (§5.4, §7).
+3. **GA4/GSC selection** — **per tenant**: one property and one site per org in `google_prefs`
+   (§5.1), chosen by the tenant admin, not per user.
+4. **GBP + org onboarding** — the one-time GBP API access application is submitted by the
+   orchestrator (per-Cloud-project step, §9); each org's GBP is **linked by that org's admin**.
+   This answer also set the org approval chain — new scope, designed in §12.1 below.
+5. **OAuth user type** — not known from memory; §10 now documents how to read it off the Cloud
+   Console and why the answer is almost certainly **External** (consumer-domain guest sign-ins
+   and multi-org tenancy rule out Internal). Phase 0 records the observed setting in the
+   runbook.
+6. **Scheduled digests** — cadence and recipients are **user-configurable per tenant** (the
+   configurability Danny asked for is fully supported); seeded defaults are the weekly GA4+GSC
+   digest to admins + monthly review deck. Config shape in §6.4.
+
+### 12.1 Org onboarding & approval chain (new scope from decision 4)
+
+How a new organization gets into the Hub, and who can do what afterward:
+
+```
+prospective org admin signs in with Google
+  → lands as role `onboarding` — no org privileges (existing default, auth.ts:336-349)
+  → superadmin (the orchestrator, Danny) reviews the request in /admin and approves:
+      creates the tenant (id, name, domain) and promotes the requester to `admin`
+  → the admin self-serves their org from there:
+      colleagues on the org's email domain sign in → auto-admitted into that tenant
+        as `onboarding`
+      admin assigns `staff` (existing role management, canManageRoles caps at staff)
+      admin owns tenant settings: GA4/GSC pickers (§5.1), report configs (§6.4),
+        GBP linking (§9, Phase 4)
+```
+
+Most of the chain already exists; the delta is small:
+
+| Piece | Today | Delta |
+|---|---|---|
+| Roles + default | `superadmin/admin/staff/onboarding`; new users auto-created as `onboarding` (`auth.ts:336-349`) | none |
+| Domain gate | env-global `ALLOWED_EMAIL_DOMAINS`, derived from configured admin emails (`auth.ts:26-58`) | per-tenant: honor `tenants.domain` (column exists, unused for sign-in today) so an approved org's domain auto-admits into *that* tenant |
+| Approval surface | none — access requests are `mailto:` drafts (`lib/access-request.ts`) | superadmin approval queue in `/admin`: `onboarding` users from unrecognized domains, approve → create tenant + promote to `admin` |
+| Tenant creation | hardcoded `TENANT_CONFIGS` + deploy-time `NEXT_PUBLIC_TENANT_ID` (`lib/tenant.ts`) | tenant identity becomes data (the `tenants` table already exists); branding stays code-side until self-serve theming matters |
+
+Timing: parallel workstream alongside Phases 1–2 — it gates no Google-API work except
+multi-org GBP linking (Phase 4), which requires an approved admin by construction. Audit:
+approvals and role changes are logged with the approving superadmin as actor, same discipline
+as `ai_action_log`.
 
 ---
 
