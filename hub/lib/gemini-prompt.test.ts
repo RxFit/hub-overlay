@@ -267,3 +267,41 @@ describe('chatMessagesToContents', () => {
     ])
   })
 })
+
+describe('buildSystemPrompt — live analytics (read-tool results)', () => {
+  const withAnalytics = (liveAnalytics: string) => buildSystemPrompt({ liveAnalytics })
+
+  it('omits the data section when no tools ran', () => {
+    // The phrase still appears in the anti-fabrication enumeration; it is the
+    // SECTION carrying figures that must be absent.
+    expect(buildSystemPrompt({})).not.toContain('## Live Analytics')
+  })
+
+  it('renders retrieved analytics as a distinct, citable section', () => {
+    const prompt = withAnalytics('LIVE DATA RETRIEVED THIS TURN:\nsessions: 1200')
+
+    expect(prompt).toContain('## Live Analytics')
+    expect(prompt).toContain('sessions: 1200')
+    expect(prompt).toContain('cite the specific figures')
+  })
+
+  it('does not re-fence content the tool layer already fenced', () => {
+    // Nesting fence markers would let the inner block close the outer one.
+    const alreadyFenced = '<untrusted_data source="GA4">rows</untrusted_data>'
+    const prompt = withAnalytics(alreadyFenced)
+
+    expect(prompt).toContain(alreadyFenced)
+    expect(prompt.match(/<untrusted_data source="GA4"/g)).toHaveLength(1)
+  })
+
+  it('carves out a narrow exception to the never-fetched-data rule', () => {
+    // The anti-fabrication block must keep forbidding invented data while
+    // permitting figures the app actually retrieved this turn.
+    const prompt = buildSystemPrompt({})
+
+    expect(prompt).toContain('Live Analytics')
+    expect(prompt).toContain('state them as fact')
+    // The write prohibition survives the carve-out — that is the load-bearing part.
+    expect(prompt).toContain('does NOT let you claim to have performed any write')
+  })
+})
