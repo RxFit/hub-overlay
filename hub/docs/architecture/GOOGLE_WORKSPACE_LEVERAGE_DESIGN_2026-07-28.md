@@ -558,6 +558,43 @@ KPI board + digests); local posts via v4 `localPosts` (still API-supported; Q&A 
 
 ---
 
+## 10a. Implementation status (updated 2026-07-28)
+
+What has actually shipped, versus what this document still only proposes.
+
+| Area | Status | Where |
+|---|---|---|
+| Shared client + retry/backoff | **Shipped** | `lib/google/client.ts` |
+| Drive workspace provisioning | **Shipped** | `lib/google/drive-workspace{,-db}.ts`, `drive_workspaces` |
+| Docs from markdown | **Shipped** | `lib/google/docs.ts` → `/api/google/doc` |
+| Formatted Sheets | **Shipped** | `lib/google/sheets.ts` → `/api/google/sheet` |
+| DeckSpec → Slides compiler | **Shipped** | `lib/google/{deck-spec,slides-compiler,slides}.ts` → `/api/google/presentation` |
+| GA4 discovery + flexible reports | **Shipped** | `lib/google/analytics.ts` → `/api/google/analytics/*` |
+| GSC discovery + queries | **Shipped** | `lib/google/search-console.ts` → `/api/google/search-console/*` |
+| Per-tenant GA4/GSC selection | **Shipped (API only)** | `google_prefs`, `/api/settings/google-prefs` |
+| Settings picker UI | Not built | — |
+| Read-tool function calling (§7) | Not built | — |
+| Scheduled reports (§6.4) | Not built | — |
+| Gmail/Calendar/Chat upgrades (§6) | Not built | — |
+| Legacy `lib/google.ts` module split | Not done | ~900 lines still monolithic |
+| Forms / GBP / BigQuery (Phase 4) | Not started | needs new scopes + GBP approval |
+
+Deviations from the design worth knowing:
+
+- **`CAPTION_ONLY` dropped** from the supported deck layouts. Its placeholder
+  type varies by theme, and naming a placeholder a layout lacks fails the entire
+  `batchUpdate`. `TITLE_ONLY` covers the same intent safely.
+- **Retry ceiling is 8s, not 64s.** Google's 64s guidance targets batch jobs;
+  these calls run inside interactive routes bounded by the timeout ladder, where
+  a 64s sleep would exceed the route budget before the retry could help.
+- **Env-var fallback retained.** `GA4_PROPERTY_ID`/`GSC_SITE_URL` still apply
+  per-field when a tenant has not chosen a property, so nothing regresses before
+  an admin configures one.
+- **Artifact filing is fail-soft.** A Drive/DB problem downgrades to creating
+  the file at Drive root rather than failing the creation the user asked for.
+
+---
+
 ## 11. Rollout
 
 ```mermaid
