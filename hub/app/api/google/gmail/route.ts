@@ -15,6 +15,7 @@ import { requireAiGate, AI_INTENT_HEADER, GATE_TOKEN_HEADER } from '@/lib/requir
 import { recordAiAction } from '@/lib/ai-audit'
 import { checkActionLimit } from '@/lib/rate-limit'
 import { newRequestId } from '@/lib/observability'
+import { resolveSubject } from '@/lib/gmail-subject'
 
 export const runtime = 'nodejs'
 
@@ -166,7 +167,9 @@ export async function POST(req: NextRequest) {
   const cleanTo = recipients.join(', ')
 
   const from = session.user.email ?? ''
-  const subjectLine = stripHeader(subject || (cleanInReplyTo ? `Re: ${cleanInReplyTo}` : '(no subject)'))
+  // Deliberately does NOT derive a subject from `inReplyTo` — that is a
+  // Message-ID, not a subject. See lib/gmail-subject.ts for the full rationale.
+  const subjectLine = stripHeader(resolveSubject(subject))
 
   // ── AI-action audit trail (NS-2) ──
   // When the request is AI-originated (X-AI-Intent present), every send writes
