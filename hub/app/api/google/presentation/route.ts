@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { resolveGoogleAuth, googleWriteErrorResponse } from '@/lib/google-session'
-import { createGooglePresentation } from '@/lib/google'
+import { createDeckFromSpec } from '@/lib/google/slides'
+import { deckSpecFromMarkdown, normalizeDeckSpec } from '@/lib/google/deck-spec'
+import { resolveArtifactFolder } from '@/lib/google/artifact-folder'
 import { AI_INTENT_HEADER } from '@/lib/requireGate'
 import { recordAiAction } from '@/lib/ai-audit'
 import { checkActionLimit } from '@/lib/rate-limit'
@@ -15,6 +17,16 @@ export const runtime = 'nodejs'
  * own Drive. Same posture as the Doc/Sheet routes: confirm-card gated, AI calls
  * audited + rate-limited, MISSING_SCOPE surfaced for grants predating the
  * `presentations`/`drive.file` scopes.
+ *
+ * Two input shapes:
+ *  - `slides: [...]` — an explicit outline (the outline-first flow), compiled
+ *    verbatim.
+ *  - `body: "<markdown>"` — free text, converted into an outline where headings
+ *    become slide boundaries and list/prose lines become bullets. This is what
+ *    the existing chat interview sends, so it now yields a real multi-slide deck
+ *    instead of one slide holding the whole blob.
+ *
+ * The deck is filed into the Hub workspace's `Presentations/` folder.
  */
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions)
@@ -25,7 +37,7 @@ export async function POST(req: NextRequest) {
   const auth = await resolveGoogleAuth(req)
   if (!auth.ok) return auth.response
 
-  let body: { title?: string; body?: string }
+  let body: { title?: string; body?: string; slides?: unknown[] }
   try {
     body = await req.json()
   } catch {
@@ -62,9 +74,20 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const presentation = await createGooglePresentation(auth.accessToken, { title, body: body.body })
+    // An explicit outline wins; otherwise derive one from the free-text body.
+    const spec = Array.isArray(body.slides) && body.slides.length
+      ? normalizeDeckSpec({ title, slides: body.slides })
+      : deckSpecFromMarkdown(title, body.body)
+
+    const { folderId, tenantId } = await resolveArtifactFolder(auth.accessToken, email, 'presentations')
+    const presentation = await createDeckFromSpec(auth.accessToken, spec, { folderId, tenantId })
+
     if (isAiAction) {
-      await recordAiAction({ ...auditBase, target: { presentationId: presentation.presentationId }, status: 'success' })
+      await recordAiAction({
+        ...auditBase,
+        target: { presentationId: presentation.presentationId, slideCount: presentation.slideCount },
+        status: 'success',
+      })
     }
     return NextResponse.json({ presentation })
   } catch (err) {
