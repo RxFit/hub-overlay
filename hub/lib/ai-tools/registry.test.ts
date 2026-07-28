@@ -1,0 +1,204 @@
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import {
+  READ_TOOLS,
+  getTool,
+  toolsFor,
+  roleAllows,
+  toFunctionDeclarations,
+  toAnthropicTools,
+  type ToolContext,
+} from './registry'
+import { __clearGA4MetadataCache } from '../google/analytics'
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+  // The metadata cache is process-wide; clearing it keeps tests independent.
+  __clearGA4MetadataCache()
+})
+
+/**
+ * GA4 tool calls make TWO requests: a metadata pre-flight (which validates the
+ * model-supplied metric/dimension names) and then the report. The stub answers
+ * each by URL.
+ */
+function stubFetch(reportPayload: unknown, metadata = GA4_METADATA) {
+  const calls: string[] = []
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      calls.push(url)
+      const body = url.includes('/metadata') ? metadata : reportPayload
+      return new Response(JSON.stringify(body), { status: 200 })
+    }),
+  )
+  return calls
+}
+
+const GA4_METADATA = {
+  dimensions: [{ apiName: 'pagePath' }, { apiName: 'country' }],
+  metrics: [{ apiName: 'sessions' }, { apiName: 'totalUsers' }],
+}
+
+const ctx = (over: Partial<ToolContext> = {}): ToolContext => ({
+  accessToken: 'tok',
+  role: 'staff',
+  ga4PropertyId: '123',
+  gscSiteUrl: 'https://x.test/',
+  today: new Date('2026-07-28T00:00:00Z'),
+  ...over,
+})
+
+describe('roleAllows', () => {
+  it('ranks roles so staff clears staff but not admin', () => {
+    expect(roleAllows('staff', 'staff')).toBe(true)
+    expect(roleAllows('admin', 'staff')).toBe(true)
+    expect(roleAllows('superadmin', 'admin')).toBe(true)
+    expect(roleAllows('staff', 'admin')).toBe(false)
+  })
+
+  it('denies onboarding and unknown/missing roles', () => {
+    expect(roleAllows('onboarding', 'staff')).toBe(false)
+    expect(roleAllows(undefined, 'staff')).toBe(false)
+    expect(roleAllows('not-a-role', 'staff')).toBe(false)
+  })
+})
+
+describe('registry shape', () => {
+  it('exposes uniquely-named tools', () => {
+    const names = READ_TOOLS.map(t => t.name)
+    expect(new Set(names).size).toBe(names.length)
+  })
+
+  it('derives declarations from the same table as dispatch', () => {
+    // The invariant that keeps a tool from being advertised but unrunnable.
+    for (const decl of toFunctionDeclarations(READ_TOOLS)) {
+      expect(getTool(decl.name as string)).toBeDefined()
+    }
+  })
+
+  it('emits Anthropic tools with input_schema for provider parity', () => {
+    const tools = toAnthropicTools(READ_TOOLS)
+    expect(tools[0]).toHaveProperty('input_schema')
+    expect(tools).toHaveLength(READ_TOOLS.length)
+  })
+
+  it('declares every required argument in its JSON Schema', () => {
+    for (const tool of READ_TOOLS) {
+      const params = tool.parameters as { required?: string[]; properties?: Record<string, unknown> }
+      for (const req of params.required ?? []) {
+        expect(params.properties).toHaveProperty(req)
+      }
+    }
+  })
+})
+
+describe('toolsFor', () => {
+  it('returns the analytics group for staff', () => {
+    expect(toolsFor('analytics', 'staff').map(t => t.name)).toEqual([
+      'ga4_run_report',
+      'gsc_search_analytics',
+    ])
+  })
+
+  it('returns nothing for the none group', () => {
+    expect(toolsFor('none', 'admin')).toEqual([])
+  })
+
+  it('filters out tools the role cannot run', () => {
+    expect(toolsFor('analytics', 'onboarding')).toEqual([])
+  })
+})
+
+describe('ga4_run_report', () => {
+  it('reports a missing property as a note rather than throwing', async () => {
+    const tool = getTool('ga4_run_report')!
+    const result = await tool.execute(
+      { startDate: '2026-07-01', endDate: '2026-07-28', metrics: ['sessions'] },
+      ctx({ ga4PropertyId: undefined }),
+    )
+
+    expect(result.note).toBe('NOT_CONFIGURED')
+    expect(result.fenced).toBe('')
+  })
+
+  it('fences the report payload — dimension values are third-party text', async () => {
+    stubFetch({
+      dimensionHeaders: [{ name: 'pagePath' }],
+      metricHeaders: [{ name: 'sessions' }],
+      rows: [{ dimensionValues: [{ value: '/pricing' }], metricValues: [{ value: '120' }] }],
+    })
+
+    const tool = getTool('ga4_run_report')!
+    const result = await tool.execute(
+      { startDate: '2026-07-01', endDate: '2026-07-28', metrics: ['sessions'], dimensions: ['pagePath'] },
+      ctx(),
+    )
+
+    // Page paths and titles come from whatever the site published.
+    expect(result.fenced).toContain('<untrusted_data')
+    expect(result.fenced).toContain('/pricing')
+    expect(result.rows?.[0]).toEqual(['pagePath', 'sessions'])
+  })
+
+  it('rejects a hallucinated metric name against the property metadata', async () => {
+    stubFetch({ rows: [] })
+    const tool = getTool('ga4_run_report')!
+
+    // Metric names come from the MODEL, so this is exactly the case metadata
+    // validation exists for — a correctable error, not an opaque Google 400.
+    await expect(
+      tool.execute({ startDate: 'a', endDate: 'b', metrics: ['sessionz'] }, ctx()),
+    ).rejects.toThrow(/sessionz/)
+  })
+
+  it('caches property metadata so repeated questions cost one call each', async () => {
+    __clearGA4MetadataCache()
+    const calls = stubFetch({ rows: [] })
+    const tool = getTool('ga4_run_report')!
+    const args = { startDate: 'a', endDate: 'b', metrics: ['sessions'] }
+
+    await tool.execute(args, ctx())
+    await tool.execute(args, ctx())
+
+    // First question: metadata + report. Second: report only.
+    expect(calls.filter(u => u.includes('/metadata'))).toHaveLength(1)
+    expect(calls.filter(u => u.includes(':runReport'))).toHaveLength(2)
+  })
+})
+
+describe('gsc_search_analytics', () => {
+  it('reports a missing site as a note', async () => {
+    const tool = getTool('gsc_search_analytics')!
+    const result = await tool.execute(
+      { startDate: '2026-07-01', endDate: '2026-07-28' },
+      ctx({ gscSiteUrl: undefined }),
+    )
+    expect(result.note).toBe('NOT_CONFIGURED')
+  })
+
+  it('carries the anonymization caveat INTO the payload the model reasons over', async () => {
+    stubFetch({ rows: [{ keys: ['shoes'], clicks: 5, impressions: 100, ctr: 0.05, position: 3 }] })
+
+    const tool = getTool('gsc_search_analytics')!
+    const result = await tool.execute(
+      { startDate: '2026-07-01', endDate: '2026-07-28', dimensions: ['query'] },
+      ctx(),
+    )
+
+    // An answer built on silently under-reported totals is wrong in a way the
+    // reader can't detect, so the caveat travels with the data.
+    expect(result.fenced).toContain('caveat')
+    expect(result.fenced).toContain('under-report')
+  })
+
+  it('omits the caveat when no query dimension is requested', async () => {
+    stubFetch({ rows: [] })
+    const tool = getTool('gsc_search_analytics')!
+    const result = await tool.execute(
+      { startDate: '2026-07-01', endDate: '2026-07-28', dimensions: ['page'] },
+      ctx(),
+    )
+    expect(result.fenced).not.toContain('caveat')
+  })
+})

@@ -94,19 +94,46 @@ export interface GA4Metadata {
 }
 
 /**
+ * Property metadata changes about as often as someone edits their GA4 custom
+ * definitions — i.e. rarely — but validation runs on EVERY model-driven query.
+ * Without a cache, each analytics question would cost two API calls instead of
+ * one, doubling quota consumption to re-learn the same field list.
+ *
+ * In-process is sufficient: the Hub runs as a single Cloud Run service, and a
+ * cold start simply re-fetches. Keyed by property so multi-tenant lookups can't
+ * cross-contaminate.
+ */
+export const METADATA_CACHE_TTL_MS = 24 * 60 * 60 * 1000
+const metadataCache = new Map<string, { fetchedAt: number; value: GA4Metadata }>()
+
+/** Drop cached metadata — exported for tests. */
+export function __clearGA4MetadataCache(): void {
+  metadataCache.clear()
+}
+
+/**
  * Fetch the property's valid dimension/metric API names, including custom
  * definitions (which vary per property and cannot be hardcoded).
  */
-export async function fetchGA4Metadata(accessToken: string, propertyId: string): Promise<GA4Metadata> {
+export async function fetchGA4Metadata(
+  accessToken: string,
+  propertyId: string,
+  now: number = Date.now(),
+): Promise<GA4Metadata> {
+  const cached = metadataCache.get(propertyId)
+  if (cached && now - cached.fetchedAt < METADATA_CACHE_TTL_MS) return cached.value
+
   const data = await googleFetch<{
     dimensions?: { apiName?: string }[]
     metrics?: { apiName?: string }[]
   }>(`${DATA_BASE}/properties/${encodeURIComponent(propertyId)}/metadata`, accessToken)
 
-  return {
+  const value: GA4Metadata = {
     dimensions: new Set((data.dimensions ?? []).map(d => d.apiName).filter((n): n is string => !!n)),
     metrics: new Set((data.metrics ?? []).map(m => m.apiName).filter((n): n is string => !!n)),
   }
+  metadataCache.set(propertyId, { fetchedAt: now, value })
+  return value
 }
 
 /**

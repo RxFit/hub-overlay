@@ -9,11 +9,15 @@ import {
   reportToSheetRows,
   DEFAULT_ROW_LIMIT,
   MAX_ROW_LIMIT,
+  __clearGA4MetadataCache,
 } from './analytics'
 
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+  // Metadata is cached process-wide; clear it so call-count assertions measure
+  // this test's calls rather than whatever a previous test warmed.
+  __clearGA4MetadataCache()
 })
 
 function stubJson(payloads: unknown[]) {
