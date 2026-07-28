@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { resolveGoogleAuth, googleWriteErrorResponse } from '@/lib/google-session'
-import { createGoogleSheet } from '@/lib/google'
+import { createFormattedSheet } from '@/lib/google/sheets'
+import { resolveArtifactFolder } from '@/lib/google/artifact-folder'
 import { AI_INTENT_HEADER } from '@/lib/requireGate'
 import { recordAiAction } from '@/lib/ai-audit'
 import { checkActionLimit } from '@/lib/rate-limit'
@@ -16,7 +17,10 @@ export const runtime = 'nodejs'
  * rate-limited, MISSING_SCOPE surfaced for pre-scope grants.
  *
  * `rows` is an optional array of rows (each a string[] of cell values) written
- * starting at A1.
+ * starting at A1. The first row is treated as a header: it is bolded and
+ * frozen, and columns are auto-sized. The sheet is filed into the Hub
+ * workspace's `Spreadsheets/` folder, falling back to Drive root if that
+ * folder can't be provisioned.
  */
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions)
@@ -72,7 +76,8 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const sheet = await createGoogleSheet(auth.accessToken, { title, rows })
+    const { folderId, tenantId } = await resolveArtifactFolder(auth.accessToken, email, 'spreadsheets')
+    const sheet = await createFormattedSheet(auth.accessToken, { title, rows, folderId, tenantId })
     if (isAiAction) {
       await recordAiAction({ ...auditBase, target: { spreadsheetId: sheet.spreadsheetId }, status: 'success' })
     }

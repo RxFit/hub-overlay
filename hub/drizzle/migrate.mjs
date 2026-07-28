@@ -386,6 +386,26 @@ async function run() {
   `
   console.log('[migrate] ✓ ai_action_log table')
 
+  // Drive workspaces — cache of each user's auto-provisioned "HUB Overlay"
+  // folder. Drive stays the source of truth; a stale row costs one extra
+  // rediscovery query, never a failed write.
+  await sql`
+    CREATE TABLE IF NOT EXISTS drive_workspaces (
+      id               TEXT PRIMARY KEY,
+      tenant_id        TEXT NOT NULL REFERENCES tenants(id),
+      email            TEXT NOT NULL,
+      root_folder_id   TEXT NOT NULL,
+      folders          JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at       TIMESTAMPTZ DEFAULT now() NOT NULL,
+      last_verified_at TIMESTAMPTZ DEFAULT now() NOT NULL
+    )
+  `
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS drive_workspaces_email_tenant_uniq
+    ON drive_workspaces(tenant_id, email)
+  `
+  console.log('[migrate] ✓ drive_workspaces table')
+
   // Seed rxfit tenant
   await sql`
     INSERT INTO tenants (id, name, domain)

@@ -210,6 +210,31 @@ export const chatSpacePreferences = pgTable(
   })
 )
 
+/* ── Drive Workspaces (the auto-provisioned "HUB Overlay" folder) ────────── */
+/**
+ * Cache of each user's Hub folder in their own Google Drive. Drive is the
+ * source of truth — this row only saves a rediscovery query on the hot path.
+ * A stale/trashed/deleted folder is detected on use and re-provisioned, so a
+ * wrong row here degrades to one extra Drive call, never to a broken write.
+ */
+export const driveWorkspaces = pgTable(
+  'drive_workspaces',
+  {
+    id:           text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+    tenantId:     text('tenant_id').notNull().references(() => tenants.id),
+    email:        text('email').notNull(),
+    rootFolderId: text('root_folder_id').notNull(),
+    /** { documents: '<id>', presentations: '<id>', … } — filled in lazily as
+     *  each subfolder is first needed. */
+    folders:      jsonb('folders').$type<Record<string, string>>().notNull().default({}),
+    createdAt:    timestamp('created_at').defaultNow().notNull(),
+    lastVerifiedAt: timestamp('last_verified_at').defaultNow().notNull(),
+  },
+  (t) => ({
+    emailTenantUniq: uniqueIndex('drive_workspaces_email_tenant_uniq').on(t.tenantId, t.email),
+  })
+)
+
 /* ── Google OAuth Tokens (durable offline-access credential) ────────────── */
 /**
  * The user's Google REFRESH token, kept server-side so the Hub can mint fresh

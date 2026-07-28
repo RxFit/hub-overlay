@@ -35,6 +35,11 @@ export interface TenantConfig {
   logoFull: string                 // 'HUB' (text after accent)
   brandColors: TenantBrandColors
   googleWorkspaceId?: string
+  /** Name of the auto-provisioned Drive folder that receives everything the Hub
+   *  creates. Defaults to "HUB Overlay" (the app's placeholder name) when unset;
+   *  set per tenant to brand it. Renaming this only affects folders created
+   *  afterward — existing ones are tracked by id, so they keep working. */
+  driveFolderName?: string
   /** Google Drive folder id holding this tenant's meeting transcripts.
    *  When unset, the Transcripts tab returns an empty list (no cross-tenant leakage). */
   transcriptsFolderId?: string
