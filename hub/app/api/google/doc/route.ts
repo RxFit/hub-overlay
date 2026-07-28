@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { resolveGoogleAuth, googleWriteErrorResponse } from '@/lib/google-session'
-import { createGoogleDoc } from '@/lib/google'
+import { createDocFromMarkdown } from '@/lib/google/docs'
+import { resolveArtifactFolder } from '@/lib/google/artifact-folder'
 import { AI_INTENT_HEADER } from '@/lib/requireGate'
 import { recordAiAction } from '@/lib/ai-audit'
 import { checkActionLimit } from '@/lib/rate-limit'
@@ -18,6 +19,12 @@ export const runtime = 'nodejs'
  * and are audited + rate-limited. No HMAC gate token (not high-stakes). A grant
  * predating the `documents`/`drive.file` scope surfaces as MISSING_SCOPE so the
  * client can prompt a one-time re-consent.
+ *
+ * `body` is treated as MARKDOWN and converted by Drive into real Doc formatting
+ * (headings, bold, lists, tables, links) — plain text still works, since plain
+ * text is valid markdown. The file is filed into the Hub workspace's
+ * `Documents/` folder; if that folder can't be provisioned the doc is still
+ * created, just at Drive root.
  */
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions)
@@ -65,7 +72,13 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const doc = await createGoogleDoc(auth.accessToken, { title, body: body.body })
+    const { folderId, tenantId } = await resolveArtifactFolder(auth.accessToken, email, 'documents')
+    const doc = await createDocFromMarkdown(auth.accessToken, {
+      title,
+      markdown: body.body,
+      folderId,
+      tenantId,
+    })
     if (isAiAction) {
       await recordAiAction({ ...auditBase, target: { documentId: doc.documentId }, status: 'success' })
     }
