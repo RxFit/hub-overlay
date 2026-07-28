@@ -210,6 +210,40 @@ export const chatSpacePreferences = pgTable(
   })
 )
 
+/* ── Google Prefs (per-tenant analytics + reporting configuration) ───────── */
+/**
+ * Which GA4 property and Search Console site this tenant's analytics read from,
+ * plus the scheduled-report configuration. Per TENANT, not per user: one
+ * business has one set of numbers, and every admin should see the same ones.
+ *
+ * Replaces the single-property GA4_PROPERTY_ID / GSC_SITE_URL env vars, which
+ * could not express more than one tenant. The env vars remain as a fallback so
+ * existing deployments keep working before an admin picks a property.
+ */
+export const googlePrefs = pgTable(
+  'google_prefs',
+  {
+    id:               text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+    tenantId:         text('tenant_id').notNull().references(() => tenants.id),
+    /** Numeric GA4 property id (no "properties/" prefix). */
+    ga4PropertyId:    text('ga4_property_id'),
+    /** GSC property, either a URL prefix or `sc-domain:example.com`. */
+    gscSiteUrl:       text('gsc_site_url'),
+    bigqueryProjectId: text('bigquery_project_id'),
+    gbpAccountId:     text('gbp_account_id'),
+    gbpLocationIds:   jsonb('gbp_location_ids').$type<string[]>().notNull().default([]),
+    /** Scheduled report configs — cadence/recipients are admin-configurable. */
+    reports:          jsonb('reports').$type<unknown[]>().notNull().default([]),
+    /** IANA timezone the report schedule is evaluated in. */
+    timezone:         text('timezone'),
+    updatedBy:        text('updated_by'),
+    updatedAt:        timestamp('updated_at').defaultNow().notNull(),
+  },
+  (t) => ({
+    tenantUniq: uniqueIndex('google_prefs_tenant_uniq').on(t.tenantId),
+  })
+)
+
 /* ── Drive Workspaces (the auto-provisioned "HUB Overlay" folder) ────────── */
 /**
  * Cache of each user's Hub folder in their own Google Drive. Drive is the

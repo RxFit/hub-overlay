@@ -85,10 +85,15 @@ async function querySearchConsole(
   }
 }
 
-export async function fetchGSCKPIs(accessToken: string): Promise<GSCKPIs[]> {
-  const siteUrl = process.env.GSC_SITE_URL
+/**
+ * `siteUrl` comes from the tenant's saved analytics configuration; the
+ * GSC_SITE_URL env var remains the fallback so existing deployments are
+ * unaffected until an admin picks a site in Settings.
+ */
+export async function fetchGSCKPIs(accessToken: string, explicitSiteUrl?: string): Promise<GSCKPIs[]> {
+  const siteUrl = explicitSiteUrl || process.env.GSC_SITE_URL
   if (!siteUrl) {
-    console.warn('[kpi-sync/gsc] GSC_SITE_URL not set — skipping')
+    console.warn('[kpi-sync/gsc] no Search Console site configured (tenant prefs or GSC_SITE_URL) — skipping')
     return []
   }
 

@@ -75,10 +75,15 @@ async function runGA4Report(
   return result
 }
 
-export async function fetchGA4KPIs(accessToken: string): Promise<GA4KPI[]> {
-  const propertyId = process.env.GA4_PROPERTY_ID
+/**
+ * `propertyId` comes from the tenant's saved analytics configuration; the
+ * GA4_PROPERTY_ID env var remains the fallback so deployments that never set a
+ * property in Settings keep working exactly as before.
+ */
+export async function fetchGA4KPIs(accessToken: string, explicitPropertyId?: string): Promise<GA4KPI[]> {
+  const propertyId = explicitPropertyId || process.env.GA4_PROPERTY_ID
   if (!propertyId) {
-    console.warn('[kpi-sync/ga4] GA4_PROPERTY_ID not set — skipping')
+    console.warn('[kpi-sync/ga4] no GA4 property configured (tenant prefs or GA4_PROPERTY_ID) — skipping')
     return []
   }
 
