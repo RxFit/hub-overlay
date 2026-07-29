@@ -26,11 +26,13 @@ import { z } from 'zod'
 import { runGA4Report, reportToSheetRows } from '../google/analytics'
 import { querySearchConsole, GSC_DIMENSIONS, resultToSheetRows, type GSCDimension } from '../google/search-console'
 import { fenceUntrusted } from '../prompt-safety'
+import { searchDriveWithContents, searchChatHistory } from './workspace-search'
+import type { ChatSpacePreferences } from '../chat-spaces'
 
 /** Tool groups keep each request's advertised tool set small — model providers
  *  degrade at picking from long tool lists, so a request carries only the group
  *  its question needs. */
-export type ToolGroup = 'analytics' | 'none'
+export type ToolGroup = 'analytics' | 'workspace' | 'none'
 
 export type ToolRole = 'staff' | 'admin' | 'superadmin'
 
@@ -48,6 +50,9 @@ export interface ToolContext {
    *  reports that as a result, rather than throwing. */
   ga4PropertyId?: string
   gscSiteUrl?: string
+  /** The user's Chat space visibility choices. A space they hid from the panel
+   *  must not be readable by the assistant either. */
+  chatSpacePreferences?: ChatSpacePreferences
   /** Injectable for tests. */
   today?: Date
 }
@@ -236,10 +241,148 @@ const gscTool: ReadTool = {
 }
 
 /* ══════════════════════════════════════════
+   search_drive
+   ══════════════════════════════════════════ */
+
+/**
+ * Why the Workspace tools exist alongside the digest.
+ *
+ * The pre-assembled Live Google Workspace block gives the model Drive as 12
+ * FILENAMES with no contents, and Chat as a few recent messages from the first
+ * spaces. So "who is our account manager at Nuvita?" was unanswerable: the model
+ * could see the Nuvita space existed and nothing inside it, and correctly but
+ * uselessly replied that it had no access. These two tools are the access.
+ *
+ * Both are reads against the user's own OAuth token, and neither can mutate
+ * anything — the read-only-by-construction property the registry depends on.
+ */
+
+const DriveArgs = z.object({
+  query: z.string().min(2).max(200),
+})
+
+const searchDriveTool: ReadTool = {
+  name: 'search_drive',
+  description:
+    'Search the user\'s Google Drive by document CONTENTS and filename, and read the text of the ' +
+    'best matches. Use for questions about what a document says — agreements, proposals, notes, ' +
+    'reports, meeting minutes. Pass distinctive keywords (a company, project or topic name), not ' +
+    'the user\'s whole sentence.',
+  group: 'workspace',
+  minRole: 'staff',
+  schema: DriveArgs,
+  parameters: {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: 'Keywords to search for, e.g. "Nuvita partnership"' },
+    },
+    required: ['query'],
+  },
+
+  async execute(rawArgs, ctx) {
+    const args = DriveArgs.parse(rawArgs)
+    const { matches, documents } = await searchDriveWithContents(ctx.accessToken, args.query)
+
+    if (matches.length === 0) {
+      return {
+        summary: `No Drive files matched "${args.query}" (searched contents and filenames).`,
+        fenced: '',
+        note: 'NO_RESULTS',
+      }
+    }
+
+    return {
+      summary: `Drive search "${args.query}" — ${matches.length} match(es), read ${documents.length}`,
+      // Document text is user-and-third-party authored content landing verbatim
+      // in the model's context; it gets the same fencing as any external data.
+      fenced: fenceUntrusted(
+        'Google Drive search results',
+        JSON.stringify({ query: args.query, matches, documents }),
+      ),
+    }
+  },
+}
+
+/* ══════════════════════════════════════════
+   search_chat
+   ══════════════════════════════════════════ */
+
+const ChatArgs = z.object({
+  query: z.string().min(2).max(200),
+  space: z.string().max(200).optional(),
+})
+
+const searchChatTool: ReadTool = {
+  name: 'search_chat',
+  description:
+    'Search the message history of the user\'s Google Chat spaces. Use for what someone said, ' +
+    'who a contact is, or a decision or detail discussed in a space. Set "space" to the name of ' +
+    'a space when the question names an organisation, team or project. Searches recent history, ' +
+    'not the entire archive.',
+  group: 'workspace',
+  minRole: 'staff',
+  schema: ChatArgs,
+  parameters: {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: 'Keywords to look for in messages, e.g. "account manager contact"' },
+      space: { type: 'string', description: 'Restrict to spaces whose name contains this, e.g. "Nuvita"' },
+    },
+    required: ['query'],
+  },
+
+  async execute(rawArgs, ctx) {
+    const args = ChatArgs.parse(rawArgs)
+    const outcome = await searchChatHistory(
+      ctx.accessToken,
+      args.query,
+      args.space,
+      ctx.chatSpacePreferences,
+    )
+
+    if (outcome.spacesSearched.length === 0) {
+      // A named space that matched nothing is a DIFFERENT answer from "no
+      // messages matched" — telling the model which spaces do exist lets it
+      // correct the user instead of reporting a dead end.
+      const available = outcome.availableSpaces?.length
+        ? ` Visible spaces: ${outcome.availableSpaces.join(', ')}.`
+        : ' The user has no visible Chat spaces.'
+      return {
+        summary: `No Chat space matched "${args.space ?? ''}".${available}`,
+        fenced: '',
+        note: 'NO_RESULTS',
+      }
+    }
+
+    if (outcome.hits.length === 0) {
+      return {
+        summary: `No messages matched "${args.query}" in ${outcome.spacesSearched.join(', ')} (recent history).`,
+        fenced: '',
+        note: 'NO_RESULTS',
+      }
+    }
+
+    return {
+      summary: `Chat search "${args.query}" — ${outcome.hits.length} message(s) across ${outcome.spacesSearched.join(', ')}`,
+      // Chat messages are written by other people. Fenced, always.
+      fenced: fenceUntrusted(
+        'Google Chat search results',
+        JSON.stringify({
+          query: args.query,
+          spacesSearched: outcome.spacesSearched,
+          ...(outcome.failures.length ? { unreadableSpaces: outcome.failures } : {}),
+          messages: outcome.hits,
+        }),
+      ),
+    }
+  },
+}
+
+/* ══════════════════════════════════════════
    Registry
    ══════════════════════════════════════════ */
 
-export const READ_TOOLS: readonly ReadTool[] = [ga4Tool, gscTool]
+export const READ_TOOLS: readonly ReadTool[] = [ga4Tool, gscTool, searchDriveTool, searchChatTool]
 
 export function getTool(name: string): ReadTool | undefined {
   return READ_TOOLS.find(t => t.name === name)

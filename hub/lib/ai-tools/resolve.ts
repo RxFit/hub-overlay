@@ -19,10 +19,14 @@
  * gets an answer — just without figures.
  */
 
+import { getServerSession } from 'next-auth'
 import { planToolCalls } from './plan'
 import { executeToolCalls, renderToolOutcomes } from './execute'
 import { toolsFor } from './registry'
 import { getEffectivePrefs } from '../google/prefs-db'
+import { authOptions } from '../auth'
+import { getChatSpacePreferences } from '../chat-space-preferences-db'
+import { EMPTY_CHAT_SPACE_PREFERENCES, type ChatSpacePreferences } from '../chat-spaces'
 
 export interface ResolveResult {
   /** Rendered block for the system prompt, or undefined when nothing ran. */
@@ -31,29 +35,46 @@ export interface ResolveResult {
   ran: string[]
 }
 
-export async function resolveLiveAnalytics(
+/**
+ * Resolve every read-tool group in ONE planner call.
+ *
+ * The groups are offered together rather than planned separately so a question
+ * costs at most one planning round trip regardless of how many groups exist,
+ * and so a question spanning two sources ("what did we agree on pricing, and
+ * how did that page perform?") can be answered by one coherent plan. Each
+ * group's prefilter still gates whether it contributes tools at all, so a pure
+ * analytics question never carries Workspace tool declarations and vice versa.
+ */
+export async function resolveReadTools(
   question: string,
   role: string | undefined,
   accessToken: string | undefined,
   now: Date = new Date(),
 ): Promise<ResolveResult> {
-  // No Google session means no analytics — cheaper to bail than to plan a call
+  // No Google session means no reads — cheaper to bail than to plan a call
   // that could never execute.
   if (!accessToken || !question.trim()) return { ran: [] }
 
-  const tools = toolsFor('analytics', role)
+  const tools = [...toolsFor('analytics', role), ...toolsFor('workspace', role)]
   if (!tools.length) return { ran: [] }
 
   try {
     const calls = await planToolCalls(question, tools, now)
     if (!calls.length) return { ran: [] }
 
-    const prefs = await getEffectivePrefs()
+    // Analytics targets come from tenant prefs; Chat visibility is per-user.
+    // Both are fail-open — a lookup failure degrades a tool, never the turn.
+    const [prefs, chatSpacePreferences] = await Promise.all([
+      getEffectivePrefs().catch(() => ({} as Awaited<ReturnType<typeof getEffectivePrefs>>)),
+      resolveChatSpacePreferences(),
+    ])
+
     const outcomes = await executeToolCalls(calls, {
       accessToken,
       role: role ?? '',
       ga4PropertyId: prefs.ga4PropertyId,
       gscSiteUrl: prefs.gscSiteUrl,
+      chatSpacePreferences,
       today: now,
     })
 
@@ -62,7 +83,24 @@ export async function resolveLiveAnalytics(
       ran: outcomes.filter(o => o.ok).map(o => o.name),
     }
   } catch (err) {
-    console.warn('[ai-tools] live analytics resolution failed; answering without it:', err)
+    console.warn('[ai-tools] read-tool resolution failed; answering without it:', err)
     return { ran: [] }
   }
 }
+
+/** Read the caller's Chat visibility overrides, defaulting to none. */
+async function resolveChatSpacePreferences(): Promise<ChatSpacePreferences> {
+  try {
+    const session = await getServerSession(authOptions)
+    const email = session?.user?.email
+    return email ? await getChatSpacePreferences(email) : EMPTY_CHAT_SPACE_PREFERENCES
+  } catch {
+    return EMPTY_CHAT_SPACE_PREFERENCES
+  }
+}
+
+/**
+ * @deprecated Use {@link resolveReadTools}, which also covers Workspace reads.
+ * Retained so an existing caller keeps compiling.
+ */
+export const resolveLiveAnalytics = resolveReadTools

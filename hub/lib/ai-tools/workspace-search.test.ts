@@ -3,10 +3,9 @@ import {
   selectSpacesToSearch,
   messageMatches,
   queryTerms,
-  RETRIEVAL_LIMITS,
-} from './retrieval-tools'
-import { escapeDriveQueryTerm } from './google'
-import type { ChatSpace } from './google'
+  WORKSPACE_SEARCH_LIMITS,
+} from './workspace-search'
+import { escapeDriveQueryTerm, type ChatSpace } from '../google'
 
 const space = (displayName: string, name = `spaces/${displayName.replace(/\W/g, '')}`): ChatSpace =>
   ({ name, displayName, type: 'ROOM', spaceType: 'SPACE' })
@@ -34,7 +33,7 @@ describe('selectSpacesToSearch', () => {
 
   it('respects the scan limit', () => {
     const many = Array.from({ length: 20 }, (_, i) => space(`Space ${i}`))
-    expect(selectSpacesToSearch(many, undefined)).toHaveLength(RETRIEVAL_LIMITS.chatSpacesScanned)
+    expect(selectSpacesToSearch(many, undefined)).toHaveLength(WORKSPACE_SEARCH_LIMITS.chatSpacesScanned)
   })
 
   it('treats a blank space filter as "no filter"', () => {

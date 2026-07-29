@@ -4,7 +4,7 @@ import { getToken } from 'next-auth/jwt'
 import { authOptions } from '@/lib/auth'
 import { createLogger } from '@/lib/logger'
 import { streamChat, buildSystemPromptParts, friendlyModelError } from '@/lib/gemini'
-import { resolveLiveAnalytics } from '@/lib/ai-tools/resolve'
+import { resolveReadTools } from '@/lib/ai-tools/resolve'
 import type { SystemPromptParts } from '@/lib/claude'
 import { getCompanies, getIssues, getAgents, getRuns } from '@/lib/paperclip'
 import { searchSemanticBrain } from '@/lib/vertex'
@@ -18,7 +18,6 @@ import { boundHistory, MAX_HISTORY_MESSAGES } from '@/lib/history-window'
 import { extractSuggestedToolsJson, sanitizeAssistantHistoryContent } from '@/lib/model-output'
 import { buildGoogleWorkspaceContext } from '@/lib/google-context'
 import { getChatSpacePreferences } from '@/lib/chat-space-preferences-db'
-import { runRetrieval } from '@/lib/retrieval-executor'
 import { withTimeout } from '@/lib/timeout'
 import { chatErrorBody } from '@/lib/chat-error'
 import { breaker, CircuitOpenError } from '@/lib/circuit-breaker'
@@ -543,24 +542,15 @@ async function handleChat(req: NextRequest): Promise<Response> {
   const effectiveUseCase = activeSkill ? 'deep_dive' : useCase
   const lastUserMsg = boundedMessages.filter(m => m.role === 'user').pop()
   const query = lastUserMsg?.content ?? ''
-  // Live analytics resolution is independent of the Paperclip/Google context
-  // fetches, so start it here to run concurrently rather than adding its
-  // latency on top. Resolves to an empty result for non-analytics questions.
-  const analyticsPromise = resolveLiveAnalytics(query, chatRole, googleAccessToken)
+  // Read-tool resolution (analytics + Drive/Chat lookups) is independent of the
+  // Paperclip/Google context fetches, so start it here to run concurrently
+  // rather than adding its latency on top. Resolves to an empty result for
+  // questions that need no lookup.
+  const readToolsPromise = resolveReadTools(query, chatRole, googleAccessToken)
 
   const searchPromise: Promise<string[]> = query
     ? runSearchPipeline(query, effectiveUseCase)
     : Promise.resolve([])
-
-  // On-demand retrieval: plan and run live Drive/Chat reads for THIS question.
-  // Kicked off here so its planner call and Google reads overlap the Paperclip
-  // and Workspace-digest fetches rather than adding to them. Fully fail-soft —
-  // it resolves to '' on any problem, leaving the digest-only behavior intact.
-  const retrievalPromise: Promise<string> = query
-    ? getChatSpacePreferences(session.user.email ?? '')
-        .then(prefs => runRetrieval(googleAccessToken, query, prefs))
-        .catch(() => '')
-    : Promise.resolve('')
 
   const [paperclipContextResult, googleWsResult] = await Promise.all([
     // Branch 1: Paperclip orchestration context (8s timeout)
@@ -690,9 +680,6 @@ async function handleChat(req: NextRequest): Promise<Response> {
   const searchResults = await searchPromise
   const searchContext = searchResults.join('')
 
-  // Live Drive/Chat lookups for this question (started above, awaited here).
-  const retrievalContext = await retrievalPromise
-
   // Resolve attachments into text context. Extracted to resolveAttachmentContext
   // (lib/attachment-resolver.ts), which resolves the (independent) attachments
   // CONCURRENTLY — preserving the .slice(0,5) cap, input order of the injected
@@ -700,12 +687,8 @@ async function handleChat(req: NextRequest): Promise<Response> {
   // worst-case time-to-first-token from serial (~30-40s for 3-5 items) to parallel.
   const attachmentContext = await resolveAttachmentContext(attachments, lastUserMsg, googleAccessToken)
 
-  // Combine all injected context. Retrieval goes FIRST: it was fetched
-  // specifically to answer this question, so it should be the most salient
-  // block if anything downstream gets truncated.
-  const allInjectedContext = [retrievalContext, searchContext, attachmentContext]
-    .filter(Boolean)
-    .join('\n\n')
+  // Combine all injected context
+  const allInjectedContext = [searchContext, attachmentContext].filter(Boolean).join('\n\n')
 
   // Load active skill content if specified
   let activeSkillContent: string | undefined
@@ -716,7 +699,7 @@ async function handleChat(req: NextRequest): Promise<Response> {
 
   // Parts form for prompt caching — static persona/policy prefix cached,
   // dynamic context (date, workspace, search results) after the breakpoint.
-  const liveAnalytics = await analyticsPromise
+  const liveAnalytics = await readToolsPromise
 
   const systemPrompt = buildSystemPromptParts({
     projects: projectContext,
