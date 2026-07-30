@@ -38,7 +38,8 @@ export function looksAnalytical(message: string): boolean {
 }
 
 /**
- * Terms that suggest a question answerable from Drive documents or Chat history.
+ * Terms that suggest a question answerable from Drive documents, Chat history,
+ * or calendar availability.
  *
  * Broader than the analytics filter by necessity: "who is our account manager
  * at Nuvita?" contains no workspace vocabulary at all. So this also fires on
@@ -49,7 +50,7 @@ export function looksAnalytical(message: string): boolean {
  * Drive or Chat when in fact it could have looked).
  */
 const WORKSPACE_HINTS =
-  /\b(document|doc|docs|file|files|drive|folder|spreadsheet|sheet|contract|agreement|proposal|invoice|report|notes?|minutes|memo|deck|chat|space|spaces|message|messages|thread|conversation|said|says|told|discussed|mentioned|agreed|decided|contact|account manager|point of contact|who is|who are|what did|when did|where did|status of|update on)\b/i
+  /\b(document|doc|docs|file|files|drive|folder|spreadsheet|sheet|contract|agreement|proposal|invoice|report|notes?|minutes|memo|deck|chat|space|spaces|message|messages|thread|conversation|said|says|told|discussed|mentioned|agreed|decided|contact|account manager|point of contact|who is|who are|what did|when did|where did|status of|update on|free|busy|available|availability|calendar|schedule|booked|open slot|any time|meeting)\b/i
 
 /** True when a message might be answerable from Drive or Chat content. */
 export function looksWorkspaceRelated(message: string): boolean {

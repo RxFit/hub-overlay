@@ -202,3 +202,44 @@ describe('gsc_search_analytics', () => {
     expect(result.fenced).not.toContain('caveat')
   })
 })
+
+describe('calendar_freebusy', () => {
+  it('is registered in the workspace group and reachable by staff', () => {
+    // The defect this closes: queryFreeBusy shipped with no consumer at all.
+    expect(getTool('calendar_freebusy')).toBeDefined()
+    expect(toolsFor('workspace', 'staff').map(t => t.name)).toContain('calendar_freebusy')
+  })
+
+  it('reports a clear calendar as a distinct answer, not an error', async () => {
+    stubFetch({ calendars: { primary: { busy: [] } } })
+    const result = await getTool('calendar_freebusy')!.execute(
+      { timeMin: '2026-07-30T00:00:00Z', timeMax: '2026-07-31T00:00:00Z' },
+      ctx(),
+    )
+    expect(result.note).toBe('NO_RESULTS')
+    expect(result.summary).toContain('clear')
+  })
+
+  it('fences merged busy blocks — they derive from other people’s invitations', async () => {
+    stubFetch({
+      calendars: {
+        primary: { busy: [{ start: '2026-07-30T15:00:00Z', end: '2026-07-30T16:00:00Z' }] },
+        work: { busy: [{ start: '2026-07-30T15:30:00Z', end: '2026-07-30T17:00:00Z' }] },
+      },
+    })
+
+    const result = await getTool('calendar_freebusy')!.execute(
+      { timeMin: '2026-07-30T00:00:00Z', timeMax: '2026-07-31T00:00:00Z' },
+      ctx(),
+    )
+
+    expect(result.fenced).toContain('<untrusted_data')
+    // Overlapping blocks across two calendars merge to one busy run.
+    expect(JSON.parse(result.fenced.split('\n')[1]).busy).toHaveLength(1)
+  })
+
+  it('rejects a call missing the time range before hitting Google', () => {
+    const tool = getTool('calendar_freebusy')!
+    expect(tool.schema.safeParse({ timeMin: '2026-07-30T00:00:00Z' }).success).toBe(false)
+  })
+})

@@ -45,8 +45,13 @@ describe('registry wiring', () => {
   })
 
   it('exposes them to staff and above', () => {
-    expect(toolsFor('workspace', 'staff').map(t => t.name).sort()).toEqual(['search_chat', 'search_drive'])
-    expect(toolsFor('workspace', 'admin')).toHaveLength(2)
+    // Asserts CONTAINMENT rather than an exact list: the group grows (calendar
+    // free/busy joined it), and a frozen list would fail on every addition
+    // without any of them being wrong.
+    const staffTools = toolsFor('workspace', 'staff').map(t => t.name)
+    expect(staffTools).toContain('search_drive')
+    expect(staffTools).toContain('search_chat')
+    expect(toolsFor('workspace', 'admin').map(t => t.name).sort()).toEqual(staffTools.sort())
   })
 
   it('hides them from an onboarding account', () => {

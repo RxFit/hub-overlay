@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { looksAnalytical, extractJson, parsePlan, planToolCalls } from './plan'
+import { looksAnalytical, looksWorkspaceRelated, extractJson, parsePlan, planToolCalls } from './plan'
 import { READ_TOOLS } from './registry'
 
 vi.mock('../gemini', () => ({
@@ -79,11 +79,22 @@ describe('parsePlan', () => {
 describe('planToolCalls', () => {
   const mockGemini = vi.mocked(geminiGenerateText)
 
-  it('skips the model call entirely for non-analytics questions', async () => {
-    const calls = await planToolCalls("what's on my calendar?", READ_TOOLS)
+  it('skips the model call entirely when no tool could answer', async () => {
+    // Was "what's on my calendar?" — that now DOES plan, deliberately, since
+    // calendar_freebusy can answer availability. Replaced with a message no
+    // registered tool could serve, which is what this test is really about.
+    const calls = await planToolCalls('write me a poem about Austin', READ_TOOLS)
 
     expect(calls).toEqual([])
     expect(mockGemini).not.toHaveBeenCalled()
+  })
+
+  it('DOES plan for an availability question now that free/busy exists', async () => {
+    mockGemini.mockResolvedValue({ text: '{"calls":[]}', model: 'test' })
+
+    await planToolCalls('when am I free Thursday?', READ_TOOLS)
+
+    expect(mockGemini).toHaveBeenCalled()
   })
 
   it('skips when no tools are available to the caller', async () => {
@@ -171,5 +182,21 @@ describe('planner provider failover', () => {
 
     await expect(planToolCalls(QUESTION, tools)).resolves.toEqual([])
     expect(claudeChat).not.toHaveBeenCalled()
+  })
+})
+
+describe('looksWorkspaceRelated — availability questions', () => {
+  it('fires on availability phrasing so the freebusy tool is reachable', () => {
+    // Registering a tool is not enough: if the prefilter never matches, the
+    // group is never offered and the tool stays as dead as it was before.
+    expect(looksWorkspaceRelated('when am I free Thursday?')).toBe(true)
+    expect(looksWorkspaceRelated('am I available at 3 tomorrow')).toBe(true)
+    expect(looksWorkspaceRelated("what's on my schedule Friday")).toBe(true)
+    expect(looksWorkspaceRelated('is my calendar booked that afternoon')).toBe(true)
+  })
+
+  it('still ignores messages with no workspace or availability signal', () => {
+    expect(looksWorkspaceRelated('thanks, that works')).toBe(false)
+    expect(looksWorkspaceRelated('write me a poem')).toBe(false)
   })
 })
