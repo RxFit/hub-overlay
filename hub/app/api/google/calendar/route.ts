@@ -5,6 +5,7 @@ import { clampInt } from '@/lib/num'
 import { GoogleCalendarCreateSchema } from '@/lib/zod-schemas'
 import { authOptions } from '@/lib/auth'
 import { listUpcomingEvents, createCalendarEvent, deleteCalendarEvent, listCalendars, GoogleCalendarEvent } from '@/lib/google'
+import { updateCalendarEvent } from '@/lib/google/calendar'
 
 export const runtime = 'nodejs'
 
@@ -93,6 +94,67 @@ export async function POST(req: NextRequest) {
 
   try {
     const event = await createCalendarEvent(accessToken, body)
+    return NextResponse.json({ event })
+  } catch (error) {
+    return googleApiErrorResponse(error)
+  }
+}
+
+/**
+ * PATCH /api/google/calendar — update an existing event in place.
+ *
+ * Previously only create and delete existed, so "move my 3pm to 4pm" had no
+ * path: the closest available behavior was delete-and-recreate, which loses the
+ * event id, drops attendee RSVPs, and re-notifies everyone as though it were a
+ * brand-new meeting.
+ *
+ * Fields omitted from the body keep their current values (events.patch merges),
+ * so a reschedule preserves the title, description, attendees and any Meet
+ * link. Attendees are notified by default — a silent reschedule leaves everyone
+ * holding the old time.
+ */
+export async function PATCH(req: NextRequest) {
+  const session = await getServerSession(authOptions)
+  if (!session?.user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const auth = await resolveGoogleAuth(req)
+  if (!auth.ok) return auth.response
+
+  let body: {
+    eventId?: string
+    calendarId?: string
+    sendUpdates?: 'all' | 'externalOnly' | 'none'
+    summary?: string
+    description?: string
+    location?: string
+    start?: string
+    end?: string
+    timeZone?: string
+    attendees?: string[]
+  }
+  try {
+    body = await req.json()
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
+  }
+
+  const eventId = (body.eventId || '').trim()
+  if (!eventId) {
+    return NextResponse.json({ error: 'eventId is required' }, { status: 400 })
+  }
+
+  const { eventId: _id, calendarId, sendUpdates, ...patch } = body
+  if (!Object.keys(patch).length) {
+    return NextResponse.json({ error: 'No fields to update' }, { status: 400 })
+  }
+
+  try {
+    const event = await updateCalendarEvent(auth.accessToken, eventId, patch, {
+      calendarId,
+      sendUpdates,
+    })
     return NextResponse.json({ event })
   } catch (error) {
     return googleApiErrorResponse(error)
