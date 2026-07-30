@@ -6,12 +6,13 @@ import { hubUsers, googlePrefs } from '@/lib/schema'
 import { getTenantId } from '@/lib/tenant-context'
 import { getEffectivePrefs } from '@/lib/google/prefs-db'
 import { normalizeReports, dueReports, reportWindow, DEFAULT_REPORTS } from '@/lib/reports/config'
-import { buildDigestMarkdown } from '@/lib/reports/digest'
+import { buildDigestMarkdown, buildReviewDeckSpec } from '@/lib/reports/digest'
 import { resolveTenantToken } from '@/lib/reports/access-token'
 import { deliverDigest } from '@/lib/reports/deliver'
 import { runGA4Report } from '@/lib/google/analytics'
 import { querySearchConsole } from '@/lib/google/search-console'
 import { createDocFromMarkdown } from '@/lib/google/docs'
+import { createDeckFromSpec } from '@/lib/google/slides'
 import { ensureWorkspace } from '@/lib/google/drive-workspace'
 import { dbWorkspaceStore } from '@/lib/google/drive-workspace-db'
 import { recordAiAction } from '@/lib/ai-audit'
@@ -95,7 +96,12 @@ export async function POST(req: NextRequest) {
       .from(hubUsers)
       .where(and(eq(hubUsers.tenantId, tenantId), inArray(hubUsers.role, ['admin', 'superadmin'])))
 
-    const token = await resolveTenantToken(tenantId, admins.map(a => a.email))
+    // Prefer an admin whose recorded grant actually covers the analytics scopes a
+    // digest needs — granular consent lets one admin hold Drive but not Analytics.
+    const token = await resolveTenantToken(tenantId, admins.map(a => a.email), [
+      'https://www.googleapis.com/auth/analytics.readonly',
+      'https://www.googleapis.com/auth/webmasters.readonly',
+    ])
     if (!token) {
       return NextResponse.json(
         { ok: false, error: 'No usable Google credential for this tenant', ran: 0 },
@@ -107,7 +113,7 @@ export async function POST(req: NextRequest) {
 
     for (const report of due) {
       const requestId = newRequestId()
-      const window = reportWindow(report.cadence, now)
+      const window = reportWindow(report.cadence, now, prefsRow?.timezone ?? undefined)
       const notes: string[] = []
 
       try {
@@ -157,8 +163,19 @@ export async function POST(req: NextRequest) {
         if (!prefs.ga4PropertyId) notes.push('No Google Analytics property is configured.')
         if (!prefs.gscSiteUrl) notes.push('No Search Console site is configured.')
 
-        const title = `${report.cadence === 'monthly' ? 'Monthly' : report.cadence === 'daily' ? 'Daily' : 'Weekly'} performance digest`
-        const markdown = buildDigestMarkdown({
+        // `kind` decides the artifact type. It was previously ignored, so a
+        // report configured as a review DECK silently produced another digest
+        // Doc — and when the 1st of the month landed on a Monday, both seeded
+        // defaults came due in the same hour and admins got two near-identical
+        // Docs. Branching here is what makes the config field mean something.
+        const isDeck = report.kind === 'business_review_deck'
+        const cadenceLabel =
+          report.cadence === 'monthly' ? 'Monthly' : report.cadence === 'daily' ? 'Daily' : 'Weekly'
+        const title = isDeck
+          ? `${cadenceLabel} business review`
+          : `${cadenceLabel} performance digest`
+
+        const digestInput = {
           title,
           startDate: window.startDate,
           endDate: window.endDate,
@@ -167,21 +184,27 @@ export async function POST(req: NextRequest) {
           gsc,
           gscTopPages,
           notes,
-        })
+        }
 
         const workspace = await ensureWorkspace(token.accessToken, {
           tenantId,
           email: token.email,
-          ensure: ['reports'],
+          // Decks live in Presentations/, digests in Reports/.
+          ensure: isDeck ? ['presentations'] : ['reports'],
           store: dbWorkspaceStore,
         })
 
-        const doc = await createDocFromMarkdown(token.accessToken, {
-          title: `${title} (${window.startDate} – ${window.endDate})`,
-          markdown,
-          folderId: workspace.folders.reports,
-          tenantId,
-        })
+        const artifact = isDeck
+          ? await createDeckFromSpec(token.accessToken, buildReviewDeckSpec(digestInput), {
+              folderId: workspace.folders.presentations,
+              tenantId,
+            }).then(deck => ({ id: deck.presentationId, url: deck.presentationUrl }))
+          : await createDocFromMarkdown(token.accessToken, {
+              title: `${title} (${window.startDate} – ${window.endDate})`,
+              markdown: buildDigestMarkdown(digestInput),
+              folderId: workspace.folders.reports,
+              tenantId,
+            }).then(doc => ({ id: doc.documentId, url: doc.documentUrl }))
 
         // Delivery is best-effort and reported, never fatal: the Doc exists and
         // is linked from Drive regardless, so a Gmail hiccup must not turn a
@@ -195,7 +218,7 @@ export async function POST(req: NextRequest) {
             title,
             startDate: window.startDate,
             endDate: window.endDate,
-            documentUrl: doc.documentUrl,
+            documentUrl: artifact.url,
             notes,
           },
         )
@@ -206,7 +229,7 @@ export async function POST(req: NextRequest) {
           actionType: 'report_generated',
           target: {
             reportId: report.id,
-            documentId: doc.documentId,
+            documentId: artifact.id,
             window,
             emailed: delivered.emailed,
             chatPosted: delivered.chatPosted,
@@ -220,7 +243,7 @@ export async function POST(req: NextRequest) {
         results.push({
           reportId: report.id,
           status: 'created',
-          documentId: doc.documentId,
+          documentId: artifact.id,
           ...(delivered.problems.length ? { reason: delivered.problems.join('; ') } : {}),
         })
       } catch (err) {

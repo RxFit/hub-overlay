@@ -53,6 +53,9 @@ describe('resolvePrefs', () => {
       gscSiteUrl: undefined,
       bigqueryProjectId: undefined,
       timezone: undefined,
+      // Empty rather than undefined: the runner falls back to DEFAULT_REPORTS
+      // when the list is empty, so [] is the meaningful "nothing stored" value.
+      reports: [],
     })
   })
 })
@@ -83,5 +86,41 @@ describe('normalizePrefsInput', () => {
   it('never throws on junk input', () => {
     expect(() => normalizePrefsInput(null)).not.toThrow()
     expect(() => normalizePrefsInput({ ga4PropertyId: 42, gscSiteUrl: {} })).not.toThrow()
+  })
+})
+
+describe('normalizePrefsInput — presence semantics (regression)', () => {
+  it('omits keys the caller did not send', () => {
+    // The bug: every key was returned as undefined, and savePrefs wrote each as
+    // `?? null`, so the settings UI posting two fields nulled the rest.
+    const out = normalizePrefsInput({ ga4PropertyId: '123' })
+    expect('ga4PropertyId' in out).toBe(true)
+    expect('gscSiteUrl' in out).toBe(false)
+    expect('timezone' in out).toBe(false)
+    expect('reports' in out).toBe(false)
+  })
+
+  it('keeps a present-but-empty field as an explicit clear', () => {
+    // Distinguishing "absent" from "emptied" is the whole point.
+    const out = normalizePrefsInput({ gscSiteUrl: '' })
+    expect('gscSiteUrl' in out).toBe(true)
+    expect(out.gscSiteUrl).toBeUndefined()
+  })
+
+  it('accepts a reports array so the schedule becomes writable', () => {
+    const out = normalizePrefsInput({ reports: [{ id: 'w', kind: 'ga4_gsc_digest', cadence: 'weekly' }] })
+    expect(Array.isArray(out.reports)).toBe(true)
+    expect(out.reports).toHaveLength(1)
+  })
+
+  it('coerces a non-array reports value to an empty list', () => {
+    expect(normalizePrefsInput({ reports: 'nope' }).reports).toEqual([])
+  })
+
+  it('lets a reports-only post leave analytics sources untouched', () => {
+    // The dangerous direction: a cadence editor must not wipe the GA4 property.
+    const out = normalizePrefsInput({ reports: [] })
+    expect('ga4PropertyId' in out).toBe(false)
+    expect('gscSiteUrl' in out).toBe(false)
   })
 })

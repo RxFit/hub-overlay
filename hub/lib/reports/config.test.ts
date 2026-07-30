@@ -215,3 +215,46 @@ describe('reportWindow', () => {
     })
   })
 })
+
+describe('reportWindow — tenant-local anchoring (regression)', () => {
+  it('anchors the window to the tenant local date, not the UTC date', () => {
+    // The bug: isDue matched in tenant-local time while reportWindow computed
+    // from UTC. At UTC+9 the seeded Mon 07:00 digest fires at 22:00Z Sunday, so
+    // the UTC-derived window landed a full day behind, permanently.
+    const firing = new Date('2026-08-02T22:00:00Z') // Mon 2026-08-03 07:00 Asia/Tokyo
+    expect(reportWindow('weekly', firing, 'Asia/Tokyo')).toEqual({
+      startDate: '2026-07-27',
+      endDate: '2026-08-02',
+    })
+    // Same instant read as UTC is a day earlier — this is the divergence.
+    expect(reportWindow('weekly', firing, 'UTC').endDate).toBe('2026-08-01')
+  })
+
+  it('agrees with isDue about which local day it is', () => {
+    const firing = new Date('2026-08-02T22:00:00Z')
+    const tz = 'Asia/Tokyo'
+    // isDue sees Monday...
+    expect(isDue(weekly({ day: 'mon' }), firing, tz)).toBe(true)
+    // ...so the window must end on Sunday the 2nd, the local yesterday.
+    expect(reportWindow('weekly', firing, tz).endDate).toBe('2026-08-02')
+  })
+
+  it('still ends yesterday for a western timezone', () => {
+    // 12:00Z Tue = 07:00 Chicago Tue; yesterday local is Monday the 27th.
+    expect(reportWindow('daily', new Date('2026-07-28T12:00:00Z'), 'America/Chicago')).toEqual({
+      startDate: '2026-07-27',
+      endDate: '2026-07-27',
+    })
+  })
+
+  it('falls back to UTC for an unusable timezone rather than throwing', () => {
+    expect(() => reportWindow('weekly', new Date('2026-07-28T12:00:00Z'), 'Mars/Olympus')).not.toThrow()
+  })
+
+  it('keeps the no-timezone behavior unchanged', () => {
+    expect(reportWindow('weekly', new Date('2026-07-28T07:00:00Z'))).toEqual({
+      startDate: '2026-07-21',
+      endDate: '2026-07-27',
+    })
+  })
+})
