@@ -366,6 +366,146 @@ export async function listRecentFiles(
   return data.files ?? []
 }
 
+/**
+ * Escape a user-supplied term for a Drive `q` query string.
+ *
+ * Drive query literals are single-quoted, so an unescaped apostrophe ends the
+ * literal and the rest of the term is parsed as query syntax — which at best
+ * 400s and at worst changes what the query means. Backslashes must be escaped
+ * first or they would escape the escapes we add.
+ */
+export function escapeDriveQueryTerm(term: string): string {
+  return term.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+}
+
+/**
+ * Search Drive for files matching a term, by CONTENT and by filename.
+ *
+ * `fullText contains` searches indexed document body text, not just titles —
+ * this is what makes "find the Nuvita partnership agreement" work when the
+ * filename says nothing about partnerships. The name clause is OR'd in because
+ * full-text indexing lags for freshly-uploaded files, and a filename match is
+ * exactly what a user means when they name a document.
+ *
+ * Trashed files are always excluded: surfacing a deleted document as a live
+ * source is worse than returning nothing.
+ */
+export async function searchDriveFiles(
+  accessToken: string,
+  term: string,
+  opts?: { maxResults?: number }
+): Promise<GoogleDriveFile[]> {
+  const safe = escapeDriveQueryTerm(term.trim())
+  if (!safe) return []
+
+  const params = new URLSearchParams({
+    q: `(fullText contains '${safe}' or name contains '${safe}') and trashed = false`,
+    orderBy: 'modifiedTime desc',
+    pageSize: String(opts?.maxResults ?? 8),
+    fields: 'files(id,name,mimeType,modifiedTime,webViewLink,owners,size)',
+  })
+
+  const data = await googleFetch<{ files?: GoogleDriveFile[] }>(
+    `${DRIVE_BASE}/files?${params}`,
+    accessToken
+  )
+  return data.files ?? []
+}
+
+/**
+ * Google Workspace mime types that must be EXPORTED rather than downloaded,
+ * mapped to the export format that best preserves their text.
+ *
+ * A native Google Doc has no bytes to download — `alt=media` returns 403 for
+ * these — so the export endpoint is the only way to read one.
+ */
+const WORKSPACE_EXPORT_FORMATS: Record<string, string> = {
+  'application/vnd.google-apps.document': 'text/plain',
+  'application/vnd.google-apps.presentation': 'text/plain',
+  // CSV exports only the FIRST sheet; that is a real limitation of the export
+  // endpoint, and it is still far more useful than refusing to read the file.
+  'application/vnd.google-apps.spreadsheet': 'text/csv',
+}
+
+/** Non-Workspace types whose bytes are already text and can be read directly. */
+const DIRECTLY_READABLE = /^(text\/|application\/(json|xml|x-ndjson|javascript|typescript))/
+
+export interface DriveFileContent {
+  id: string
+  name: string
+  mimeType: string
+  text: string
+  /** True when the body was cut at maxChars. */
+  truncated: boolean
+  webViewLink?: string
+}
+
+/**
+ * Read a Drive file's text.
+ *
+ * Handles the two distinct cases the Drive API draws a hard line between:
+ * native Workspace files are EXPORTED to a text format, everything else is
+ * downloaded with `alt=media`. Binary formats we cannot turn into text (PDF,
+ * images, video, zip) are reported as such rather than returning mojibake —
+ * a model handed garbled bytes will confidently invent content from them.
+ *
+ * `maxChars` bounds the result because this text goes into a prompt: a 200-page
+ * document would blow the context window and evict everything else.
+ */
+export async function readDriveFileText(
+  accessToken: string,
+  fileId: string,
+  opts?: { maxChars?: number }
+): Promise<DriveFileContent> {
+  const maxChars = opts?.maxChars ?? 12_000
+
+  const meta = await googleFetch<GoogleDriveFile>(
+    `${DRIVE_BASE}/files/${encodeURIComponent(fileId)}?fields=id,name,mimeType,modifiedTime,webViewLink`,
+    accessToken
+  )
+
+  const exportFormat = WORKSPACE_EXPORT_FORMATS[meta.mimeType]
+  const isDirect = DIRECTLY_READABLE.test(meta.mimeType)
+
+  if (!exportFormat && !isDirect) {
+    return {
+      id: meta.id,
+      name: meta.name,
+      mimeType: meta.mimeType,
+      text: `[This file is ${meta.mimeType}, which has no text representation the Hub can extract. Open it directly: ${meta.webViewLink ?? '(no link)'}]`,
+      truncated: false,
+      webViewLink: meta.webViewLink,
+    }
+  }
+
+  const url = exportFormat
+    ? `${DRIVE_BASE}/files/${encodeURIComponent(fileId)}/export?mimeType=${encodeURIComponent(exportFormat)}`
+    : `${DRIVE_BASE}/files/${encodeURIComponent(fileId)}?alt=media`
+
+  // Not googleFetch: that helper parses JSON, and these endpoints return raw
+  // text/CSV bodies.
+  const res = await fetch(url, {
+    signal: AbortSignal.timeout(GOOGLE_API_TIMEOUT_MS),
+    headers: { Authorization: `Bearer ${accessToken}` },
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`Google API error ${res.status}: ${body.slice(0, 200)}`)
+  }
+
+  const raw = await res.text()
+  const text = raw.length > maxChars ? raw.slice(0, maxChars) : raw
+
+  return {
+    id: meta.id,
+    name: meta.name,
+    mimeType: meta.mimeType,
+    text,
+    truncated: raw.length > maxChars,
+    webViewLink: meta.webViewLink,
+  }
+}
+
 /* ══════════════════════════════════════════
    Gmail  —  https://gmail.googleapis.com/gmail/v1
    ══════════════════════════════════════════ */

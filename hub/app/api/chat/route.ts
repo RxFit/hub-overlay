@@ -4,7 +4,7 @@ import { getToken } from 'next-auth/jwt'
 import { authOptions } from '@/lib/auth'
 import { createLogger } from '@/lib/logger'
 import { streamChat, buildSystemPromptParts, friendlyModelError } from '@/lib/gemini'
-import { resolveLiveAnalytics } from '@/lib/ai-tools/resolve'
+import { resolveReadTools } from '@/lib/ai-tools/resolve'
 import type { SystemPromptParts } from '@/lib/claude'
 import { getCompanies, getIssues, getAgents, getRuns } from '@/lib/paperclip'
 import { searchSemanticBrain } from '@/lib/vertex'
@@ -542,10 +542,11 @@ async function handleChat(req: NextRequest): Promise<Response> {
   const effectiveUseCase = activeSkill ? 'deep_dive' : useCase
   const lastUserMsg = boundedMessages.filter(m => m.role === 'user').pop()
   const query = lastUserMsg?.content ?? ''
-  // Live analytics resolution is independent of the Paperclip/Google context
-  // fetches, so start it here to run concurrently rather than adding its
-  // latency on top. Resolves to an empty result for non-analytics questions.
-  const analyticsPromise = resolveLiveAnalytics(query, chatRole, googleAccessToken)
+  // Read-tool resolution (analytics + Drive/Chat lookups) is independent of the
+  // Paperclip/Google context fetches, so start it here to run concurrently
+  // rather than adding its latency on top. Resolves to an empty result for
+  // questions that need no lookup.
+  const readToolsPromise = resolveReadTools(query, chatRole, googleAccessToken)
 
   const searchPromise: Promise<string[]> = query
     ? runSearchPipeline(query, effectiveUseCase)
@@ -698,7 +699,7 @@ async function handleChat(req: NextRequest): Promise<Response> {
 
   // Parts form for prompt caching — static persona/policy prefix cached,
   // dynamic context (date, workspace, search results) after the breakpoint.
-  const liveAnalytics = await analyticsPromise
+  const liveAnalytics = await readToolsPromise
 
   const systemPrompt = buildSystemPromptParts({
     projects: projectContext,

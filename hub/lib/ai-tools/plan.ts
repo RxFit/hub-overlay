@@ -36,16 +36,55 @@ export function looksAnalytical(message: string): boolean {
   return ANALYTICS_HINTS.test(message)
 }
 
-const PLANNER_SYSTEM = `You convert a business question into calls to read-only analytics tools.
+/**
+ * Terms that suggest a question answerable from Drive documents or Chat history.
+ *
+ * Broader than the analytics filter by necessity: "who is our account manager
+ * at Nuvita?" contains no workspace vocabulary at all. So this also fires on
+ * shape — a who/what/when question, or a reference to something said or written
+ * — accepting false positives. The asymmetry is the same as for analytics: a
+ * false positive costs one small planner call that returns no tools, while a
+ * false negative is the original bug (the assistant declaring it cannot see
+ * Drive or Chat when in fact it could have looked).
+ */
+const WORKSPACE_HINTS =
+  /\b(document|doc|docs|file|files|drive|folder|spreadsheet|sheet|contract|agreement|proposal|invoice|report|notes?|minutes|memo|deck|chat|space|spaces|message|messages|thread|conversation|said|says|told|discussed|mentioned|agreed|decided|contact|account manager|point of contact|who is|who are|what did|when did|where did|status of|update on)\b/i
+
+/** True when a message might be answerable from Drive or Chat content. */
+export function looksWorkspaceRelated(message: string): boolean {
+  return WORKSPACE_HINTS.test(message)
+}
+
+/**
+ * Should we spend a planner call on this message, given the tools on offer?
+ *
+ * Each group carries its own prefilter, and a match on ANY represented group is
+ * enough. Deriving this from the tool set rather than hardcoding one filter is
+ * what lets a new group be added without the planner silently refusing to plan
+ * for it.
+ */
+export function shouldPlan(message: string, tools: readonly ReadTool[]): boolean {
+  const groups = new Set(tools.map(t => t.group))
+  if (groups.has('analytics') && looksAnalytical(message)) return true
+  if (groups.has('workspace') && looksWorkspaceRelated(message)) return true
+  return false
+}
+
+const PLANNER_SYSTEM = `You convert a business question into calls to read-only data tools.
 
 Rules:
 - Reply with JSON ONLY — no prose, no markdown fences.
 - Shape: {"calls":[{"name":"<tool>","args":{...}}]}
-- Return {"calls":[]} if the question does not need analytics data, or if you cannot
-  express it with the tools given.
+- Return {"calls":[]} if the question does not need looked-up data, or if you cannot
+  express it with the tools given. This is a common and correct answer — greetings,
+  follow-ups answerable from the conversation, and requests to WRITE or SEND something
+  all take no tools.
 - Never invent tool names or argument names beyond those declared.
 - Prefer ONE well-chosen call. Use at most two, and only when the question genuinely
-  spans both site analytics and search performance.
+  spans two sources (for example site analytics and search performance, or a document
+  and a chat conversation).
+- Pass KEYWORDS as search queries, not the user's whole sentence. For "who is our
+  account manager at Nuvita?" search for "account manager contact", scoped to Nuvita.
 - Resolve relative dates ("last month", "this week") against the current date given below.`
 
 /** Strip markdown fencing a model may add despite being told not to. */
@@ -90,7 +129,7 @@ export async function planToolCalls(
   tools: readonly ReadTool[],
   now: Date = new Date(),
 ): Promise<ToolCall[]> {
-  if (!tools.length || !looksAnalytical(message)) return []
+  if (!tools.length || !shouldPlan(message, tools)) return []
 
   const declarations = toFunctionDeclarations(tools)
   const system = [
