@@ -211,17 +211,48 @@ export function dueReports(reports: ReportConfig[], now: Date, timeZone?: string
 }
 
 /**
+ * The tenant-local calendar date for an instant, as YYYY-MM-DD.
+ *
+ * `en-CA` formats as YYYY-MM-DD natively, so no reassembly is needed. Falls
+ * back to UTC for an unrecognized timezone, matching `localParts`.
+ */
+export function localDateString(now: Date, timeZone?: string): string {
+  const opts: Intl.DateTimeFormatOptions = {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }
+  try {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: timeZone || 'UTC', ...opts }).format(now)
+  } catch {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'UTC', ...opts }).format(now)
+  }
+}
+
+/**
  * The reporting window a run covers, as ISO dates.
  *
  * Ends YESTERDAY, not today: analytics for the current day are partial, and a
  * "last week" digest that silently includes six and a half days understates
  * every figure in it.
+ *
+ * ── Why this takes a timezone ──
+ * It used to derive the window from UTC calendar dates while `isDue` decided
+ * due-ness in the tenant's LOCAL timezone — two different clocks in one run. At
+ * offsets of UTC+8 or further east the seeded Mon 07:00 digest fires at 22:00Z
+ * the previous UTC day, so every window landed a full day behind the "ends
+ * yesterday" contract, permanently and silently. Anchoring the window to the
+ * same local calendar date `isDue` matched keeps the two in agreement.
  */
 export function reportWindow(
   cadence: ReportCadence,
   now: Date,
+  timeZone?: string,
 ): { startDate: string; endDate: string } {
-  const end = new Date(now)
+  // Anchor to the tenant's local calendar day, then do plain date arithmetic on
+  // a UTC-anchored instant — only whole calendar dates matter from here, so the
+  // anchor's offset is irrelevant and DST cannot shift the result.
+  const end = new Date(`${localDateString(now, timeZone)}T00:00:00Z`)
   end.setUTCDate(end.getUTCDate() - 1)
 
   const start = new Date(end)

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildDigestMarkdown, formatDelta } from './digest'
+import { buildDigestMarkdown, buildReviewDeckSpec, formatDelta } from './digest'
 import type { GA4ReportResult } from '../google/analytics'
 import type { GSCQueryResult } from '../google/search-console'
 
@@ -110,5 +110,55 @@ describe('buildDigestMarkdown', () => {
     expect(md).toMatch(/^# /)
     expect(md).toContain('| Metric | This period | Change |')
     expect(md.trimEnd().endsWith('_Generated automatically by the HUB Overlay._')).toBe(true)
+  })
+})
+
+describe('buildReviewDeckSpec', () => {
+  it('opens with a title slide carrying the period', () => {
+    const spec = buildReviewDeckSpec({ ...base, ga4: ga4(1200) })
+    expect(spec.slides[0]).toMatchObject({ layout: 'TITLE', title: 'Weekly digest' })
+    expect(spec.slides[0].bullets?.[0]).toContain('2026-07-21')
+  })
+
+  it('renders each metric as a BIG_NUMBER slide with its delta', () => {
+    const spec = buildReviewDeckSpec({ ...base, ga4: ga4(1200), ga4Previous: ga4(1000) })
+    const big = spec.slides.find(s => s.layout === 'BIG_NUMBER')
+    expect(big?.bigNumber).toBe('1.2k')
+    expect(big?.bullets?.[0]).toContain('+20.0%')
+  })
+
+  it('attaches speaker notes with the raw figures', () => {
+    const spec = buildReviewDeckSpec({ ...base, ga4: ga4(1200), ga4Previous: ga4(1000) })
+    const big = spec.slides.find(s => s.layout === 'BIG_NUMBER')
+    expect(big?.speakerNotes).toContain('1200')
+  })
+
+  it('includes search performance and the anonymization caveat', () => {
+    const spec = buildReviewDeckSpec({
+      ...base,
+      gsc: gsc({ anonymizedDataWarning: 'totals under-report' }),
+    })
+    const search = spec.slides.find(s => s.title === 'Search performance')
+    expect(search?.bullets?.join(' ')).toContain('under-report')
+  })
+
+  it('caps top pages at the per-slide bullet limit', () => {
+    const rows = Array.from({ length: 10 }, (_, i) => ({
+      keys: [`/p${i}`], clicks: i, impressions: i * 10, ctr: 1, position: 1,
+    }))
+    const spec = buildReviewDeckSpec({ ...base, gscTopPages: { dimensions: ['page'], rows } })
+    const top = spec.slides.find(s => s.title === 'Top pages by clicks')
+    expect(top?.bullets?.length).toBeLessThanOrEqual(7)
+  })
+
+  it('never produces a title-only deck with nothing after it', () => {
+    // A deck with one slide and no explanation would look broken.
+    const spec = buildReviewDeckSpec(base)
+    expect(spec.slides.length).toBeGreaterThan(1)
+    expect(JSON.stringify(spec.slides)).toContain('Analytics Sources')
+  })
+
+  it('always returns a schema-valid spec', () => {
+    expect(() => buildReviewDeckSpec({ ...base, ga4: ga4(5), gsc: gsc() })).not.toThrow()
   })
 })

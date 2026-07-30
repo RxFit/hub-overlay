@@ -11,7 +11,7 @@
  * against Google's six-month-unused revocation of refresh tokens.
  */
 
-import { getGoogleRefreshToken } from '../google-token-store'
+import { getGoogleRefreshTokenRecord } from '../google-token-store'
 
 export interface MintedToken {
   accessToken: string
@@ -48,26 +48,65 @@ export async function mintAccessToken(refreshToken: string): Promise<string | nu
 }
 
 /**
- * Find a usable credential for a tenant by trying its candidate emails in
- * order and returning the first that mints.
+ * Find a usable credential for a tenant among its admins.
  *
  * Candidates are the tenant's admins: they are the users whose grant is most
  * likely to cover the analytics scopes, and the reports are addressed to them
- * anyway. A revoked or scope-reduced grant simply moves to the next candidate
- * rather than failing the tenant outright.
+ * anyway.
+ *
+ * Selection is scope-aware and deterministic, because the naive version
+ * ("first one that mints, in whatever order Postgres returned") had two teeth:
+ * minting succeeds for a credential missing every analytics scope, so a run
+ * could silently produce a digest whose data sections were all 403 notes; and
+ * the unordered admin list made that outcome vary run to run even though
+ * nothing had changed.
  */
 export async function resolveTenantToken(
   tenantId: string,
   candidateEmails: string[],
+  /** Scopes the run actually needs; a candidate whose recorded grant is missing
+   *  one is skipped. Omit to accept any credential that mints. */
+  requiredScopes: string[] = [],
 ): Promise<MintedToken | null> {
-  for (const email of candidateEmails) {
-    const refreshToken = await getGoogleRefreshToken(email, tenantId)
-    if (!refreshToken) continue
+  // Deterministic order. The admin list arrives unordered from Postgres, so
+  // which credential a run picked varied between runs — and with it whether the
+  // run produced real numbers or a digest full of 403 notes. Sorting makes a
+  // failure reproducible instead of intermittent.
+  const ordered = [...candidateEmails].sort((a, b) => a.localeCompare(b))
 
-    const accessToken = await mintAccessToken(refreshToken)
-    if (accessToken) return { accessToken, email }
+  // Two passes: prefer a candidate whose recorded scopes cover the run, but fall
+  // back to any credential that mints rather than producing nothing. Granular
+  // consent means an admin can hold Drive but not Analytics, and minting
+  // succeeds either way — success carries no scope information at all, which is
+  // why the stored scope string has to be consulted.
+  for (const pass of ['scoped', 'any'] as const) {
+    for (const email of ordered) {
+      const stored = await getGoogleRefreshTokenRecord(email, tenantId)
+      if (!stored?.refreshToken) continue
 
-    console.warn(`[reports] stored token for ${email} did not mint; trying next candidate`)
+      if (pass === 'scoped' && requiredScopes.length && !coversScopes(stored.scope, requiredScopes)) {
+        continue
+      }
+
+      const accessToken = await mintAccessToken(stored.refreshToken)
+      if (accessToken) return { accessToken, email }
+
+      console.warn(`[reports] stored token for ${email} did not mint; trying next candidate`)
+    }
+    if (!requiredScopes.length) break
   }
   return null
+}
+
+/**
+ * Does a recorded grant cover every required scope?
+ *
+ * A NULL/absent scope string means "unknown, recorded before we captured it" —
+ * treated as covering, because refusing it would lock out every pre-existing
+ * grant. Exported for testing.
+ */
+export function coversScopes(scope: string | null | undefined, required: string[]): boolean {
+  if (!scope) return true
+  const granted = new Set(scope.split(/\s+/).filter(Boolean))
+  return required.every(s => granted.has(s))
 }

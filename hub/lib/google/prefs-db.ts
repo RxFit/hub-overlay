@@ -16,6 +16,7 @@ import { db } from '../db'
 import { googlePrefs, tenants } from '../schema'
 import { getTenantId } from '../tenant-context'
 import { resolvePrefs, type GooglePrefsValues } from './prefs'
+import { normalizeReports } from '../reports/config'
 
 async function ensureTenant(tenantId: string): Promise<void> {
   await db.insert(tenants).values({ id: tenantId, name: tenantId }).onConflictDoNothing()
@@ -30,6 +31,7 @@ export async function getStoredPrefs(tenantId = getTenantId()): Promise<GooglePr
     gscSiteUrl: row.gscSiteUrl ?? undefined,
     bigqueryProjectId: row.bigqueryProjectId ?? undefined,
     timezone: row.timezone ?? undefined,
+    reports: normalizeReports(row.reports),
   }
 }
 
@@ -46,33 +48,39 @@ export async function getEffectivePrefs(tenantId = getTenantId()): Promise<Googl
   }
 }
 
-/** Upsert a tenant's analytics configuration. Throws on failure. */
+/**
+ * Upsert a tenant's analytics configuration. Throws on failure.
+ *
+ * PARTIAL by key presence: only fields present on `values` are written, so a
+ * caller that edits analytics sources cannot blank the report schedule and a
+ * caller that edits the schedule cannot blank the analytics sources. The
+ * previous version wrote every column as `value ?? null` on every save, which
+ * made each partial UI post silently clear the fields it didn't mention.
+ * `normalizePrefsInput` is what decides presence.
+ */
 export async function savePrefs(
   values: GooglePrefsValues,
   updatedBy: string,
   tenantId = getTenantId(),
 ): Promise<GooglePrefsValues> {
   await ensureTenant(tenantId)
+
+  // Build the column set from present keys only. `undefined` on a present key
+  // is a deliberate clear (the admin emptied the field) and maps to null.
+  const columns: Record<string, unknown> = {}
+  if ('ga4PropertyId' in values) columns.ga4PropertyId = values.ga4PropertyId ?? null
+  if ('gscSiteUrl' in values) columns.gscSiteUrl = values.gscSiteUrl ?? null
+  if ('bigqueryProjectId' in values) columns.bigqueryProjectId = values.bigqueryProjectId ?? null
+  if ('timezone' in values) columns.timezone = values.timezone ?? null
+  if ('reports' in values) columns.reports = normalizeReports(values.reports)
+
   await db
     .insert(googlePrefs)
-    .values({
-      tenantId,
-      ga4PropertyId: values.ga4PropertyId ?? null,
-      gscSiteUrl: values.gscSiteUrl ?? null,
-      bigqueryProjectId: values.bigqueryProjectId ?? null,
-      timezone: values.timezone ?? null,
-      updatedBy,
-    })
+    .values({ tenantId, updatedBy, ...columns })
     .onConflictDoUpdate({
       target: googlePrefs.tenantId,
-      set: {
-        ga4PropertyId: values.ga4PropertyId ?? null,
-        gscSiteUrl: values.gscSiteUrl ?? null,
-        bigqueryProjectId: values.bigqueryProjectId ?? null,
-        timezone: values.timezone ?? null,
-        updatedBy,
-        updatedAt: new Date(),
-      },
+      set: { ...columns, updatedBy, updatedAt: new Date() },
     })
+
   return values
 }

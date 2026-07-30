@@ -72,6 +72,43 @@ export async function storeGoogleRefreshToken(
   }
 }
 
+export interface StoredGoogleToken {
+  refreshToken: string
+  /** Space-separated scopes the grant was issued with; null for grants recorded
+   *  before the column was populated. */
+  scope: string | null
+}
+
+/**
+ * Read the stored refresh token AND the scopes it was granted with.
+ *
+ * The scope column has been written since the table existed but read nowhere,
+ * which meant callers could not tell a fully-scoped credential from a partial
+ * one — and minting an access token succeeds either way, so success carries no
+ * scope information. Scheduled runs need this to avoid picking an admin who
+ * granted Drive but declined Analytics under granular consent.
+ *
+ * Never throws; returns null when absent or the DB is unreachable.
+ */
+export async function getGoogleRefreshTokenRecord(
+  email: string,
+  tenantId = getTenantId(),
+): Promise<StoredGoogleToken | null> {
+  const normalized = (email || '').toLowerCase().trim()
+  if (!normalized) return null
+  try {
+    const [row] = await db
+      .select({ refreshToken: googleOauthTokens.refreshToken, scope: googleOauthTokens.scope })
+      .from(googleOauthTokens)
+      .where(and(eq(googleOauthTokens.tenantId, tenantId), eq(googleOauthTokens.email, normalized)))
+      .limit(1)
+    return row?.refreshToken ? { refreshToken: row.refreshToken, scope: row.scope ?? null } : null
+  } catch (err) {
+    console.error('[google-token-store] record read failed (fail-open):', err)
+    return null
+  }
+}
+
 /**
  * Read the stored refresh token for a user, or null when there is none (or the
  * DB is unreachable). Never throws.

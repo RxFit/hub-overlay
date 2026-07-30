@@ -11,6 +11,9 @@ export interface GooglePrefsValues {
   gscSiteUrl?: string
   bigqueryProjectId?: string
   timezone?: string
+  /** Scheduled report configs. Typed loosely here so this module stays free of
+   *  the reports import; normalized via normalizeReports on the way in/out. */
+  reports?: unknown[]
 }
 
 export const EMPTY_GOOGLE_PREFS: GooglePrefsValues = {}
@@ -30,6 +33,7 @@ export function resolvePrefs(stored: GooglePrefsValues | null): GooglePrefsValue
     gscSiteUrl: stored?.gscSiteUrl || process.env.GSC_SITE_URL || undefined,
     bigqueryProjectId: stored?.bigqueryProjectId || undefined,
     timezone: stored?.timezone || undefined,
+    reports: stored?.reports ?? [],
   }
 }
 
@@ -44,11 +48,23 @@ export function normalizePrefsInput(input: unknown): GooglePrefsValues {
 
   const ga4 = str(raw.ga4PropertyId, 40)
 
-  return {
+  // Only include keys the caller actually SENT.
+  //
+  // Returning every key with `undefined` for the absent ones made the writer
+  // null them out: the settings UI posts just ga4PropertyId + gscSiteUrl, which
+  // wiped any stored timezone. The dangerous direction is the mirror image —
+  // once a reports editor posts only `reports`, the same shape would wipe the
+  // tenant's analytics sources. Presence, not value, decides what gets written.
+  const out: GooglePrefsValues = {}
+
+  if ('ga4PropertyId' in raw) {
     // GA4 property ids are numeric; callers sometimes paste "properties/123".
-    ga4PropertyId: ga4 ? ga4.replace(/^properties\//, '').replace(/\D/g, '') || undefined : undefined,
-    gscSiteUrl: str(raw.gscSiteUrl),
-    bigqueryProjectId: str(raw.bigqueryProjectId, 100),
-    timezone: str(raw.timezone, 64),
+    out.ga4PropertyId = ga4 ? ga4.replace(/^properties\//, '').replace(/\D/g, '') || undefined : undefined
   }
+  if ('gscSiteUrl' in raw) out.gscSiteUrl = str(raw.gscSiteUrl)
+  if ('bigqueryProjectId' in raw) out.bigqueryProjectId = str(raw.bigqueryProjectId, 100)
+  if ('timezone' in raw) out.timezone = str(raw.timezone, 64)
+  if ('reports' in raw) out.reports = Array.isArray(raw.reports) ? raw.reports : []
+
+  return out
 }

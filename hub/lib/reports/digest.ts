@@ -13,6 +13,7 @@
 
 import type { GA4ReportResult } from '../google/analytics'
 import type { GSCQueryResult } from '../google/search-console'
+import { normalizeDeckSpec, type DeckSpec } from '../google/deck-spec'
 
 export interface DigestInput {
   title: string
@@ -142,4 +143,85 @@ export function buildDigestMarkdown(input: DigestInput): string {
 
   lines.push('---', '', '_Generated automatically by the HUB Overlay._')
   return lines.join('\n')
+}
+
+/* ══════════════════════════════════════════
+   Business review deck
+   ══════════════════════════════════════════ */
+
+/**
+ * Build a deck outline from the same inputs as the markdown digest.
+ *
+ * `ReportKind` has always had a `business_review_deck` value, and both seeded
+ * defaults set one — but the runner only ever built a Doc, so the monthly
+ * "review deck" silently shipped as a second digest. Worse, when the 1st of the
+ * month fell on a Monday both defaults came due in the same hour and admins got
+ * two near-identical Docs. This is the missing branch.
+ *
+ * Pure, and deliberately expressed as a DeckSpec rather than as Slides requests:
+ * the compiler (lib/google/slides-compiler.ts) owns the API mechanics, so this
+ * only decides what goes on which slide.
+ */
+export function buildReviewDeckSpec(input: DigestInput): DeckSpec {
+  const slides: Record<string, unknown>[] = [
+    {
+      layout: 'TITLE',
+      title: input.title,
+      bullets: [`${input.startDate} to ${input.endDate}`],
+    },
+  ]
+
+  const current = totals(input.ga4)
+  const previous = totals(input.ga4Previous)
+
+  // One BIG_NUMBER slide per headline metric — the layout renders the figure
+  // large, which is the whole point of a review deck versus a table.
+  for (const [metric, value] of Object.entries(current)) {
+    slides.push({
+      layout: 'BIG_NUMBER',
+      title: metric,
+      bigNumber: fmt(value),
+      bullets: [`${formatDelta(value, previous[metric] ?? 0)} vs. previous period`],
+      speakerNotes: `${metric}: ${value} this period, ${previous[metric] ?? 0} previous.`,
+    })
+  }
+
+  if (input.gsc) {
+    const t = gscTotals(input.gsc)
+    slides.push({
+      layout: 'TITLE_AND_BODY',
+      title: 'Search performance',
+      bullets: [
+        `Clicks: ${fmt(t.clicks)}`,
+        `Impressions: ${fmt(t.impressions)}`,
+        `Average position: ${t.position.toFixed(1)}`,
+        ...(input.gsc.anonymizedDataWarning ? [input.gsc.anonymizedDataWarning] : []),
+      ],
+    })
+  }
+
+  const topRows = input.gscTopPages?.rows ?? []
+  if (topRows.length) {
+    slides.push({
+      layout: 'TITLE_AND_BODY',
+      title: 'Top pages by clicks',
+      // Bullets cap at 7 per slide in the spec; normalizeDeckSpec would truncate
+      // silently, so slice deliberately.
+      bullets: topRows.slice(0, 7).map(r => `${r.keys[0] ?? '—'} — ${fmt(r.clicks)} clicks`),
+    })
+  }
+
+  if (input.notes?.length) {
+    slides.push({ layout: 'TITLE_AND_BODY', title: 'Notes', bullets: input.notes.slice(0, 7) })
+  }
+
+  if (slides.length === 1) {
+    slides.push({
+      layout: 'TITLE_AND_BODY',
+      title: 'No data available',
+      bullets: ['An admin can choose a GA4 property and Search Console site in Settings → Analytics Sources.'],
+    })
+  }
+
+  return normalizeDeckSpec({ title: input.title, slides })
 }
