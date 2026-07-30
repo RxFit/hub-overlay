@@ -27,6 +27,7 @@ import { runGA4Report, reportToSheetRows } from '../google/analytics'
 import { querySearchConsole, GSC_DIMENSIONS, resultToSheetRows, type GSCDimension } from '../google/search-console'
 import { fenceUntrusted } from '../prompt-safety'
 import { searchDriveWithContents, searchChatHistory } from './workspace-search'
+import { queryFreeBusy } from '../google/calendar'
 import type { ChatSpacePreferences } from '../chat-spaces'
 
 /** Tool groups keep each request's advertised tool set small — model providers
@@ -379,10 +380,91 @@ const searchChatTool: ReadTool = {
 }
 
 /* ══════════════════════════════════════════
+   calendar_freebusy
+   ══════════════════════════════════════════ */
+
+const FreeBusyArgs = z.object({
+  timeMin: z.string().min(10).max(40),
+  timeMax: z.string().min(10).max(40),
+  calendarIds: z.array(z.string().min(1).max(200)).max(20).optional(),
+})
+
+/**
+ * Availability lookups.
+ *
+ * `queryFreeBusy` shipped with the Calendar work but nothing consumed it, so
+ * "when am I free Thursday?" still had no path — the assistant's only calendar
+ * awareness was the event-title summary in the Workspace context block, which
+ * cannot answer a gap question. This closes that.
+ *
+ * Read-only by construction like the rest of the group: freeBusy returns busy
+ * intervals and cannot mutate a calendar.
+ */
+const freeBusyTool: ReadTool = {
+  name: 'calendar_freebusy',
+  description:
+    "Look up when the user is BUSY on their calendars over a time range, to answer availability " +
+    'questions ("when am I free Thursday?", "do I have time before the 2pm?"). Returns busy ' +
+    'intervals merged across calendars — free time is the gaps between them. Times are RFC 3339 ' +
+    'instants (e.g. "2026-07-30T09:00:00Z"). Prefer a range of a few days at most.',
+  group: 'workspace',
+  minRole: 'staff',
+  schema: FreeBusyArgs,
+  parameters: {
+    type: 'object',
+    properties: {
+      timeMin: { type: 'string', description: 'Start of the range, RFC 3339' },
+      timeMax: { type: 'string', description: 'End of the range, RFC 3339' },
+      calendarIds: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Calendar ids to check; omit for the primary calendar',
+      },
+    },
+    required: ['timeMin', 'timeMax'],
+  },
+
+  async execute(rawArgs, ctx) {
+    const args = FreeBusyArgs.parse(rawArgs)
+    const result = await queryFreeBusy(ctx.accessToken, {
+      timeMin: args.timeMin,
+      timeMax: args.timeMax,
+      calendarIds: args.calendarIds,
+    })
+
+    if (!result.merged.length) {
+      // Genuinely-clear is a real answer, and a distinct one from "the lookup
+      // failed" — say so plainly so the model does not hedge.
+      return {
+        summary: `No busy time found between ${args.timeMin} and ${args.timeMax} — the calendar is clear.`,
+        fenced: '',
+        note: 'NO_RESULTS',
+      }
+    }
+
+    return {
+      summary: `Calendar busy blocks between ${args.timeMin} and ${args.timeMax}: ${result.merged.length}`,
+      // Busy blocks come from invitations other people created, and the merged
+      // set is derived from their data.
+      fenced: fenceUntrusted(
+        'Calendar free/busy',
+        JSON.stringify({ range: [args.timeMin, args.timeMax], busy: result.merged }),
+      ),
+    }
+  },
+}
+
+/* ══════════════════════════════════════════
    Registry
    ══════════════════════════════════════════ */
 
-export const READ_TOOLS: readonly ReadTool[] = [ga4Tool, gscTool, searchDriveTool, searchChatTool]
+export const READ_TOOLS: readonly ReadTool[] = [
+  ga4Tool,
+  gscTool,
+  searchDriveTool,
+  searchChatTool,
+  freeBusyTool,
+]
 
 export function getTool(name: string): ReadTool | undefined {
   return READ_TOOLS.find(t => t.name === name)
