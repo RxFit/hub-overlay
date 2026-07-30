@@ -8462,6 +8462,101 @@ a:hover .rx-arrow {
   color: var(--text-muted);
 }
 
+/* Scheduled report cards — one editable row per configured report. */
+.settings-reports-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.settings-report-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.settings-report-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.settings-report-card__title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-report-card__kind {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* The line an admin actually reads to confirm the schedule is right. */
+.settings-report-card__schedule {
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+}
+
+/* Auto-fit so the row reflows to one column on a phone without a media query. */
+.settings-report-card__fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-3);
+}
+
+.settings-report-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-report-field--wide {
+  grid-column: 1 / -1;
+}
+
+.settings-report-field > span {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.settings-report-field select,
+.settings-report-field input {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  /* 16px minimum on the text input stops iOS Safari zooming the page on focus. */
+  min-height: 40px;
+}
+
+.settings-report-field select:focus-visible,
+.settings-report-field input:focus-visible {
+  outline: none;
+  border-color: var(--border-accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.settings-report-card__foot {
+  display: flex;
+  justify-content: flex-end;
+}
+
 /* Inline save failure under a settings section */
 .settings-error {
   margin: var(--space-2) 0 0 0;
