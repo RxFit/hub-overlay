@@ -315,6 +315,17 @@ export const GoogleGmailSendSchema = z.object({
   message: z.string().min(1).max(1_000_000),
   threadId: z.string().max(256).optional(),
   inReplyTo: z.string().max(998).optional(),
+  /**
+   * 'draft' creates a Gmail draft and returns its id WITHOUT sending;
+   * 'send' (the default, so existing callers are unaffected) delivers it.
+   * See app/api/google/gmail/route.ts for why the AI path uses both.
+   */
+  mode: z.enum(['send', 'draft']).optional(),
+})
+
+/** Send an ALREADY-CREATED draft, by id. */
+export const GoogleGmailSendDraftSchema = z.object({
+  draftId: z.string().trim().min(1).max(256),
 })
 
 export const GoogleGmailActionSchema = z.object({

@@ -49,8 +49,17 @@ afterEach(() => {
 /* ── send_gmail ── */
 
 describe('executeAction: send_gmail', () => {
-  it('POSTs to /api/google/gmail with to/subject/message and reports success', async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse({ sent: true, messageId: 'm1' }))
+  /**
+   * Drafts-first (§6.1): a send is TWO calls — create the draft, then send it.
+   * The second call is what delivers; the first exists so a failed delivery
+   * leaves the composed email recoverable in Gmail instead of losing it.
+   */
+  const draftOk = () => jsonResponse({ sent: false, draftId: 'd1', to: 'maria@rxfitatx.com' })
+
+  it('creates a draft, then sends it, and reports success', async () => {
+    fetchMock
+      .mockResolvedValueOnce(draftOk())
+      .mockResolvedValueOnce(jsonResponse({ sent: true, messageId: 'm1' }))
 
     const result = await executeAction(
       specFor('send_gmail', {
@@ -61,34 +70,47 @@ describe('executeAction: send_gmail', () => {
       deps
     )
 
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('/api/google/gmail')
-    expect(init.method).toBe('POST')
-    expect(JSON.parse(init.body)).toEqual({
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+
+    const [draftUrl, draftInit] = fetchMock.mock.calls[0]
+    expect(draftUrl).toBe('/api/google/gmail')
+    expect(JSON.parse(draftInit.body)).toEqual({
       to: 'maria@rxfitatx.com',
       subject: 'Invoice',
       message: 'The invoice is paid',
+      mode: 'draft',
     })
+
+    // The delivering call references the draft — it does not re-send the body,
+    // which would risk sending something other than what was drafted.
+    const [sendUrl, sendInit] = fetchMock.mock.calls[1]
+    expect(sendUrl).toBe('/api/google/gmail')
+    expect(JSON.parse(sendInit.body)).toEqual({ draftId: 'd1' })
+
     expect(result).toContain('Email sent')
     expect(result).toContain('maria@rxfitatx.com')
     expect(result).toContain('Invoice')
   })
 
-  it('attaches X-Gate-Token and X-AI-Intent headers to the send POST (P0-2)', async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse({ sent: true }))
+  it('attaches X-Gate-Token and X-AI-Intent headers to BOTH calls (P0-2)', async () => {
+    fetchMock
+      .mockResolvedValueOnce(draftOk())
+      .mockResolvedValueOnce(jsonResponse({ sent: true }))
 
     await executeAction(
       specFor('send_gmail', { to: 'maria@rxfitatx.com', subject: 'x', body: 'y' }, GATE_TOKEN),
       deps
     )
 
-    const [, init] = fetchMock.mock.calls[0]
-    expect(init.headers).toEqual({
+    const expected = {
       'Content-Type': 'application/json',
       'X-Gate-Token': GATE_TOKEN,
       'X-AI-Intent': 'send_gmail',
-    })
+    }
+    // The send half is the side-effecting one; an ungated second call would
+    // reopen exactly the hole the gate closes.
+    expect(fetchMock.mock.calls[0][1].headers).toEqual(expected)
+    expect(fetchMock.mock.calls[1][1].headers).toEqual(expected)
   })
 
   it('throws without fetching when the quality-gate token is missing (fail fast)', async () => {
@@ -102,7 +124,9 @@ describe('executeAction: send_gmail', () => {
   })
 
   it('defaults the subject and falls back to details for the body', async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse({ sent: true }))
+    fetchMock
+      .mockResolvedValueOnce(draftOk())
+      .mockResolvedValueOnce(jsonResponse({ sent: true }))
 
     await executeAction(
       specFor('send_gmail', {
@@ -112,16 +136,18 @@ describe('executeAction: send_gmail', () => {
       deps
     )
 
-    const [, init] = fetchMock.mock.calls[0]
-    expect(JSON.parse(init.body)).toEqual({
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
       to: 'maria@rxfitatx.com',
       subject: '(no subject)',
       message: 'Free-text collected answer',
+      mode: 'draft',
     })
   })
 
   it('folds a real additionalContext (lightweight flow) into the email body', async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse({ sent: true }))
+    fetchMock
+      .mockResolvedValueOnce(draftOk())
+      .mockResolvedValueOnce(jsonResponse({ sent: true }))
 
     await executeAction(
       specFor('send_gmail', {
@@ -133,12 +159,14 @@ describe('executeAction: send_gmail', () => {
       deps
     )
 
-    const [, init] = fetchMock.mock.calls[0]
-    expect(JSON.parse(init.body).message).toBe('The invoice is paid\n\nCC the CFO and keep it formal')
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).message)
+      .toBe('The invoice is paid\n\nCC the CFO and keep it formal')
   })
 
   it('uses additionalContext as the body when no body/details were extracted', async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse({ sent: true }))
+    fetchMock
+      .mockResolvedValueOnce(draftOk())
+      .mockResolvedValueOnce(jsonResponse({ sent: true }))
 
     await executeAction(
       specFor('send_gmail', {
@@ -148,11 +176,11 @@ describe('executeAction: send_gmail', () => {
       deps
     )
 
-    const [, init] = fetchMock.mock.calls[0]
-    expect(JSON.parse(init.body).message).toBe('Let the team know the demo moved to 3pm')
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).message)
+      .toBe('Let the team know the demo moved to 3pm')
   })
 
-  it('throws with the status when the send fails', async () => {
+  it('throws with the status when the DRAFT step fails, without attempting a send', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ error: 'nope' }, false, 500))
 
     await expect(
@@ -160,7 +188,39 @@ describe('executeAction: send_gmail', () => {
         specFor('send_gmail', { to: 'maria@rxfitatx.com', subject: 'x', body: 'y' }, GATE_TOKEN),
         deps
       )
-    ).rejects.toThrow('Email send failed: 500')
+    ).rejects.toThrow('Email draft failed: 500')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("surfaces the server's message when the SEND step fails, so the user is told the draft survived", async () => {
+    fetchMock
+      .mockResolvedValueOnce(draftOk())
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { error: 'Could not send the email. It is saved in your Gmail drafts — nothing was lost. (Gmail API 503)' },
+          false,
+          502,
+        ),
+      )
+
+    await expect(
+      executeAction(
+        specFor('send_gmail', { to: 'maria@rxfitatx.com', subject: 'x', body: 'y' }, GATE_TOKEN),
+        deps
+      )
+    ).rejects.toThrow(/saved in your Gmail drafts/)
+  })
+
+  it('throws when the draft call returns no id rather than sending nothing', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ sent: false }))
+
+    await expect(
+      executeAction(
+        specFor('send_gmail', { to: 'maria@rxfitatx.com', subject: 'x', body: 'y' }, GATE_TOKEN),
+        deps
+      )
+    ).rejects.toThrow('Gmail did not return a draft id')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
 
