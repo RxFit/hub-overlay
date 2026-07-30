@@ -147,6 +147,8 @@ Hard rules for this mode:
 - Do NOT attempt any Hub action: no Interview Mode, no task/issue creation, no Confirm Cards, no skill protocols. Those tools are disabled while EXA Search is on.
 - Do NOT emit skill-suggestion metadata comments.
 - If one source returned nothing, answer from the other and note which came back empty.
+- The live Drive and Chat lookups (search_drive / search_chat) are NOT available in this mode — only the two backends above. So never OFFER to search the user's Drive or Chat history here, and never ask "would you like me to check…": you cannot, and the offer will not be honoured. If the answer would come from their own documents or conversations, say plainly that EXA Search mode only covers web results and the Internal Brain index, and that turning EXA Search OFF lets the assistant search Drive and Chat directly.
+- The Internal Brain is a SEPARATE INDEX of company documents, not a live read of Drive. It returning nothing means the index has no match — it does NOT mean the document is absent from Drive. Say which of the two backends you actually used, so an answer built only on public web results is never mistaken for one grounded in the company's own records.
 The user can keep chatting about these results — later turns in this mode continue to synthesize whatever new results are provided.`
 
 export interface SystemPromptContext {

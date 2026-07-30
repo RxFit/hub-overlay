@@ -18,6 +18,7 @@
  */
 
 import { geminiGenerateText } from '../gemini'
+import { claudeChat, isClaudeConfigured } from '../claude'
 import { toFunctionDeclarations, type ReadTool } from './registry'
 import type { ToolCall } from './execute'
 
@@ -139,10 +140,47 @@ export async function planToolCalls(
   ].join('\n\n')
 
   try {
-    const { text } = await geminiGenerateText(system, message)
-    return parsePlan(text)
+    return parsePlan(await planWithFallback(system, message))
   } catch (err) {
     console.warn('[ai-tools] tool planning failed; answering without live data:', err)
     return []
+  }
+}
+
+/**
+ * Run the planner against Gemini, falling back to Claude.
+ *
+ * WHY THIS EXISTS — this was a real, user-visible failure. Planning ran on
+ * Gemini ONLY. The chat stream has cross-provider failover (it rotates to
+ * Claude and says so with a "Primary model unavailable" banner), but planning
+ * did not: when the Gemini chain was down or in cooldown, `geminiGenerateText`
+ * threw, planning returned no calls, and every read tool silently vanished.
+ *
+ * The user saw the assistant answer a "who is our account manager at Nuvita?"
+ * question from a web search and then OFFER to check Drive and Chat — with the
+ * fallback banner sitting at the top of the very same reply. Tools disappeared
+ * at precisely the moment the banner announced why, which is the worst possible
+ * time: a degraded primary model is when grounded data matters most.
+ *
+ * Claude is the same provider the stream itself falls back to, so this adds no
+ * new dependency — it just gives planning the failover the answer already had.
+ */
+async function planWithFallback(system: string, message: string): Promise<string> {
+  try {
+    const { text } = await geminiGenerateText(system, message)
+    return text
+  } catch (geminiErr) {
+    if (!isClaudeConfigured()) throw geminiErr
+    console.warn('[ai-tools] Gemini planning unavailable — falling back to Claude:', geminiErr)
+    // Haiku is the default and is the right tier here: emitting a small JSON
+    // object from an explicit tool list is not a reasoning-heavy task, and the
+    // executor validates everything it proposes anyway.
+    return claudeChat(
+      // id/timestamp are part of the Hub's ChatMessage shape but carry no
+      // meaning for a one-shot planning call; they are filled to satisfy it.
+      [{ id: 'planner', role: 'user', content: message, timestamp: '' }],
+      system,
+      { maxTokens: 1024 },
+    )
   }
 }
