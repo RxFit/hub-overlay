@@ -9,8 +9,8 @@ import {
   type GmailThread,
 } from '@/lib/google'
 import { clampInt } from '@/lib/num'
-import { extractEmail } from '@/lib/email-address'
-import { GoogleGmailSendSchema } from '@/lib/zod-schemas'
+import { GoogleGmailSendSchema, GoogleGmailSendDraftSchema } from '@/lib/zod-schemas'
+import { encodeMimeMessage, parseRecipientList, stripHeader } from '@/lib/gmail-mime'
 import { requireAiGate, AI_INTENT_HEADER, GATE_TOKEN_HEADER } from '@/lib/requireGate'
 import { recordAiAction } from '@/lib/ai-audit'
 import { checkActionLimit } from '@/lib/rate-limit'
@@ -116,6 +116,68 @@ export async function GET(req: NextRequest) {
   }
 }
 
+/**
+ * Deliver a draft created by an earlier `mode: 'draft'` call.
+ *
+ * This is where the send actually happens, so this is where the audit row and
+ * the rate limit belong — creating a draft delivers nothing and is neither.
+ *
+ * On failure the draft is left in place ON PURPOSE. That is the whole point of
+ * drafts-first: a delivery that fails leaves recoverable content in the user's
+ * Gmail rather than losing what the assistant composed. The error says so, so
+ * the user is told where to find it instead of being asked to start over.
+ */
+async function sendExistingDraft(
+  req: NextRequest,
+  draftId: string,
+  accessToken: string,
+  userEmail: string,
+): Promise<NextResponse> {
+  const aiIntent = req.headers.get(AI_INTENT_HEADER)
+  const isAiAction = aiIntent !== null
+  const auditBase = {
+    userEmail: userEmail || null,
+    actor: 'ai' as const,
+    actionType: 'gmail_send' as const,
+    target: { draftId },
+    intent: aiIntent,
+    gateToken: req.headers.get(GATE_TOKEN_HEADER),
+    requestId: newRequestId(),
+  }
+
+  if (isAiAction) {
+    const limit = checkActionLimit(userEmail, 'gmail_send')
+    if (!limit.allowed) {
+      await recordAiAction({ ...auditBase, status: 'failed', error: 'rate_limited' })
+      return NextResponse.json(
+        { error: 'Rate limit exceeded for gmail_send. Please try again shortly.' },
+        { status: 429, headers: { 'Retry-After': String(limit.retryAfterSec ?? 60) } },
+      )
+    }
+  }
+
+  try {
+    const sent = await gmailPost<{ id: string; threadId: string }>(
+      '/drafts/send',
+      accessToken,
+      { id: draftId },
+    )
+    if (isAiAction) await recordAiAction({ ...auditBase, status: 'success' })
+    return NextResponse.json({ sent: true, messageId: sent.id, threadId: sent.threadId })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'unknown error'
+    if (isAiAction) await recordAiAction({ ...auditBase, status: 'failed', error: message })
+    if (message.includes('401') || message.includes('403')) return googleApiErrorResponse(err)
+    return NextResponse.json(
+      {
+        error: `Could not send the email. It is saved in your Gmail drafts — nothing was lost. (${message})`,
+        draftId,
+      },
+      { status: 502 },
+    )
+  }
+}
+
 /* ── POST /api/google/gmail — send or reply ── */
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions)
@@ -139,6 +201,17 @@ export async function POST(req: NextRequest) {
   } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
+
+  // ── Phase 2 of drafts-first: send a draft that already exists ──
+  // Checked before the compose schema because the two bodies are disjoint —
+  // this one carries a draftId and no recipient. It is the side-effecting half,
+  // so it carries the SAME gate (already applied above), rate limit and audit
+  // row that a direct send does.
+  const draftSend = GoogleGmailSendDraftSchema.safeParse(bodyJson)
+  if (draftSend.success) {
+    return sendExistingDraft(req, draftSend.data.draftId, accessToken, session.user.email ?? '')
+  }
+
   const parsed = GoogleGmailSendSchema.safeParse(bodyJson)
   if (!parsed.success) {
     return NextResponse.json(
@@ -146,25 +219,17 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     )
   }
-  const { to, subject, message, threadId, inReplyTo } = parsed.data
+  const { to, subject, message, threadId, inReplyTo, mode = 'send' } = parsed.data
 
-  // ── Header-injection guard ──
-  // Any value interpolated into an RFC-2822 header line must not contain
-  // CR/LF, or an attacker could inject extra headers (e.g. a silent Bcc).
-  const stripHeader = (v: unknown): string => String(v ?? '').replace(/[\r\n]+/g, ' ').trim()
-  const cleanInReplyTo = inReplyTo ? stripHeader(inReplyTo) : ''
-
-  // Validate every recipient address (comma-separated list supported).
-  // Extract the bare address first so bare addresses and simple `Name <addr>`
-  // forms are normalized before validation. Quoted display names containing a
-  // comma (`"Lopez, Maria" <m@x.com>`) are split apart here and rejected —
-  // not supported at the route layer, which fails closed.
-  const EMAIL_RE = /^[^\s@,<>]+@[^\s@,<>]+\.[^\s@,<>]+$/
-  const recipients = stripHeader(to).split(',').map(r => extractEmail(r)).filter(Boolean)
-  if (recipients.length === 0 || !recipients.every(r => EMAIL_RE.test(r))) {
+  // ── Header-injection guard + recipient validation ──
+  // Both now live in lib/gmail-mime.ts, shared with the draft path so the two
+  // cannot drift, and unit-tested there (this logic is security-relevant and
+  // previously had no direct tests).
+  const parsedRecipients = parseRecipientList(to)
+  if (!parsedRecipients.ok) {
     return NextResponse.json({ error: 'Invalid recipient address' }, { status: 400 })
   }
-  const cleanTo = recipients.join(', ')
+  const cleanTo = parsedRecipients.value
 
   const from = session.user.email ?? ''
   // Deliberately does NOT derive a subject from `inReplyTo` — that is a
@@ -199,25 +264,42 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Build RFC 2822 email
-  const emailLines = [
-    `From: ${from}`,
-    `To: ${cleanTo}`,
-    `Subject: ${subjectLine}`,
-    ...(cleanInReplyTo ? [`In-Reply-To: ${cleanInReplyTo}`, `References: ${cleanInReplyTo}`] : []),
-    'Content-Type: text/plain; charset=UTF-8',
-    '',
-    message,
-  ]
-  const raw = Buffer.from(emailLines.join('\r\n'))
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '')
+  const raw = encodeMimeMessage({
+    from,
+    to: cleanTo,
+    subject: subjectLine,
+    inReplyTo,
+    body: message,
+  })
 
   try {
     const payload: Record<string, string> = { raw }
     if (threadId) payload.threadId = threadId
+
+    // ── Draft mode: create, don't send ──
+    //
+    // §6.1 "drafts-first". The value is in the failure case: a composed email
+    // that fails at the delivery step is otherwise lost entirely, and the user
+    // has to ask the assistant to write it again. Created as a draft, it is
+    // sitting in Gmail regardless of what happens next.
+    //
+    // Deliberately NOT audited as a send and NOT rate-limited as one — creating
+    // a draft delivers nothing to anybody. The subsequent send is the
+    // side-effecting act, and that is where both apply.
+    if (mode === 'draft') {
+      const draft = await gmailPost<{ id: string; message?: { id: string; threadId: string } }>(
+        '/drafts',
+        accessToken,
+        { message: payload },
+      )
+      return NextResponse.json({
+        sent: false,
+        draftId: draft.id,
+        threadId: draft.message?.threadId,
+        to: cleanTo,
+        subject: subjectLine,
+      })
+    }
 
     const sent = await gmailPost<{ id: string; threadId: string }>('/messages/send', accessToken, payload)
 

@@ -452,12 +452,35 @@ export async function executeAction(
         throw new Error(`I couldn't resolve "${spec.details.to}" to an email address. Edit the action and give me the address directly.`)
       }
 
-      const res = await fetch('/api/google/gmail', {
+      // ── Drafts-first (§6.1) ──
+      // Create the message as a Gmail draft, THEN send that draft. Two calls
+      // instead of one, for one reason: if delivery fails, the composed email
+      // is sitting in the user's Gmail drafts rather than gone. Previously a
+      // failed send lost the body entirely and the only recovery was asking
+      // the assistant to write it again — and the second draft is never quite
+      // the one that was approved.
+      const draftRes = await fetch('/api/google/gmail', {
         method: 'POST',
         headers: gmailHeaders,
-        body: JSON.stringify({ to, subject, message: body }),
+        body: JSON.stringify({ to, subject, message: body, mode: 'draft' }),
       })
-      if (!res.ok) throw new Error(`Email send failed: ${res.status}`)
+      if (!draftRes.ok) throw new Error(`Email draft failed: ${draftRes.status}`)
+      const { draftId } = (await draftRes.json()) as { draftId?: string }
+      if (!draftId) throw new Error('Gmail did not return a draft id')
+
+      const sendRes = await fetch('/api/google/gmail', {
+        method: 'POST',
+        headers: gmailHeaders,
+        body: JSON.stringify({ draftId }),
+      })
+      if (!sendRes.ok) {
+        // Surface the server's message, which names the surviving draft.
+        const errBody = await sendRes.json().catch(() => ({} as { error?: string }))
+        throw new Error(
+          errBody?.error ??
+            `Email send failed (${sendRes.status}) — the draft is saved in your Gmail drafts.`,
+        )
+      }
       resultMsg = `✉️ **Email sent** to ${to} — "${subject}".`
       break
     }
