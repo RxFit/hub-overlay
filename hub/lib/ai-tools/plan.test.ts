@@ -6,7 +6,13 @@ vi.mock('../gemini', () => ({
   geminiGenerateText: vi.fn(),
 }))
 
+vi.mock('../claude', () => ({
+  claudeChat: vi.fn(),
+  isClaudeConfigured: vi.fn(() => true),
+}))
+
 import { geminiGenerateText } from '../gemini'
+import { claudeChat, isClaudeConfigured } from '../claude'
 
 afterEach(() => {
   vi.clearAllMocks()
@@ -116,5 +122,54 @@ describe('planToolCalls', () => {
     const calls = await planToolCalls('how is our traffic?', READ_TOOLS)
 
     expect(calls).toEqual([])
+  })
+})
+
+/**
+ * Cross-provider failover for PLANNING.
+ *
+ * The regression this guards: planning ran on Gemini only, so whenever the
+ * Gemini chain was down or cooling, every read tool silently vanished. The user
+ * saw the assistant answer a Drive/Chat question from a web search and then
+ * offer to check Drive and Chat — with the "Primary model unavailable" banner
+ * at the top of the same reply. Tools went missing at exactly the moment the
+ * banner explained why.
+ */
+describe('planner provider failover', () => {
+  const tools = READ_TOOLS.filter(t => t.group === 'workspace')
+  const QUESTION = 'who is our account manager at Nuvita?'
+  const PLAN = '{"calls":[{"name":"search_chat","args":{"query":"account manager","space":"Nuvita"}}]}'
+
+  it('falls back to Claude when the Gemini chain is unavailable', async () => {
+    vi.mocked(geminiGenerateText).mockRejectedValue(new Error('All Gemini models failed or cooling down'))
+    vi.mocked(claudeChat).mockResolvedValue(PLAN)
+
+    const calls = await planToolCalls(QUESTION, tools)
+
+    expect(claudeChat).toHaveBeenCalled()
+    expect(calls).toEqual([{ name: 'search_chat', args: { query: 'account manager', space: 'Nuvita' } }])
+  })
+
+  it('does not call Claude when Gemini succeeds', async () => {
+    vi.mocked(geminiGenerateText).mockResolvedValue({ text: PLAN, model: 'gemini' })
+
+    await planToolCalls(QUESTION, tools)
+
+    expect(claudeChat).not.toHaveBeenCalled()
+  })
+
+  it('degrades to no tools — never throws — when BOTH providers fail', async () => {
+    vi.mocked(geminiGenerateText).mockRejectedValue(new Error('gemini down'))
+    vi.mocked(claudeChat).mockRejectedValue(new Error('claude down'))
+
+    await expect(planToolCalls(QUESTION, tools)).resolves.toEqual([])
+  })
+
+  it('skips the fallback when Claude is not configured', async () => {
+    vi.mocked(geminiGenerateText).mockRejectedValue(new Error('gemini down'))
+    vi.mocked(isClaudeConfigured).mockReturnValue(false)
+
+    await expect(planToolCalls(QUESTION, tools)).resolves.toEqual([])
+    expect(claudeChat).not.toHaveBeenCalled()
   })
 })
