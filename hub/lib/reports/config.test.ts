@@ -258,3 +258,40 @@ describe('reportWindow — tenant-local anchoring (regression)', () => {
     })
   })
 })
+
+describe('normalizeReports — settings-editor round trip', () => {
+  it('survives a whole-list save/reload without drifting', () => {
+    // The editor PUTs the entire list and renders whatever comes back, so
+    // normalize must be idempotent or the form would visibly change after save.
+    const edited = [
+      { id: 'weekly-digest', kind: 'ga4_gsc_digest', cadence: 'weekly', day: 'fri', hourLocal: 16,
+        delivery: { email: ['admins'] }, enabled: true },
+      { id: 'monthly-review', kind: 'business_review_deck', cadence: 'monthly', day: 1, hourLocal: 9,
+        delivery: { email: [] }, enabled: false },
+    ]
+    const once = normalizeReports(edited)
+    expect(normalizeReports(once)).toEqual(once)
+    expect(once[0]).toMatchObject({ cadence: 'weekly', day: 'fri', hourLocal: 16 })
+    expect(once[1].enabled).toBe(false)
+  })
+
+  it('repairs a cadence switch that left a stale day value', () => {
+    // Switching weekly -> monthly in the UI could carry a weekday across; the
+    // server must not store 'mon' as a day-of-month.
+    const out = normalizeReports([
+      { id: 'x', kind: 'ga4_gsc_digest', cadence: 'monthly', day: 'mon', hourLocal: 7, delivery: { email: [] } },
+    ])
+    expect(out[0].day).toBe(1)
+  })
+
+  it('accepts an empty delivery list as Drive-only', () => {
+    const out = normalizeReports([
+      { id: 'x', kind: 'ga4_gsc_digest', cadence: 'weekly', delivery: { email: [] } },
+    ])
+    expect(out[0].delivery.email).toEqual([])
+  })
+
+  it('preserves both seeded defaults through a reset-then-save', () => {
+    expect(normalizeReports(DEFAULT_REPORTS)).toEqual(DEFAULT_REPORTS)
+  })
+})

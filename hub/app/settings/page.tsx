@@ -7,6 +7,7 @@ import Link from 'next/link'
 import { InfoPopover } from '@/app/components/InfoPopover'
 import { ChatSpacesSettings } from '@/app/settings/components/ChatSpacesSettings'
 import { AnalyticsSettings } from '@/app/settings/components/AnalyticsSettings'
+import { ReportScheduleSettings } from '@/app/settings/components/ReportScheduleSettings'
 import { FocusPreferencesSettings } from '@/app/settings/components/FocusPreferencesSettings'
 import { useCompanies } from '@/app/hooks/useCompanies'
 import type { Company } from '@/types'
@@ -1489,6 +1490,10 @@ export default function SettingsPage() {
       {/* ── Analytics sources (GA4 property + GSC site) — admin only; the
              component hides itself when the API answers 403 for staff ── */}
       <AnalyticsSettings />
+
+      {/* ── Scheduled report cadence + delivery — admin only; hides itself
+             when the prefs API answers 403 for staff ── */}
+      <ReportScheduleSettings />
 
       {/* ── Email Focus Priorities (VIP list + goals) — every user ── */}
       <FocusPreferencesSettings />

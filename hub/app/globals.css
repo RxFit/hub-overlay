@@ -9651,3 +9651,21 @@ details[open] > .settings-collapsible__trigger .settings-collapsible__arrow {
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
   animation: gmailSheetFade 0.2s ease-out;
 }
+
+/* Scheduled-report rows (cadence + delivery editor) */
+.settings-report-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.settings-report-row__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
