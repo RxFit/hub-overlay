@@ -28,6 +28,8 @@ import { querySearchConsole, GSC_DIMENSIONS, resultToSheetRows, type GSCDimensio
 import { fenceUntrusted } from '../prompt-safety'
 import { searchDriveWithContents, searchChatHistory } from './workspace-search'
 import { queryFreeBusy } from '../google/calendar'
+import { listFileAccess, describeAccessEntry } from '../google/sharing'
+import { searchDriveFiles } from '../google'
 import type { ChatSpacePreferences } from '../chat-spaces'
 
 /** Tool groups keep each request's advertised tool set small — model providers
@@ -455,6 +457,80 @@ const freeBusyTool: ReadTool = {
 }
 
 /* ══════════════════════════════════════════
+   file_access
+   ══════════════════════════════════════════ */
+
+const FileAccessArgs = z.object({
+  file: z.string().min(2).max(200),
+})
+
+/**
+ * "Who can see this document?"
+ *
+ * The read half of Drive sharing. It belongs in THIS registry rather than
+ * alongside the share write path because listing permissions cannot mutate
+ * anything — and because `permissions.list` accepts `drive.readonly`, it works
+ * on any file the user can see, not just the Hub-created ones the Hub is able
+ * to re-share. So the assistant can always answer "who has access?", even where
+ * it would have to answer "I can't change that" to the follow-up.
+ */
+const fileAccessTool: ReadTool = {
+  name: 'list_file_access',
+  description:
+    'Look up WHO currently has access to a Google Drive file, and at what level (viewer / ' +
+    'commenter / editor / owner). Use for questions about sharing, permissions or visibility — ' +
+    '"who can see the Q3 memo?", "is the pricing sheet shared with anyone outside the company?", ' +
+    '"is that deck public?". Pass distinctive words from the file name.',
+  group: 'workspace',
+  minRole: 'staff',
+  schema: FileAccessArgs,
+  parameters: {
+    type: 'object',
+    properties: {
+      file: { type: 'string', description: 'Part of the file name, e.g. "Q3 decision memo"' },
+    },
+    required: ['file'],
+  },
+
+  async execute(rawArgs, ctx) {
+    const args = FileAccessArgs.parse(rawArgs)
+    const files = await searchDriveFiles(ctx.accessToken, args.file, { maxResults: 5 })
+
+    if (files.length === 0) {
+      return {
+        summary: `No Drive file matched "${args.file}".`,
+        fenced: '',
+        note: 'NO_RESULTS',
+      }
+    }
+
+    // Exact-name match wins over the top full-text hit: a search for "Pricing"
+    // ranks by relevance, which is not the same as "the file actually called
+    // Pricing" the user meant.
+    const wanted = args.file.trim().toLowerCase()
+    const file = files.find(f => f.name?.toLowerCase().trim() === wanted) ?? files[0]
+
+    const access = await listFileAccess(ctx.accessToken, file.id)
+    const others = files.filter(f => f.id !== file.id).map(f => f.name)
+
+    return {
+      summary: `Access on "${file.name}" — ${access.length} grant(s)`,
+      // Permission entries carry other people's names and email addresses:
+      // third-party data landing verbatim in the model's context, fenced like
+      // every other external payload.
+      fenced: fenceUntrusted(
+        'Google Drive file access',
+        JSON.stringify({
+          file: { id: file.id, name: file.name, webViewLink: file.webViewLink },
+          access: access.map(describeAccessEntry),
+          ...(others.length ? { otherMatches: others } : {}),
+        }),
+      ),
+    }
+  },
+}
+
+/* ══════════════════════════════════════════
    Registry
    ══════════════════════════════════════════ */
 
@@ -464,6 +540,7 @@ export const READ_TOOLS: readonly ReadTool[] = [
   searchDriveTool,
   searchChatTool,
   freeBusyTool,
+  fileAccessTool,
 ]
 
 export function getTool(name: string): ReadTool | undefined {

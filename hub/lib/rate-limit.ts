@@ -83,6 +83,10 @@ export const ACTION_LIMITS: Readonly<Record<string, number>> = {
   gmail_send: 5,
   chat_post: 10,
   task_create: 10,
+  // Sharing hands a file to a third party and sends them a notification mail —
+  // outward-facing and un-sendable, so it sits at the gmail_send tier rather
+  // than the create-a-doc tier.
+  file_share: 5,
 }
 
 /** Limit applied to any action type not present in ACTION_LIMITS. */

@@ -1,6 +1,12 @@
 import { ActionSpec } from '@/types'
 import { PAPERCLIP_BASE_URL } from '@/lib/paperclipConfig'
 import { isProtectedCompany } from '@/lib/protected-workspaces'
+import {
+  normalizeShareRole,
+  parseRecipientRefs,
+  shareRoleLabel,
+  type ShareRole,
+} from '@/lib/google/share-roles'
 
 interface ExecuteActionDeps {
   activeCompany: { id: string; name: string; identifier: string } | null
@@ -379,6 +385,110 @@ export async function executeAction(
       if (!res.ok) throw new Error(await scopeAwareError(res, 'Presentation creation'))
       const data = await res.json()
       resultMsg = `🖼️ **Google Slides deck created!**\n\n"${data.presentation?.title || deckTitle}" is in your Drive.\n\n▶ [Open the deck](${data.presentation?.presentationUrl})`
+      break
+    }
+
+    case 'share_google_file': {
+      // Outward-facing like a Gmail send: fail before any network call if the
+      // quality-gate token is missing, since the route verifies it and would
+      // 403 the share anyway.
+      const shareHeaders = gatedSendHeaders(spec)
+
+      const fileRef = (spec.details.file || spec.details.fileRef || spec.details.title || '').trim()
+      if (!fileRef) {
+        throw new Error('Tell me which file to share (its name, or part of it).')
+      }
+
+      // ── Resolve the file ──
+      // The lookup separates files the Hub created (shareable — `drive.file`
+      // covers them) from files that merely match by name. Matching a
+      // colleague's doc and then failing with a Drive 403 would be an opaque
+      // dead end; naming the limit is a fixable answer.
+      const lookupRes = await fetch(`/api/google/share?q=${encodeURIComponent(fileRef)}`)
+      if (!lookupRes.ok) throw new Error(`Drive lookup failed: ${lookupRes.status}`)
+      const lookup = (await lookupRes.json()) as {
+        managed?: Array<{ id: string; name: string; webViewLink?: string }>
+        unmanaged?: Array<{ id: string; name: string }>
+      }
+      const managed = lookup.managed ?? []
+
+      if (managed.length === 0) {
+        const nearby = lookup.unmanaged ?? []
+        if (nearby.length > 0) {
+          throw new Error(
+            `I found "${nearby[0].name}" in your Drive, but I can only change sharing on files the Hub created. Open it in Drive to share it, or ask me to make a Hub copy first.`,
+          )
+        }
+        throw new Error(`No Hub-created file matching "${fileRef}" was found in your Drive.`)
+      }
+
+      // Exact-name short-circuit, same reasoning as Chat space resolution: with
+      // substring matching alone a file whose name is contained in another's
+      // could never be targeted, even by its exact name.
+      const shareRefLower = fileRef.toLowerCase()
+      const exactFiles = managed.filter((f) => f.name?.toLowerCase().trim() === shareRefLower)
+      if (managed.length > 1 && exactFiles.length !== 1) {
+        throw new Error(
+          `Multiple Hub files match "${fileRef}": ${managed.slice(0, 6).map((f) => `"${f.name}"`).join(', ')}. Please edit and name the one you mean.`,
+        )
+      }
+      const file = exactFiles.length === 1 ? exactFiles[0] : managed[0]
+
+      // ── Resolve the access level ──
+      // Falls back to `reader` for anything unrecognised. Least privilege on an
+      // ambiguous instruction, and the granted level is echoed back so an
+      // under-grant is visible rather than silent.
+      const accessText = `${spec.details.access || ''} ${spec.details.additionalContext || ''}`
+      const shareRole: ShareRole = /\b(edit|editor|editing|write|writer)\b/i.test(accessText)
+        ? 'writer'
+        : /\bcomment/i.test(accessText)
+          ? 'commenter'
+          : normalizeShareRole(spec.details.access)
+
+      // ── Link sharing is opt-in by explicit words only ──
+      // Never inferred from "share this with the team": a fuzzy recipient
+      // string must not be able to widen a file to the whole internet.
+      const recipientsText = spec.details.recipients || spec.details.to || ''
+      const wantsLink = /\b(anyone with (the )?link|link sharing|public link|shareable link)\b/i.test(
+        `${recipientsText} ${spec.details.additionalContext || ''}`,
+      )
+
+      let sharePayload: Record<string, unknown>
+      let granteeLabel: string
+
+      if (wantsLink) {
+        sharePayload = { fileId: file.id, link: true, role: shareRole }
+        granteeLabel = 'anyone with the link'
+      } else {
+        const refs = parseRecipientRefs(recipientsText)
+        if (refs.length === 0) {
+          throw new Error('Tell me who to share it with (an email address, or a name I can look up).')
+        }
+
+        // Names → addresses via contacts, the same resolution send_gmail uses.
+        const resolved = await Promise.all(refs.map((r) => resolveRecipientEmail(r)))
+        const unresolved = refs.filter(
+          (_r, i) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(resolved[i]),
+        )
+        if (unresolved.length > 0) {
+          throw new Error(
+            `I couldn't resolve ${unresolved.map((r) => `"${r}"`).join(', ')} to an email address. Edit the action and give me the address directly.`,
+          )
+        }
+
+        sharePayload = { fileId: file.id, recipients: resolved, role: shareRole }
+        granteeLabel = resolved.join(', ')
+      }
+
+      const shareRes = await fetch('/api/google/share', {
+        method: 'POST',
+        headers: shareHeaders,
+        body: JSON.stringify(sharePayload),
+      })
+      if (!shareRes.ok) throw new Error(await scopeAwareError(shareRes, 'Sharing'))
+
+      const link = file.webViewLink ? `\n\n▶ [Open the file](${file.webViewLink})` : ''
+      resultMsg = `🔗 **Shared "${file.name}"**\n\n${granteeLabel} now has **${shareRoleLabel(shareRole)}** access.${link}`
       break
     }
 
