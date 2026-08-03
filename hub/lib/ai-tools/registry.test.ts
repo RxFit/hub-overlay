@@ -243,3 +243,66 @@ describe('calendar_freebusy', () => {
     expect(tool.schema.safeParse({ timeMin: '2026-07-30T00:00:00Z' }).success).toBe(false)
   })
 })
+
+describe('list_file_access', () => {
+  /**
+   * `permissions.list` accepts `drive.readonly`, so the read half of sharing
+   * works on ANY file the user can see — including ones the Hub cannot re-share.
+   * That is why this lives in the read registry rather than beside the write
+   * path: it can answer "who has access?" even where the answer to "give Sam
+   * access" would be "I can't".
+   */
+  it('is registered in the workspace group and reachable by staff', () => {
+    expect(getTool('list_file_access')).toBeDefined()
+    expect(toolsFor('workspace', 'staff').map(t => t.name)).toContain('list_file_access')
+  })
+
+  it('reports no match as a benign note rather than an error', async () => {
+    stubFetch({ files: [] })
+    const result = await getTool('list_file_access')!.execute({ file: 'nothing' }, ctx())
+    expect(result.note).toBe('NO_RESULTS')
+  })
+
+  it('prefers an exact name match over the top relevance hit', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        // Drive file search → two hits, the exact-name one ranked second.
+        if (url.includes('/files?')) {
+          return new Response(
+            JSON.stringify({
+              files: [
+                { id: 'loose', name: 'Pricing notes 2026' },
+                { id: 'exact', name: 'Pricing' },
+              ],
+            }),
+            { status: 200 },
+          )
+        }
+        return new Response(
+          JSON.stringify({
+            permissions: [
+              { id: 'p1', type: 'user', role: 'writer', emailAddress: 'maria@acme.com' },
+            ],
+          }),
+          { status: 200 },
+        )
+      }),
+    )
+
+    const result = await getTool('list_file_access')!.execute({ file: 'Pricing' }, ctx())
+
+    expect(result.summary).toContain('"Pricing"')
+    // Permission entries carry other people's names and addresses — fenced like
+    // every other third-party payload.
+    expect(result.fenced).toContain('<untrusted_data')
+    const payload = JSON.parse(result.fenced.split('\n')[1])
+    expect(payload.file.id).toBe('exact')
+    expect(payload.access).toEqual(['maria@acme.com — editor'])
+    expect(payload.otherMatches).toEqual(['Pricing notes 2026'])
+  })
+
+  it('rejects a call with no file reference before hitting Google', () => {
+    expect(getTool('list_file_access')!.schema.safeParse({}).success).toBe(false)
+  })
+})

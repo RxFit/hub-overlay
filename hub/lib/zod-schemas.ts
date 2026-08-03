@@ -341,3 +341,32 @@ export const GoogleChatSendSchema = z.object({
   text: z.string().trim().min(1).max(4096),
   threadKey: z.string().max(256).optional(),
 })
+
+/**
+ * Grant access to a Drive file the Hub created.
+ *
+ * `recipients` and `link` are the two shapes of a share and are mutually
+ * exclusive — the route rejects a body carrying both, and one of them must be
+ * present. Keeping link sharing a separate, explicit flag (rather than a magic
+ * "anyone" recipient) is what stops a fuzzy recipient string from ever
+ * widening a file to the whole internet by accident.
+ */
+export const GoogleShareSchema = z
+  .object({
+    fileId: z.string().trim().min(1).max(256),
+    recipients: z.array(z.string().trim().email().max(320)).max(25).optional(),
+    /** Link sharing — anyone holding the URL gets `role`. */
+    link: z.boolean().optional(),
+    role: z.enum(['reader', 'commenter', 'writer']).optional(),
+    notify: z.boolean().optional(),
+    message: z.string().max(2048).optional(),
+  })
+  .refine(b => Boolean(b.recipients?.length) !== Boolean(b.link), {
+    message: 'Provide either recipients or link sharing, not both',
+  })
+
+/** Remove one existing grant from a Drive file the Hub created. */
+export const GoogleUnshareSchema = z.object({
+  fileId: z.string().trim().min(1).max(256),
+  permissionId: z.string().trim().min(1).max(256),
+})

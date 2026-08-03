@@ -83,6 +83,9 @@ const INTENT_DIMENSIONS: Record<string, string[]> = {
   create_google_doc: ['title', 'content'],
   create_google_sheet: ['title', 'content'],
   create_google_presentation: ['title', 'content'],
+  // A share is only executable once BOTH the file and the people are named —
+  // the access level has a safe default (view), so it is not a gate dimension.
+  share_google_file: ['file_identity', 'recipients'],
   send_communication: ['recipient', 'channel', 'message_content', 'tone'],
   send_gmail: ['recipient', 'subject', 'message_content'],
   post_chat_message: ['space', 'message_content'],
@@ -136,6 +139,7 @@ Evaluate each dimension:
 
 For simpler intents (check_agent_status, view_runs, run_audit), any answer scores 80+.
 For personal-productivity intents (create_task, update_task, schedule_event, create_google_doc, create_google_sheet, create_google_presentation) — these write only to the user's OWN Google account — score 85+ whenever the action is specific enough for a competent assistant to execute (clear what, and when if timing matters). A Doc/Sheet/deck needs only a title to be executable; content may be empty. Do NOT require constraints or success criteria for these.
+For share_google_file, score 85+ only when the context names BOTH a specific file and at least one specific recipient (an email address, or a person's name the assistant can look up) — or explicitly asks for link sharing. A share cannot be executed against "the doc" with no recipient, and an unrecoverable disclosure is the wrong place to guess. The access level is NOT required: it defaults to view-only. Ask for whichever of file or recipient is missing.
 For destructive intents (delete_workspace, delete_agent), require explicit confirmation text to score 80+.
 For complex intents (launch_campaign, create_agent), require all 4 dimensions to score 80+.
 

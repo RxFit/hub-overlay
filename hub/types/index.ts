@@ -241,6 +241,8 @@ export type InterviewIntent =
   | 'create_google_doc'
   | 'create_google_sheet'
   | 'create_google_presentation'
+  // Drive access settings — grant someone access to a Hub-created file
+  | 'share_google_file'
   | 'send_communication'
   | 'create_paperclip_issue'
   // Phase 3: Paperclip orchestrator intents

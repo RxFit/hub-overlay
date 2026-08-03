@@ -356,3 +356,45 @@ describe('F3 direct-send intents (send_gmail / post_chat_message)', () => {
     expect(state.step).toBe(0) // parked on the single context question, not fast-forwarded past it
   })
 })
+
+describe('share_google_file (Drive access settings)', () => {
+  it('is registered in the classifier definitions with file/recipients/access', () => {
+    const def = INTENT_DEFINITIONS.find(d => d.id === 'share_google_file')
+    expect(def).toBeDefined()
+    expect(def?.expectedEntities).toEqual(['file', 'recipients', 'access'])
+  })
+
+  it('requires staff permission and denies onboarding guests', () => {
+    expect(hasPermission('staff', 'share_google_file')).toBe(true)
+    expect(hasPermission('admin', 'share_google_file')).toBe(true)
+    expect(hasPermission('onboarding', 'share_google_file')).toBe(false)
+  })
+
+  it('uses the lightweight single-question flow and builds a spec', () => {
+    expect(getTotalQuestions('share_google_file')).toBe(1)
+    let state = startInterview('share_google_file', {
+      file: 'Q3 Decision Memo',
+      recipients: 'maria@acme.com',
+    })
+    expect(state.active).toBe(true) // parked on the single context question
+    state = advanceInterview(state, 'go ahead')
+    expect(state.active).toBe(false)
+    expect(state.spec?.intent).toBe('share_google_file')
+    expect(state.spec?.details.file).toBe('Q3 Decision Memo')
+    expect(state.spec?.details.recipients).toBe('maria@acme.com')
+    expect(state.spec?.targetSystems).toEqual(['Google Drive — Sharing'])
+  })
+
+  /**
+   * The property that separates sharing from the other Workspace authoring
+   * intents: a share discloses content to a third party and fires a Google
+   * notification that cannot be recalled, so it carries a server-verified gate
+   * token exactly like a Gmail send.
+   */
+  it('is high-stakes (gate-token guarded), unlike doc/sheet creation', () => {
+    expect(isHighStakesIntent('share_google_file')).toBe(true)
+    expect(isHighStakesIntent('create_google_doc')).toBe(false)
+    expect(isDestructiveIntent('share_google_file')).toBe(false)
+    expect(isReadOnlyIntent('share_google_file')).toBe(false)
+  })
+})

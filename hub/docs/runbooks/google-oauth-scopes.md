@@ -150,6 +150,41 @@ Third-party access → CT Hub*, or decode the access token via `tokeninfo`.
 > missing-scope error is swallowed and recipient resolution falls back to
 > personal contacts — nothing hard-breaks.
 
+### Drive sharing — **no new scope** (`/api/google/share`)
+
+Changing who can open a file is served entirely by scopes the Hub already
+holds, which is why this shipped without a Console change or a re-consent:
+
+| Operation | Drive method | Scope that authorises it | Reaches |
+|---|---|---|---|
+| Who has access? | `permissions.list` | `drive.readonly` | **any** file the user can see |
+| Grant access | `permissions.create` | `drive.file` | files the **Hub created** |
+| Revoke access | `permissions.delete` | `drive.file` | files the **Hub created** |
+
+That asymmetry is the whole shape of the feature, and it is worth stating
+plainly because it will be the first support question:
+
+- **Reading** access works on a colleague's shared doc, a file from Gmail,
+  anything. `permissions.list` accepts `drive.readonly`.
+- **Changing** access does not. `permissions.create` accepts only `drive` and
+  `drive.file`, and `drive.file` is per-file access to files **this app
+  created**. A Doc/Sheet/deck the Hub authored is shareable; a file the user
+  made in Drive last year is not.
+
+`findShareableFiles` (`lib/google/sharing.ts`) makes that boundary visible
+*before* a share is attempted: it searches Hub artifacts first (by the
+`hubOverlay` appProperty, tenant-scoped) and only falls back to a plain name
+search so the assistant can say "I found it, but it isn't a Hub file" instead of
+surfacing a raw Drive 403.
+
+> [!warning]
+> The obvious "fix" — adding full `…/auth/drive` so any file becomes shareable —
+> is the one addition this runbook tells you not to make. It is a **restricted**
+> scope: ~6-week verification plus an annual CASA assessment. If sharing an
+> existing user file becomes a real requirement, the cheaper routes are (a) have
+> the Hub make a copy it owns, or (b) add the Google **Picker**, which grants
+> `drive.file` access to a file the user explicitly selects.
+
 ## Consent screen configuration (record this)
 
 Several downstream decisions hinge on how the OAuth app itself is configured,

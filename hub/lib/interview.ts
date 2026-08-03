@@ -32,6 +32,10 @@ const INTENT_PERMISSIONS: Record<InterviewIntent, ActionPermission> = {
   create_google_doc: 'staff',
   create_google_sheet: 'staff',
   create_google_presentation: 'staff',
+  // Sharing hands a Hub-created file to someone else — outward-facing, so it
+  // sits with the other external-comms actions at staff+ rather than with the
+  // pending/onboarding-safe personal writes.
+  share_google_file: 'staff',
   // Staff-level (read + create)
   send_communication: 'staff',
   send_gmail: 'staff',
@@ -112,6 +116,11 @@ export const INTENT_DEFINITIONS: Array<{ id: InterviewIntent; description: strin
     id: 'create_google_presentation',
     description: 'User wants to create a NEW Google Slides deck / presentation — e.g. "make a slide deck for the pitch", "turn this into Google Slides", "build a presentation of these points". Use this when the durable output should be a Google Slides presentation.',
     expectedEntities: ['title', 'content'],
+  },
+  {
+    id: 'share_google_file',
+    description: 'User wants to SHARE or change who can access an EXISTING Google Doc, Sheet or Slides deck the Hub created — e.g. "share the Q3 memo with maria@acme.com", "give Sam edit access to the pricing sheet", "make the deck viewable by anyone with the link". Use this for access/permission changes, NOT for creating a new file.',
+    expectedEntities: ['file', 'recipients', 'access'],
   },
   {
     id: 'send_communication',
@@ -308,6 +317,20 @@ const INTERVIEW_SEQUENCES: Record<InterviewIntent, InterviewStep[]> = {
   create_google_sheet: [
     {
       question: 'Want to add any more context for this spreadsheet (a title, or the columns/rows)? Reply with details, or say "go ahead" to continue.',
+      key: 'additionalContext',
+      defaultValue: 'go ahead',
+    },
+  ],
+
+  // Sharing is a lightweight flow like the other Workspace actions, but with a
+  // deliberate difference: the single question names the DEFAULT it will apply
+  // (view access) so a user who just says "go ahead" has still been told what
+  // they are approving. The confirm card then shows the resolved file, the
+  // resolved recipients and the access level before anything is granted.
+  share_google_file: [
+    {
+      question:
+        'Anything to adjust before I share it — who exactly, and what access (view / comment / edit)? Reply with details, or say "go ahead" to share with view access.',
       key: 'additionalContext',
       defaultValue: 'go ahead',
     },
@@ -783,6 +806,7 @@ const INTENT_LABELS: Record<InterviewIntent, string> = {
   create_google_doc: 'Create Google Doc',
   create_google_sheet: 'Create Google Sheet',
   create_google_presentation: 'Create Google Slides',
+  share_google_file: 'Share Google File',
   send_communication: 'Send Communication',
   send_gmail: 'Send Gmail',
   post_chat_message: 'Post Chat Message',
@@ -812,6 +836,7 @@ const INTENT_TARGET_SYSTEMS: Record<InterviewIntent, string[]> = {
   create_google_doc: ['Google Docs'],
   create_google_sheet: ['Google Sheets'],
   create_google_presentation: ['Google Slides'],
+  share_google_file: ['Google Drive — Sharing'],
   send_communication: ['Paperclip AI — COO Routed'],
   send_gmail: ['Gmail'],
   post_chat_message: ['Google Chat'],
@@ -903,6 +928,7 @@ const PERSONAL_ACTION_INTENTS: ReadonlySet<InterviewIntent> = new Set([
   'post_chat_message',
   'create_google_doc',
   'create_google_sheet',
+  'share_google_file',
 ])
 
 /**
@@ -954,6 +980,10 @@ export function isHighStakesIntent(intent: InterviewIntent): boolean {
     intent === 'send_gmail' ||
     intent === 'post_chat_message' ||
     intent === 'create_paperclip_issue' ||
+    // Sharing discloses business content to a third party and fires a Google
+    // notification email that cannot be recalled — the same blast radius as a
+    // Gmail send, so it gets the same server-verified gate token.
+    intent === 'share_google_file' ||
     // Phase 3 creation intents: both stand up durable orchestration objects
     // (recurring agent work / the goal tree), so they carry gate tokens and
     // the proxy fails closed without one.
