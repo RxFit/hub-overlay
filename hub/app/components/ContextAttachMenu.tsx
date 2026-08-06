@@ -285,18 +285,29 @@ function DocumentSubView({
   const [searchResults, setSearchResults] = useState<DriveFileItem[] | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isSearching, setIsSearching] = useState(false)
+  // A failed Drive fetch must NOT render as "No recent files" — an expired
+  // Google session then looks identical to an empty Drive, which users report
+  // as "the Hub can't see my documents". 401 → reauth hint; anything else →
+  // generic load error.
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const searchRef = useRef<HTMLInputElement>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const errorMessageFor = (status: number | undefined) =>
+    status === 401
+      ? 'Your Google session has expired — sign out and back in to reconnect Drive.'
+      : 'Couldn’t load Google Drive files right now. Try again in a moment.'
 
   // Fetch 30 recent files on mount
   useEffect(() => {
     let cancelled = false
     setIsLoading(true)
+    setLoadError(null)
 
     fetch('/api/google/drive?filter=recent&maxResults=30')
       .then((res) => {
-        if (!res.ok) throw new Error('Failed to load')
+        if (!res.ok) throw Object.assign(new Error('Failed to load'), { status: res.status })
         return res.json()
       })
       .then((data: { files: DriveFileItem[] }) => {
@@ -305,9 +316,10 @@ function DocumentSubView({
           setIsLoading(false)
         }
       })
-      .catch(() => {
+      .catch((err: Error & { status?: number }) => {
         if (!cancelled) {
           setRecentFiles([])
+          setLoadError(errorMessageFor(err?.status))
           setIsLoading(false)
         }
       })
@@ -333,18 +345,23 @@ function DocumentSubView({
 
     setIsSearching(true)
     debounceRef.current = setTimeout(() => {
-      const driveQuery = `name contains '${query.replace(/'/g, "\\'")}'`
+      // Backslashes escaped FIRST or they'd escape the quote-escapes; matches
+      // escapeDriveQueryTerm's contract in lib/google.ts.
+      const safe = query.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+      const driveQuery = `(name contains '${safe}' or fullText contains '${safe}')`
       fetch(`/api/google/drive?filter=recent&maxResults=20&q=${encodeURIComponent(driveQuery)}`)
         .then((res) => {
-          if (!res.ok) throw new Error('Search failed')
+          if (!res.ok) throw Object.assign(new Error('Search failed'), { status: res.status })
           return res.json()
         })
         .then((data: { files: DriveFileItem[] }) => {
           setSearchResults(data.files ?? [])
+          setLoadError(null)
           setIsSearching(false)
         })
-        .catch(() => {
+        .catch((err: Error & { status?: number }) => {
           setSearchResults([])
+          setLoadError(errorMessageFor(err?.status))
           setIsSearching(false)
         })
     }, 300)
@@ -405,6 +422,10 @@ function DocumentSubView({
         {showLoading ? (
           <div className="context-attach-file-loading">
             {isSearching ? 'Searching Drive…' : 'Loading files…'}
+          </div>
+        ) : loadError && displayFiles.length === 0 ? (
+          <div className="context-attach-file-empty" role="alert">
+            {loadError}
           </div>
         ) : displayFiles.length === 0 ? (
           <div className="context-attach-file-empty">

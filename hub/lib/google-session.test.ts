@@ -5,6 +5,7 @@ import {
   googleApiErrorResponse,
   googleWriteErrorResponse,
   resolveGoogleAuth,
+  resolveGoogleAccessTokenLenient,
 } from './google-session'
 
 const { getTokenMock } = vi.hoisted(() => ({ getTokenMock: vi.fn() }))
@@ -196,5 +197,52 @@ describe('mapGoogleErrorToStatus — quota 403s are not credential failures', ()
 
   it('still maps a genuine permission 403 to a reauth 401', () => {
     expect(mapGoogleErrorToStatus('Google API error 403: insufficientPermissions')).toBe(401)
+  })
+})
+
+/* The chat route must apply the SAME token checks as the panel routes, but
+   soft — it still answers without Workspace data. Before this existed, a bare
+   getToken() handed dead tokens to every Google consumer in chat and their
+   failures were silently swallowed: all Drive/Gmail/Calendar data vanished
+   from the model's context, which users experienced as "the AI can't see any
+   Google Drive files". */
+describe('resolveGoogleAccessTokenLenient', () => {
+  const req = {} as NextRequest
+
+  beforeEach(() => {
+    getTokenMock.mockReset()
+  })
+
+  it('returns the access token when the session is healthy', async () => {
+    getTokenMock.mockResolvedValueOnce({ accessToken: 'ya29.ok' })
+    expect(await resolveGoogleAccessTokenLenient(req)).toEqual({ ok: true, accessToken: 'ya29.ok' })
+  })
+
+  it('reports reauth when there is no token at all', async () => {
+    getTokenMock.mockResolvedValueOnce(null)
+    expect(await resolveGoogleAccessTokenLenient(req)).toEqual({ ok: false, reason: 'reauth' })
+  })
+
+  it('reports reauth for a fatal refresh failure even with a stale token present', async () => {
+    getTokenMock.mockResolvedValueOnce({ accessToken: 'ya29.stale', error: 'RefreshAccessTokenError' })
+    expect(await resolveGoogleAccessTokenLenient(req)).toEqual({ ok: false, reason: 'reauth' })
+  })
+
+  it('reports transient — NOT reauth — for a transient refresh failure', async () => {
+    getTokenMock.mockResolvedValueOnce({ accessToken: 'ya29.x', error: 'RefreshTransientError' })
+    expect(await resolveGoogleAccessTokenLenient(req)).toEqual({ ok: false, reason: 'transient' })
+  })
+
+  it('reports expired for a cookie holding an already-expired access token', async () => {
+    getTokenMock.mockResolvedValueOnce({
+      accessToken: 'ya29.dead',
+      accessTokenExpires: Date.now() - 60_000,
+    })
+    expect(await resolveGoogleAccessTokenLenient(req)).toEqual({ ok: false, reason: 'expired' })
+  })
+
+  it('passes through a legacy session that records no expiry at all', async () => {
+    getTokenMock.mockResolvedValueOnce({ accessToken: 'ya29.legacy' })
+    expect(await resolveGoogleAccessTokenLenient(req)).toEqual({ ok: true, accessToken: 'ya29.legacy' })
   })
 })

@@ -257,9 +257,10 @@ export async function fetchDriveDocContent(
       }
       text = await res.text()
     } else {
-      // For non-Google files (PDF, plain text, etc.) — download content
+      // For non-Google files (PDF, plain text, etc.) — download content.
+      // supportsAllDrives lets this read files living in Shared Drives.
       const res = await fetch(
-        `${DRIVE_EXPORT_BASE}/${fileId}?alt=media`,
+        `${DRIVE_EXPORT_BASE}/${fileId}?alt=media&supportsAllDrives=true`,
         {
           headers: { Authorization: `Bearer ${accessToken}` },
           signal: AbortSignal.timeout(10_000),

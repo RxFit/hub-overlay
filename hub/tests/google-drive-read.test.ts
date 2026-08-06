@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { searchDriveFiles, readDriveFileText } from '@/lib/google'
+import { searchDriveFiles, readDriveFileText, listRecentFiles } from '@/lib/google'
 
 /**
  * The Drive API draws a hard line between native Workspace files (which must be
@@ -152,5 +152,48 @@ describe('readDriveFileText', () => {
     })
 
     await expect(readDriveFileText('tok', 'f1')).rejects.toThrow(/403/)
+  })
+})
+
+/* Shared Drives are invisible to any Drive call that omits supportsAllDrives/
+   includeItemsFromAllDrives — files.list silently drops them and files.get
+   404s. Every read path must carry the params or documents "disappear" the
+   moment they move into a Shared Drive. */
+describe('Shared Drive visibility', () => {
+  it('searchDriveFiles spans all drives (corpora=allDrives + both flags)', async () => {
+    stub(() => new Response(JSON.stringify({ files: [] }), { status: 200 }))
+    await searchDriveFiles('tok', 'Nuvita')
+    const url = readableUrl(calls[0])
+    expect(url).toContain('corpora=allDrives')
+    expect(url).toContain('supportsAllDrives=true')
+    expect(url).toContain('includeItemsFromAllDrives=true')
+  })
+
+  it('readDriveFileText fetches metadata with supportsAllDrives', async () => {
+    stub((url) =>
+      url.includes('fields=')
+        ? new Response(JSON.stringify({ id: 'f1', name: 'Doc', mimeType: 'text/plain' }), { status: 200 })
+        : new Response('body', { status: 200 }),
+    )
+    await readDriveFileText('tok', 'f1')
+    expect(calls[0]).toContain('supportsAllDrives=true')
+  })
+
+  it('listRecentFiles includes shared-drive items and never lists trash', async () => {
+    stub(() => new Response(JSON.stringify({ files: [] }), { status: 200 }))
+    await listRecentFiles('tok', { maxResults: 15 })
+    const url = readableUrl(calls[0])
+    expect(url).toContain('supportsAllDrives=true')
+    expect(url).toContain('includeItemsFromAllDrives=true')
+    expect(url).toContain('trashed = false')
+    // The caller's own-edit timestamp powers the panel's "my docs first" ranking.
+    expect(url).toContain('modifiedByMeTime')
+  })
+
+  it('listRecentFiles ANDs trashed = false onto a caller query', async () => {
+    stub(() => new Response(JSON.stringify({ files: [] }), { status: 200 }))
+    await listRecentFiles('tok', { query: "name contains 'x'" })
+    const url = readableUrl(calls[0])
+    expect(url).toContain("(name contains 'x') and trashed = false")
   })
 })

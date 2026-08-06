@@ -116,6 +116,8 @@ export async function findShareableFiles(
     orderBy: 'modifiedTime desc',
     pageSize,
     fields: FILE_FIELDS,
+    supportsAllDrives: 'true',
+    includeItemsFromAllDrives: 'true',
   })
 
   const managed = toShareableFiles(
@@ -128,6 +130,8 @@ export async function findShareableFiles(
     orderBy: 'modifiedTime desc',
     pageSize,
     fields: FILE_FIELDS,
+    supportsAllDrives: 'true',
+    includeItemsFromAllDrives: 'true',
   })
   const unmanaged = toShareableFiles(
     await googleFetch<DriveFileListResponse>(`${DRIVE_FILES}?${anyParams}`, accessToken),
@@ -175,6 +179,7 @@ export async function listFileAccess(
   const params = new URLSearchParams({
     fields: 'permissions(id,type,role,emailAddress,displayName,domain,permissionDetails(inherited))',
     pageSize: '100',
+    supportsAllDrives: 'true',
   })
   const data = await googleFetch<{ permissions?: DrivePermission[] }>(
     `${DRIVE_FILES}/${encodeURIComponent(fileId)}/permissions?${params}`,
@@ -216,6 +221,7 @@ export async function grantFileAccess(
   const params = new URLSearchParams({
     sendNotificationEmail: String(input.notify ?? true),
     fields: 'id,role,emailAddress',
+    supportsAllDrives: 'true',
   })
   // Drive rejects emailMessage when no notification is being sent.
   if ((input.notify ?? true) && input.message?.trim()) {
@@ -254,6 +260,7 @@ export async function grantLinkAccess(
   const params = new URLSearchParams({
     sendNotificationEmail: 'false',
     fields: 'id,role',
+    supportsAllDrives: 'true',
   })
 
   const created = await googleFetch<{ id?: string; role?: string }>(
@@ -285,7 +292,7 @@ export async function revokeFileAccess(
   permissionId: string,
 ): Promise<void> {
   await googleFetchVoid(
-    `${DRIVE_FILES}/${encodeURIComponent(fileId)}/permissions/${encodeURIComponent(permissionId)}`,
+    `${DRIVE_FILES}/${encodeURIComponent(fileId)}/permissions/${encodeURIComponent(permissionId)}?supportsAllDrives=true`,
     accessToken,
     { method: 'DELETE' },
   )

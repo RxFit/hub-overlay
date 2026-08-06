@@ -99,6 +99,30 @@ export type GoogleAuth =
   | { ok: false; response: NextResponse }
 
 /**
+ * Soft-degrade variant of {@link resolveGoogleAuth} for callers that must not
+ * fail the request over a dead Google token — the chat route, which still
+ * answers without Workspace data. Applies the SAME three checks (fatal refresh
+ * error, missing token, expired-in-cookie access token) but returns a reason
+ * string instead of an HTTP response, so the caller can tell the model WHY
+ * Google data is missing rather than silently handing it a token that will 401
+ * on every Google call.
+ */
+export type GoogleTokenState =
+  | { ok: true; accessToken: string }
+  | { ok: false; reason: 'transient' | 'reauth' | 'expired' }
+
+export async function resolveGoogleAccessTokenLenient(req: NextRequest): Promise<GoogleTokenState> {
+  const token = await getToken({ req })
+  const accessToken = token?.accessToken as string | undefined
+
+  if (token?.error === REFRESH_TRANSIENT_ERROR) return { ok: false, reason: 'transient' }
+  if (!accessToken || token?.error === REFRESH_FATAL_ERROR) return { ok: false, reason: 'reauth' }
+  if (isAccessTokenExpired(token?.accessTokenExpires)) return { ok: false, reason: 'expired' }
+
+  return { ok: true, accessToken }
+}
+
+/**
  * Resolve the caller's Google OAuth access token, honoring a failed-refresh
  * signal.
  *
