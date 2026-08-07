@@ -6,7 +6,7 @@ import { useDrive } from '@/app/hooks/useHubData'
 import type { DriveFile } from '@/app/hooks/useHubData'
 import type { ToolArtifactRecord, ChatAttachment } from '@/types'
 import styles from './LeftPanelSections.module.css'
-import { CollapsibleSection, SkeletonBlock, SectionMessage } from './LeftPanelShared'
+import { CollapsibleSection, SkeletonBlock, SectionMessage, AuthExpiredMessage } from './LeftPanelShared'
 import { formatRelativeDate, getDriveIcon, artifactsFetcher } from './LeftPanelUtils'
 import { buildDocumentInject, buildArtifactInject } from '@/lib/panel-inject'
 
@@ -80,11 +80,10 @@ export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string,
       {activeFilter === 'artifacts' ? (
         artifactsLoading ? (
           <SkeletonBlock lines={3} />
+        ) : (artifactsError as any)?.status === 401 ? (
+          <AuthExpiredMessage />
         ) : artifactsError ? (
-          <SectionMessage
-            message={(artifactsError as any)?.status === 401 ? 'Session expired — please sign in again' : 'Unable to load artifacts'}
-            type="error"
-          />
+          <SectionMessage message="Unable to load artifacts" type="error" />
         ) : !artifactsData?.artifacts?.length ? (
           <SectionMessage message={emptyMessages.artifacts} type="empty" />
         ) : (
@@ -121,7 +120,7 @@ export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string,
           {isLoading ? (
             <SkeletonBlock lines={3} />
           ) : isAuthError ? (
-            <SectionMessage message="Session expired — please sign in again" type="error" />
+            <AuthExpiredMessage />
           ) : error ? (
             <SectionMessage message="Unable to load files — try refreshing or check your connection" type="error" />
           ) : files.length === 0 ? (

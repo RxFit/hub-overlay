@@ -7,7 +7,7 @@ import { writeFetch } from '@/app/hooks/useWriteFetch'
 import type { CalendarEvent } from '@/app/hooks/useHubData'
 import type { ChatAttachment } from '@/types'
 import styles from './LeftPanelSections.module.css'
-import { CollapsibleSection, SkeletonBlock, SectionMessage } from './LeftPanelShared'
+import { CollapsibleSection, SkeletonBlock, SectionMessage, AuthExpiredMessage } from './LeftPanelShared'
 import { formatTime, eventDisplayTitle, validateEventForm, DAY_LETTERS, getMonday, getWeekDays } from './LeftPanelUtils'
 import { buildEventInjectMessage } from '@/lib/panel-inject'
 
@@ -276,7 +276,7 @@ function CalendarSectionImpl({ onInjectChat }: { onInjectChat: (msg: string, att
   if (isAuthError) {
     return (
       <CollapsibleSection title="Calendar" protocolNum="02" defaultOpen>
-        <SectionMessage message="Session expired — please sign in again" type="error" />
+        <AuthExpiredMessage />
       </CollapsibleSection>
     )
   }

@@ -7,7 +7,7 @@ import { createHideTimers } from '@/lib/hide-timers'
 import type { TaskItem } from '@/app/hooks/useHubData'
 import type { ChatAttachment } from '@/types'
 import styles from './LeftPanelSections.module.css'
-import { CollapsibleSection, SkeletonBlock, SectionMessage } from './LeftPanelShared'
+import { CollapsibleSection, SkeletonBlock, SectionMessage, AuthExpiredMessage } from './LeftPanelShared'
 import { buildTaskInjectMessage, formatDueDate } from '@/lib/panel-inject'
 import {
   addRecentlyCompleted,
@@ -75,7 +75,7 @@ function TasksSectionImpl({ onInjectChat, onInjectAction }: { onInjectChat: (msg
   if (isAuthError) {
     return (
       <CollapsibleSection title="Tasks" protocolNum="04" defaultOpen>
-        <SectionMessage message="Session expired — please sign in again" type="error" />
+        <AuthExpiredMessage />
       </CollapsibleSection>
     )
   }

@@ -2,6 +2,11 @@ import { defineConfig } from 'vitest/config'
 import { fileURLToPath } from 'node:url'
 
 export default defineConfig({
+  // tsconfig sets jsx:"preserve" for Next's compiler; esbuild's default
+  // fallback is the CLASSIC transform, which requires `import React` in every
+  // component under test. Use the automatic runtime, matching what Next
+  // actually compiles, so .tsx components render in tests as they do in prod.
+  esbuild: { jsx: 'automatic' },
   test: {
     environment: 'node',
     include: ['lib/**/*.test.ts', 'tests/**/*.test.ts', 'app/**/*.test.ts', 'app/**/*.test.tsx'],
