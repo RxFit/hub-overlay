@@ -350,3 +350,37 @@ export const aiActionLog = pgTable(
     userCreatedIdx: index('ai_action_log_user_created_idx').on(t.userEmail, t.createdAt.desc()),
   })
 )
+
+/* ── Webhook channels (Google Drive push notifications) ──────────────────── */
+/**
+ * The live Drive watch channel(s) feeding the semantic index. Google push
+ * channels EXPIRE (and did so silently — the pgvector index just stopped
+ * updating with no error anywhere). This table is what lets the renewal cron
+ * (/api/webhooks/google/renew) know a channel exists, when it dies, and where
+ * the changes cursor is, so it can renew before expiry and bootstrap from
+ * nothing. One row per (tenant, kind); kind is 'drive-changes' today.
+ */
+export const webhookChannels = pgTable(
+  'webhook_channels',
+  {
+    /** Channel id we mint (uuid) — echoed back by Google as X-Goog-Channel-Id. */
+    id:         text('id').primaryKey(),
+    tenantId:   text('tenant_id').notNull().references(() => tenants.id),
+    kind:       text('kind').notNull(),
+    /** Google's opaque resource id — required to STOP a channel. */
+    resourceId: text('resource_id').notNull(),
+    /** changes.list cursor. Survives channel renewal — the cursor belongs to
+     *  the corpus, not to any one channel. */
+    pageToken:  text('page_token'),
+    /** When Google will stop delivering. The renewal cron re-registers before
+     *  this passes. */
+    expiration: timestamp('expiration', { withTimezone: true }).notNull(),
+    /** Webhook address the channel posts to. */
+    address:    text('address').notNull(),
+    createdAt:  timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt:  timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    tenantKindUniq: uniqueIndex('webhook_channels_tenant_kind_uniq').on(t.tenantId, t.kind),
+  })
+)

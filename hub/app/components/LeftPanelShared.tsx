@@ -2,6 +2,7 @@
 
 import { useState, ReactNode, Component } from 'react'
 import type { ErrorInfo } from 'react'
+import { signIn } from 'next-auth/react'
 import styles from './LeftPanelSections.module.css'
 
 /* ══════════════════════════════════════════════════════════════════════════════
@@ -32,15 +33,63 @@ export function SkeletonBlock({ lines = 3 }: { lines?: number }) {
    ERROR MESSAGE — shared error/empty fallback
    ══════════════════════════════════════════════════════════════════════════════ */
 
-export function SectionMessage({ message, type = 'info' }: { message: string; type?: 'info' | 'error' | 'empty' }) {
+export function SectionMessage({
+  message,
+  type = 'info',
+  action,
+}: {
+  message: string
+  type?: 'info' | 'error' | 'empty'
+  /** Optional recovery affordance rendered under the message (e.g. "Sign in again"). */
+  action?: { label: string; onClick: () => void }
+}) {
   const typeClass = type === 'error' ? styles.sectionMessageError : type === 'empty' ? styles.sectionMessageEmpty : styles.sectionMessageInfo
   return (
     <div
       role={type === 'error' ? 'alert' : 'status'}
       className={`${styles.sectionMessage} ${typeClass}`}
+      style={action ? { display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '8px' } : undefined}
     >
-      {message}
+      <span>{message}</span>
+      {action && (
+        <button
+          type="button"
+          onClick={action.onClick}
+          style={{
+            padding: '4px 12px',
+            background: 'var(--surface-2)',
+            border: '1px solid var(--border)',
+            borderRadius: '6px',
+            color: 'var(--text-primary)',
+            fontSize: '0.72rem',
+            cursor: 'pointer',
+          }}
+        >
+          {action.label}
+        </button>
+      )}
     </div>
+  )
+}
+
+/**
+ * The Left Panel's expired-session state, WITH the way out.
+ *
+ * The audit (docs/left-panel-audit/02) found the documented 401→reauth path was
+ * dead code — `useAuthErrorRecovery` is mounted by no component — so "Session
+ * expired — please sign in again" rendered as a dead end: text telling the user
+ * to do something the UI offered no way to do. This is the planned replacement:
+ * an explicit, user-initiated re-auth. No `prompt` on signIn — with the grant
+ * already on file Google completes it silently, so a routine expiry costs one
+ * click and no consent screen.
+ */
+export function AuthExpiredMessage({ message = 'Google session expired' }: { message?: string }) {
+  return (
+    <SectionMessage
+      message={message}
+      type="error"
+      action={{ label: 'Sign in again', onClick: () => signIn('google') }}
+    />
   )
 }
 

@@ -39,7 +39,18 @@ export async function POST(req: Request) {
     const resourceId = req.headers.get('x-goog-resource-id') || 'unknown';
     const resourceUri = req.headers.get('x-goog-resource-uri') || '';
 
-    // 3. Handle document deletion or trashing
+    // 3a. A changes.watch channel (registered by /api/webhooks/google/renew)
+    // does not name a file — it says "something changed, come list it". The
+    // notification's only job is to trigger a changes.list from the stored
+    // cursor; per-file add/update/trash/delete all fall out of that listing.
+    if (resourceUri.includes('/changes')) {
+      processChangesQueue().catch(err => {
+        console.error('[Google Webhook] Changes processing error:', err);
+      });
+      return NextResponse.json({ status: 'Processing changes' }, { status: 200 });
+    }
+
+    // 3b. Handle document deletion or trashing (legacy per-file channels)
     if (resourceState === 'trash' || resourceState === 'delete') {
       let fileId = resourceId;
       if (resourceUri) {
@@ -87,6 +98,12 @@ async function processGoogleDelta(resourceId: string, resourceUri: string) {
     }
   }
 
+  await ingestDriveFile(accessToken, fileId);
+}
+
+/** Read one Drive file and (re)index it — shared by the legacy per-file path
+ *  and the changes-channel path. */
+async function ingestDriveFile(accessToken: string, fileId: string) {
   // Fetch file metadata to get name, mimeType, webViewLink
   const metaRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name,mimeType,webViewLink&supportsAllDrives=true`, {
     headers: { Authorization: `Bearer ${accessToken}` }
@@ -126,6 +143,84 @@ async function processGoogleDelta(resourceId: string, resourceUri: string) {
   }
 
   console.log(`[Google Webhook] Successfully indexed document ${fileId} with ${result.chunkIds.length} chunks`);
+}
+
+/**
+ * Coalescing latch for changes processing. Drive sends a notification per
+ * mutation, often in bursts; every run lists ALL pending changes from the
+ * stored cursor, so concurrent runs would only duplicate work (the ingest is
+ * idempotent per sourceUrl, so duplication is waste, not corruption). One run
+ * active, at most one queued — a notification landing mid-run is covered by
+ * the queued pass, which starts from the cursor the active run stores.
+ */
+let changesRunInFlight: Promise<void> | null = null;
+let changesRunQueued = false;
+
+function processChangesQueue(): Promise<void> {
+  if (changesRunInFlight) {
+    changesRunQueued = true;
+    return changesRunInFlight;
+  }
+  changesRunInFlight = (async () => {
+    do {
+      changesRunQueued = false;
+      await processChanges();
+    } while (changesRunQueued);
+  })().finally(() => {
+    changesRunInFlight = null;
+  });
+  return changesRunInFlight;
+}
+
+async function processChanges() {
+  const accessToken = await getServiceAccountAccessToken('https://www.googleapis.com/auth/drive.readonly');
+  if (!accessToken) {
+    throw new Error('Failed to obtain Google Drive access token');
+  }
+
+  const { getChannel, updatePageToken, DRIVE_CHANGES_KIND } = await import('@/lib/google/webhook-channels-db');
+  const { listChanges, shouldIngestChange, fetchStartPageToken, InvalidPageTokenError } = await import('@/lib/google/watch-channels');
+  const { getDefaultTenantId } = await import('@/lib/tenant-context');
+  const tenantId = getDefaultTenantId(); // PHASE 2 TODO: derive from channel metadata
+
+  const row = await getChannel(tenantId, DRIVE_CHANGES_KIND);
+  if (!row?.pageToken) {
+    console.warn('[Google Webhook] Changes notification but no stored cursor — run /api/webhooks/google/renew first.');
+    return;
+  }
+
+  let batch;
+  try {
+    batch = await listChanges(accessToken, row.pageToken);
+  } catch (err) {
+    if (err instanceof InvalidPageTokenError) {
+      // Cursor too old for Drive to serve (channel was dead for a long time).
+      // Reset to "now" — the gap is unrecoverable via changes.list, and a
+      // loud log beats retrying a token that can never work again.
+      const fresh = await fetchStartPageToken(accessToken);
+      await updatePageToken(tenantId, DRIVE_CHANGES_KIND, fresh);
+      console.error(`[Google Webhook] Stored changes cursor was rejected by Drive; reset to a fresh startPageToken. Documents changed during the outage will re-index on their next edit.`);
+      return;
+    }
+    throw err;
+  }
+
+  console.log(`[Google Webhook] Processing ${batch.changes.length} Drive change(s)...`);
+  for (const change of batch.changes) {
+    try {
+      if (change.removed || change.trashed) {
+        await deleteChunksForFile(change.fileId);
+      } else if (shouldIngestChange(change)) {
+        await ingestDriveFile(accessToken, change.fileId);
+      }
+    } catch (err) {
+      // One unreadable file must not stall the cursor behind it forever.
+      console.error(`[Google Webhook] Failed to process change for ${change.fileId}:`, err instanceof Error ? err.message : err);
+    }
+  }
+
+  // Advance the cursor only after the whole batch was attempted.
+  await updatePageToken(tenantId, DRIVE_CHANGES_KIND, batch.newStartPageToken);
 }
 
 async function deleteChunksForFile(fileId: string) {

@@ -430,6 +430,27 @@ async function run() {
   `
   console.log('[migrate] ✓ google_prefs table')
 
+  // Webhook channels — the live Drive watch channel(s) feeding the semantic
+  // index. Push channels expire; the renewal cron reads/writes this table.
+  await sql`
+    CREATE TABLE IF NOT EXISTS webhook_channels (
+      id           TEXT PRIMARY KEY,
+      tenant_id    TEXT NOT NULL REFERENCES tenants(id),
+      kind         TEXT NOT NULL,
+      resource_id  TEXT NOT NULL,
+      page_token   TEXT,
+      expiration   TIMESTAMPTZ NOT NULL,
+      address      TEXT NOT NULL,
+      created_at   TIMESTAMPTZ DEFAULT now() NOT NULL,
+      updated_at   TIMESTAMPTZ DEFAULT now() NOT NULL
+    )
+  `
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS webhook_channels_tenant_kind_uniq
+    ON webhook_channels(tenant_id, kind)
+  `
+  console.log('[migrate] ✓ webhook_channels table')
+
   // Seed rxfit tenant
   await sql`
     INSERT INTO tenants (id, name, domain)
