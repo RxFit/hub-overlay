@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
-import { getToken } from 'next-auth/jwt'
 import { authOptions } from '@/lib/auth'
+import { resolveGoogleAccessTokenLenient } from '@/lib/google-session'
+import { resolveDriveLinkContext } from '@/lib/drive-links'
 import { createLogger } from '@/lib/logger'
 import { streamChat, buildSystemPromptParts, friendlyModelError } from '@/lib/gemini'
 import { resolveReadTools } from '@/lib/ai-tools/resolve'
@@ -475,15 +476,26 @@ async function handleChat(req: NextRequest): Promise<Response> {
     // Hybrid SEMANTIC-ONLY research: Exa (web) + Vertex AI Internal Brain run
     // CONCURRENTLY, each failing open independently — a Vertex outage must not
     // kill web results and vice versa. Everything else (pgvector, Paperclip,
-    // Workspace context, attachments, skills) stays disabled in this mode.
-    const [exaSearch, internalSearch] = await Promise.all([
+    // Workspace context, attachments, skills) stays disabled in this mode —
+    // EXCEPT documents the user explicitly linked by URL in their message:
+    // those are user-supplied context, not a tool, and refusing to read a link
+    // the user just pasted is indistinguishable from a bug to them.
+    const [exaSearch, internalSearch, exaDriveLinks] = await Promise.all([
       exaQuery ? runExaOnlySearch(exaQuery) : Promise.resolve({ context: '', failed: false }),
       exaQuery
         ? withTimeout(
             (async () => {
               try {
                 const vertexResults = await breaker.execute('vertex-ai', () => searchSemanticBrain(exaQuery))
-                if (vertexResults && vertexResults.length > 0) {
+                if (vertexResults === null) {
+                  // searchSemanticBrain's null contract: the backend is
+                  // unavailable/misconfigured (no service account, HTTP error).
+                  // Reporting that as "zero matches" made the model tell the
+                  // user their documents don't exist during outages.
+                  log.warn('EXA hybrid: Vertex returned null (unavailable) — disclosing as failed, not empty')
+                  return { context: '', failed: true }
+                }
+                if (vertexResults.length > 0) {
                   const ctx = vertexResults
                     .map(r => `**${r.title}** ${r.uri ? `(${r.uri})` : ''}\n${r.snippet}`)
                     .join('\n\n---\n\n')
@@ -504,6 +516,19 @@ async function handleChat(req: NextRequest): Promise<Response> {
             'exa-internal-search',
           )
         : Promise.resolve({ context: '', failed: false }),
+      withTimeout(
+        (async () => {
+          const tokenState = await resolveGoogleAccessTokenLenient(req)
+          return resolveDriveLinkContext(
+            exaQuery,
+            tokenState.ok ? tokenState.accessToken : undefined,
+            tokenState.ok ? undefined : { unavailableReason: tokenState.reason },
+          )
+        })(),
+        12_000,
+        { content: '', advisory: '' },
+        'exa-drive-links',
+      ),
     ])
 
     // Parts form → Claude puts a cache breakpoint on the static prefix
@@ -514,6 +539,8 @@ async function handleChat(req: NextRequest): Promise<Response> {
       exaSearchFailed: exaSearch.failed,
       exaInternalContext: internalSearch.context || undefined,
       exaInternalFailed: internalSearch.failed,
+      driveLinkContext: exaDriveLinks.content || undefined,
+      driveLinkAdvisory: exaDriveLinks.advisory || undefined,
     })
     // 'exa_search' routes to the Claude chain (Fable 5 → Sonnet 4.6 → Gemini
     // fallbacks) — research synthesis with citations needs the strongest model,
@@ -534,8 +561,23 @@ async function handleChat(req: NextRequest): Promise<Response> {
   let projectContext = ''
   let agentActivity = ''
 
-  const googleToken = await getToken({ req })
-  const googleAccessToken = googleToken?.accessToken as string | undefined
+  // Same three token checks every /api/google/* route applies (fatal refresh
+  // error, missing token, expired-in-cookie access token) — but soft: chat
+  // still answers without Workspace data. Previously a bare getToken() here
+  // handed dead tokens to every Google consumer, whose failures are silently
+  // swallowed — ALL Drive/Gmail/Calendar data vanished from the model's
+  // context with no signal to the user. Now the model is told why, so it says
+  // "reconnect Google" instead of "you have no documents".
+  const googleTokenState = await resolveGoogleAccessTokenLenient(req)
+  const googleAccessToken = googleTokenState.ok ? googleTokenState.accessToken : undefined
+  let googleAuthNotice: string | undefined
+  if (!googleTokenState.ok) {
+    log.warn({ reason: googleTokenState.reason }, 'Chat running without Google Workspace access')
+    googleAuthNotice =
+      googleTokenState.reason === 'reauth'
+        ? '[Google Workspace access is UNAVAILABLE this turn: the user\'s Google session has expired or been revoked. No Drive, Gmail, Calendar, Tasks, or Chat data could be read. If the user asks about their files, email, or schedule, tell them to sign out of the Hub and sign back in to reconnect Google — do NOT tell them the data does not exist, and do NOT invent it.]'
+        : '[Google Workspace access is TEMPORARILY unavailable this turn (the Google session token is refreshing). No Drive, Gmail, Calendar, Tasks, or Chat data could be read. If the user asks about their files or email, tell them to retry in a moment — do NOT tell them the data does not exist, and do NOT invent it.]'
+  }
 
   // Search depends only on the query + useCase (not on Paperclip/Google context),
   // so kick it off NOW to run CONCURRENTLY with the context fetches below.
@@ -685,7 +727,16 @@ async function handleChat(req: NextRequest): Promise<Response> {
   // CONCURRENTLY — preserving the .slice(0,5) cap, input order of the injected
   // blocks, per-attachment error isolation, and every existing timeout. This cuts
   // worst-case time-to-first-token from serial (~30-40s for 3-5 items) to parallel.
-  const attachmentContext = await resolveAttachmentContext(attachments, lastUserMsg, googleAccessToken)
+  const [attachmentContext, driveLinks] = await Promise.all([
+    resolveAttachmentContext(attachments, lastUserMsg, googleAccessToken),
+    // Drive links pasted directly into the message text — read with the
+    // user's token, deterministically (no planner in the loop).
+    resolveDriveLinkContext(
+      query,
+      googleAccessToken,
+      googleTokenState.ok ? undefined : { unavailableReason: googleTokenState.reason },
+    ),
+  ])
 
   // Combine all injected context
   const allInjectedContext = [searchContext, attachmentContext].filter(Boolean).join('\n\n')
@@ -706,8 +757,11 @@ async function handleChat(req: NextRequest): Promise<Response> {
     agentActivity,
     googleWorkspace: Object.keys(googleWorkspaceCounts).length > 0 ? googleWorkspaceCounts : undefined,
     googleWorkspaceDetail,
+    googleAuthNotice,
     liveAnalytics: liveAnalytics.context,
     injectedContext: allInjectedContext || undefined,
+    driveLinkContext: driveLinks.content || undefined,
+    driveLinkAdvisory: driveLinks.advisory || undefined,
     activeSkill: activeSkill || undefined,
     activeSkillContent,
   })

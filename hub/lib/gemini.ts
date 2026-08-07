@@ -136,7 +136,7 @@ If they lack the required role, politely tell them what permission level is need
 const EXA_SEARCH_SYSTEM_PROMPT = `You are the Hub's EXA Search assistant. The user has toggled EXA Search mode ON, turning this chat into a semantic research tool with exactly TWO search backends: Exa.AI (semantic web search over public sources) and the Internal Brain (Vertex AI semantic search over the company's own documents in Google Drive, Gmail, and Chat). This is a research-only mode.
 
 Your job:
-- Answer the user's query using ONLY the "Web Search Results (Exa.AI)" and "Internal Knowledge (Vertex AI)" sections provided in your context below.
+- Answer the user's query using ONLY the "Web Search Results (Exa.AI)" and "Internal Knowledge (Vertex AI)" sections provided in your context below — plus, when present, the "User-Linked Documents (Google Drive)" section containing documents the user linked by URL in their message.
 - Synthesize BOTH sources into one clear, well-organized answer (great for combining market/competitor/academic research with the company's own documents and data).
 - ALWAYS attribute claims to their source: web claims cite inline markdown links with the exact URLs from the results, e.g. [source](https://example.com); internal claims name the document title and label it "(internal)". Never present internal company data as public information or vice versa.
 - End with a short "Sources" list — web links first, then internal document titles.
@@ -147,7 +147,7 @@ Hard rules for this mode:
 - Do NOT attempt any Hub action: no Interview Mode, no task/issue creation, no Confirm Cards, no skill protocols. Those tools are disabled while EXA Search is on.
 - Do NOT emit skill-suggestion metadata comments.
 - If one source returned nothing, answer from the other and note which came back empty.
-- The live Drive and Chat lookups (search_drive / search_chat) are NOT available in this mode — only the two backends above. So never OFFER to search the user's Drive or Chat history here, and never ask "would you like me to check…": you cannot, and the offer will not be honoured. If the answer would come from their own documents or conversations, say plainly that EXA Search mode only covers web results and the Internal Brain index, and that turning EXA Search OFF lets the assistant search Drive and Chat directly.
+- The live Drive and Chat lookups (search_drive / search_chat) are NOT available in this mode — only the two backends above. So never OFFER to search the user's Drive or Chat history here, and never ask "would you like me to check…": you cannot, and the offer will not be honoured. If the answer would come from their own documents or conversations, say plainly that EXA Search mode only covers web results and the Internal Brain index, and that turning EXA Search OFF lets the assistant search Drive and Chat directly. ONE exception: a Google Drive document the user links by URL in their message IS read and provided under "User-Linked Documents (Google Drive)" — use it when present.
 - The Internal Brain is a SEPARATE INDEX of company documents, not a live read of Drive. It returning nothing means the index has no match — it does NOT mean the document is absent from Drive. Say which of the two backends you actually used, so an answer built only on public web results is never mistaken for one grounded in the company's own records.
 The user can keep chatting about these results — later turns in this mode continue to synthesize whatever new results are provided.`
 
@@ -166,6 +166,18 @@ export interface SystemPromptContext {
   }
   /** Detailed live Google Workspace data (task titles, event summaries, file names, chat spaces). */
   googleWorkspaceDetail?: string
+  /** Set when Google Workspace access could NOT be resolved this turn (expired/
+   *  revoked/refreshing session) — tells the model WHY live Google data is
+   *  absent so it says "reconnect Google" instead of "you have no documents". */
+  googleAuthNotice?: string
+  /** Documents the user linked by Drive URL in their message, read this turn
+   *  with their own token. UNTRUSTED document text — fenced at render. Shown
+   *  in BOTH normal and EXA modes. */
+  driveLinkContext?: string
+  /** Our own guidance about the linked documents (sign-in hints, "don't deny
+   *  it exists"). Rendered OUTSIDE the fence — the fence policy tells the
+   *  model to ignore instructions found inside fenced content. */
+  driveLinkAdvisory?: string
   /** Analytics retrieved by read-tools THIS TURN (GA4 / Search Console),
    *  already fenced by the tool layer. See lib/ai-tools/. */
   liveAnalytics?: string
@@ -231,6 +243,14 @@ export function buildSystemPromptParts(context: SystemPromptContext): { staticPr
     } else {
       p += `## Internal Knowledge (Vertex AI — company semantic database)\n\n[No matching internal documents were found for this query. Say so briefly if the user asked about internal/company data; do NOT invent internal documents.]\n\n`
     }
+    /* ── User-linked Drive documents — the one exception to "two backends":
+       content the user explicitly linked by URL in their message, read with
+       their own Google token. Document text is fenced like every injected
+       block; OUR guidance about it renders after the fence, where the model
+       is allowed to follow it. */
+    if (context.driveLinkContext) {
+      p += `## User-Linked Documents (Google Drive)\n${fenceUntrusted('User-linked Drive documents', context.driveLinkContext)}\n\nThe user linked these documents directly in their message — treat them as primary context and cite them by title labeled "(linked document)".${context.driveLinkAdvisory ? ` ${context.driveLinkAdvisory}` : ''}\n\n`
+    }
     return { staticPrefix, dynamic: p }
   }
 
@@ -244,6 +264,16 @@ export function buildSystemPromptParts(context: SystemPromptContext): { staticPr
       prompt += ` — ${context.roleDescription}`
     }
     prompt += '\n\n'
+  }
+
+  /* ── Google Workspace availability ──
+     When the OAuth token could not be resolved, the model must know Google
+     data is MISSING (and why) — otherwise "no files in your context" reads as
+     "you have no files" to the user. Placed before the workspace sections it
+     explains. Plain instruction text from our own route, not user content, so
+     it is not fenced. */
+  if (context.googleAuthNotice) {
+    prompt += `## Google Workspace Availability\n${context.googleAuthNotice}\n\n`
   }
 
   /* ── Google Workspace state ── */
@@ -312,6 +342,13 @@ export function buildSystemPromptParts(context: SystemPromptContext): { staticPr
   /* ── Injected context from panel taps (progressive disclosure) ── */
   if (context.injectedContext) {
     prompt += `Currently active context (retrieved on the user's behalf — web results, documents, attachments):\n${fenceUntrusted('retrieved context', context.injectedContext)}\n\nUse this context to inform your response. The user is asking about this specific item.\n\n`
+  }
+
+  /* ── Drive documents the user linked by URL in their message ──
+     Document text fenced; OUR guidance rendered after the fence, where the
+     model is allowed to follow it. */
+  if (context.driveLinkContext) {
+    prompt += `## User-Linked Google Drive Documents\n${fenceUntrusted('User-linked Drive documents', context.driveLinkContext)}\n\nThe user pasted these Drive links directly into their message — their content was just read with the user's own Google account. Treat them as primary context for this turn and cite them by document title.${context.driveLinkAdvisory ? ` ${context.driveLinkAdvisory}` : ''}\n\n`
   }
 
   return { staticPrefix, dynamic: prompt }

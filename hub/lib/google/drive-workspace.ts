@@ -144,7 +144,7 @@ export function artifactAppProperties(tenantId: string, kind: string): Record<st
 async function getFile(accessToken: string, fileId: string): Promise<DriveFile | null> {
   try {
     return await googleFetch<DriveFile>(
-      `${DRIVE_FILES}/${fileId}?fields=id,name,mimeType,trashed,shortcutDetails`,
+      `${DRIVE_FILES}/${fileId}?fields=id,name,mimeType,trashed,shortcutDetails&supportsAllDrives=true`,
       accessToken,
     )
   } catch (err) {

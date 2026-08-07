@@ -88,7 +88,7 @@ async function processGoogleDelta(resourceId: string, resourceUri: string) {
   }
 
   // Fetch file metadata to get name, mimeType, webViewLink
-  const metaRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name,mimeType,webViewLink`, {
+  const metaRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name,mimeType,webViewLink&supportsAllDrives=true`, {
     headers: { Authorization: `Bearer ${accessToken}` }
   });
   if (!metaRes.ok) {

@@ -305,3 +305,73 @@ describe('buildSystemPrompt — live analytics (read-tool results)', () => {
     expect(prompt).toContain('does NOT let you claim to have performed any write')
   })
 })
+
+/* Google-data honesty: when the OAuth token is dead the model must be told WHY
+   Workspace data is missing — and a document the user linked by URL must reach
+   the model in BOTH chat modes. Together these are the fix for "the AI can't
+   see any Google Drive files even when I send it the file link". */
+describe('buildSystemPrompt — Google availability notice + user-linked Drive documents', () => {
+  it('renders the auth notice so the model says "reconnect Google", not "no documents"', () => {
+    const notice = '[Google Workspace access is UNAVAILABLE this turn: session expired]'
+    const prompt = buildSystemPrompt({ googleAuthNotice: notice })
+    expect(prompt).toContain('## Google Workspace Availability')
+    expect(prompt).toContain(notice)
+    expect(buildSystemPrompt({})).not.toContain('## Google Workspace Availability')
+  })
+
+  it('renders user-linked Drive documents fenced as untrusted in normal mode', () => {
+    const prompt = buildSystemPrompt({ driveLinkContext: 'Linked Drive file: "Q3 Plan"\nRevenue…' })
+    expect(prompt).toContain('## User-Linked Google Drive Documents')
+    expect(prompt).toContain('Q3 Plan')
+    // Fenced — linked document content is data, not instructions.
+    const closes = (s: string) => s.split('</untrusted_data>').length - 1
+    expect(closes(prompt)).toBe(closes(buildSystemPrompt({})) + 1)
+  })
+
+  it('renders user-linked Drive documents in EXA mode too', () => {
+    const prompt = buildSystemPrompt({
+      exaMode: true,
+      injectedContext: 'web hit',
+      driveLinkContext: 'Linked Drive file: "Q3 Plan"\nRevenue…',
+    })
+    expect(prompt).toContain('## User-Linked Documents (Google Drive)')
+    expect(prompt).toContain('Q3 Plan')
+    // Still no Hub tooling scaffolding in EXA mode.
+    expect(prompt).not.toContain('## Available Skills')
+  })
+
+  it('EXA mode without links renders no linked-documents section', () => {
+    // The persona TEXT mentions the section by name, so assert on the header.
+    const prompt = buildSystemPrompt({ exaMode: true, injectedContext: 'web hit' })
+    expect(prompt).not.toContain('## User-Linked Documents (Google Drive)')
+  })
+})
+
+describe('buildSystemPrompt — drive-link advisory renders OUTSIDE the fence', () => {
+  // The fence policy orders the model to ignore instructions inside fenced
+  // content, so recovery guidance ("sign back in", "don't claim it doesn't
+  // exist") must render after the fence or it would be discarded.
+  it('normal mode: advisory text appears after the closing fence', () => {
+    const prompt = buildSystemPrompt({
+      driveLinkContext: '[read failed: HTTP 404]',
+      driveLinkAdvisory: 'A linked file could not be read — say so plainly.',
+    })
+    const fenceClose = prompt.lastIndexOf('</untrusted_data>')
+    const advisoryAt = prompt.indexOf('A linked file could not be read')
+    expect(advisoryAt).toBeGreaterThan(fenceClose)
+    // And the advisory is NOT inside any fenced block.
+    expect(prompt.slice(0, fenceClose)).not.toContain('say so plainly')
+  })
+
+  it('EXA mode: advisory text appears after the closing fence', () => {
+    // Marker chosen to collide with nothing in the EXA persona text.
+    const prompt = buildSystemPrompt({
+      exaMode: true,
+      injectedContext: 'web hit',
+      driveLinkContext: '[read failed: HTTP 404]',
+      driveLinkAdvisory: 'ADVISORY-MARKER: the linked file may be unshared.',
+    })
+    const advisoryAt = prompt.indexOf('ADVISORY-MARKER')
+    expect(advisoryAt).toBeGreaterThan(prompt.lastIndexOf('</untrusted_data>'))
+  })
+})
