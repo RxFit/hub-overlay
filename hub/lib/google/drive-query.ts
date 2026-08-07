@@ -16,8 +16,17 @@ const VIDEO_EXCLUSIONS = [
  *  - { query }            → run this query
  *  - { empty: true }      → return an empty file list without calling Drive
  *  - { rankByMyEdits }    → over-fetch and re-rank so the caller's own edits
- *                           come first (see rankByOwnActivity) */
-export type DriveQueryPlan = { query?: string; empty?: boolean; rankByMyEdits?: boolean }
+ *                           come first (see rankByOwnActivity)
+ *  - { corpora }          → Drive corpora to search. allDrives also covers
+ *                           Shared Drives the user is a member of but has
+ *                           never opened; NOT set for the 'shared' filter —
+ *                           sharedWithMe is only valid in the user corpus. */
+export type DriveQueryPlan = {
+  query?: string
+  empty?: boolean
+  rankByMyEdits?: boolean
+  corpora?: 'allDrives'
+}
 
 /** Build the Drive query plan based on filter type and the active tenant. */
 export function buildDriveQuery(
@@ -34,12 +43,12 @@ export function buildDriveQuery(
     case 'transcripts':
       // Per-tenant folder; no hardcoded id. Unconfigured → empty (no cross-tenant leak).
       if (!transcriptsFolderId) return { empty: true }
-      return { query: `'${transcriptsFolderId}' in parents and ${VIDEO_EXCLUSIONS}` }
+      return { query: `'${transcriptsFolderId}' in parents and ${VIDEO_EXCLUSIONS}`, corpora: 'allDrives' }
 
     case 'recent':
     default: {
       // Custom q (the attach-menu search) is a plain filtered listing.
-      if (customQ) return { query: `${customQ} and ${VIDEO_EXCLUSIONS}` }
+      if (customQ) return { query: `${customQ} and ${VIDEO_EXCLUSIONS}`, corpora: 'allDrives' }
       // Default "Recent": the docs the USER has been working on. Drive's query
       // language cannot filter on modifiedByMeTime, and plain
       // `modifiedTime desc` ranks by ANYONE's edits — in an active org that
@@ -49,6 +58,7 @@ export function buildDriveQuery(
       return {
         query: `modifiedTime > '${sevenDaysAgo}' and ${VIDEO_EXCLUSIONS}`,
         rankByMyEdits: true,
+        corpora: 'allDrives',
       }
     }
   }

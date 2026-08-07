@@ -519,10 +519,14 @@ async function handleChat(req: NextRequest): Promise<Response> {
       withTimeout(
         (async () => {
           const tokenState = await resolveGoogleAccessTokenLenient(req)
-          return resolveDriveLinkContext(exaQuery, tokenState.ok ? tokenState.accessToken : undefined)
+          return resolveDriveLinkContext(
+            exaQuery,
+            tokenState.ok ? tokenState.accessToken : undefined,
+            tokenState.ok ? undefined : { unavailableReason: tokenState.reason },
+          )
         })(),
         12_000,
-        '',
+        { content: '', advisory: '' },
         'exa-drive-links',
       ),
     ])
@@ -535,7 +539,8 @@ async function handleChat(req: NextRequest): Promise<Response> {
       exaSearchFailed: exaSearch.failed,
       exaInternalContext: internalSearch.context || undefined,
       exaInternalFailed: internalSearch.failed,
-      driveLinkContext: exaDriveLinks || undefined,
+      driveLinkContext: exaDriveLinks.content || undefined,
+      driveLinkAdvisory: exaDriveLinks.advisory || undefined,
     })
     // 'exa_search' routes to the Claude chain (Fable 5 → Sonnet 4.6 → Gemini
     // fallbacks) — research synthesis with citations needs the strongest model,
@@ -722,11 +727,15 @@ async function handleChat(req: NextRequest): Promise<Response> {
   // CONCURRENTLY — preserving the .slice(0,5) cap, input order of the injected
   // blocks, per-attachment error isolation, and every existing timeout. This cuts
   // worst-case time-to-first-token from serial (~30-40s for 3-5 items) to parallel.
-  const [attachmentContext, driveLinkContext] = await Promise.all([
+  const [attachmentContext, driveLinks] = await Promise.all([
     resolveAttachmentContext(attachments, lastUserMsg, googleAccessToken),
     // Drive links pasted directly into the message text — read with the
     // user's token, deterministically (no planner in the loop).
-    resolveDriveLinkContext(query, googleAccessToken),
+    resolveDriveLinkContext(
+      query,
+      googleAccessToken,
+      googleTokenState.ok ? undefined : { unavailableReason: googleTokenState.reason },
+    ),
   ])
 
   // Combine all injected context
@@ -751,7 +760,8 @@ async function handleChat(req: NextRequest): Promise<Response> {
     googleAuthNotice,
     liveAnalytics: liveAnalytics.context,
     injectedContext: allInjectedContext || undefined,
-    driveLinkContext: driveLinkContext || undefined,
+    driveLinkContext: driveLinks.content || undefined,
+    driveLinkAdvisory: driveLinks.advisory || undefined,
     activeSkill: activeSkill || undefined,
     activeSkillContent,
   })

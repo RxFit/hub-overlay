@@ -346,3 +346,32 @@ describe('buildSystemPrompt — Google availability notice + user-linked Drive d
     expect(prompt).not.toContain('## User-Linked Documents (Google Drive)')
   })
 })
+
+describe('buildSystemPrompt — drive-link advisory renders OUTSIDE the fence', () => {
+  // The fence policy orders the model to ignore instructions inside fenced
+  // content, so recovery guidance ("sign back in", "don't claim it doesn't
+  // exist") must render after the fence or it would be discarded.
+  it('normal mode: advisory text appears after the closing fence', () => {
+    const prompt = buildSystemPrompt({
+      driveLinkContext: '[read failed: HTTP 404]',
+      driveLinkAdvisory: 'A linked file could not be read — say so plainly.',
+    })
+    const fenceClose = prompt.lastIndexOf('</untrusted_data>')
+    const advisoryAt = prompt.indexOf('A linked file could not be read')
+    expect(advisoryAt).toBeGreaterThan(fenceClose)
+    // And the advisory is NOT inside any fenced block.
+    expect(prompt.slice(0, fenceClose)).not.toContain('say so plainly')
+  })
+
+  it('EXA mode: advisory text appears after the closing fence', () => {
+    // Marker chosen to collide with nothing in the EXA persona text.
+    const prompt = buildSystemPrompt({
+      exaMode: true,
+      injectedContext: 'web hit',
+      driveLinkContext: '[read failed: HTTP 404]',
+      driveLinkAdvisory: 'ADVISORY-MARKER: the linked file may be unshared.',
+    })
+    const advisoryAt = prompt.indexOf('ADVISORY-MARKER')
+    expect(advisoryAt).toBeGreaterThan(prompt.lastIndexOf('</untrusted_data>'))
+  })
+})

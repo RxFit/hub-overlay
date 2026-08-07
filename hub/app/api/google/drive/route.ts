@@ -43,6 +43,7 @@ export async function GET(req: NextRequest) {
       // own docs get cut before they can be moved to the front.
       maxResults: plan.rankByMyEdits ? Math.max(limit, RANK_FETCH_SIZE) : limit,
       query: plan.query,
+      corpora: plan.corpora,
     })
     const ranked = plan.rankByMyEdits ? rankByOwnActivity(files).slice(0, limit) : files
     return NextResponse.json({ files: ranked })

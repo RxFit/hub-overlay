@@ -2,28 +2,33 @@ import { describe, it, expect } from 'vitest'
 import { buildDriveQuery, rankByOwnActivity } from './drive-query'
 
 describe('buildDriveQuery', () => {
-  it('default "recent" windows by modifiedTime and asks for own-edit re-ranking', () => {
+  it('default "recent" windows by modifiedTime, spans all drives, and asks for own-edit re-ranking', () => {
     const plan = buildDriveQuery('recent', undefined, undefined)
     expect(plan.query).toContain('modifiedTime > ')
     expect(plan.query).toContain("mimeType != 'video/mp4'")
     expect(plan.rankByMyEdits).toBe(true)
+    expect(plan.corpora).toBe('allDrives')
   })
 
-  it('a custom q (attach-menu search) is a plain filtered listing — no re-ranking', () => {
+  it('a custom q (attach-menu search) is a plain filtered listing — no re-ranking, all drives', () => {
     const plan = buildDriveQuery('recent', "name contains 'foo'", undefined)
     expect(plan.query).toContain("name contains 'foo'")
     expect(plan.rankByMyEdits).toBeUndefined()
+    expect(plan.corpora).toBe('allDrives')
   })
 
-  it('shared filter lists sharedWithMe without re-ranking', () => {
+  it('shared filter lists sharedWithMe in the USER corpus — sharedWithMe is invalid with corpora=allDrives', () => {
     const plan = buildDriveQuery('shared', undefined, undefined)
     expect(plan.query).toContain('sharedWithMe = true')
     expect(plan.rankByMyEdits).toBeUndefined()
+    expect(plan.corpora).toBeUndefined()
   })
 
   it('transcripts without a configured folder returns empty instead of leaking cross-tenant', () => {
     expect(buildDriveQuery('transcripts', undefined, undefined)).toEqual({ empty: true })
-    expect(buildDriveQuery('transcripts', undefined, 'folder1').query).toContain("'folder1' in parents")
+    const plan = buildDriveQuery('transcripts', undefined, 'folder1')
+    expect(plan.query).toContain("'folder1' in parents")
+    expect(plan.corpora).toBe('allDrives')
   })
 })
 

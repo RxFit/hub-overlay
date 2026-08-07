@@ -169,6 +169,14 @@ describe('Shared Drive visibility', () => {
     expect(url).toContain('includeItemsFromAllDrives=true')
   })
 
+  it('searchDriveFiles sends NO orderBy — Drive 400s on sorting a fullText query', async () => {
+    // "Sorting is not supported for queries with fullText terms" — this exact
+    // combination made every search_drive call fail upstream.
+    stub(() => new Response(JSON.stringify({ files: [] }), { status: 200 }))
+    await searchDriveFiles('tok', 'Nuvita')
+    expect(calls[0]).not.toContain('orderBy')
+  })
+
   it('readDriveFileText fetches metadata with supportsAllDrives', async () => {
     stub((url) =>
       url.includes('fields=')
@@ -188,6 +196,22 @@ describe('Shared Drive visibility', () => {
     expect(url).toContain('trashed = false')
     // The caller's own-edit timestamp powers the panel's "my docs first" ranking.
     expect(url).toContain('modifiedByMeTime')
+    // Ordinary (non-fullText) listings keep recency ordering.
+    expect(url).toContain('orderBy=modifiedTime desc')
+  })
+
+  it('listRecentFiles drops orderBy for a fullText query (Drive rejects the combination)', async () => {
+    stub(() => new Response(JSON.stringify({ files: [] }), { status: 200 }))
+    await listRecentFiles('tok', { query: "(name contains 'x' or fullText contains 'x')" })
+    expect(calls[0]).not.toContain('orderBy')
+  })
+
+  it('listRecentFiles passes corpora only when the caller opts in', async () => {
+    stub(() => new Response(JSON.stringify({ files: [] }), { status: 200 }))
+    await listRecentFiles('tok', { corpora: 'allDrives' })
+    expect(calls[0]).toContain('corpora=allDrives')
+    await listRecentFiles('tok', {})
+    expect(calls[1]).not.toContain('corpora=')
   })
 
   it('listRecentFiles ANDs trashed = false onto a caller query', async () => {

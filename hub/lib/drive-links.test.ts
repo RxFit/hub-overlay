@@ -61,12 +61,12 @@ describe('extractDriveLinks', () => {
 describe('resolveDriveLinkContext', () => {
   beforeEach(() => readDriveFileTextMock.mockReset())
 
-  it('returns empty for a message without links (no Drive call)', async () => {
-    expect(await resolveDriveLinkContext('just a question', 'tok')).toBe('')
+  it('returns empty parts for a message without links (no Drive call)', async () => {
+    expect(await resolveDriveLinkContext('just a question', 'tok')).toEqual({ content: '', advisory: '' })
     expect(readDriveFileTextMock).not.toHaveBeenCalled()
   })
 
-  it('reads a linked file with the user token and includes its content', async () => {
+  it('reads a linked file with the user token; content carries the text, no advisory needed', async () => {
     readDriveFileTextMock.mockResolvedValueOnce({
       id: 'docIDdocID123456',
       name: 'Q3 Plan',
@@ -79,38 +79,49 @@ describe('resolveDriveLinkContext', () => {
       'tok',
     )
     expect(readDriveFileTextMock).toHaveBeenCalledWith('tok', 'docIDdocID123456', { maxChars: 12_000 })
-    expect(ctx).toContain('User-Linked Google Drive Documents')
-    expect(ctx).toContain('"Q3 Plan"')
-    expect(ctx).toContain('Revenue targets…')
+    expect(ctx.content).toContain('"Q3 Plan"')
+    expect(ctx.content).toContain('Revenue targets…')
+    expect(ctx.advisory).toBe('')
   })
 
-  it('explains a missing token instead of silently dropping the link', async () => {
+  it('explains a missing token in the ADVISORY (outside-fence guidance), reauth wording by default', async () => {
     const ctx = await resolveDriveLinkContext(
       'https://docs.google.com/document/d/docIDdocID123456/edit',
       undefined,
     )
-    expect(ctx).toContain('no valid access token')
-    expect(ctx).toContain('sign out and sign back in')
+    expect(ctx.advisory).toContain('no valid access token')
+    expect(ctx.advisory).toContain('sign out')
+    expect(ctx.advisory).toContain("don't exist")
     expect(readDriveFileTextMock).not.toHaveBeenCalled()
   })
 
-  it('degrades an unreadable link to an explanatory note with a sharing hint on 404', async () => {
+  it('uses retry wording — never sign-out advice — for a transient/expired token, matching googleAuthNotice', async () => {
+    const ctx = await resolveDriveLinkContext(
+      'https://docs.google.com/document/d/docIDdocID123456/edit',
+      undefined,
+      { unavailableReason: 'transient' },
+    )
+    expect(ctx.advisory).toContain('retry in a moment')
+    expect(ctx.advisory).not.toContain('sign out')
+  })
+
+  it('degrades an unreadable link to a status note plus a sharing-hint advisory on 404', async () => {
     readDriveFileTextMock.mockRejectedValueOnce(new Error('Google API error 404: File not found'))
     const ctx = await resolveDriveLinkContext(
       'https://drive.google.com/file/d/goneIDgoneID1234/view',
       'tok',
     )
-    expect(ctx).toContain('Could not read this Drive link')
-    expect(ctx).toContain('may not be shared with the signed-in Google account')
-    expect(ctx).toContain("Do NOT claim the document doesn't exist")
+    expect(ctx.content).toContain('read failed')
+    expect(ctx.advisory).toContain('may not be shared with the signed-in Google account')
+    expect(ctx.advisory).toContain("do NOT claim the document doesn't exist")
   })
 
-  it('tells the model a folder link cannot be read as a document', async () => {
+  it('routes the folder explanation through the advisory', async () => {
     const ctx = await resolveDriveLinkContext(
       'https://drive.google.com/drive/folders/folderIDfolder123',
       'tok',
     )
-    expect(ctx).toContain('Drive FOLDER')
+    expect(ctx.advisory).toContain('Drive FOLDER')
     expect(readDriveFileTextMock).not.toHaveBeenCalled()
   })
 

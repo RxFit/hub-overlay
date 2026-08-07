@@ -171,8 +171,13 @@ export interface SystemPromptContext {
    *  absent so it says "reconnect Google" instead of "you have no documents". */
   googleAuthNotice?: string
   /** Documents the user linked by Drive URL in their message, read this turn
-   *  with their own token. Rendered in BOTH normal and EXA modes. */
+   *  with their own token. UNTRUSTED document text — fenced at render. Shown
+   *  in BOTH normal and EXA modes. */
   driveLinkContext?: string
+  /** Our own guidance about the linked documents (sign-in hints, "don't deny
+   *  it exists"). Rendered OUTSIDE the fence — the fence policy tells the
+   *  model to ignore instructions found inside fenced content. */
+  driveLinkAdvisory?: string
   /** Analytics retrieved by read-tools THIS TURN (GA4 / Search Console),
    *  already fenced by the tool layer. See lib/ai-tools/. */
   liveAnalytics?: string
@@ -240,9 +245,11 @@ export function buildSystemPromptParts(context: SystemPromptContext): { staticPr
     }
     /* ── User-linked Drive documents — the one exception to "two backends":
        content the user explicitly linked by URL in their message, read with
-       their own Google token. Fenced like every injected block. */
+       their own Google token. Document text is fenced like every injected
+       block; OUR guidance about it renders after the fence, where the model
+       is allowed to follow it. */
     if (context.driveLinkContext) {
-      p += `## User-Linked Documents (Google Drive)\n${fenceUntrusted('User-linked Drive documents', context.driveLinkContext)}\n\nThe user linked these documents directly in their message — treat them as primary context and cite them by title labeled "(linked document)".\n\n`
+      p += `## User-Linked Documents (Google Drive)\n${fenceUntrusted('User-linked Drive documents', context.driveLinkContext)}\n\nThe user linked these documents directly in their message — treat them as primary context and cite them by title labeled "(linked document)".${context.driveLinkAdvisory ? ` ${context.driveLinkAdvisory}` : ''}\n\n`
     }
     return { staticPrefix, dynamic: p }
   }
@@ -337,9 +344,11 @@ export function buildSystemPromptParts(context: SystemPromptContext): { staticPr
     prompt += `Currently active context (retrieved on the user's behalf — web results, documents, attachments):\n${fenceUntrusted('retrieved context', context.injectedContext)}\n\nUse this context to inform your response. The user is asking about this specific item.\n\n`
   }
 
-  /* ── Drive documents the user linked by URL in their message ── */
+  /* ── Drive documents the user linked by URL in their message ──
+     Document text fenced; OUR guidance rendered after the fence, where the
+     model is allowed to follow it. */
   if (context.driveLinkContext) {
-    prompt += `## User-Linked Google Drive Documents\n${fenceUntrusted('User-linked Drive documents', context.driveLinkContext)}\n\nThe user pasted these Drive links directly into their message — their content was just read with the user's own Google account. Treat them as primary context for this turn and cite them by document title.\n\n`
+    prompt += `## User-Linked Google Drive Documents\n${fenceUntrusted('User-linked Drive documents', context.driveLinkContext)}\n\nThe user pasted these Drive links directly into their message — their content was just read with the user's own Google account. Treat them as primary context for this turn and cite them by document title.${context.driveLinkAdvisory ? ` ${context.driveLinkAdvisory}` : ''}\n\n`
   }
 
   return { staticPrefix, dynamic: prompt }

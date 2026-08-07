@@ -118,6 +118,9 @@ export async function findShareableFiles(
     fields: FILE_FIELDS,
     supportsAllDrives: 'true',
     includeItemsFromAllDrives: 'true',
+    // Also match files in Shared Drives the user has never opened — the
+    // default user corpus omits those. Name-only query, so orderBy is valid.
+    corpora: 'allDrives',
   })
 
   const managed = toShareableFiles(
@@ -132,6 +135,9 @@ export async function findShareableFiles(
     fields: FILE_FIELDS,
     supportsAllDrives: 'true',
     includeItemsFromAllDrives: 'true',
+    // Also match files in Shared Drives the user has never opened — the
+    // default user corpus omits those. Name-only query, so orderBy is valid.
+    corpora: 'allDrives',
   })
   const unmanaged = toShareableFiles(
     await googleFetch<DriveFileListResponse>(`${DRIVE_FILES}?${anyParams}`, accessToken),

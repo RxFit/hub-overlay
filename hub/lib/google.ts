@@ -365,17 +365,25 @@ const SHARED_DRIVE_PARAMS = {
 /** List recent files from Google Drive */
 export async function listRecentFiles(
   accessToken: string,
-  opts?: { maxResults?: number; query?: string; orderBy?: string }
+  opts?: { maxResults?: number; query?: string; corpora?: 'user' | 'allDrives' }
 ): Promise<GoogleDriveFile[]> {
   const params = new URLSearchParams({
-    orderBy: opts?.orderBy ?? 'modifiedTime desc',
     pageSize: String(opts?.maxResults ?? 10),
     fields: 'files(id,name,mimeType,modifiedTime,modifiedByMeTime,webViewLink,iconLink,owners,size)',
     ...SHARED_DRIVE_PARAMS,
   })
   // Never list trash: a deleted file showing up as a "recent document" both
   // confuses and displaces a live one from the page.
-  params.set('q', opts?.query ? `(${opts.query}) and trashed = false` : 'trashed = false')
+  const query = opts?.query ? `(${opts.query}) and trashed = false` : 'trashed = false'
+  params.set('q', query)
+  // Drive HARD-REJECTS orderBy on queries containing fullText terms (400:
+  // "Sorting is not supported for queries with fullText terms") — those come
+  // back in relevance order, which is the right ranking for a content search.
+  if (!query.includes('fullText')) params.set('orderBy', 'modifiedTime desc')
+  // Callers pass allDrives to also see files in Shared Drives the user is a
+  // member of but has never opened (the default user corpus omits those).
+  // NOT valid for sharedWithMe queries, so it stays opt-in.
+  if (opts?.corpora) params.set('corpora', opts.corpora)
 
   const data = await googleFetch<{ files?: GoogleDriveFile[] }>(
     `${DRIVE_BASE}/files?${params}`,
@@ -416,9 +424,12 @@ export async function searchDriveFiles(
   const safe = escapeDriveQueryTerm(term.trim())
   if (!safe) return []
 
+  // No orderBy: Drive REJECTS sorting on fullText queries with a 400
+  // ("Sorting is not supported for queries with fullText terms") — every
+  // search_drive call had been failing on exactly that. Results arrive in
+  // descending relevance order, which is what a content search wants anyway.
   const params = new URLSearchParams({
     q: `(fullText contains '${safe}' or name contains '${safe}') and trashed = false`,
-    orderBy: 'modifiedTime desc',
     pageSize: String(opts?.maxResults ?? 8),
     fields: 'files(id,name,mimeType,modifiedTime,webViewLink,owners,size)',
     // Search spans every Shared Drive the user belongs to, not just My Drive —
