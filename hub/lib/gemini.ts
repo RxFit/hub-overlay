@@ -3,6 +3,7 @@ import type { ChatMessage } from '@/types'
 import { SKILL_CATALOG_PROMPT } from './skills'
 import { fenceUntrusted, UNTRUSTED_CONTENT_POLICY } from './prompt-safety'
 import { IDLE_TIMEOUT_MS, CONNECT_TIMEOUT_MS } from './timeout-config'
+import { withTimeout } from './timeout'
 import { emit, newRequestId, startTimer, type AiProvider } from './observability'
 import type { SystemPromptParts } from './claude'
 
@@ -1081,6 +1082,16 @@ async function* streamGeminiWithFallback(
 export async function geminiGenerateText(
   systemPrompt: string,
   userPrompt: string,
+  opts: {
+    /** Passed straight to the SDK — use responseMimeType/responseSchema when
+     *  the caller's contract is JSON rather than prose. */
+    generationConfig?: Record<string, unknown>
+    /** Ceiling for ONE model attempt. Without it a single slow model consumes
+     *  the caller's whole budget and the rest of the chain never runs — which
+     *  is how a 3-model chain under a 20s cap could fail without ever
+     *  reaching models 2 and 3. */
+    perModelTimeoutMs?: number
+  } = {},
 ): Promise<{ text: string; model: string }> {
   let lastErr: unknown
   for (const modelName of GEMINI_MODEL_CHAIN) {
@@ -1089,8 +1100,13 @@ export async function geminiGenerateText(
       const model = getGenAI().getGenerativeModel({
         model: modelName,
         systemInstruction: systemPrompt,
+        ...(opts.generationConfig ? { generationConfig: opts.generationConfig } : {}),
       })
-      const result = await model.generateContent(userPrompt)
+      const call = model.generateContent(userPrompt)
+      const result = opts.perModelTimeoutMs
+        ? await withTimeout(call, opts.perModelTimeoutMs, null, `gemini:${modelName}`)
+        : await call
+      if (!result) throw new Error(`${modelName} timed out after ${opts.perModelTimeoutMs}ms`)
       const text = result.response.text()
       if (!text || !text.trim()) throw new Error(`${modelName} returned empty text`)
       return { text, model: modelName }

@@ -26,11 +26,17 @@ export function useGmailFocus(enabled: boolean = true, opts: { background?: bool
   const { data, isLoading } = useQuery({
     queryKey: ['gmail', 'focus'],
     enabled,
-    queryFn: async (): Promise<{ items: FocusDisplayItem[] }> => {
+    queryFn: async (): Promise<{ items: FocusDisplayItem[]; degraded: boolean }> => {
       const r = await fetch('/api/google/gmail/focus')
-      if (!r.ok) return { items: [] }
+      if (!r.ok) return { items: [], degraded: true }
       const d = await r.json().catch(() => null)
-      return { items: Array.isArray(d?.items) ? (d.items as FocusDisplayItem[]) : [] }
+      return {
+        items: Array.isArray(d?.items) ? (d.items as FocusDisplayItem[]) : [],
+        // The server sets this when the AI ranking stage failed and the items
+        // are deterministic-only. The strip says so rather than presenting an
+        // outage as working AI ranking.
+        degraded: d?.degraded === true,
+      }
     },
     refetchInterval: 5 * 60_000,
     refetchIntervalInBackground: opts.background ?? false,
@@ -42,5 +48,6 @@ export function useGmailFocus(enabled: boolean = true, opts: { background?: bool
   return {
     focusItems: data?.items ?? [],
     focusLoading: isLoading,
+    focusDegraded: data?.degraded ?? false,
   }
 }

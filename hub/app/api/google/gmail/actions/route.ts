@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
-import { createTask, parseGmailThreadMeta, type GmailThread } from '@/lib/google'
+import { createTask, parseGmailThreadMeta, GMAIL_TRIAGE_HEADER_QS, type GmailThread } from '@/lib/google'
 import { GoogleGmailActionSchema } from '@/lib/zod-schemas'
 import { buildTaskNotes, GMAIL_THREAD_ID_RE } from '@/lib/gmail-actions'
 import { requireAiGate, AI_INTENT_HEADER, GATE_TOKEN_HEADER } from '@/lib/requireGate'
@@ -113,7 +113,7 @@ export async function POST(req: NextRequest) {
     // degenerate empty-thread case. '@default' is the Tasks API alias for the
     // user's default list.
     const metaRes = await fetch(
-      `${GMAIL_BASE}/threads/${threadId}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`,
+      `${GMAIL_BASE}/threads/${threadId}?format=metadata&${GMAIL_TRIAGE_HEADER_QS}`,
       { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(10_000) }
     )
     if (!metaRes.ok) {

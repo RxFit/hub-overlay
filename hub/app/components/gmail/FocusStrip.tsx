@@ -24,9 +24,11 @@ interface FocusStripProps {
   items: FocusItem[]
   threads: GmailThread[]
   onOpen: (threadId: string) => void
+  /** The AI ranking stage failed and these items are deterministic-only. */
+  degraded?: boolean
 }
 
-export function FocusStrip({ items, threads, onOpen }: FocusStripProps) {
+export function FocusStrip({ items, threads, onOpen, degraded = false }: FocusStripProps) {
   const byId = new Map(threads.map(t => [t.id, t]))
   const cards = items
     .map(item => ({ item, thread: byId.get(item.id) }))
@@ -44,7 +46,9 @@ export function FocusStrip({ items, threads, onOpen }: FocusStripProps) {
       <div className="gmail-focus__title">
         <span className="gmail-focus__spark" aria-hidden="true">✦</span>
         Focus
-        <span className="gmail-focus__hint">AI-suggested priorities</span>
+        <span className="gmail-focus__hint">
+          {degraded ? 'Ranked from inbox signals' : 'AI-suggested priorities'}
+        </span>
       </div>
       <div className="gmail-focus__rail">
         {cards.map(({ item, thread }) => {
@@ -68,6 +72,9 @@ export function FocusStrip({ items, threads, onOpen }: FocusStripProps) {
                 </span>
               </div>
               <div className="gmail-focus-card__subject">{thread.subject}</div>
+              {/* Rendered as a text node only — never dangerouslySetInnerHTML,
+                  never markdown, never a link. A reason may embed a short quote
+                  from sender-controlled subject/snippet text. */}
               {item.reason && <div className="gmail-focus-card__reason">{item.reason}</div>}
             </button>
           )

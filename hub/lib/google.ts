@@ -573,6 +573,85 @@ export interface GmailThreadSummary {
   snippet: string
   isUnread: boolean
   messageCount: number
+
+  /* ── Triage signals ──
+     Everything below already arrives in the SAME `format=metadata` response the
+     summary is built from — Gmail charges quota per method, not per header, so
+     none of it costs an extra call. It used to be parsed and thrown away (only
+     the UNREAD bit survived), which left the Focus ranker guessing "is this a
+     person or a mailing list?" from the From string alone. See lib/gmail-signals. */
+
+  /** labelIds of the LAST message — CATEGORY_*, IMPORTANT, STARRED, UNREAD. */
+  labelIds: string[]
+  /** Union of labelIds across EVERY message, so SENT/DRAFT anywhere in the
+   *  thread is visible (the user may have replied to the first message). */
+  threadLabelIds: string[]
+  /** Gmail's own server receive time (epoch ms) for the last message. Unlike
+   *  the `Date:` header this is not sender-controlled. null when absent. */
+  receivedAt: number | null
+  /** Triage headers of the last message, keys lowercased, values clipped.
+   *  Interpreting these is lib/gmail-signals' job, not this parser's. */
+  headers: Record<string, string>
+
+  /* Addressing, relative to the signed-in user. All false/0 when the caller
+     does not pass `userEmail` — the single best human-vs-blast discriminator. */
+  /** The user is the ONLY address in To. */
+  addressedDirectly: boolean
+  /** The user appears anywhere in To. */
+  inTo: boolean
+  /** The user is in Cc but not To. */
+  ccOnly: boolean
+  /** Distinct addresses across To + Cc. */
+  recipientCount: number
+  /** To is an RFC 5322 group with no members (`undisclosed-recipients:;`). */
+  undisclosedRecipients: boolean
+
+  /* Reciprocity — the Gmail Priority Inbox "thread" feature family. */
+  /** Some message in the thread is SENT: the user has written here. */
+  userReplied: boolean
+  /** Some message in the thread is a DRAFT: the user started a reply. */
+  hasDraft: boolean
+}
+
+/**
+ * Metadata headers fetched for every inbox thread.
+ *
+ * Gmail bills quota PER METHOD, not per header, so asking for all of these
+ * costs exactly what asking for From/Subject/Date cost. The list-mail markers
+ * (List-*, Precedence, Feedback-ID, Auto-Submitted) are what let the ranker
+ * separate a newsletter from a person with near-perfect precision — RFC 8058
+ * senders are required to set them, so the big offenders self-identify.
+ */
+export const GMAIL_TRIAGE_HEADERS = [
+  'From', 'To', 'Cc', 'Subject', 'Date', 'Reply-To',
+  'List-Unsubscribe', 'List-Unsubscribe-Post', 'List-Id', 'List-Post',
+  'Precedence', 'Auto-Submitted', 'Feedback-ID', 'X-Auto-Response-Suppress',
+  'Content-Type', 'Return-Path', 'Delivered-To',
+] as const
+
+/** Pre-built `metadataHeaders=` query fragment for GMAIL_TRIAGE_HEADERS. */
+export const GMAIL_TRIAGE_HEADER_QS = GMAIL_TRIAGE_HEADERS
+  .map(h => `metadataHeaders=${encodeURIComponent(h)}`)
+  .join('&')
+
+/** Longest header value retained. Bounds memory and, more importantly, bounds
+ *  how much sender-controlled text can reach anything downstream. */
+const MAX_HEADER_VALUE = 200
+
+/**
+ * Pull the addr-specs out of a To/Cc header.
+ *
+ * Matches addresses rather than splitting on ',' so a quoted display name
+ * containing a comma (`"Decker, Sam" <sam@x.com>`) doesn't inflate the count.
+ */
+export function parseAddressList(header: string): string[] {
+  return header.match(/[^\s<>,";]+@[^\s<>,";]+/g)?.map(a => a.toLowerCase()) ?? []
+}
+
+/** RFC 5322 §3.4 group syntax with an empty member list — the shape bulk
+ *  senders use when every real recipient is Bcc'd: `undisclosed-recipients:;` */
+export function isUndisclosedRecipients(toHeader: string): boolean {
+  return /^[^:@]+:\s*;$/.test(toHeader.trim())
 }
 
 /** Read a named RFC-2822 header off a Gmail message (case-insensitive). */
@@ -583,10 +662,36 @@ export function getGmailHeader(msg: GmailMessage, name: string): string {
 /** Collapse a metadata-format Gmail thread into a one-line summary.
  *  Shared by the Gmail route and the AI context builder — keep it the single
  *  implementation of thread-summary parsing. */
-export function parseGmailThreadMeta(thread: GmailThread): GmailThreadSummary | null {
-  const lastMsg = thread.messages?.[thread.messages.length - 1]
+export function parseGmailThreadMeta(
+  thread: GmailThread,
+  opts: { userEmail?: string } = {},
+): GmailThreadSummary | null {
+  const messages = thread.messages ?? []
+  const lastMsg = messages[messages.length - 1]
   if (!lastMsg) return null
-  const isUnread = lastMsg.labelIds?.includes('UNREAD') ?? false
+  const labelIds = lastMsg.labelIds ?? []
+  const isUnread = labelIds.includes('UNREAD')
+
+  // Walk EVERY message, not just the last: SENT/DRAFT may sit on the first
+  // message of a thread the user opened and the sender then replied to.
+  const threadLabels = new Set<string>()
+  for (const m of messages) for (const l of m.labelIds ?? []) threadLabels.add(l)
+
+  const headers: Record<string, string> = {}
+  for (const h of lastMsg.payload?.headers ?? []) {
+    if (h?.name) headers[h.name.toLowerCase()] = (h.value ?? '').slice(0, MAX_HEADER_VALUE)
+  }
+
+  const to = headers['to'] ?? ''
+  const cc = headers['cc'] ?? ''
+  const toList = parseAddressList(to)
+  const ccList = parseAddressList(cc)
+  const me = opts.userEmail?.trim().toLowerCase() ?? ''
+  const inTo = me !== '' && toList.includes(me)
+  const inCc = me !== '' && ccList.includes(me)
+
+  const received = Number(lastMsg.internalDate)
+
   return {
     id: thread.id,
     subject: getGmailHeader(lastMsg, 'Subject') || '(no subject)',
@@ -597,14 +702,28 @@ export function parseGmailThreadMeta(thread: GmailThread): GmailThreadSummary | 
     // list — instead of the oldest message the thread opened with.
     snippet: lastMsg.snippet ?? '',
     isUnread,
-    messageCount: thread.messages?.length ?? 1,
+    messageCount: messages.length || 1,
+
+    labelIds,
+    threadLabelIds: [...threadLabels],
+    receivedAt: Number.isFinite(received) && received > 0 ? received : null,
+    headers,
+
+    addressedDirectly: inTo && toList.length === 1,
+    inTo,
+    ccOnly: inCc && !inTo,
+    recipientCount: new Set([...toList, ...ccList]).size,
+    undisclosedRecipients: to !== '' && isUndisclosedRecipients(to),
+
+    userReplied: threadLabels.has('SENT'),
+    hasDraft: threadLabels.has('DRAFT'),
   }
 }
 
 /** List the most recent inbox threads with From/Subject/Date metadata. */
 export async function listRecentGmailThreads(
   accessToken: string,
-  opts?: { maxResults?: number }
+  opts?: { maxResults?: number; userEmail?: string }
 ): Promise<GmailThreadSummary[]> {
   const maxResults = opts?.maxResults ?? 10
   const list = await googleFetch<{ threads?: { id: string; snippet?: string }[] }>(
@@ -618,10 +737,10 @@ export async function listRecentGmailThreads(
   const threads = await Promise.all(
     list.threads.map(t =>
       googleFetch<GmailThread>(
-        `${GMAIL_BASE}/threads/${t.id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`,
+        `${GMAIL_BASE}/threads/${t.id}?format=metadata&${GMAIL_TRIAGE_HEADER_QS}`,
         accessToken
       )
-        .then(parseGmailThreadMeta)
+        .then(thread => parseGmailThreadMeta(thread, { userEmail: opts?.userEmail }))
         .catch(() => null)
     )
   )

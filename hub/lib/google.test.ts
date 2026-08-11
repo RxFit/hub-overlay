@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { createCalendarEvent, listRecentGmailThreads, type GmailThread } from './google'
+import { createCalendarEvent, listRecentGmailThreads, GMAIL_TRIAGE_HEADERS, type GmailThread } from './google'
 
 /* ════════════════════════════════════════════════════════════════════════════
    createCalendarEvent body construction (audit C-P0-1 / C-P0-2)
@@ -192,7 +192,7 @@ describe('listRecentGmailThreads', () => {
     expect(threads[1]).toMatchObject({ id: 't2', subject: 'Invoice', isUnread: false })
   })
 
-  it('requests INBOX threads then per-thread metadata with From/Subject/Date headers', async () => {
+  it('requests INBOX threads then per-thread metadata with every triage header', async () => {
     const fetchMock = stubGmailFetch({ threads: [{ id: 't1' }] }, {
       t1: {
         id: 't1',
@@ -204,9 +204,84 @@ describe('listRecentGmailThreads', () => {
     const urls = fetchMock.mock.calls.map(c => String(c[0]))
     expect(urls[0]).toContain('/threads?labelIds=INBOX&maxResults=7')
     expect(urls[1]).toContain('/threads/t1?format=metadata')
-    expect(urls[1]).toContain('metadataHeaders=From')
-    expect(urls[1]).toContain('metadataHeaders=Subject')
-    expect(urls[1]).toContain('metadataHeaders=Date')
+    // Gmail bills quota per METHOD, not per header, so the full triage set is
+    // free. Asking for only From/Subject/Date is what left the ranker unable to
+    // tell a mailing list from a person.
+    for (const h of GMAIL_TRIAGE_HEADERS) {
+      expect(urls[1]).toContain(`metadataHeaders=${encodeURIComponent(h)}`)
+    }
+    expect(urls[1]).toContain('metadataHeaders=List-Unsubscribe')
+  })
+
+  it('preserves labelIds — Gmail\'s own CATEGORY_* and IMPORTANT verdicts', async () => {
+    stubGmailFetch({ threads: [{ id: 't1' }] }, {
+      t1: {
+        id: 't1',
+        messages: [{
+          id: 'm1', threadId: 't1',
+          labelIds: ['INBOX', 'UNREAD', 'CATEGORY_PROMOTIONS', 'IMPORTANT'],
+          internalDate: '1786400000000',
+          payload: { headers: gmailHeaders('S', 'f@x.com', 'D') },
+        }],
+      },
+    })
+    const [t] = await listRecentGmailThreads('token')
+    expect(t.labelIds).toContain('CATEGORY_PROMOTIONS')
+    expect(t.labelIds).toContain('IMPORTANT')
+    expect(t.receivedAt).toBe(1786400000000)
+  })
+
+  it('detects reciprocity from ANY message in the thread, not just the last', async () => {
+    stubGmailFetch({ threads: [{ id: 't1' }] }, {
+      t1: {
+        id: 't1',
+        messages: [
+          // The user replied FIRST, then the sender wrote back — so the last
+          // message carries no SENT label and a last-message-only scan misses it.
+          { id: 'm1', threadId: 't1', labelIds: ['SENT'], payload: { headers: gmailHeaders('S', 'me@x.com', 'D') } },
+          { id: 'm2', threadId: 't1', labelIds: ['INBOX', 'UNREAD'], payload: { headers: gmailHeaders('Re: S', 'them@y.com', 'D') } },
+        ],
+      },
+    })
+    const [t] = await listRecentGmailThreads('token')
+    expect(t.userReplied).toBe(true)
+    expect(t.threadLabelIds).toContain('SENT')
+  })
+
+  it('resolves addressing relative to the user, case-insensitively', async () => {
+    stubGmailFetch({ threads: [{ id: 'solo' }, { id: 'blast' }, { id: 'cc' }] }, {
+      solo: {
+        id: 'solo',
+        messages: [{ id: 'm', threadId: 'solo', labelIds: ['INBOX'], payload: { headers: [
+          ...gmailHeaders('S', 'a@x.com', 'D'),
+          { name: 'To', value: 'Danny@RxFitATX.com' },
+        ] } }],
+      },
+      blast: {
+        id: 'blast',
+        messages: [{ id: 'm', threadId: 'blast', labelIds: ['INBOX'], payload: { headers: [
+          ...gmailHeaders('S', 'a@x.com', 'D'),
+          { name: 'To', value: 'undisclosed-recipients:;' },
+        ] } }],
+      },
+      cc: {
+        id: 'cc',
+        messages: [{ id: 'm', threadId: 'cc', labelIds: ['INBOX'], payload: { headers: [
+          ...gmailHeaders('S', 'a@x.com', 'D'),
+          { name: 'To', value: '"Team, Ops" <ops@y.com>' },
+          { name: 'Cc', value: 'danny@rxfitatx.com, other@z.com' },
+        ] } }],
+      },
+    })
+    const threads = await listRecentGmailThreads('token', { userEmail: 'danny@rxfitatx.com' })
+    const by = Object.fromEntries(threads.map(t => [t.id, t]))
+    expect(by.solo.addressedDirectly).toBe(true)
+    expect(by.solo.recipientCount).toBe(1)
+    expect(by.blast.undisclosedRecipients).toBe(true)
+    expect(by.blast.addressedDirectly).toBe(false)
+    // A quoted display name containing a comma must not inflate the count.
+    expect(by.cc.ccOnly).toBe(true)
+    expect(by.cc.recipientCount).toBe(3)
   })
 
   it('returns [] for an empty inbox and drops threads whose metadata fetch fails', async () => {

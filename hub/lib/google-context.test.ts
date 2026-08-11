@@ -52,6 +52,17 @@ function thread(id: string, over: Partial<GmailThreadSummary> = {}): GmailThread
     snippet: `snippet for ${id}`,
     isUnread: false,
     messageCount: 1,
+    labelIds: ['INBOX'],
+    threadLabelIds: ['INBOX'],
+    receivedAt: Date.parse('2026-07-03T15:00:00Z'),
+    headers: {},
+    addressedDirectly: false,
+    inTo: false,
+    ccOnly: false,
+    recipientCount: 0,
+    undisclosedRecipients: false,
+    userReplied: false,
+    hasDraft: false,
     ...over,
   }
 }
