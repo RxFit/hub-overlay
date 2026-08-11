@@ -6,18 +6,22 @@ import { listRecentGmailThreads } from '@/lib/google'
 import { clampInt } from '@/lib/num'
 import {
   buildFocusPrompt,
-  parseFocusResult,
+  parseFocusRanking,
+  scoreFocusItems,
+  seededOrder,
   threadsSignature,
   getCachedFocus,
   setCachedFocus,
-  heuristicFocusItems,
   type FocusItem,
+  type FocusRankEntry,
 } from '@/lib/gmail-focus'
+import { extractThreadSignals, DEFAULT_MIN_PRIORITY } from '@/lib/gmail-signals'
+import { claudeChat, isClaudeConfigured } from '@/lib/claude'
 import { withTimeout } from '@/lib/timeout'
 import { recordAiAction } from '@/lib/ai-audit'
 import { newRequestId } from '@/lib/observability'
 import { geminiGenerateText } from '@/lib/gemini'
-import { focusPreferencesSignature } from '@/lib/focus-preferences'
+import { focusPreferencesSignature, EMPTY_FOCUS_PREFERENCES } from '@/lib/focus-preferences'
 import { getFocusPreferences } from '@/lib/focus-preferences-db'
 
 export const runtime = 'nodejs'
@@ -51,6 +55,51 @@ const CACHE_TTL_MS = 10 * 60 * 1000
 const EMPTY_CACHE_TTL_MS = 2 * 60 * 1000
 const FOCUS_THREAD_POOL = 20
 
+/* Time budget. The old single 20s cap covered a THREE-model sequential chain
+   with no per-model bound, against a non-streaming call on a thinking-by-default
+   model — so one slow first model could consume the whole budget and models 2
+   and 3 never ran. Per-model bound x 3 now fits inside the total, which itself
+   sits under `maxDuration = 30`. */
+const PER_MODEL_TIMEOUT_MS = 8_000
+const RANK_BUDGET_MS = 24_000
+const PREFS_TIMEOUT_MS = 3_000
+
+const FOCUS_SYSTEM_PROMPT =
+  'You are an inbox triage assistant. Follow the instructions in the user message exactly and respond with ONLY the requested JSON array — no markdown, no prose.'
+
+/* The one Gemini call in the app whose entire contract is "return JSON" was
+   also the only one not asking for JSON. Every other structured call site sets
+   this. */
+const FOCUS_GENERATION_CONFIG = { responseMimeType: 'application/json', temperature: 0 }
+
+/**
+ * Rank with Gemini, falling back to Claude.
+ *
+ * Focus was the last AI path in the app without cross-provider failover. Chat,
+ * intent detection and tool planning all gained one after the same failure —
+ * the Gemini chain down or in cooldown — reached production (see the war story
+ * in lib/ai-tools/plan.ts). Without it, any transient Gemini problem pins the
+ * strip to its deterministic fallback indefinitely, which is exactly what the
+ * user was looking at.
+ */
+async function rankWithFallback(prompt: string): Promise<{ text: string; model: string }> {
+  try {
+    return await geminiGenerateText(FOCUS_SYSTEM_PROMPT, prompt, {
+      generationConfig: FOCUS_GENERATION_CONFIG,
+      perModelTimeoutMs: PER_MODEL_TIMEOUT_MS,
+    })
+  } catch (geminiErr) {
+    if (!isClaudeConfigured()) throw geminiErr
+    console.warn('[gmail-focus] Gemini ranking unavailable — falling back to Claude:', geminiErr)
+    const text = await claudeChat(
+      [{ id: 'focus-rank', role: 'user', content: prompt, timestamp: '' }],
+      FOCUS_SYSTEM_PROMPT,
+      { maxTokens: 2048, temperature: 0 },
+    )
+    return { text, model: 'claude-fallback' }
+  }
+}
+
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions)
@@ -64,7 +113,7 @@ export async function GET(req: NextRequest) {
 
   let threads
   try {
-    threads = await listRecentGmailThreads(auth.accessToken, { maxResults })
+    threads = await listRecentGmailThreads(auth.accessToken, { maxResults, userEmail })
   } catch (err) {
     return googleApiErrorResponse(err)
   }
@@ -76,7 +125,21 @@ export async function GET(req: NextRequest) {
   // Per-user personalization (VIP list + goals). FAIL-OPEN: an outage or an
   // empty row returns EMPTY prefs, so ranking degrades to the pre-feature
   // behavior instead of failing the request.
-  const prefs = await getFocusPreferences(userEmail)
+  // A catch is not a timeout: the DB helper swallows errors, but a hung socket
+  // would still block the whole route ahead of an already-tight AI budget.
+  const prefs = await withTimeout(
+    getFocusPreferences(userEmail),
+    PREFS_TIMEOUT_MS,
+    EMPTY_FOCUS_PREFERENCES,
+    'focus-prefs',
+  )
+
+  // Deterministic signals for every thread — the global model. Computed once
+  // and shared by the prompt, the scorer and the reason builder so all three
+  // agree on what kind of sender each thread is.
+  const signals = new Map(
+    threads.map(t => [t.id, extractThreadSignals(t, { userEmail, vips: prefs.vips })]),
+  )
 
   // Display enrichment for notifications: sender/subject come from the LIVE
   // Gmail thread data (already fetched above), never from model output — the
@@ -98,6 +161,8 @@ export async function GET(req: NextRequest) {
       items: enrich(cached.items),
       generatedAt: cached.generatedAt,
       cached: true,
+      model: cached.model,
+      degraded: cached.degraded,
     })
   }
 
@@ -112,72 +177,83 @@ export async function GET(req: NextRequest) {
     requestId: newRequestId(),
   }
 
-  // ── AI ranking with a hard time budget, heuristic fallback below ──
-  // Ranking goes through the SAME Gemini configuration the chat path uses in
-  // production (lib/gemini geminiGenerateText). Whatever happens — model
-  // failure, timeout, empty/garbled output — the strip still renders: the
-  // deterministic heuristic ranks from live inbox signals instead.
-  let items: FocusItem[] = []
-  let model = 'heuristic'
+  // ── AI ranking with a hard time budget, deterministic scoring either way ──
+  // The model no longer produces the final number: it labels every thread with
+  // a level and quotes the text justifying it, and scoreFocusItems blends that
+  // with the deterministic score under the sender class's hard ceiling. So a
+  // total AI outage degrades the ranking (deterministic only) rather than
+  // switching to a different algorithm.
+  let model = 'deterministic'
   let aiFailure: string | null = null
-  // True once the model returns a VALID ranking — even an empty one. A genuine
-  // empty verdict ("inbox of pure noise", which buildFocusPrompt explicitly
-  // permits) must be honored, NOT overridden by the heuristic. The heuristic is
-  // reserved for real failures: timeout, exception, or unparseable output.
+  // True once the model returns a VALID ranking — even an all-"none" one. A
+  // genuine "nothing matters" verdict must be honored, not treated as failure.
   let aiRanked = false
+  let entries: ReadonlyMap<string, FocusRankEntry> | null = null
   try {
-    const prompt = buildFocusPrompt(userEmail, threads, prefs)
-    const ranked = await withTimeout(
-      geminiGenerateText(
-        'You are an inbox triage assistant. Follow the instructions in the user message exactly and respond with ONLY the requested JSON array — no markdown, no prose.',
-        prompt,
-      ),
-      20_000,
-      null,
-      'gmail-focus-rank',
-    )
+    const prompt = buildFocusPrompt(userEmail, threads, prefs, signals, {
+      order: seededOrder(threads.length, signature),
+    })
+    const ranked = await withTimeout(rankWithFallback(prompt), RANK_BUDGET_MS, null, 'gmail-focus-rank')
     if (ranked) {
-      const result = parseFocusResult(ranked.text, new Set(threads.map(t => t.id)))
+      const result = parseFocusRanking(ranked.text, threads)
       if (result.parsed) {
         aiRanked = true
-        items = result.items
-        model = ranked.model // credit the model even for a valid empty ranking
+        entries = result.entries
+        model = ranked.model
       } else {
         aiFailure = 'unparseable model output'
       }
     } else {
-      aiFailure = 'rank timeout (20s)'
+      aiFailure = `rank timeout (${RANK_BUDGET_MS / 1000}s)`
     }
   } catch (err) {
     aiFailure = err instanceof Error ? err.message.slice(0, 200) : 'unknown error'
   }
 
-  // Heuristic fallback ONLY on a real AI failure — never to override a valid
-  // (possibly empty) model ranking. The heuristic still honors VIPs so flagged
-  // senders surface even during a total model outage.
-  if (!aiRanked) {
-    items = heuristicFocusItems(threads, { vips: prefs.vips })
-  }
+  const items = scoreFocusItems(threads, signals, entries, { minPriority: DEFAULT_MIN_PRIORITY })
 
   const generatedAt = new Date().toISOString()
   setCachedFocus(userEmail, {
     signature,
-    // Heuristic results are a stopgap — keep them briefly so the AI ranker is
-    // retried soon; genuine AI rankings hold for the full TTL.
-    expiresAt: Date.now() + (model !== 'heuristic' ? CACHE_TTL_MS : EMPTY_CACHE_TTL_MS),
+    // Key the SHORT ttl on what the constant's own comment describes: a
+    // degraded or empty result is far more often a transient hiccup than a
+    // verdict, and should be retried soon. (This previously keyed on the model
+    // name, so a valid-but-empty AI ranking — the case the comment was written
+    // to prevent — got the full 10 minutes.)
+    expiresAt: Date.now() + (!aiRanked || items.length === 0 ? EMPTY_CACHE_TTL_MS : CACHE_TTL_MS),
     generatedAt,
     model,
+    degraded: !aiRanked,
     items,
   })
 
-  await recordAiAction({
-    ...auditBase,
-    // A failure means the AI never produced a valid ranking (aiRanked stayed
-    // false and we fell back to the heuristic). A valid empty verdict is success.
-    status: aiFailure ? 'failed' : 'success',
-    target: { ...auditBase.target, model, itemCount: items.length },
-    ...(aiFailure ? { error: aiFailure } : {}),
+  // Audit off the response path — it cannot throw (ai-audit catches), but a
+  // slow insert should not delay every poll.
+  void withTimeout(
+    recordAiAction({
+      ...auditBase,
+      // A failure means the AI never produced a valid ranking. A valid verdict
+      // in which nothing cleared the bar is a success.
+      status: aiFailure ? 'failed' : 'success',
+      target: { ...auditBase.target, model, itemCount: items.length },
+      ...(aiFailure ? { error: aiFailure } : {}),
+    }),
+    2_000,
+    undefined,
+    'focus-audit',
+  )
+
+  return NextResponse.json({
+    items: enrich(items),
+    generatedAt,
+    cached: false,
+    model,
+    // The route's contract has always promised this flag; it was never
+    // implemented, so a total ranking outage rendered as working AI ranking
+    // under an "AI-suggested priorities" label. That is why this stayed broken
+    // long enough to reach a screenshot.
+    degraded: !aiRanked,
+    ...(aiFailure ? { aiFailure } : {}),
   })
-  return NextResponse.json({ items: enrich(items), generatedAt, cached: false })
 }
 

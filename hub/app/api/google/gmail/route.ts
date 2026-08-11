@@ -5,6 +5,7 @@ import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
 import {
   getGmailHeader as getHeader,
   parseGmailThreadMeta as parseThreadMeta,
+  GMAIL_TRIAGE_HEADER_QS,
   type GmailMessage,
   type GmailThread,
 } from '@/lib/google'
@@ -89,7 +90,7 @@ export async function GET(req: NextRequest) {
     // Fetch metadata for each thread in parallel
     const threads = await Promise.all(
       list.threads.map(t =>
-        gmailGet<GmailThread>(`/threads/${t.id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`, accessToken)
+        gmailGet<GmailThread>(`/threads/${t.id}?format=metadata&${GMAIL_TRIAGE_HEADER_QS}`, accessToken)
           .then(parseThreadMeta)
           .catch(() => null)
       )

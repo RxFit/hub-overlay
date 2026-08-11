@@ -108,7 +108,7 @@ export function GmailView({
     onDiscussEmail?.(buildDiscussPrompt({ subject: t.subject, from: t.from, snippet: t.snippet }))
   }
 
-  const { focusItems } = useGmailFocus()
+  const { focusItems, focusDegraded } = useGmailFocus()
 
   // Conversation context (Gmail-style): older messages in the thread render
   // COLLAPSED (sender + date + one-line preview) so the newest message leads,
@@ -182,7 +182,7 @@ export function GmailView({
           </button>
         </div>
         {!loading && (
-          <FocusStrip items={focusItems} threads={threads} onOpen={openThread} />
+          <FocusStrip items={focusItems} threads={threads} onOpen={openThread} degraded={focusDegraded} />
         )}
         {loading ? (
           [1,2,3,4,5].map(i => (
