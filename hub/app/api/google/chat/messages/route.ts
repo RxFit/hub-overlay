@@ -17,13 +17,21 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const spaceId = searchParams.get('spaceId')
   const pageSize = parseInt(searchParams.get('pageSize') ?? '50', 10)
+  // Optional: scope the read to ONE thread (the panel's thread view). Strict
+  // charset check BEFORE it becomes a Google filter expression — quotes/spaces
+  // could otherwise rewrite the filter itself. Junk → plain listing.
+  const threadNameRaw = searchParams.get('threadName')
+  const threadName =
+    threadNameRaw && /^spaces\/[\w-]+\/threads\/[\w-]+$/.test(threadNameRaw)
+      ? threadNameRaw
+      : undefined
 
   if (!spaceId) {
     return NextResponse.json({ error: 'Missing spaceId' }, { status: 400 })
   }
 
   try {
-    const messages = await listChatMessages(auth.accessToken, spaceId, pageSize)
+    const messages = await listChatMessages(auth.accessToken, spaceId, pageSize, { threadName })
     return NextResponse.json({ messages })
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error'
@@ -71,14 +79,18 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       )
     }
-    const { spaceId, text, threadKey } = parsed.data
+    const { spaceId, text, threadName, threadKey } = parsed.data
 
     // `target` holds routing metadata only — never the message text.
     const auditBase = {
       userEmail,
       actor: 'ai' as const,
       actionType: 'chat_post' as const,
-      target: { spaceId, ...(threadKey ? { threadKey } : {}) },
+      target: {
+        spaceId,
+        ...(threadName ? { threadName } : {}),
+        ...(threadKey ? { threadKey } : {}),
+      },
       intent: aiIntent,
       gateToken: req.headers.get(GATE_TOKEN_HEADER),
       requestId: newRequestId(),
@@ -100,7 +112,7 @@ export async function POST(req: NextRequest) {
         auth.accessToken,
         spaceId,
         text.trim(),
-        threadKey
+        threadName || threadKey ? { threadName, threadKey } : undefined
       )
       if (isAiAction) await recordAiAction({ ...auditBase, status: 'success' })
       return NextResponse.json({ message })

@@ -2,12 +2,19 @@
 
 import { useState, useRef, useEffect, useCallback, useReducer } from 'react'
 import { useSpaces, useMessages, useSendMessage, useSpaceMembers, useUnreadCounts, useMarkSpaceRead, useLegacyPinnedSpaceMigration } from '@/app/hooks/useGoogleChat'
-import type { ChatSpace, ChatMessage, SpaceMember } from '@/app/hooks/useGoogleChat'
+import type { ChatSpace, ChatMessage, ChatThreadTarget, SpaceMember } from '@/app/hooks/useGoogleChat'
 import { MentionPicker, useMentionTrigger } from '@/app/components/MentionPicker'
 import { InfoPopover } from '@/app/components/InfoPopover'
 import { GmailView } from '@/app/components/gmail/GmailView'
 import { useModalA11y } from '@/app/hooks/useModalA11y'
 import { classifyChatSpace, type ChatSpaceKind } from '@/lib/chat-spaces'
+import {
+  groupMessagesByThread,
+  spaceSupportsThreadReplies,
+  threadLastActivity,
+  threadReplyCount,
+  type ThreadGroup,
+} from '@/lib/chat-threads'
 
 
 /* ══════════════════════════════════════════
@@ -21,7 +28,24 @@ function SpaceAvatar({ space }: { space: ChatSpace }) {
   // Classify rather than test `type === 'DM'`: in the Chat API that deprecated
   // value means a Chat-APP conversation, while a human DM reports `ROOM`. The
   // old check therefore never matched a real person-to-person DM.
-  const isDM = spaceKind(space) === 'dm'
+  const kind = spaceKind(space)
+  const isDM = kind === 'dm'
+  if (kind === 'bot') {
+    // A Chat app conversation (e.g. the Hermes agent) — robot glyph, not initials.
+    return (
+      <span className="chat-space-avatar chat-space-avatar--bot" aria-hidden="true">
+        <span className="rx-icon rx-icon--sm">
+          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <rect x="4" y="8" width="16" height="12" rx="2" />
+            <path d="M12 8V4M8 4h8" />
+            <circle cx="9" cy="13" r="1" />
+            <circle cx="15" cy="13" r="1" />
+            <path d="M9 17h6" />
+          </svg>
+        </span>
+      </span>
+    )
+  }
   return (
     <span className={`chat-space-avatar ${isDM ? 'chat-space-avatar--dm' : ''}`} aria-hidden="true">
       {isDM ? (
@@ -186,81 +210,149 @@ function SpacesList({
    MESSAGE THREAD
    ══════════════════════════════════════════ */
 
-function MessageBubble({ msg, prevMsg }: { msg: ChatMessage; prevMsg: ChatMessage | null }) {
-  const showSender = !prevMsg || prevMsg.sender.name !== msg.sender.name
+function formatMsgTime(iso: string): string {
+  try {
+    return new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  } catch { return '' }
+}
 
-  const time = (() => {
-    try {
-      return new Date(msg.createTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-    } catch { return '' }
-  })()
+function MessageBubble({
+  msg,
+  prevMsg,
+  onReplyInThread,
+}: {
+  msg: ChatMessage
+  prevMsg: ChatMessage | null
+  /** When set, a hover/focus "Reply in thread" action shows on the message. */
+  onReplyInThread?: () => void
+}) {
+  const showSender = !prevMsg || prevMsg.sender.name !== msg.sender.name
+  const time = formatMsgTime(msg.createTime)
+  const isApp = (msg.sender.type ?? '').toUpperCase() === 'BOT'
+  // Apps often send card-only messages (no text body the REST list exposes) —
+  // an empty bubble reads as a bug, so say what it actually is.
+  const cardOnly = !msg.text && !msg.formattedText && (msg.cardsV2?.length ?? 0) > 0
 
   return (
     <div className="chat-msg">
       {showSender && (
         <div className="chat-msg__header">
           <span className="chat-msg__sender">{msg.sender.displayName}</span>
+          {isApp && <span className="chat-msg__app-badge">APP</span>}
           <span className="chat-msg__time">{time}</span>
         </div>
       )}
-      <div className="chat-msg__bubble">{msg.text || msg.formattedText || ''}</div>
+      <div className="chat-msg__bubble">
+        {cardOnly ? (
+          <span className="chat-msg__card-note">Interactive card — open Google Chat to view it.</span>
+        ) : (
+          msg.text || msg.formattedText || ''
+        )}
+      </div>
+      {onReplyInThread && (
+        <button
+          type="button"
+          className="chat-msg__reply-action"
+          onClick={onReplyInThread}
+          aria-label="Reply in thread"
+          title="Reply in thread"
+        >
+          <span className="rx-icon rx-icon--sm" aria-hidden="true">
+            <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <polyline points="9 17 4 12 9 7" />
+              <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
+            </svg>
+          </span>
+        </button>
+      )}
     </div>
   )
 }
 
-function MessageThread({
+/**
+ * One collapsed thread in the main conversation — the starter message plus a
+ * "N replies" chip, exactly how official Google Chat presents threads inline.
+ */
+function ThreadGroupBlock({
+  group,
+  prevRoot,
+  canReply,
+  onOpenThread,
+}: {
+  group: ThreadGroup<ChatMessage>
+  prevRoot: ChatMessage | null
+  canReply: boolean
+  onOpenThread: (threadName: string) => void
+}) {
+  const replies = threadReplyCount(group)
+  const openable = canReply && !!group.threadName
+
+  return (
+    <div className="chat-thread-group">
+      <MessageBubble
+        msg={group.root}
+        prevMsg={prevRoot}
+        onReplyInThread={openable ? () => onOpenThread(group.threadName!) : undefined}
+      />
+      {openable && replies > 0 && (
+        <button
+          type="button"
+          className="chat-thread-chip"
+          onClick={() => onOpenThread(group.threadName!)}
+          aria-label={`Open thread — ${replies} ${replies === 1 ? 'reply' : 'replies'}`}
+        >
+          <span className="rx-icon rx-icon--sm" aria-hidden="true">
+            <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            </svg>
+          </span>
+          <span className="chat-thread-chip__count">
+            {replies} {replies === 1 ? 'reply' : 'replies'}
+          </span>
+          <span className="chat-thread-chip__time">{formatMsgTime(threadLastActivity(group))}</span>
+        </button>
+      )}
+    </div>
+  )
+}
+
+/* ══════════════════════════════════════════
+   COMPOSER — shared by the space view and the thread view
+   ══════════════════════════════════════════ */
+
+function MessageComposer({
   spaceId,
-  spaceName,
+  members,
+  thread,
+  placeholder,
+  ariaLabel,
+  autoFocus,
+  onSendStart,
 }: {
   spaceId: string
-  spaceName: string
+  members: SpaceMember[]
+  /** Present in the thread view — replies land in this thread. */
+  thread?: ChatThreadTarget
+  placeholder: string
+  ariaLabel: string
+  autoFocus?: boolean
+  /** Called synchronously as a send begins (the space view re-pins its scroll). */
+  onSendStart?: () => void
 }) {
-  const { messages, isLoading } = useMessages(spaceId)
   const { send, isSending, sendError, clearError } = useSendMessage()
-  const { markRead } = useMarkSpaceRead()
-  const { members } = useSpaceMembers(spaceId)
   const [draft, setDraft] = useState('')
   const [cursorPos, setCursorPos] = useState(0)
-  const bottomRef = useRef<HTMLDivElement>(null)
-  const threadRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const composerRef = useRef<HTMLDivElement>(null)
-  // Whether the user is pinned near the bottom of the thread. Starts true so the
-  // initial load and a freshly-opened space scroll down. Flipped false once the
-  // user scrolls up so the 30s poll no longer yanks them back to the bottom.
-  const nearBottomRef = useRef(true)
-  const prevSpaceRef = useRef(spaceId)
+  const threadName = thread?.threadName
+  const threadKey = thread?.threadKey
 
   // Mention trigger detection
   const mention = useMentionTrigger(draft, cursorPos)
 
-  const handleThreadScroll = useCallback(() => {
-    const el = threadRef.current
-    if (!el) return
-    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-    nearBottomRef.current = distFromBottom < 120
-  }, [])
-
-  // Auto-scroll only when appropriate: on a space switch (treated as initial
-  // load) or when the user is already near the bottom. A user reading scrollback
-  // is left in place on each poll instead of being force-scrolled down.
   useEffect(() => {
-    if (prevSpaceRef.current !== spaceId) {
-      prevSpaceRef.current = spaceId
-      nearBottomRef.current = true
-    }
-    if (nearBottomRef.current) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-    }
-  }, [messages, spaceId])
-
-  // Viewing a space marks it read — server-side readstate write + immediate
-  // local badge clear. Keyed to the latest message so each new arrival while
-  // the thread is open re-marks, but poll refetches with no new mail don't.
-  useEffect(() => {
-    if (!messages.length) return
-    markRead(spaceId, messages[messages.length - 1]?.name)
-  }, [messages, spaceId, markRead])
+    if (autoFocus) inputRef.current?.focus()
+  }, [autoFocus])
 
   const handleMentionSelect = useCallback((member: SpaceMember) => {
     if (mention.atIndex === -1) return
@@ -290,11 +382,13 @@ function MessageThread({
     setDraft('')
     setCursorPos(0)
     if (inputRef.current) inputRef.current.style.height = 'auto'
-    // The user's own send should always scroll them to the newest message, even
-    // if they had scrolled up to read history.
-    nearBottomRef.current = true
-    await send(spaceId, text)
-  }, [draft, spaceId, send, isSending])
+    onSendStart?.()
+    await send(
+      spaceId,
+      text,
+      threadName || threadKey ? { threadName, threadKey } : undefined
+    )
+  }, [draft, spaceId, send, isSending, threadName, threadKey, onSendStart])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Don't intercept Enter/Arrow when mention picker is open
@@ -320,35 +414,8 @@ function MessageThread({
     setCursorPos((e.target as HTMLTextAreaElement).selectionStart ?? 0)
   }, [])
 
-  if (isLoading) {
-    return (
-      <div className="chat-thread chat-thread--loading" role="status" aria-label="Loading messages">
-        {[1, 2, 3, 4, 5].map(i => (
-          <div key={i} className="chat-msg-skeleton" style={{ width: `${50 + i * 8}%` }} />
-        ))}
-      </div>
-    )
-  }
-
   return (
-    <div className="chat-thread-wrapper">
-      {/* Space header */}
-      <div className="chat-thread-header">
-        <span className="chat-thread-header__name">{spaceName}</span>
-      </div>
-
-      {/* Messages */}
-      <div ref={threadRef} onScroll={handleThreadScroll} className="chat-thread" role="log" aria-label={`Messages in ${spaceName}`} aria-live="polite">
-        {messages.length === 0 ? (
-          <div className="chat-thread__empty">No messages yet</div>
-        ) : (
-          messages.map((msg, i) => (
-            <MessageBubble key={msg.name} msg={msg} prevMsg={messages[i - 1] ?? null} />
-          ))
-        )}
-        <div ref={bottomRef} />
-      </div>
-
+    <>
       {/* Send error */}
       {sendError && (
         <div className="chat-send-error" role="alert">
@@ -378,8 +445,8 @@ function MessageThread({
           onChange={handleInputChange}
           onClick={handleInputClick}
           onKeyDown={handleKeyDown}
-          placeholder={`Message ${spaceName}… (type @ to mention)`}
-          aria-label={`Compose message to ${spaceName}`}
+          placeholder={placeholder}
+          aria-label={ariaLabel}
           rows={1}
           disabled={isSending}
         />
@@ -390,7 +457,11 @@ function MessageThread({
               <>
                 <p style={{ fontWeight: 600, color: 'var(--accent)' }}>✦ Message Guidelines</p>
                 <p style={{ marginTop: '6px' }}><b>Mentions:</b> Type <code>@</code> to open the space members picker and mention someone.</p>
-                <p><b>Google Workspace:</b> Your message will sync directly with the Google Chat space in real time.</p>
+                {thread ? (
+                  <p><b>Threads:</b> This reply stays inside the thread you opened — teammates following the thread are notified.</p>
+                ) : (
+                  <p><b>Google Workspace:</b> Your message will sync directly with the Google Chat space in real time.</p>
+                )}
               </>
             }
           />
@@ -400,7 +471,7 @@ function MessageThread({
           className="chat-composer__send"
           onClick={handleSend}
           disabled={!draft.trim() || isSending}
-          aria-label="Send message"
+          aria-label={thread ? 'Send reply' : 'Send message'}
         >
           {isSending ? (
             <span className="chat-composer__spinner" aria-hidden="true" />
@@ -414,6 +485,219 @@ function MessageThread({
           )}
         </button>
       </div>
+    </>
+  )
+}
+
+/* ══════════════════════════════════════════
+   THREAD VIEW — one thread, opened from the space view
+   ══════════════════════════════════════════ */
+
+function ThreadPanel({
+  space,
+  threadName,
+  members,
+  onBack,
+}: {
+  space: ChatSpace
+  threadName: string
+  members: SpaceMember[]
+  onBack: () => void
+}) {
+  const spaceId = space.name
+  const spaceLabel = space.displayName || space.name.split('/')[1]
+  // Thread-scoped fetch: the server filters by thread.name, so the panel shows
+  // the COMPLETE thread even when its replies predate the space view's window.
+  const { messages, isLoading } = useMessages(spaceId, threadName)
+  const { markRead } = useMarkSpaceRead()
+  const bottomRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
+  // Reading the thread reads the space — same contract as the space view.
+  useEffect(() => {
+    if (!messages.length) return
+    markRead(spaceId, messages[messages.length - 1]?.name)
+  }, [messages, spaceId, markRead])
+
+  const root = messages[0] ?? null
+  const replies = messages.slice(1)
+
+  return (
+    <div className="chat-thread-wrapper">
+      <div className="chat-thread-header chat-thread-header--thread">
+        <button
+          type="button"
+          className="chat-thread-back"
+          onClick={onBack}
+          aria-label="Back to conversation"
+        >
+          ‹
+        </button>
+        <div className="chat-thread-header__titles">
+          <span className="chat-thread-header__name">Thread</span>
+          <span className="chat-thread-header__sub">{spaceLabel}</span>
+        </div>
+      </div>
+
+      <div className="chat-thread" role="log" aria-label={`Thread in ${spaceLabel}`} aria-live="polite">
+        {isLoading ? (
+          [1, 2, 3].map(i => (
+            <div key={i} className="chat-msg-skeleton" style={{ width: `${55 + i * 10}%` }} />
+          ))
+        ) : !root ? (
+          <div className="chat-thread__empty">No messages in this thread yet</div>
+        ) : (
+          <>
+            <MessageBubble msg={root} prevMsg={null} />
+            {replies.length > 0 && (
+              <div className="chat-thread-divider" aria-hidden="true">
+                <span>{replies.length} {replies.length === 1 ? 'reply' : 'replies'}</span>
+              </div>
+            )}
+            {replies.map((m, i) => (
+              <MessageBubble key={m.name} msg={m} prevMsg={replies[i - 1] ?? null} />
+            ))}
+          </>
+        )}
+        <div ref={bottomRef} />
+      </div>
+
+      <MessageComposer
+        spaceId={spaceId}
+        members={members}
+        thread={{ threadName }}
+        placeholder="Reply in thread…"
+        ariaLabel={`Reply in thread in ${spaceLabel}`}
+        autoFocus
+      />
+    </div>
+  )
+}
+
+function MessageThread({ space }: { space: ChatSpace }) {
+  const spaceId = space.name
+  const spaceName = space.displayName || space.name.split('/')[1]
+  const { messages, isLoading } = useMessages(spaceId)
+  const { markRead } = useMarkSpaceRead()
+  const { members } = useSpaceMembers(spaceId)
+  // Reply-in-thread only where Google supports it (named spaces). DMs and
+  // group chats — including app DMs like Hermes — stay flat, as in Google Chat.
+  const threadsEnabled = spaceSupportsThreadReplies(space)
+  const [openThreadName, setOpenThreadName] = useState<string | null>(null)
+  const bottomRef = useRef<HTMLDivElement>(null)
+  const threadRef = useRef<HTMLDivElement>(null)
+  // Whether the user is pinned near the bottom of the thread. Starts true so the
+  // initial load and a freshly-opened space scroll down. Flipped false once the
+  // user scrolls up so the 30s poll no longer yanks them back to the bottom.
+  const nearBottomRef = useRef(true)
+  const prevSpaceRef = useRef(spaceId)
+
+  // Switching spaces closes any open thread — it belongs to the old space.
+  useEffect(() => {
+    setOpenThreadName(null)
+  }, [spaceId])
+
+  const handleThreadScroll = useCallback(() => {
+    const el = threadRef.current
+    if (!el) return
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    nearBottomRef.current = distFromBottom < 120
+  }, [])
+
+  // Auto-scroll only when appropriate: on a space switch (treated as initial
+  // load) or when the user is already near the bottom. A user reading scrollback
+  // is left in place on each poll instead of being force-scrolled down.
+  useEffect(() => {
+    if (prevSpaceRef.current !== spaceId) {
+      prevSpaceRef.current = spaceId
+      nearBottomRef.current = true
+    }
+    if (nearBottomRef.current) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [messages, spaceId])
+
+  // Viewing a space marks it read — server-side readstate write + immediate
+  // local badge clear. Keyed to the latest message so each new arrival while
+  // the thread is open re-marks, but poll refetches with no new mail don't.
+  useEffect(() => {
+    if (!messages.length) return
+    markRead(spaceId, messages[messages.length - 1]?.name)
+  }, [messages, spaceId, markRead])
+
+  // A thread is open: the column shows that thread alone (root, replies and a
+  // composer that replies INTO it), with a back button to the conversation —
+  // Google Chat's own thread-panel flow.
+  if (openThreadName) {
+    return (
+      <ThreadPanel
+        space={space}
+        threadName={openThreadName}
+        members={members}
+        onBack={() => setOpenThreadName(null)}
+      />
+    )
+  }
+
+  if (isLoading) {
+    return (
+      <div className="chat-thread chat-thread--loading" role="status" aria-label="Loading messages">
+        {[1, 2, 3, 4, 5].map(i => (
+          <div key={i} className="chat-msg-skeleton" style={{ width: `${50 + i * 8}%` }} />
+        ))}
+      </div>
+    )
+  }
+
+  // In threaded spaces the flat API page is collapsed Google Chat-style: each
+  // thread renders once (its starter + reply-count chip) instead of replies
+  // interleaving with unrelated messages.
+  const groups = threadsEnabled ? groupMessagesByThread(messages) : null
+
+  return (
+    <div className="chat-thread-wrapper">
+      {/* Space header */}
+      <div className="chat-thread-header">
+        <span className="chat-thread-header__name">{spaceName}</span>
+        {space.singleUserBotDm && <span className="chat-msg__app-badge">APP</span>}
+      </div>
+
+      {/* Messages */}
+      <div ref={threadRef} onScroll={handleThreadScroll} className="chat-thread" role="log" aria-label={`Messages in ${spaceName}`} aria-live="polite">
+        {messages.length === 0 ? (
+          <div className="chat-thread__empty">No messages yet</div>
+        ) : groups ? (
+          groups.map((group, i) => (
+            <ThreadGroupBlock
+              key={group.root.name}
+              group={group}
+              prevRoot={groups[i - 1]?.root ?? null}
+              canReply
+              onOpenThread={setOpenThreadName}
+            />
+          ))
+        ) : (
+          messages.map((msg, i) => (
+            <MessageBubble key={msg.name} msg={msg} prevMsg={messages[i - 1] ?? null} />
+          ))
+        )}
+        <div ref={bottomRef} />
+      </div>
+
+      <MessageComposer
+        spaceId={spaceId}
+        members={members}
+        placeholder={`Message ${spaceName}… (type @ to mention)`}
+        ariaLabel={`Compose message to ${spaceName}`}
+        onSendStart={() => {
+          // The user's own send should always scroll them to the newest
+          // message, even if they had scrolled up to read history.
+          nearBottomRef.current = true
+        }}
+      />
     </div>
   )
 }
@@ -448,6 +732,13 @@ export function GoogleChatPanel({
     }
   }, [visibleSpaces, selectedSpace])
 
+  // Read the selected space through the LATEST fetch, not the click-time
+  // snapshot — a poll can hydrate a bot DM's name or the threading state after
+  // selection, and the thread column should follow.
+  const currentSpace = selectedSpace
+    ? visibleSpaces.find(s => s.name === selectedSpace.name) ?? selectedSpace
+    : null
+
   const handleSelectSpace = (space: ChatSpace) => {
     setSelectedSpace(space)
     setMobileView('thread')
@@ -465,7 +756,7 @@ export function GoogleChatPanel({
       isLoading={isLoading}
       missingScope={missingScope}
       unreadMap={unreadMap}
-      selectedSpace={selectedSpace}
+      selectedSpace={currentSpace}
       onSelectSpace={handleSelectSpace}
       mobileView={mobileView}
       setMobileView={setMobileView}
@@ -631,10 +922,7 @@ function GoogleChatPanelDialog({
               {/* Thread column */}
               <div className={`chat-panel-thread${mobileView === 'spaces' ? ' chat-panel-thread--mobile-hidden' : ''}`}>
                 {selectedSpace ? (
-                  <MessageThread
-                    spaceId={selectedSpace.name}
-                    spaceName={selectedSpace.displayName || selectedSpace.name}
-                  />
+                  <MessageThread space={selectedSpace} />
                 ) : (
                   <div className="chat-thread__empty chat-thread__select-prompt">
                     <span className="rx-icon rx-icon--lg" aria-hidden="true">

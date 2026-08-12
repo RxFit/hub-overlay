@@ -79,7 +79,22 @@ describe('GET /api/google/chat/messages', () => {
     const res = await GET(getReq('?spaceId=spaces/x&pageSize=25'))
     expect(res.status).toBe(200)
     expect((await res.json()).messages).toEqual([{ name: 'm1' }])
-    expect(state.listChatMessages).toHaveBeenCalledWith('goog-token', 'spaces/x', 25)
+    expect(state.listChatMessages).toHaveBeenCalledWith('goog-token', 'spaces/x', 25, { threadName: undefined })
+  })
+
+  it('forwards a well-formed threadName so the thread view gets the FULL thread', async () => {
+    state.listChatMessages.mockResolvedValue([])
+    const res = await GET(getReq('?spaceId=spaces/x&threadName=' + encodeURIComponent('spaces/x/threads/t1')))
+    expect(res.status).toBe(200)
+    expect(state.listChatMessages).toHaveBeenCalledWith('goog-token', 'spaces/x', 50, {
+      threadName: 'spaces/x/threads/t1',
+    })
+  })
+
+  it('drops a malformed threadName instead of letting it reach Google as a filter', async () => {
+    state.listChatMessages.mockResolvedValue([])
+    await GET(getReq('?spaceId=spaces/x&threadName=' + encodeURIComponent('spaces/x/threads/t1" OR x')))
+    expect(state.listChatMessages).toHaveBeenCalledWith('goog-token', 'spaces/x', 50, { threadName: undefined })
   })
 
   it('keeps the dedicated 403 MISSING_SCOPE contract for a missing Chat scope (before the generic mapper)', async () => {
@@ -126,13 +141,39 @@ describe('POST /api/google/chat/messages', () => {
     const res = await POST(postReq({ ...VALID, threadKey: 'tk' }))
     expect(res.status).toBe(200)
     expect((await res.json()).message).toEqual({ name: 'msg-1' })
-    expect(state.sendChatMessage).toHaveBeenCalledWith('goog-token', 'spaces/x', 'hello team', 'tk')
+    expect(state.sendChatMessage).toHaveBeenCalledWith('goog-token', 'spaces/x', 'hello team', {
+      threadName: undefined,
+      threadKey: 'tk',
+    })
     expect(state.auditRows).toHaveLength(0)
   })
 
-  it('audits an AI post success with routing metadata only (spaceId/threadKey, never the text)', async () => {
+  it('posts a plain message with NO thread target at all', async () => {
+    state.sendChatMessage.mockResolvedValue({ name: 'msg-plain' })
+    const res = await POST(postReq(VALID))
+    expect(res.status).toBe(200)
+    expect(state.sendChatMessage).toHaveBeenCalledWith('goog-token', 'spaces/x', 'hello team', undefined)
+  })
+
+  it('forwards threadName so a reply lands INSIDE the thread it answers', async () => {
+    state.sendChatMessage.mockResolvedValue({ name: 'msg-reply' })
+    const res = await POST(postReq({ ...VALID, threadName: 'spaces/x/threads/t1' }))
+    expect(res.status).toBe(200)
+    expect(state.sendChatMessage).toHaveBeenCalledWith('goog-token', 'spaces/x', 'hello team', {
+      threadName: 'spaces/x/threads/t1',
+      threadKey: undefined,
+    })
+  })
+
+  it('400s a malformed threadName (quotes/spaces can never reach Google routing)', async () => {
+    const res = await POST(postReq({ ...VALID, threadName: 'spaces/x/threads/bad id"' }))
+    expect(res.status).toBe(400)
+    expect(state.sendChatMessage).not.toHaveBeenCalled()
+  })
+
+  it('audits an AI post success with routing metadata only (spaceId/thread, never the text)', async () => {
     state.sendChatMessage.mockResolvedValue({ name: 'msg-2' })
-    const res = await POST(postReq({ ...VALID, threadKey: 'tk' }, aiHeaders()))
+    const res = await POST(postReq({ ...VALID, threadName: 'spaces/x/threads/t1', threadKey: 'tk' }, aiHeaders()))
     expect(res.status).toBe(200)
     expect(state.auditRows).toHaveLength(1)
     expect(state.auditRows[0]).toMatchObject({
@@ -140,7 +181,7 @@ describe('POST /api/google/chat/messages', () => {
       actionType: 'chat_post',
       status: 'success',
       userEmail: 'danny@rxfitatx.com',
-      target: { spaceId: 'spaces/x', threadKey: 'tk' },
+      target: { spaceId: 'spaces/x', threadName: 'spaces/x/threads/t1', threadKey: 'tk' },
     })
     expect(JSON.stringify(state.auditRows[0].target)).not.toContain('hello team')
   })

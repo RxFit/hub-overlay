@@ -49,6 +49,8 @@ export interface ChatSpace {
   spaceType?: string
   singleUserBotDm?: boolean
   spaceDetails?: { description?: string }
+  /** THREADED_MESSAGES | GROUPED_MESSAGES | UNTHREADED_MESSAGES — gates the reply-in-thread UI. */
+  spaceThreadingState?: string
   /** Server-annotated classification (see lib/chat-spaces.ts). */
   kind?: ChatSpaceKind
   /** Whether the default rule shows this space with no override. */
@@ -66,6 +68,16 @@ export interface ChatMessage {
   text: string
   formattedText?: string
   thread?: { name: string }
+  /** Output-only Chat API flag: true when the message is a reply inside a thread. */
+  threadReply?: boolean
+  /** Present on card-only app messages (no text body to render). */
+  cardsV2?: unknown[]
+}
+
+/** Thread target for a send — reply into an existing thread by resource name. */
+export interface ChatThreadTarget {
+  threadName?: string   // "spaces/xxx/threads/yyy"
+  threadKey?: string
 }
 
 /* ══════════════════════════════════════════
@@ -244,17 +256,29 @@ interface MessagesResponse {
   messages: ChatMessage[]
 }
 
-/** Cache key for a space's message list — shared with useSendMessage's post-send invalidation. */
-export function messagesQueryKey(spaceId: string) {
-  return ['chat', 'messages', spaceId] as const
+/**
+ * Cache key for a space's message list — shared with useSendMessage's
+ * post-send invalidation. Thread reads extend the space key, so invalidating
+ * the space PREFIX refreshes the main view and every open thread together.
+ */
+export function messagesQueryKey(spaceId: string, threadName?: string) {
+  return threadName
+    ? (['chat', 'messages', spaceId, threadName] as const)
+    : (['chat', 'messages', spaceId] as const)
 }
 
-export function useMessages(spaceId: string | null) {
+/**
+ * Messages for a space — or, given `threadName`, ONE thread's complete
+ * history (the server filters by thread.name, so replies older than the
+ * space view's 50-message window still appear in the thread panel).
+ */
+export function useMessages(spaceId: string | null, threadName?: string) {
   const { data, error, isLoading, refetch } = useQuery<MessagesResponse>({
-    queryKey: messagesQueryKey(spaceId ?? ''),
+    queryKey: messagesQueryKey(spaceId ?? '', threadName),
     queryFn: () =>
       fetcher<MessagesResponse>(
-        `/api/google/chat/messages?spaceId=${encodeURIComponent(spaceId!)}&pageSize=50`
+        `/api/google/chat/messages?spaceId=${encodeURIComponent(spaceId!)}` +
+        (threadName ? `&pageSize=100&threadName=${encodeURIComponent(threadName)}` : '&pageSize=50')
       ),
     enabled: !!spaceId,
     refetchInterval: 30_000,
@@ -285,7 +309,7 @@ export function useSendMessage() {
   const send = useCallback(async (
     spaceId: string,
     text: string,
-    threadKey?: string
+    thread?: ChatThreadTarget
   ): Promise<boolean> => {
     if (!text.trim() || !spaceId) return false
     setIsSending(true)
@@ -295,7 +319,12 @@ export function useSendMessage() {
       const res = await fetch('/api/google/chat/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ spaceId, text: text.trim(), threadKey }),
+        body: JSON.stringify({
+          spaceId,
+          text: text.trim(),
+          threadName: thread?.threadName,
+          threadKey: thread?.threadKey,
+        }),
       })
 
       if (!res.ok) {
@@ -303,7 +332,9 @@ export function useSendMessage() {
         throw new Error(body?.error ?? `Send failed (${res.status})`)
       }
 
-      // Revalidate the cached messages for this space
+      // Revalidate the cached messages for this space. Prefix match also
+      // covers every thread query under the space, so a reply shows up in
+      // both the thread panel and the main view's reply count.
       await queryClient.invalidateQueries({ queryKey: messagesQueryKey(spaceId) })
       return true
     } catch (err) {

@@ -761,6 +761,8 @@ export interface ChatSpace {
   singleUserBotDm?: boolean
   spaceDetails?: { description?: string }
   adminInstalled?: boolean
+  /** THREADED_MESSAGES | GROUPED_MESSAGES | UNTHREADED_MESSAGES — gates the reply-in-thread UI. */
+  spaceThreadingState?: string
 }
 
 export interface ChatMessage {
@@ -776,9 +778,13 @@ export interface ChatMessage {
   text: string
   formattedText?: string
   thread?: { name: string }
+  /** Output-only: true when this message is a reply inside a thread rather than a thread starter. */
+  threadReply?: boolean
   space?: { name: string }
   clientAssignedMessageId?: string
   annotations?: unknown[]
+  /** Present on card-only app messages (no text body to render). */
+  cardsV2?: unknown[]
 }
 
 export interface ChatSpacesResponse {
@@ -803,15 +809,20 @@ export async function listChatSpaces(
     `${CHAT_BASE}/spaces?${params}`,
     accessToken
   )
-  // Filter out bot DMs for cleaner UX
-  return (data.spaces ?? []).filter(s => !s.singleUserBotDm)
+  // Bot/app DMs are INCLUDED. They used to be dropped here "for cleaner UX",
+  // which made conversations with Chat apps (e.g. the Hermes agent) impossible
+  // to open in the Hub at all. Clutter control now belongs to the visibility
+  // layer in lib/chat-spaces.ts: bot DMs classify as kind 'bot' and stay hidden
+  // by default until the user turns them on in Settings.
+  return data.spaces ?? []
 }
 
-/** List recent messages from a Google Chat space */
+/** List recent messages from a Google Chat space (optionally one thread's messages). */
 export async function listChatMessages(
   accessToken: string,
   spaceId: string,
-  pageSize = 50
+  pageSize = 50,
+  opts: { threadName?: string } = {}
 ): Promise<ChatMessage[]> {
   // spaceId can be "spaces/XXXXXXXX" or just "XXXXXXXX"
   const spaceName = spaceId.startsWith('spaces/') ? spaceId : `spaces/${spaceId}`
@@ -819,6 +830,9 @@ export async function listChatMessages(
     pageSize: String(pageSize),
     orderBy: 'createTime desc',
   })
+  // Scoping to one thread fetches its COMPLETE history, including replies older
+  // than the space view's page window. (Filter grammar wants no quotes here.)
+  if (opts.threadName) params.set('filter', `thread.name = ${opts.threadName}`)
   const data = await googleFetch<ChatMessagesResponse>(
     `${CHAT_BASE}/${spaceName}/messages?${params}`,
     accessToken
@@ -827,22 +841,45 @@ export async function listChatMessages(
   return (data.messages ?? []).reverse()
 }
 
-/** Send a new message or reply to a Google Chat space */
+/**
+ * Where a sent message should land.
+ *
+ * `threadName` replies to an EXISTING thread by resource name (what the
+ * reply-in-thread UI does); `threadKey` names a client-chosen thread, creating
+ * it on first use. threadName wins when both are present.
+ */
+export interface ChatThreadTarget {
+  threadName?: string             // "spaces/xxx/threads/yyy"
+  threadKey?: string
+}
+
+/** Send a new message — or a reply into a specific thread — of a Google Chat space */
 export async function sendChatMessage(
   accessToken: string,
   spaceId: string,
   text: string,
-  threadKey?: string
+  thread?: ChatThreadTarget
 ): Promise<ChatMessage> {
   const spaceName = spaceId.startsWith('spaces/') ? spaceId : `spaces/${spaceId}`
 
   const body: Record<string, unknown> = { text }
-  if (threadKey) {
-    body.thread = { threadKey }
+  if (thread?.threadName) {
+    body.thread = { name: thread.threadName }
+  } else if (thread?.threadKey) {
+    body.thread = { threadKey: thread.threadKey }
   }
 
+  const params = new URLSearchParams()
+  if (body.thread) {
+    // Required opt-in: without messageReplyOption Google IGNORES the thread
+    // field entirely and silently starts a new thread, so "replies" sent the
+    // old way never landed in the thread they answered.
+    params.set('messageReplyOption', 'REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD')
+  }
+
+  const qs = params.toString()
   return googleFetch<ChatMessage>(
-    `${CHAT_BASE}/${spaceName}/messages`,
+    `${CHAT_BASE}/${spaceName}/messages${qs ? `?${qs}` : ''}`,
     accessToken,
     {
       method: 'POST',
@@ -876,18 +913,73 @@ interface SpaceMembersResponse {
 export async function listSpaceMembers(
   accessToken: string,
   spaceId: string,
-  pageSize = 100
+  pageSize = 100,
+  memberType: 'HUMAN' | 'BOT' = 'HUMAN'
 ): Promise<SpaceMember[]> {
   const spaceName = spaceId.startsWith('spaces/') ? spaceId : `spaces/${spaceId}`
   const params = new URLSearchParams({
     pageSize: String(pageSize),
-    filter: 'member.type = "HUMAN"',
+    filter: `member.type = "${memberType}"`,
   })
   const data = await googleFetch<SpaceMembersResponse>(
     `${CHAT_BASE}/${spaceName}/members?${params}`,
     accessToken
   )
   return (data.memberships ?? []).filter(m => m.state === 'MEMBER_JOINED')
+}
+
+/**
+ * Display name of the Chat app on the other side of a bot DM, or null.
+ *
+ * DM spaces carry no displayName of their own, so without this an app
+ * conversation (e.g. the Hermes agent) renders as a bare space id. Fetching
+ * the BOT membership is the only way the API exposes the app's name.
+ */
+export async function getBotDmAppName(
+  accessToken: string,
+  spaceId: string
+): Promise<string | null> {
+  try {
+    const bots = await listSpaceMembers(accessToken, spaceId, 10, 'BOT')
+    return bots[0]?.member?.displayName?.trim() || null
+  } catch {
+    // Naming is cosmetic — never let it break the space list.
+    return null
+  }
+}
+
+/**
+ * Bound on per-request membership lookups so one spaces poll can't fan out
+ * into dozens of Google calls. Real accounts have a handful of app DMs; any
+ * past the cap simply keep their space-id label.
+ */
+const MAX_BOT_DM_NAME_LOOKUPS = 8
+
+/**
+ * Fill in displayName for unnamed bot DMs from each conversation's BOT member.
+ * Lookups run in parallel and individually fail soft (see getBotDmAppName).
+ */
+export async function hydrateBotDmDisplayNames(
+  accessToken: string,
+  spaces: ChatSpace[]
+): Promise<ChatSpace[]> {
+  const targets = spaces
+    .filter(s => s.singleUserBotDm === true && !(s.displayName ?? '').trim())
+    .slice(0, MAX_BOT_DM_NAME_LOOKUPS)
+  if (targets.length === 0) return spaces
+
+  const names = await Promise.all(targets.map(s => getBotDmAppName(accessToken, s.name)))
+  const nameBySpace = new Map<string, string>()
+  targets.forEach((s, i) => {
+    const name = names[i]
+    if (name) nameBySpace.set(s.name, name)
+  })
+  if (nameBySpace.size === 0) return spaces
+
+  return spaces.map(s => {
+    const hydrated = nameBySpace.get(s.name)
+    return hydrated ? { ...s, displayName: hydrated } : s
+  })
 }
 
 /* ── Space Read State (for unread badges) ── */
