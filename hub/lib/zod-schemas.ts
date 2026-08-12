@@ -339,6 +339,12 @@ export const GoogleGmailActionSchema = z.object({
 export const GoogleChatSendSchema = z.object({
   spaceId: z.string().trim().min(1).max(256),
   text: z.string().trim().min(1).max(4096),
+  /**
+   * Reply into an EXISTING thread by resource name — what the panel's
+   * reply-in-thread composer sends. Strict charset (the ids Google mints are
+   * URL-safe) so a junk value can never reach Google as a routing field.
+   */
+  threadName: z.string().trim().regex(/^spaces\/[\w-]+\/threads\/[\w-]+$/).max(512).optional(),
   threadKey: z.string().max(256).optional(),
 })
 

@@ -43,12 +43,34 @@ const GOOGLE_SPACES = {
     { name: 'spaces/OPS', displayName: 'RxFit Ops', spaceType: 'SPACE', type: 'ROOM' },
     { name: 'spaces/MEET', displayName: '', spaceType: 'GROUP_CHAT', type: 'GROUP_CHAT' },
     { name: 'spaces/DM1', displayName: '', spaceType: 'DIRECT_MESSAGE', type: 'DM' },
-    { name: 'spaces/BOT', displayName: 'Drive', spaceType: 'DIRECT_MESSAGE', type: 'DM', singleUserBotDm: true },
+    // App DM: like every DM it has NO displayName of its own — the route must
+    // hydrate one from the BOT membership below.
+    { name: 'spaces/BOT', displayName: '', spaceType: 'DIRECT_MESSAGE', type: 'DM', singleUserBotDm: true },
+  ],
+}
+
+/** The BOT membership of spaces/BOT — the only place the app's name exists. */
+const BOT_MEMBERSHIP = {
+  memberships: [
+    {
+      name: 'spaces/BOT/members/app',
+      member: { name: 'users/app', displayName: 'Hermes', type: 'BOT' },
+      role: 'ROLE_MEMBER',
+      state: 'MEMBER_JOINED',
+    },
   ],
 }
 
 function stubGoogle(handler: (url: string) => Response) {
   global.fetch = vi.fn(async (input: RequestInfo | URL) => handler(String(input))) as typeof fetch
+}
+
+/** Default stub: spaces.list plus the members call the bot-DM naming makes. */
+function stubGoogleSpacesAndMembers() {
+  stubGoogle(url => {
+    if (url.includes('/members')) return new Response(JSON.stringify(BOT_MEMBERSHIP), { status: 200 })
+    return new Response(JSON.stringify(GOOGLE_SPACES), { status: 200 })
+  })
 }
 
 function req(url = 'http://localhost/api/google/chat/spaces') {
@@ -69,7 +91,7 @@ beforeEach(() => {
   state.prefs = { shown: [], hidden: [] }
   state.upsertThrows = false
   state.upsertCalls = []
-  stubGoogle(() => new Response(JSON.stringify(GOOGLE_SPACES), { status: 200 }))
+  stubGoogleSpacesAndMembers()
 })
 
 afterEach(() => {
@@ -87,15 +109,45 @@ describe('GET /api/google/chat/spaces', () => {
     expect(byName['spaces/OPS']).toMatchObject({ kind: 'named', defaultVisible: true })
     expect(byName['spaces/MEET']).toMatchObject({ kind: 'group', defaultVisible: false })
     expect(byName['spaces/DM1']).toMatchObject({ kind: 'dm', defaultVisible: false })
+    expect(byName['spaces/BOT']).toMatchObject({ kind: 'bot', defaultVisible: false })
   })
 
-  it('returns every listed space so Settings can offer the hidden ones', async () => {
+  it('returns every listed space — INCLUDING app DMs — so Settings can offer the hidden ones', async () => {
     // Filtering is the client's job — the panel shows the visible subset, but
-    // Settings must be able to list what is being hidden. (Bot DMs are the one
-    // exception: lib/google.ts drops `singleUserBotDm` spaces before this
-    // route ever sees them, which is long-standing behavior.)
+    // Settings must be able to list what is being hidden. Bot DMs used to be
+    // dropped inside lib/google.ts, which made conversations with Chat apps
+    // (the Hermes agent) impossible to surface at all; they now flow through
+    // and are simply hidden by default like other non-named conversations.
     const body = await (await GET(req())).json()
-    expect(body.spaces.map((s: any) => s.name)).toEqual(['spaces/OPS', 'spaces/MEET', 'spaces/DM1'])
+    expect(body.spaces.map((s: any) => s.name)).toEqual(['spaces/OPS', 'spaces/MEET', 'spaces/DM1', 'spaces/BOT'])
+  })
+
+  it('names an app DM after its bot member (DM spaces carry no displayName)', async () => {
+    const body = await (await GET(req())).json()
+    const bot = body.spaces.find((s: any) => s.name === 'spaces/BOT')
+    expect(bot.displayName).toBe('Hermes')
+    // Membership lookups are scoped to BOT members of bot DMs only — exactly
+    // one extra call for this fixture, none for the human DM.
+    const memberCalls = (global.fetch as ReturnType<typeof vi.fn>).mock.calls
+      .map(c => String(c[0]))
+      .filter(u => u.includes('/members'))
+    expect(memberCalls).toHaveLength(1)
+    expect(memberCalls[0]).toContain('spaces/BOT/members')
+    // URLSearchParams form-encodes spaces as '+'
+    expect(decodeURIComponent(memberCalls[0].replace(/\+/g, ' '))).toContain('member.type = "BOT"')
+  })
+
+  it('keeps the space list usable when the naming lookup fails (fail-soft)', async () => {
+    stubGoogle(url => {
+      if (url.includes('/members')) return new Response('boom', { status: 500 })
+      return new Response(JSON.stringify(GOOGLE_SPACES), { status: 200 })
+    })
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    const bot = body.spaces.find((s: any) => s.name === 'spaces/BOT')
+    expect(bot).toBeDefined()
+    expect(bot.displayName).toBe('') // unnamed, but present and openable
   })
 
   it('ships the user preferences alongside, so the panel never flashes all spaces', async () => {

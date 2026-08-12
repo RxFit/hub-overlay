@@ -3,7 +3,7 @@ import type { NextRequest } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
-import { listChatSpaces } from '@/lib/google'
+import { listChatSpaces, hydrateBotDmDisplayNames } from '@/lib/google'
 import { classifyChatSpace, isDefaultVisibleSpace, EMPTY_CHAT_SPACE_PREFERENCES } from '@/lib/chat-spaces'
 import { getChatSpacePreferences } from '@/lib/chat-space-preferences-db'
 
@@ -25,7 +25,10 @@ export async function GET(req: NextRequest) {
 
   try {
     const [spaces, preferences] = await Promise.all([
-      listChatSpaces(auth.accessToken),
+      // Bot/app DMs come through since lib/google.ts stopped dropping them, but
+      // a DM space has no displayName of its own — hydrate it from the app's
+      // membership so "Hermes" reads as Hermes, not as a bare space id.
+      listChatSpaces(auth.accessToken).then(s => hydrateBotDmDisplayNames(auth.accessToken, s)),
       // Preferences are per-user; resolveGoogleAuth only proves a Google token,
       // so read the session for the email. Fail-open to defaults if absent.
       (async () => {
