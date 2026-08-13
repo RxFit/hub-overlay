@@ -1,0 +1,45 @@
+# Phase 0 clean-room runner for the agy allotment replay test.
+#
+# A container is the truest "throwaway Linux box": it has no OS keyring and no
+# D-Bus session, which is exactly the Cloud Run condition we need to prove the
+# token replays under. node:22-slim matches the Hub's own base image, so a PASS
+# here is a PASS in the real deployment target.
+#
+# BUILD:
+#   docker build -f scripts/agy/Dockerfile.phase0 -t agy-phase0 scripts/agy
+#
+# RUN (mount your token in read-only; it never enters the image):
+#   docker run --rm \
+#     -v /abs/path/to/antigravity-oauth-token:/token:ro \
+#     -e AGY_TOKEN_FILE=/token \
+#     agy-phase0
+#
+# A non-zero exit means FAIL/SETUP — the verdict text says which and why.
+
+FROM node:22-slim
+
+# util-linux gives us `script` (the pty allocator that fixes agy's silent
+# non-TTY stdout drop); ca-certificates + curl for the installer; procps for
+# a real /dev/pts. Keep it minimal.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates curl util-linux procps \
+ && rm -rf /var/lib/apt/lists/*
+
+# Run as a non-root user with a real HOME so agy's ~/.gemini paths resolve.
+RUN useradd --create-home --shell /bin/bash agyuser
+USER agyuser
+WORKDIR /home/agyuser
+ENV HOME=/home/agyuser
+
+# Install agy at build time. Pin auto-update off so the binary can't rewrite
+# itself between build and run.
+ENV AGY_CLI_DISABLE_AUTO_UPDATE=true
+RUN curl -fsSL https://antigravity.google/cli/install.sh | bash \
+ && /home/agyuser/.local/bin/agy --version || true
+ENV PATH="/home/agyuser/.local/bin:${PATH}"
+
+COPY --chown=agyuser:agyuser phase0-replay-test.sh /home/agyuser/phase0-replay-test.sh
+RUN chmod +x /home/agyuser/phase0-replay-test.sh
+
+ENTRYPOINT ["/home/agyuser/phase0-replay-test.sh"]
