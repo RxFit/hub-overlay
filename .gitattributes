@@ -1,0 +1,5 @@
+# Files that execute inside Linux containers must stay LF on every checkout,
+# including Windows machines with core.autocrlf=true — a CRLF shebang fails at
+# runtime with "/usr/bin/env: 'bash\r': No such file or directory".
+*.sh text eol=lf
+Dockerfile* text eol=lf
