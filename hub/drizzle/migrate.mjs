@@ -452,6 +452,38 @@ async function run() {
   console.log('[migrate] ✓ webhook_channels table')
 
   // Seed rxfit tenant
+  // AI runs ledger (Phase 2 of the agy migration) — one row per model run,
+  // engine-agnostic ('agy' | 'gemini' | 'claude'). Provenance only: the prompt
+  // is stored as length + sha256 fingerprint, never as text; responses and raw
+  // envelopes are never persisted (same redaction contract as ai_action_log).
+  await sql`
+    CREATE TABLE IF NOT EXISTS ai_runs (
+      id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      created_at        TIMESTAMPTZ DEFAULT now() NOT NULL,
+      engine            TEXT NOT NULL,
+      model             TEXT,
+      source            TEXT NOT NULL,
+      status            TEXT NOT NULL,
+      error_class       TEXT,
+      error             TEXT,
+      latency_ms        INTEGER NOT NULL,
+      input_tokens      INTEGER,
+      output_tokens     INTEGER,
+      cache_read_tokens INTEGER,
+      total_tokens      INTEGER,
+      prompt_chars      INTEGER,
+      prompt_sha256     TEXT,
+      request_id        TEXT,
+      user_email        TEXT,
+      meta              JSONB
+    )
+  `
+  await sql`
+    CREATE INDEX IF NOT EXISTS ai_runs_created_idx
+    ON ai_runs (created_at DESC)
+  `
+  console.log('[migrate] ✓ ai_runs table')
+
   await sql`
     INSERT INTO tenants (id, name, domain)
     VALUES ('rxfit', 'RxFit Athletics', 'rxfitatx.com')

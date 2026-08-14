@@ -100,10 +100,30 @@ leaving Paperclip to escape):
 
 | Phase | Adds here |
 |-------|-----------|
-| **1 · Gateway** | An OpenAI/Gemini-compatible proxy service (reads the same token, refreshes it, forwards to the Antigravity backend) so the Hub's chat runs on your allotment. |
-| **2 · Worker + ledger** | The accountability-wrapped `agy` runner (PTY, empty-means-failed, marker/status verify) + a Postgres runs table, so business operations execute with your tools and every run is recorded. |
+| **1 · Gateway** ✅ | Shipped as `hub/lib/agy.ts` (in-process gateway, not a separate proxy service) + `/api/admin/agy-health`. |
+| **2 · Worker + ledger** (in progress) | The accountability-wrapped `agy` runner + the `ai_runs` Postgres ledger, so every run is recorded. Chat integration shipped (`hub/lib/agy-chat.ts`, behind `AGY_CHAT_ENABLED`); ledger shipped (`hub/lib/runs.ts`). Remaining scope below. |
 | **3 · Rewire panel** | Point the right-panel feed at the runs ledger; retire the Paperclip proxy, instance, and `scripts/paperclip/` watchdogs. |
 | **4 · Reborn tooling** | Re-point Interview Mode, the score-context gate, Pre-Cog, and the skills loader from "assemble a REST payload" to "brief and verify an `agy` run." |
+
+### Phase 2 remaining scope (locked 2026-08-14)
+
+Three scope-shapers, decided after mapping what the Hub actually has today:
+
+1. **Conversations table.** Chat state is currently client-side only (React
+   state, last-20-window, lost on refresh) — the raw CLIs beat the Hub on
+   conversation persistence until this lands. Server-side `chats` +
+   `chat_messages` tables make "the Hub adds memory" true rather than aspirational.
+2. **Engine-agnostic ledger.** ✅ shipped — `ai_runs` records `engine`
+   (`agy | gemini | claude`), so metered turns can join the ledger without a
+   migration. agy call sites (chat + health probe) write rows now; the metered
+   chains join when the Phase 3 panel needs them.
+3. **Chat post-tagging convention.** Everything the Hub posts to Google Chat
+   (AI posts, scheduled digests) is sent AS the operator and is
+   indistinguishable from them typing. Any other agent in the same space that
+   reacts to operator messages (e.g. the Hermes desktop orchestrator) can be
+   triggered by a Hub post it mistakes for an instruction. Hub-originated
+   posts must carry a stable marker (suffix tag), and external agents should
+   treat tagged posts as informational.
 
 ---
 

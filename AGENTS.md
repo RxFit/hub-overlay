@@ -60,7 +60,7 @@ a disruption can't dark the Hub.
 |-------|--------|------|
 | **0 · Replay proof** | ✅ done (`scripts/agy/`) | Token replays on a keyring-less box |
 | **1 · Gateway** | ✅ done (`hub/lib/agy.ts`, PRs #178–#181) | `agyGenerateText()`, runtime binary provisioning, `/api/admin/agy-health` |
-| **2 · Worker + ledger** | next | Accountability-wrapped `agy` runner + Postgres runs table; chat engine integration |
+| **2 · Worker + ledger** | in progress | Chat integration ✅ (`hub/lib/agy-chat.ts`, `AGY_CHAT_ENABLED`); `ai_runs` ledger ✅ (`hub/lib/runs.ts`, engine-agnostic). Remaining: conversations table, Chat post-tagging convention — see `scripts/agy/README.md` § Phase 2 remaining scope |
 | **3 · Rewire right panel** | planned | Point the panel's feed at the runs ledger |
 | **4 · Reborn tooling** | planned | Re-point Interview Mode, the score-context gate, Pre-Cog, and the skills loader from "assemble a REST payload" to "brief and verify an `agy` run" |
 

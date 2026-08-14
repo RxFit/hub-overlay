@@ -351,6 +351,52 @@ export const aiActionLog = pgTable(
   })
 )
 
+/* ── AI runs ledger (Phase 2 of the agy migration) ───────────────────────── */
+/**
+ * One row per model run, whatever engine served it. This is the accountability
+ * layer the agy migration exists to build (scripts/agy/README.md — the old
+ * Paperclip runs failed with no record anywhere): the right panel's Phase 3
+ * feed reads from here, and "did the allotment actually serve?" is answered
+ * here rather than by grepping Cloud Logging.
+ *
+ * ENGINE-AGNOSTIC BY DESIGN (Phase 2 scope decision, 2026-08-14): `engine` is
+ * the AiProvider union ('agy' | 'gemini' | 'claude'), not an agy-only tag, so
+ * metered turns can join the ledger without a migration. agy call sites are
+ * wired now; the metered chains join when the panel needs them.
+ *
+ * Same redaction contract as ai_action_log: PROVENANCE, NEVER CONTENT. The
+ * prompt is stored as a length + sha256 fingerprint; response text and raw
+ * envelopes are never persisted. `meta` carries small structured extras only
+ * (probe marker verification, envelope key lists on parse failures).
+ */
+export const aiRuns = pgTable(
+  'ai_runs',
+  {
+    id:              uuid('id').primaryKey().defaultRandom(),
+    createdAt:       timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    engine:          text('engine').notNull(),          // AiProvider: 'agy' | 'gemini' | 'claude'
+    model:           text('model'),                     // model that actually served, when known
+    source:          text('source').notNull(),          // 'chat' | 'health_probe' | …
+    status:          text('status').notNull(),          // 'ok' | 'error'
+    errorClass:      text('error_class'),               // typed class (AgyErrorType etc.), never stack text
+    error:           text('error'),                     // single-line truncated message
+    latencyMs:       integer('latency_ms').notNull(),
+    inputTokens:     integer('input_tokens'),
+    outputTokens:    integer('output_tokens'),
+    cacheReadTokens: integer('cache_read_tokens'),
+    totalTokens:     integer('total_tokens'),
+    promptChars:     integer('prompt_chars'),           // prompt size — the prompt itself is NOT stored
+    promptSha256:    text('prompt_sha256'),             // 16-hex fingerprint for correlation/dedupe
+    requestId:       text('request_id'),                // correlates with telemetry + ai_action_log
+    userEmail:       text('user_email'),                // best-effort actor (probes; chat when known)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    meta:            jsonb('meta').$type<Record<string, any>>(),
+  },
+  (t) => ({
+    createdIdx: index('ai_runs_created_idx').on(t.createdAt.desc()),
+  }),
+)
+
 /* ── Webhook channels (Google Drive push notifications) ──────────────────── */
 /**
  * The live Drive watch channel(s) feeding the semantic index. Google push

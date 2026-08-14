@@ -9,14 +9,16 @@ import { NextRequest } from 'next/server'
  * classes surfacing instead of raw stack text.
  */
 
-const { sessionMock, adminMock, generateMock, versionMock } = vi.hoisted(() => ({
+const { sessionMock, adminMock, generateMock, versionMock, recordRunMock } = vi.hoisted(() => ({
   sessionMock: vi.fn(),
   adminMock: vi.fn(),
   generateMock: vi.fn(),
   versionMock: vi.fn(),
+  recordRunMock: vi.fn(),
 }))
 
 vi.mock('next-auth', () => ({ getServerSession: sessionMock }))
+vi.mock('@/lib/runs', () => ({ recordAiRun: recordRunMock }))
 vi.mock('@/lib/auth', () => ({ authOptions: {} }))
 vi.mock('@/lib/roles', () => ({ canAccessAdminRoute: adminMock }))
 vi.mock('@/lib/agy', () => ({
@@ -39,6 +41,7 @@ beforeEach(() => {
   adminMock.mockReset().mockReturnValue(true)
   generateMock.mockReset()
   versionMock.mockReset().mockResolvedValue('1.1.12')
+  recordRunMock.mockReset().mockResolvedValue(undefined)
 })
 
 describe('GET /api/admin/agy-health', () => {
@@ -109,5 +112,45 @@ describe('GET /api/admin/agy-health', () => {
     const body = await (await GET(request('/api/admin/agy-health?probe=1'))).json()
     expect(body.probe).toMatchObject({ ran: true, ok: false, errorClass: 'auth', error: 'token did not replay' })
     expect(body.healthy).toBe(false)
+  })
+
+  it('a successful probe lands in the runs ledger with marker verification and the admin actor', async () => {
+    generateMock.mockResolvedValue({
+      text: 'AGY_GATEWAY_OK',
+      model: 'gemini-3-flash',
+      usage: { cacheReadTokens: 42 },
+      raw: {},
+      latencyMs: 1234,
+    })
+    await GET(request('/api/admin/agy-health?probe=1'))
+    expect(recordRunMock).toHaveBeenCalledTimes(1)
+    expect(recordRunMock.mock.calls[0][0]).toMatchObject({
+      engine: 'agy',
+      source: 'health_probe',
+      status: 'ok',
+      model: 'gemini-3-flash',
+      latencyMs: 1234,
+      userEmail: 'admin@rxfitatx.com',
+      meta: { markerVerified: true },
+    })
+  })
+
+  it('a failed probe lands in the runs ledger as an error row with the typed class', async () => {
+    generateMock.mockRejectedValue(
+      Object.assign(new Error('token did not replay'), { agyError: { type: 'auth', message: 'token did not replay' } }),
+    )
+    await GET(request('/api/admin/agy-health?probe=1'))
+    expect(recordRunMock).toHaveBeenCalledTimes(1)
+    expect(recordRunMock.mock.calls[0][0]).toMatchObject({
+      engine: 'agy',
+      source: 'health_probe',
+      status: 'error',
+      errorClass: 'auth',
+    })
+  })
+
+  it('the cheap default report writes no ledger row', async () => {
+    await GET(request())
+    expect(recordRunMock).not.toHaveBeenCalled()
   })
 })

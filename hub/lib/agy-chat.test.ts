@@ -22,6 +22,16 @@ const hoisted = vi.hoisted(() => ({
   agyConfigured: true,
   agyBinaryReady: true,
   warmCalls: 0,
+  runCalls: [] as Record<string, unknown>[],
+}))
+
+// The runs ledger is stubbed at the same seam agy-chat consumes it: capture
+// the input, resolve immediately (the real recordAiRun is best-effort/no-throw).
+vi.mock('@/lib/runs', () => ({
+  recordAiRun: (input: Record<string, unknown>) => {
+    hoisted.runCalls.push(input)
+    return Promise.resolve()
+  },
 }))
 
 vi.mock('@/lib/agy', () => ({
@@ -114,6 +124,7 @@ beforeEach(() => {
   hoisted.agyConfigured = true
   hoisted.agyBinaryReady = true
   hoisted.warmCalls = 0
+  hoisted.runCalls.length = 0
   process.env.GEMINI_API_KEY = 'test-key'
   delete process.env.AGY_CHAT_ENABLED
   delete process.env.AGY_CHAT_TIMEOUT_MS
@@ -256,6 +267,48 @@ describe('flag on — failure falls through to Gemini', () => {
     vi.advanceTimersByTime(1_800_000)
     await collect(streamChat(MESSAGES, 'sys', 'recall'))
     expect(hoisted.agyCalls).toHaveLength(2)
+  })
+})
+
+describe('runs ledger (Phase 2 accountability)', () => {
+  it('a served turn records one ok row: engine, source, prompt provenance, request correlation', async () => {
+    process.env.AGY_CHAT_ENABLED = 'true'
+    hoisted.agyBehavior = () =>
+      Promise.resolve({ text: 'allotment answer', model: 'gemini-3-pro', latencyMs: 900, usage: { outputTokens: 5 } })
+
+    await collect(streamChat(MESSAGES, 'sys prompt', 'recall'))
+    expect(hoisted.runCalls).toHaveLength(1)
+    const run = hoisted.runCalls[0]
+    expect(run.engine).toBe('agy')
+    expect(run.source).toBe('chat')
+    expect(run.status).toBe('ok')
+    expect(run.model).toBe('gemini-3-pro')
+    expect(run.latencyMs).toBe(900)
+    expect(run.usage).toEqual({ outputTokens: 5 })
+    // The prompt is passed for fingerprinting — the module under mock never
+    // stores it, and the row carries the same requestId the telemetry does.
+    expect(run.prompt).toContain('User: hello')
+    expect(typeof run.requestId).toBe('string')
+  })
+
+  it('a failed attempt records one error row with the typed class, then the Gemini rescue is not double-counted', async () => {
+    process.env.AGY_CHAT_ENABLED = 'true'
+    hoisted.agyBehavior = () => agyFailure('empty')
+    hoisted.geminiBehavior = () => geminiStream(['gem rescue'])
+
+    await collect(streamChat(MESSAGES, 'sys', 'recall'))
+    expect(hoisted.runCalls).toHaveLength(1)
+    const run = hoisted.runCalls[0]
+    expect(run.status).toBe('error')
+    expect(run.errorClass).toBe('empty')
+    expect(run.engine).toBe('agy')
+    expect(run.source).toBe('chat')
+  })
+
+  it('no ledger row when agy is not attempted (flag off)', async () => {
+    hoisted.geminiBehavior = () => geminiStream(['gem'])
+    await collect(streamChat(MESSAGES, 'sys', 'recall'))
+    expect(hoisted.runCalls).toHaveLength(0)
   })
 })
 
