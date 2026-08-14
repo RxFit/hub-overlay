@@ -5,6 +5,7 @@ import { fenceUntrusted, UNTRUSTED_CONTENT_POLICY } from './prompt-safety'
 import { IDLE_TIMEOUT_MS, CONNECT_TIMEOUT_MS } from './timeout-config'
 import { withTimeout } from './timeout'
 import { emit, newRequestId, startTimer, type AiProvider } from './observability'
+import { shouldTryAgyChat, tryAgyChat } from './agy-chat'
 import type { SystemPromptParts } from './claude'
 
 /* Local join for the union prompt form — Gemini's systemInstruction wants one
@@ -817,6 +818,20 @@ async function* streamChatRotation(
 
   // Bail before the Gemini leg if the client aborted while Claude was walked.
   if (signal?.aborted) return
+
+  // ── Phase 2: agy execution gateway (subscription allotment) ──
+  // Opt-in via AGY_CHAT_ENABLED; non-EXA turns only (EXA stays on Fable 5 by
+  // operator decision above). Tried BEFORE Gemini because every turn agy
+  // serves is zero metered spend. Fail-safe by construction: tryAgyChat never
+  // throws and emits no text until its run completes, so a fallthrough here
+  // leaves the wire untouched and the Gemini chain behaves exactly as if the
+  // flag were off. Statically imported (unlike the lazily-imported Claude
+  // client) so the rotation adds no async module-load tick — fake-timer tests
+  // choreograph this path tightly. See lib/agy-chat.ts + the agy runbook.
+  if (shouldTryAgyChat(useCase)) {
+    if ((yield* tryAgyChat(messages, systemPrompt, obs, signal, GEMINI_MODEL_CHAIN[0])) === 'served') return
+    if (signal?.aborted) return
+  }
 
   // Fallback: Gemini 2.5 Flash → Gemini 2.5 Pro
   //

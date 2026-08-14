@@ -26,8 +26,10 @@
  */
 import crypto from 'crypto'
 
-/** Which model family served (or attempted) the request. */
-export type AiProvider = 'claude' | 'gemini'
+/** Which model family served (or attempted) the request. 'agy' is the
+ *  Antigravity CLI execution gateway (lib/agy-chat.ts) — subscription
+ *  allotment, not metered API. */
+export type AiProvider = 'claude' | 'gemini' | 'agy'
 
 /** Timeout layer that tripped — matches the ladder in lib/timeout-config.ts. */
 export type TimeoutLayer = 'connect' | 'idle'

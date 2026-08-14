@@ -34,8 +34,9 @@ import { createLogger } from '@/lib/logger'
  * lib/claude.ts's `claudeError`) so callers and the admin health probe can
  * classify without string-matching.
  *
- * NOT wired into the chat engine (lib/gemini.ts) yet — that is Phase 2. The
- * only production consumer today is /api/admin/agy-health.
+ * Phase 2 (lib/agy-chat.ts) wires this into the chat engine behind the
+ * opt-in AGY_CHAT_ENABLED flag; /api/admin/agy-health remains the diagnostic
+ * surface. See docs/runbooks/agy-gateway.md § Phase 2.
  */
 
 const log = createLogger('agy')
@@ -98,6 +99,28 @@ export function agyTokenSource(): 'file' | 'env' | 'none' {
   if (existsSync(agyTokenPath())) return 'file'
   if (process.env.AGY_OAUTH_TOKEN) return 'env'
   return 'none'
+}
+
+/**
+ * Is the binary already on disk (no install needed)? The chat path gates on
+ * this so an interactive turn NEVER pays the ~55MB download + ~206MB extract:
+ * a cold instance answers from the metered chain while `warmAgyBinary()`
+ * provisions in the background, and agy serves from the next turn on.
+ */
+export function isAgyBinaryReady(): boolean {
+  return resolveBinary() !== null
+}
+
+/**
+ * Fire-and-forget binary provisioning. Shares the install memo with real runs
+ * (concurrent callers coalesce into one download); failures are logged and
+ * swallowed — the next warm attempt or real run retries because a failed
+ * install clears the memo.
+ */
+export function warmAgyBinary(): void {
+  void ensureBinary().catch((err) => {
+    log.warn({ err: truncateAgyError(err) }, 'background agy binary warm-up failed')
+  })
 }
 
 function agyError(type: AgyErrorType, message: string): Error {

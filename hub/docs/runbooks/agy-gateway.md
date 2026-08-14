@@ -102,6 +102,41 @@ assumption; this runbook covers operating the production gateway.
 | `parse` | Output had no/unrecognizable JSON envelope | agy's envelope shape changed — update `interpretEnvelope()` in `lib/agy.ts` |
 | `spawn` | Could not start the pty runner | `script` binary missing from the image (bsdutils) |
 
+## Phase 2 — chat traffic on the allotment (`AGY_CHAT_ENABLED`)
+
+`lib/agy-chat.ts` wires the gateway into the chat rotation (`lib/gemini.ts`),
+**off by default**. When enabled, non-EXA chat turns try agy FIRST — every turn
+it serves is zero metered API spend — and fall through to the normal Gemini
+chain on any failure. Guardrails, in the order they engage:
+
+- **EXA mode is excluded.** The EXA toggle stays on Claude Fable 5 (operator
+  routing decision in `shouldUseClaude`); agy never sees an `exa_search` turn.
+- **Cold instances don't stall chat.** If the binary isn't provisioned yet the
+  turn serves from Gemini and `warmAgyBinary()` downloads it in the background;
+  agy starts serving from the next turn.
+- **One bounded attempt.** `AGY_CHAT_TIMEOUT_MS` (default 45 000 = the ladder's
+  per-attempt rung, clamped 5–90 s) caps the run, leaving Gemini most of the
+  110 s client budget on failure.
+- **Fail-safe fallthrough.** agy emits nothing until its run completes, so a
+  failure never leaves a partial answer on the wire — the Gemini chain starts
+  clean. A failed gateway cools down (auth-class 30 min, else 5 min) so it
+  taxes at most one request per window.
+- **Latency tradeoff to know about:** agy does not stream — the full answer
+  lands at once, typically tens of seconds in. Interactive feel degrades vs.
+  Gemini's token streaming; that is the price of the free allotment.
+
+Rollout (after the `?probe=1` health probe is green):
+
+```bash
+gcloud run services update hub --region us-central1 --update-env-vars AGY_CHAT_ENABLED=true
+```
+
+Rollback is the reverse (`--remove-env-vars AGY_CHAT_ENABLED`); with the flag
+unset the rotation is byte-identical to pre-Phase-2. Watch `ai_complete`
+events with `provider: "agy"` vs `ai_fallback` events with `from: "agy"` in
+Cloud Logging (or /admin/ai-health) to judge how much traffic the allotment
+is actually absorbing.
+
 ## Rotation / revocation
 
 The refresh token is durable until revoked. To kill it: `agy logout` on the
