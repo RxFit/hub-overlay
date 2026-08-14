@@ -54,6 +54,18 @@ assumption; this runbook covers operating the production gateway.
    On Linux/macOS the file lands at `~/.gemini/antigravity-cli/antigravity-oauth-token`.
    Sanity: the JSON must contain `"refresh_token"` and `"auth_method": "consumer"`.
 
+   > **⚠️ Mint LAST, and never `agy logout` on that desktop afterwards.**
+   > `agy logout` revokes the OAuth grant itself, which kills every exported
+   > copy of the token — including the one in Secret Manager. The server then
+   > fails with `auth` errors that look like replay breakage but are really
+   > self-inflicted revocation. Do all desktop experimenting (including
+   > re-login cycles and Phase 0 replay tests) BEFORE exporting the token, and
+   > from then on treat `agy logout` on that machine as "rotate the prod
+   > secret" (see Rotation below). Note also that the `SSH_*` env vars are
+   > per-terminal: a shell without them uses the OS keyring, a separate
+   > session from the token file — alternating between the two looks like
+   > agy randomly logging you out.
+
 2. **Store it in Secret Manager** (project `rxfit-automation`):
 
    ```bash

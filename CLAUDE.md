@@ -25,3 +25,24 @@ is needed after merge.
 
 The Next.js app lives in `hub/`. Run all npm/test commands from that directory:
 `npm run test` (vitest), `npx playwright test` (e2e), `npm run build`.
+
+## Doc precedence: the agy migration has canonical sources
+
+For the Antigravity CLI (agy) migration — strategy, phases, operations — the
+canonical documents are, in order:
+
+1. `scripts/agy/README.md` — migration blueprint, phase roadmap, risk framing
+2. `hub/docs/runbooks/agy-gateway.md` — operating the gateway (token setup,
+   failure classes, rotation)
+3. Module-header docs in `hub/lib/agy.ts` — behavioral contracts of the code
+
+These were produced from primary research (live verification against the agy
+release server and CLI, Phase 0/1 implementation). Other instruction files —
+including `AGENTS.md` — summarize or route to them. **On any conflict, the
+canonical documents above win.** Do not follow a contradicting summary; fix the
+contradiction with a PR instead.
+
+When changing instruction files (`AGENTS.md`, this file): these auto-merge like
+any green PR, but they program every future agent session. Keep them consistent
+with the canonical docs, and prefer pointing at a canonical doc over restating
+its content where drift could accumulate.
