@@ -375,3 +375,17 @@ describe('buildSystemPrompt — drive-link advisory renders OUTSIDE the fence', 
     expect(advisoryAt).toBeGreaterThan(prompt.lastIndexOf('</untrusted_data>'))
   })
 })
+
+describe('capability manifest placement', () => {
+  it('lands in the dynamic half (per-request content must never poison the cached prefix)', () => {
+    const manifest = '## Live data capabilities (wired into this app)\n- ga4_run_report: Query GA4.'
+    const parts = buildSystemPromptParts({ capabilityManifest: manifest })
+    expect(parts.dynamic).toContain('## Live data capabilities')
+    expect(parts.staticPrefix).not.toContain('Live data capabilities')
+  })
+
+  it('is absent entirely when not provided', () => {
+    const parts = buildSystemPromptParts({})
+    expect(parts.staticPrefix + parts.dynamic).not.toContain('Live data capabilities')
+  })
+})

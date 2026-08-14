@@ -23,6 +23,7 @@ import { getServerSession } from 'next-auth'
 import { planToolCalls } from './plan'
 import { executeToolCalls, renderToolOutcomes } from './execute'
 import { toolsFor } from './registry'
+import { buildCapabilityManifest } from './capabilities'
 import { getEffectivePrefs } from '../google/prefs-db'
 import { authOptions } from '../auth'
 import { getChatSpacePreferences } from '../chat-space-preferences-db'
@@ -31,6 +32,12 @@ import { EMPTY_CHAT_SPACE_PREFERENCES, type ChatSpacePreferences } from '../chat
 export interface ResolveResult {
   /** Rendered block for the system prompt, or undefined when nothing ran. */
   context?: string
+  /** Capability manifest for the system prompt — what live data THIS
+   *  deployment can fetch and whether it is configured. Built on every
+   *  eligible turn (not only when tools ran), because the turns where NOTHING
+   *  ran are exactly the ones where the model would otherwise deny having the
+   *  capability. Undefined without a Google session or runnable tools. */
+  manifest?: string
   /** Names of tools that actually returned data — for logging. */
   ran: string[]
 }
@@ -59,27 +66,41 @@ export async function resolveReadTools(
   if (!tools.length) return { ran: [] }
 
   try {
-    const calls = await planToolCalls(question, tools, now)
-    if (!calls.length) return { ran: [] }
-
-    // Analytics targets come from tenant prefs; Chat visibility is per-user.
-    // Both are fail-open — a lookup failure degrades a tool, never the turn.
-    const [prefs, chatSpacePreferences] = await Promise.all([
-      getEffectivePrefs().catch(() => ({} as Awaited<ReturnType<typeof getEffectivePrefs>>)),
+    // Planning and the prefs lookup are independent — run them concurrently.
+    // Prefs are fetched on EVERY eligible turn (not only when a plan produced
+    // calls) because the capability manifest needs the configured state
+    // precisely on the turns where no tool ran. One indexed single-row read
+    // per chat turn; noise next to the route's other context fetches.
+    const [calls, prefsOutcome, chatSpacePreferences] = await Promise.all([
+      planToolCalls(question, tools, now),
+      getEffectivePrefs().then(
+        prefs => ({ known: true as const, prefs }),
+        () => ({ known: false as const, prefs: {} as Awaited<ReturnType<typeof getEffectivePrefs>> }),
+      ),
       resolveChatSpacePreferences(),
     ])
+
+    const manifest = buildCapabilityManifest({
+      role,
+      ga4PropertyId: prefsOutcome.prefs.ga4PropertyId,
+      gscSiteUrl: prefsOutcome.prefs.gscSiteUrl,
+      prefsKnown: prefsOutcome.known,
+    })
+
+    if (!calls.length) return { manifest, ran: [] }
 
     const outcomes = await executeToolCalls(calls, {
       accessToken,
       role: role ?? '',
-      ga4PropertyId: prefs.ga4PropertyId,
-      gscSiteUrl: prefs.gscSiteUrl,
+      ga4PropertyId: prefsOutcome.prefs.ga4PropertyId,
+      gscSiteUrl: prefsOutcome.prefs.gscSiteUrl,
       chatSpacePreferences,
       today: now,
     })
 
     return {
       context: renderToolOutcomes(outcomes) || undefined,
+      manifest,
       ran: outcomes.filter(o => o.ok).map(o => o.name),
     }
   } catch (err) {

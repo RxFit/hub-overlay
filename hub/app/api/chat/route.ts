@@ -759,6 +759,7 @@ async function handleChat(req: NextRequest): Promise<Response> {
     googleWorkspaceDetail,
     googleAuthNotice,
     liveAnalytics: liveAnalytics.context,
+    capabilityManifest: liveAnalytics.manifest,
     injectedContext: allInjectedContext || undefined,
     driveLinkContext: driveLinks.content || undefined,
     driveLinkAdvisory: driveLinks.advisory || undefined,

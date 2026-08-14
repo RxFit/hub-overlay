@@ -98,7 +98,7 @@ export async function executeToolCall(call: ToolCall, ctx: ToolContext): Promise
   }
 
   try {
-    const result = await withTimeout(tool.execute(parsed.data, ctx), TOOL_TIMEOUT_MS, tool.name)
+    const result = await withTimeout(tool.execute(parsed.data, ctx), tool.timeoutMs ?? TOOL_TIMEOUT_MS, tool.name)
     return { name: tool.name, ok: true, result }
   } catch (err) {
     const message = err instanceof Error ? err.message : 'unknown error'
