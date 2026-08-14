@@ -23,6 +23,7 @@ import { withTimeout } from '@/lib/timeout'
 import { chatErrorBody } from '@/lib/chat-error'
 import { breaker, CircuitOpenError } from '@/lib/circuit-breaker'
 import { checkRateLimit } from '@/lib/rate-limit'
+import { persistUserTurn, persistAssistantTurn } from '@/lib/chat-store'
 import { emit, newRequestId } from '@/lib/observability'
 import type { ChatMessage, ChatAttachment } from '@/types'
 import '@/lib/validate-keys'  // Side-effect import: validates API keys on cold start
@@ -304,6 +305,10 @@ function streamModelResponse(
   effectiveUseCase: string,
   hasActiveSkill: boolean,
   req: NextRequest,
+  // Conversation persistence (Phase 2): present only when the client sent a
+  // chatId. The completed answer is persisted fire-and-forget AFTER it is on
+  // the wire — persistence can never delay or break the stream.
+  persist?: { chatId: string; userEmail: string },
 ): Response {
   // Correlation id for the whole AI request lifecycle. `ai_request_start` here
   // pairs with the terminal `ai_complete`/`ai_error` emitted inside streamChat.
@@ -322,10 +327,12 @@ function streamModelResponse(
       const signal = req.signal
       try {
         let fullText = ''
+        let servingModel: string | null = null
         for await (const chunk of streamChat(boundedMessages, systemPrompt, effectiveUseCase, hasActiveSkill, requestId, signal)) {
           if (signal.aborted) break
           if (typeof chunk === 'object' && 'modelUsed' in chunk) {
             // Emit model identification event to the UI
+            servingModel = chunk.modelUsed
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ modelUsed: chunk.modelUsed })}\n\n`))
             continue
           }
@@ -338,7 +345,21 @@ function streamModelResponse(
         }
 
         // If the client went away, stop here — no suggestedTools, no [DONE].
+        // The answer is NOT persisted: only completed turns enter the record,
+        // matching what the client actually displayed.
         if (signal.aborted) return
+
+        // Persist the completed assistant turn (fire-and-forget, best-effort —
+        // persistAssistantTurn never throws). The user turn was persisted at
+        // request receipt in handleChat.
+        if (persist && fullText.length > 0) {
+          void persistAssistantTurn({
+            chatId: persist.chatId,
+            userEmail: persist.userEmail,
+            content: fullText,
+            model: servingModel,
+          })
+        }
 
         // Parse suggestedTools metadata from AI response.
         // P1-1: validate every id against the real skill catalog before emitting,
@@ -419,7 +440,7 @@ async function handleChat(req: NextRequest): Promise<Response> {
     return NextResponse.json({ error: 'Request too large' }, { status: 413 })
   }
 
-  let body: { messages: ChatMessage[]; useCase?: string; attachments?: ChatAttachment[]; activeSkill?: string; exaMode?: boolean }
+  let body: { messages: ChatMessage[]; useCase?: string; attachments?: ChatAttachment[]; activeSkill?: string; exaMode?: boolean; chatId?: string }
   try {
     const rawBody = await req.text()
     if (rawBody.length > MAX_BODY_BYTES) {
@@ -436,6 +457,26 @@ async function handleChat(req: NextRequest): Promise<Response> {
   const msgValidation = ChatRequestSchema.pick({ messages: true }).safeParse({ messages })
   if (!msgValidation.success) {
     return NextResponse.json({ error: 'Messages array required', details: msgValidation.error.issues }, { status: 400 })
+  }
+
+  // Conversation persistence (Phase 2): opt-in per request via a client-minted
+  // chatId. Invalid shapes are DROPPED, not rejected — persistence is an
+  // enhancement and must never 400 a chat that would otherwise work.
+  const userEmail = session.user.email ?? null
+  const chatId =
+    typeof body.chatId === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(body.chatId) && userEmail ? body.chatId : null
+  const persistCtx = chatId && userEmail ? { chatId, userEmail } : undefined
+  if (persistCtx) {
+    // Last user turn in the raw array (the message this request is answering).
+    const lastUser = [...messages].reverse().find((m) => m.role === 'user')
+    if (lastUser?.content) {
+      void persistUserTurn({
+        chatId: persistCtx.chatId,
+        userEmail: persistCtx.userEmail,
+        messageId: (lastUser as { id?: string }).id ?? null,
+        content: lastUser.content,
+      })
+    }
   }
 
   // Bound the history sent to the model + search pipeline (W1-#7): keep only the
@@ -545,7 +586,7 @@ async function handleChat(req: NextRequest): Promise<Response> {
     // 'exa_search' routes to the Claude chain (Fable 5 → Sonnet 4.6 → Gemini
     // fallbacks) — research synthesis with citations needs the strongest model,
     // not the Gemini Flash default that plain no-skill deep_dive falls to.
-    return streamModelResponse(boundedMessages, exaSystemPrompt, 'exa_search', false, req)
+    return streamModelResponse(boundedMessages, exaSystemPrompt, 'exa_search', false, req, persistCtx)
   }
 
   // ── Parallel pre-stream context assembly ──
@@ -770,7 +811,7 @@ async function handleChat(req: NextRequest): Promise<Response> {
   // effectiveUseCase already computed above (before search routing) for consistency
 
   // Stream response (shared with the EXA Search path — see streamModelResponse).
-  return streamModelResponse(boundedMessages, systemPrompt, effectiveUseCase, Boolean(activeSkill), req)
+  return streamModelResponse(boundedMessages, systemPrompt, effectiveUseCase, Boolean(activeSkill), req, persistCtx)
 }
 
 export async function POST(req: NextRequest) {

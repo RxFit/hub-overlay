@@ -452,6 +452,38 @@ async function run() {
   console.log('[migrate] ✓ webhook_channels table')
 
   // Seed rxfit tenant
+  // Conversations (Phase 2) — server-side chat persistence. Chat ids are
+  // client-minted; ownership is the session email (enforced in lib/chat-store).
+  await sql`
+    CREATE TABLE IF NOT EXISTS chats (
+      id         TEXT PRIMARY KEY,
+      user_email TEXT NOT NULL,
+      title      TEXT,
+      created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
+      updated_at TIMESTAMPTZ DEFAULT now() NOT NULL
+    )
+  `
+  await sql`
+    CREATE INDEX IF NOT EXISTS chats_user_updated_idx
+    ON chats (user_email, updated_at DESC)
+  `
+  await sql`
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id         TEXT PRIMARY KEY,
+      chat_id    TEXT NOT NULL REFERENCES chats(id),
+      seq        SERIAL NOT NULL,
+      role       TEXT NOT NULL,
+      content    TEXT NOT NULL,
+      model      TEXT,
+      created_at TIMESTAMPTZ DEFAULT now() NOT NULL
+    )
+  `
+  await sql`
+    CREATE INDEX IF NOT EXISTS chat_messages_chat_seq_idx
+    ON chat_messages (chat_id, seq)
+  `
+  console.log('[migrate] ✓ chats + chat_messages tables')
+
   // AI runs ledger (Phase 2 of the agy migration) — one row per model run,
   // engine-agnostic ('agy' | 'gemini' | 'claude'). Provenance only: the prompt
   // is stored as length + sha256 fingerprint, never as text; responses and raw
