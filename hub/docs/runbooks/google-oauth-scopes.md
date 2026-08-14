@@ -114,6 +114,15 @@ gracefully:
   **403 `{ code: 'MISSING_SCOPE' }`** (`googleWriteErrorResponse`) → the client
   re-consents **only** on that marker, never on a bare 403 (RBAC / gate-token /
   Paperclip proxy denials, which re-consent can't fix and would loop on).
+- **API-not-enabled** failures — Google 403 `accessNotConfigured` /
+  `SERVICE_DISABLED` ("…API has not been used in project … before or it is
+  disabled") — return **403 `{ code: 'API_NOT_ENABLED', activationUrl }`**
+  instead of either of the above. Google labels these `PERMISSION_DENIED`, but
+  they are a *Console* problem (step 1 of the checklist above was skipped), and
+  re-consent cannot fix them: mapping them to a re-auth prompt produced the
+  Settings → Analytics "authorize → consent → authorize again" loop. Clients
+  show "an operator must enable this API in the Cloud Console", linking
+  Google's own `activationUrl`, and never a sign-in prompt.
 
 To force it proactively: **sign out and back in once**.
 

@@ -9,6 +9,8 @@
  * therefore went dark with an opaque error instead of self-healing.
  *
  * `googleApiErrorResponse` maps the thrown error back to the right status:
+ *   - API not enabled in the Cloud project (accessNotConfigured) →
+ *     403 `{ code: 'API_NOT_ENABLED' }` — an operator problem; never reauth
  *   - auth failures (401/403, invalid_grant) → 401 `{ reauth: true }`
  *   - transient upstream/network (429/5xx/timeout) → 502
  *   - everything else → its own 4xx, or 500
@@ -48,9 +50,65 @@ export function mapGoogleErrorToStatus(message: string): number {
   return 500
 }
 
+/* ── "API not enabled" (accessNotConfigured / SERVICE_DISABLED) ──
+ *
+ * Google answers 403 when the API itself is not enabled in the Cloud project
+ * that owns the OAuth client (legacy reason `accessNotConfigured`, newer
+ * ErrorInfo `SERVICE_DISABLED`, message "…API has not been used in project …
+ * before or it is disabled. Enable it by visiting https://console.…").
+ *
+ * That failure READS like a permission problem — the body literally says
+ * PERMISSION_DENIED — but it is an OPERATOR problem: only enabling the API in
+ * the Cloud Console fixes it. Folding it into MISSING_SCOPE (or the generic
+ * 403 → 401 reauth) sends the user through an OAuth consent that cannot
+ * possibly help — the infinite "Authorize → consent → same error" loop the
+ * OAuth runbook warns about, seen live on Settings → Analytics Sources when
+ * the Analytics Admin API was never enabled. So both mappers classify it
+ * FIRST and answer with a dedicated non-reauth code.
+ */
+const API_NOT_ENABLED_MARKERS =
+  /accessnotconfigured|service_disabled|has not been used in project|enable it by visiting/i
+
+/** True when a thrown Google 403 means "API not enabled in the Cloud project". */
+export function isApiNotEnabledError(message: string): boolean {
+  return /\b403\b/.test(message) && API_NOT_ENABLED_MARKERS.test(message)
+}
+
+/**
+ * Google's message embeds an activation link ("Enable it by visiting
+ * https://console.developers.google.com/apis/api/…?project=…"). Surface it so
+ * an operator gets a one-click path to the fix. Client ids/project numbers are
+ * not secret (they appear in every browser OAuth URL), so exposing the link is
+ * safe.
+ */
+export function extractApiActivationUrl(message: string): string | undefined {
+  return message.match(/https:\/\/console\.(?:developers|cloud)\.google\.com\/[^\s"'\\<>]+/i)?.[0]
+}
+
+/** 403 { code: 'API_NOT_ENABLED' } — must never trigger reauth or re-consent. */
+function apiNotEnabledResponse(err: unknown, featureLabel?: string): NextResponse {
+  const raw = err instanceof Error ? err.message : ''
+  const activationUrl = extractApiActivationUrl(raw)
+  const lead = featureLabel ? `${featureLabel} is unavailable: a` : 'A'
+  return NextResponse.json(
+    {
+      error:
+        `${lead} Google API this feature needs is not enabled for the Hub's Google Cloud project. ` +
+        'An operator must enable it in the Google Cloud Console — re-authorizing your Google account cannot fix this.',
+      code: 'API_NOT_ENABLED',
+      ...(activationUrl ? { activationUrl } : {}),
+    },
+    { status: 403 },
+  )
+}
+
 /** Build the Next response for a thrown Google REST error. */
 export function googleApiErrorResponse(err: unknown): NextResponse {
   const message = err instanceof Error ? err.message : 'Google API error'
+  // Checked before the status mapping: the generic mapper folds 403 into a
+  // reauth 401, and every consumer hook answers a reauth 401 with an automatic
+  // signIn('google') — which cannot fix a disabled API and would loop.
+  if (isApiNotEnabledError(message)) return apiNotEnabledResponse(err)
   const status = mapGoogleErrorToStatus(message)
   if (status === 401) {
     return NextResponse.json(
@@ -73,14 +131,16 @@ export function googleApiErrorResponse(err: unknown): NextResponse {
  * IMPORTANT: only a genuine Google insufficient-scope 403 returns MISSING_SCOPE.
  * A bare 403 from role/gate/RBAC layers must NEVER reach here — re-consent
  * cannot fix those and would loop. This helper is for Google-upstream errors only.
+ * API-not-enabled 403s are classified first for the same reason: Google labels
+ * them PERMISSION_DENIED, but only the Cloud Console fixes them.
  */
 export function googleWriteErrorResponse(err: unknown, scopeLabel: string): NextResponse {
   const message = (err instanceof Error ? err.message : '').toLowerCase()
+  if (isApiNotEnabledError(message)) return apiNotEnabledResponse(err, scopeLabel)
   const isScopeDenial =
     /\b403\b/.test(message) &&
     (message.includes('insufficient') ||
       message.includes('permission') ||
-      message.includes('accessnotconfigured') ||
       message.includes('scope'))
   if (isScopeDenial) {
     return NextResponse.json(

@@ -66,6 +66,16 @@ export function AnalyticsSettings() {
 
   const needsReconsent = ga4.missingScope || gsc.missingScope
 
+  // "API not enabled" (Google 403 accessNotConfigured) is an operator/Console
+  // problem. It must WIN over the authorize prompt: offering re-consent for it
+  // just loops (sign in → consent → same 403 → sign-in button again), which is
+  // exactly the bug this branch exists for. Show what actually fixes it.
+  const apiNotEnabled = ga4.apiNotEnabled || gsc.apiNotEnabled
+  const apiNotEnabledMessage =
+    (ga4.apiNotEnabled ? ga4.error?.message : gsc.error?.message) ??
+    "A Google API this section needs is not enabled for the Hub's Google Cloud project. An operator must enable it in the Google Cloud Console."
+  const activationUrl = ga4.activationUrl ?? gsc.activationUrl
+
   return (
     <section className="settings-section" aria-label="Analytics sources">
       <h2 className="settings-section-title">
@@ -91,7 +101,34 @@ export function AnalyticsSettings() {
               : 'Not configured yet'}
         </summary>
 
-        {needsReconsent ? (
+        {apiNotEnabled ? (
+          <div className="settings-scope-warning" data-testid="analytics-api-not-enabled">
+            <span style={{ fontSize: '1.5rem' }}>🛠️</span>
+            <div>
+              <strong>A Google API needs to be enabled for the Hub.</strong>
+              <p
+                style={{
+                  margin: '4px 0 12px 0',
+                  fontSize: 'var(--text-xs)',
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                {apiNotEnabledMessage}
+              </p>
+              {activationUrl && (
+                <a
+                  className="settings-auth-btn"
+                  style={{ textDecoration: 'none' }}
+                  href={activationUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Enable it in the Google Cloud Console ↗
+                </a>
+              )}
+            </div>
+          </div>
+        ) : needsReconsent ? (
           <div className="settings-scope-warning">
             <span style={{ fontSize: '1.5rem' }}>🔐</span>
             <div>
