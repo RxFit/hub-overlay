@@ -10,6 +10,7 @@ import {
   isAgyConfigured,
   truncateAgyError,
 } from '@/lib/agy'
+import { recordAiRun } from '@/lib/runs'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -71,27 +72,50 @@ export async function GET(req: NextRequest) {
 
   if (req.nextUrl.searchParams.get('probe') === '1') {
     const start = Date.now()
+    const probePrompt = `Reply with exactly this token and nothing else: ${PROBE_MARKER}`
     try {
-      const result = await agyGenerateText(`Reply with exactly this token and nothing else: ${PROBE_MARKER}`, {
+      const result = await agyGenerateText(probePrompt, {
         timeoutMs: 90_000,
       })
+      const markerVerified = result.text.includes(PROBE_MARKER)
       probe = {
         ran: true,
         ok: true,
         // A reply without the marker still proves auth replayed; report both.
-        markerVerified: result.text.includes(PROBE_MARKER),
+        markerVerified,
         model: result.model,
         cacheReadTokens: result.usage?.cacheReadTokens,
         latencyMs: result.latencyMs,
       }
+      // Ledger (Phase 2): probes are real allotment spend and the very runs
+      // that decide go/no-go — they belong on the record. Awaited because the
+      // probe path is not latency-sensitive; recordAiRun never throws.
+      await recordAiRun({
+        engine: 'agy',
+        model: result.model,
+        source: 'health_probe',
+        status: 'ok',
+        latencyMs: result.latencyMs,
+        prompt: probePrompt,
+        usage: result.usage,
+        userEmail: user.email,
+        meta: { markerVerified },
+      })
     } catch (err) {
-      probe = {
-        ran: true,
-        ok: false,
-        errorClass: agyErrorType(err),
-        error: truncateAgyError(err),
-        latencyMs: Date.now() - start,
-      }
+      const errorClass = agyErrorType(err)
+      const error = truncateAgyError(err)
+      const latencyMs = Date.now() - start
+      probe = { ran: true, ok: false, errorClass, error, latencyMs }
+      await recordAiRun({
+        engine: 'agy',
+        source: 'health_probe',
+        status: 'error',
+        errorClass,
+        error,
+        latencyMs,
+        prompt: probePrompt,
+        userEmail: user.email,
+      })
     }
   }
 

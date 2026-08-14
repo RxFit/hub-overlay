@@ -2,6 +2,7 @@ import type { ChatMessage } from '@/types'
 import type { SystemPromptParts } from './claude'
 import { CONNECT_TIMEOUT_MS } from './timeout-config'
 import { emit, type AiProvider } from './observability'
+import { recordAiRun } from './runs'
 import {
   agyErrorType,
   agyGenerateText,
@@ -158,9 +159,25 @@ export async function* tryAgyChat(
   emit({ type: 'ai_provider_selected', requestId: obs.requestId, provider: 'agy', model: 'agy', attempt: obs.attempt })
   yield { modelUsed: AGY_DISPLAY_NAME }
 
+  const prompt = buildAgyPrompt(messages, sysText(systemPrompt))
+  const started = Date.now()
   try {
-    const result = await agyGenerateText(buildAgyPrompt(messages, sysText(systemPrompt)), {
+    const result = await agyGenerateText(prompt, {
       timeoutMs: agyChatTimeoutMs(),
+    })
+    // Ledger write is fire-and-forget: recordAiRun is internally best-effort
+    // and must not add latency between the answer arriving and it reaching
+    // the wire. Recorded even when the client aborted below — the allotment
+    // was spent either way, and the ledger's job is to say so.
+    void recordAiRun({
+      engine: 'agy',
+      model: result.model,
+      source: 'chat',
+      status: 'ok',
+      latencyMs: result.latencyMs,
+      prompt,
+      usage: result.usage,
+      requestId: obs.requestId,
     })
     // Client gave up while the run was in flight: stop quietly (terminal), the
     // same contract as the Claude/Gemini abort paths — nothing is restarted.
@@ -168,8 +185,18 @@ export async function* tryAgyChat(
     yield result.text
     return 'served'
   } catch (err) {
-    if (signal?.aborted) return 'served'
     const type = agyErrorType(err)
+    void recordAiRun({
+      engine: 'agy',
+      source: 'chat',
+      status: 'error',
+      errorClass: type,
+      error: truncateAgyError(err),
+      latencyMs: Date.now() - started,
+      prompt,
+      requestId: obs.requestId,
+    })
+    if (signal?.aborted) return 'served'
     // A dead token can't heal in minutes; not_configured means the env var
     // vanished — both get the long auth tier. Everything else (timeout,
     // empty, parse, install, spawn) is the 5-min real-failure tier.

@@ -137,6 +137,14 @@ events with `provider: "agy"` vs `ai_fallback` events with `from: "agy"` in
 Cloud Logging (or /admin/ai-health) to judge how much traffic the allotment
 is actually absorbing.
 
+Every agy attempt — chat turn or health probe, success or failure — also
+lands as a row in the `ai_runs` ledger (`lib/runs.ts`): engine, model, typed
+error class, latency, token usage, and a prompt fingerprint (length + sha256 —
+never the text; same provenance-not-content contract as `ai_action_log`).
+`SELECT * FROM ai_runs ORDER BY created_at DESC LIMIT 20` is the quickest
+"is the allotment actually serving?" check, and the Phase 3 panel feed reads
+from here.
+
 ## Rotation / revocation
 
 The refresh token is durable until revoked. To kill it: `agy logout` on the
