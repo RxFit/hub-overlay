@@ -49,8 +49,13 @@ export async function GET(req: NextRequest) {
     modelPin: process.env.AGY_MODEL || null,
   }
 
+  // Passive check only — the binary provisions itself (checksum-verified) on
+  // the first real run, so absence here is normal before first use and does
+  // not count against health.
   const version = await agyVersion()
-  const binary = version ? { found: true as const, version } : { found: false as const }
+  const binary = version
+    ? { found: true as const, version }
+    : { found: false as const, note: 'not provisioned yet — installs on first run (or ?probe=1)' }
 
   let probe:
     | { ran: false }
@@ -83,7 +88,7 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  const healthy = config.configured && binary.found && (!probe.ran || probe.ok)
+  const healthy = config.configured && (!probe.ran || probe.ok)
   return NextResponse.json({
     generatedAt: new Date().toISOString(),
     healthy,

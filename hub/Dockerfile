@@ -15,11 +15,14 @@ RUN npm run build
 # mode, but set it explicitly so the image is correct regardless of checkout).
 RUN chmod +x docker-entrypoint.sh
 
-# Antigravity CLI (agy) — the lib/agy.ts execution gateway spawns it at request
-# time. Checksum-verified against the release manifest (see scripts/install-agy.mjs);
-# upstream serves "latest" only, so the auto-updater is disabled at runtime to keep
-# the binary immutable per image.
-RUN node scripts/install-agy.mjs /usr/local/bin/agy
+# Antigravity CLI (agy): the lib/agy.ts gateway provisions the binary at
+# RUNTIME (lazy, checksum-verified, first use per instance) — deliberately NOT
+# here. A build-time download coupled `gcloud run deploy` to the undocumented
+# third-party release server and broke the deploy pipeline (2026-08-14); a
+# runtime failure instead surfaces as a typed error in /api/admin/agy-health
+# while deploys stay independent. scripts/install-agy.mjs remains for local
+# prebakes. The auto-updater stays off so a provisioned binary never replaces
+# itself mid-request.
 ENV AGY_CLI_DISABLE_AUTO_UPDATE=true
 
 EXPOSE 3000

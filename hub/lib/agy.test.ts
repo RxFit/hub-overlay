@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
+import { createHash } from 'node:crypto'
 
 /**
  * lib/agy.ts — the agy execution gateway.
@@ -16,12 +17,13 @@ import { EventEmitter } from 'node:events'
  *  - the JSON envelope is found inside TUI chrome and read under field aliases.
  */
 
-const { spawnMock, execFileMock, existsSyncMock, mkdirMock, writeFileMock } = vi.hoisted(() => ({
+const { spawnMock, execFileMock, existsSyncMock, mkdirMock, writeFileMock, chmodMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
   execFileMock: vi.fn(),
   existsSyncMock: vi.fn(),
   mkdirMock: vi.fn(),
   writeFileMock: vi.fn(),
+  chmodMock: vi.fn(),
 }))
 
 vi.mock('node:child_process', () => ({
@@ -34,6 +36,7 @@ vi.mock('node:fs', () => ({
 vi.mock('node:fs/promises', () => ({
   mkdir: mkdirMock,
   writeFile: writeFileMock,
+  chmod: chmodMock,
 }))
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
@@ -51,6 +54,7 @@ import {
   stripTui,
   extractJsonEnvelope,
   interpretEnvelope,
+  __resetAgyInstallForTest,
 } from './agy'
 
 interface FakeChild extends EventEmitter {
@@ -88,11 +92,14 @@ const ENVELOPE = JSON.stringify({
 
 beforeEach(() => {
   vi.unstubAllEnvs()
+  vi.unstubAllGlobals()
+  __resetAgyInstallForTest()
   spawnMock.mockReset()
   execFileMock.mockReset()
   existsSyncMock.mockReset()
   mkdirMock.mockReset().mockResolvedValue(undefined)
   writeFileMock.mockReset().mockResolvedValue(undefined)
+  chmodMock.mockReset().mockResolvedValue(undefined)
   // Default world: binary installed at the standard path, token file present.
   existsSyncMock.mockReturnValue(true)
 })
@@ -188,9 +195,70 @@ describe('agyGenerateText — token materialization', () => {
     await expect(agyGenerateText('probe')).rejects.toSatisfy((err: unknown) => agyErrorType(err) === 'not_configured')
   })
 
-  it('throws not_installed when no binary candidate exists', async () => {
+})
+
+describe('agyGenerateText — runtime binary install (no binary on disk)', () => {
+  const payload = Buffer.from('fake-agy-binary')
+  const goodManifest = {
+    version: '9.9.9',
+    url: 'https://releases.example/agy',
+    sha512: createHash('sha512').update(payload).digest('hex'),
+  }
+
+  function jsonResponse(body: unknown): Response {
+    return { ok: true, json: async () => body } as unknown as Response
+  }
+  function binResponse(buf: Buffer): Response {
+    return { ok: true, arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) } as unknown as Response
+  }
+
+  beforeEach(() => {
+    // Token file exists; NO binary anywhere → forces the install path.
     existsSyncMock.mockImplementation((p: string) => p === agyTokenPath())
-    await expect(agyGenerateText('probe')).rejects.toSatisfy((err: unknown) => agyErrorType(err) === 'not_installed')
+  })
+
+  it('downloads, sha512-verifies, installs 0755, and runs from the installed path', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(goodManifest))
+      .mockResolvedValueOnce(binResponse(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    nextRunEmits(ENVELOPE)
+
+    const result = await agyGenerateText('probe')
+    expect(result.text).toBe('hello from agy')
+    expect(fetchMock.mock.calls[0][0]).toContain('/manifests/linux_')
+    const installedPath = writeFileMock.mock.calls[0][0] as string
+    expect(installedPath).toContain('agy-cli')
+    expect(chmodMock).toHaveBeenCalledWith(installedPath, 0o755)
+    expect(spawnMock.mock.calls[0][1][1]).toContain(installedPath)
+  })
+
+  it('classifies a manifest fetch failure as install', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')))
+    await expect(agyGenerateText('probe')).rejects.toSatisfy((err: unknown) => agyErrorType(err) === 'install')
+  })
+
+  it('refuses a payload whose sha512 does not match the manifest', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ ...goodManifest, sha512: 'f'.repeat(128) }))
+      .mockResolvedValueOnce(binResponse(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(agyGenerateText('probe')).rejects.toSatisfy((err: unknown) => agyErrorType(err) === 'install')
+    expect(writeFileMock).not.toHaveBeenCalled()
+  })
+
+  it('a failed install is retried on the next call (memo cleared)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new Error('flake')))
+    await expect(agyGenerateText('probe')).rejects.toSatisfy((err: unknown) => agyErrorType(err) === 'install')
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(goodManifest))
+      .mockResolvedValueOnce(binResponse(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    nextRunEmits(ENVELOPE)
+    await expect(agyGenerateText('probe')).resolves.toMatchObject({ text: 'hello from agy' })
   })
 })
 

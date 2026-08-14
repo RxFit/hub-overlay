@@ -1,7 +1,8 @@
 import { spawn, execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, writeFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
+import { chmod, mkdir, writeFile } from 'node:fs/promises'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createLogger } from '@/lib/logger'
 
@@ -58,6 +59,7 @@ export interface AgyResult {
 export type AgyErrorType =
   | 'not_configured'
   | 'not_installed'
+  | 'install'
   | 'auth'
   | 'empty'
   | 'timeout'
@@ -117,20 +119,109 @@ export function truncateAgyError(err: unknown, max = 300): string {
 
 /* ── Internals (each lazy; exported pieces are pure helpers for tests) ───── */
 
-function resolveBinary(): string {
-  const candidates = [
+function binaryCandidates(): string[] {
+  return [
     process.env.AGY_CLI_PATH,
     '/usr/local/bin/agy',
     join(homedir(), '.local', 'bin', 'agy'),
+    runtimeInstallPath(),
   ].filter((c): c is string => Boolean(c))
-  for (const candidate of candidates) {
+}
+
+function resolveBinary(): string | null {
+  for (const candidate of binaryCandidates()) {
     if (existsSync(candidate)) return candidate
   }
-  throw agyError(
-    'not_installed',
-    `agy binary not found (checked: ${candidates.join(', ')}). ` +
-      'Set AGY_CLI_PATH or add the install layer to the Dockerfile.',
-  )
+  return null
+}
+
+function runtimeInstallPath(): string {
+  return join(tmpdir(), 'agy-cli', 'agy')
+}
+
+/**
+ * Download + checksum-verify the agy binary at runtime (first use per
+ * instance). This deliberately does NOT happen at image build time: the
+ * release server is an undocumented third-party endpoint, and coupling
+ * `gcloud run deploy` to it broke the deploy pipeline on 2026-08-14. A
+ * runtime failure instead surfaces as a typed 'install' error in agy-health
+ * while deploys stay independent. Cloud Run's /tmp is writable (in-memory).
+ */
+async function installBinary(): Promise<string> {
+  const base = process.env.AGY_DOWNLOAD_BASE_URL || 'https://antigravity-cli-auto-updater-974169037036.us-central1.run.app'
+  const archMap: Record<string, string> = { x64: 'amd64', arm64: 'arm64' }
+  const arch = archMap[process.arch]
+  if (!arch || process.platform !== 'linux') {
+    throw agyError('install', `runtime install unsupported on ${process.platform}/${process.arch} — set AGY_CLI_PATH`)
+  }
+
+  let manifest: { version?: string; url?: string; sha512?: string }
+  try {
+    const res = await fetch(`${base}/manifests/linux_${arch}.json`)
+    if (!res.ok) throw new Error(`manifest HTTP ${res.status}`)
+    manifest = await res.json()
+  } catch (err) {
+    throw agyError('install', `agy manifest fetch failed: ${err instanceof Error ? err.message : String(err)}`)
+  }
+  if (!manifest.url || !manifest.sha512) {
+    throw agyError('install', 'agy release manifest missing url/sha512')
+  }
+
+  let payload: Buffer
+  try {
+    const res = await fetch(manifest.url)
+    if (!res.ok) throw new Error(`download HTTP ${res.status}`)
+    payload = Buffer.from(await res.arrayBuffer())
+  } catch (err) {
+    throw agyError('install', `agy binary download failed: ${err instanceof Error ? err.message : String(err)}`)
+  }
+
+  const actual = createHash('sha512').update(payload).digest('hex')
+  if (actual !== manifest.sha512) {
+    throw agyError('install', 'agy binary sha512 mismatch against release manifest — refusing to install')
+  }
+
+  const target = runtimeInstallPath()
+  await mkdir(dirname(target), { recursive: true })
+  if (/\.tar\.gz(\?|$)/.test(manifest.url)) {
+    const staging = join(dirname(target), 'agy.tar.gz')
+    await writeFile(staging, payload)
+    await new Promise<void>((resolve, reject) => {
+      execFile('tar', ['-xzf', staging, '-C', dirname(target), 'antigravity'], (err) =>
+        err ? reject(agyError('install', `agy archive extraction failed: ${err.message}`)) : resolve(),
+      )
+    })
+    await new Promise<void>((resolve, reject) => {
+      execFile('mv', [join(dirname(target), 'antigravity'), target], (err) =>
+        err ? reject(agyError('install', `agy binary move failed: ${err.message}`)) : resolve(),
+      )
+    })
+  } else {
+    await writeFile(target, payload)
+  }
+  await chmod(target, 0o755)
+  log.info({ target, version: manifest.version }, 'agy binary installed at runtime (checksum verified)')
+  return target
+}
+
+// Memoized so concurrent first calls share one download instead of racing.
+let installInFlight: Promise<string> | null = null
+
+/** Test-only: clear the install memo (mirrors gemini.ts __resetModelCooldownsForTest). */
+export function __resetAgyInstallForTest(): void {
+  installInFlight = null
+}
+
+async function ensureBinary(): Promise<string> {
+  const found = resolveBinary()
+  if (found) return found
+  if (!installInFlight) {
+    installInFlight = installBinary().catch((err) => {
+      installInFlight = null // allow retry on the next call
+      throw err
+    })
+  }
+  return installInFlight
 }
 
 async function ensureTokenFile(): Promise<void> {
@@ -288,13 +379,15 @@ function runUnderPty(inner: string, timeoutMs: number): Promise<RunOutcome> {
 
 /* ── Public entry points ─────────────────────────────────────────────────── */
 
-/** `agy --version`, or null when the binary is missing/broken. No pty needed. */
+/**
+ * `agy --version`, or null when no binary is present yet. Deliberately PASSIVE:
+ * never triggers the runtime install, so the cheap health report stays cheap —
+ * a null here just means the first real run will provision the binary.
+ */
 export function agyVersion(): Promise<string | null> {
   return new Promise((resolve) => {
-    let bin: string
-    try {
-      bin = resolveBinary()
-    } catch {
+    const bin = resolveBinary()
+    if (!bin) {
       resolve(null)
       return
     }
@@ -311,8 +404,8 @@ export function agyVersion(): Promise<string | null> {
  */
 export async function agyGenerateText(prompt: string, opts: AgyOptions = {}): Promise<AgyResult> {
   const started = Date.now()
-  const bin = resolveBinary()
-  await ensureTokenFile()
+  await ensureTokenFile() // fail on missing credential before paying for a download
+  const bin = await ensureBinary()
 
   const timeoutMs = opts.timeoutMs ?? Number(process.env.AGY_TIMEOUT_MS ?? 120_000)
   // agy's own print timeout fires first so we get its error text instead of a kill.
