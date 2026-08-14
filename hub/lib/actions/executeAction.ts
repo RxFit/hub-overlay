@@ -7,6 +7,7 @@ import {
   shareRoleLabel,
   type ShareRole,
 } from '@/lib/google/share-roles'
+import { tagHubChatPost } from '@/lib/chat-post-tag'
 
 interface ExecuteActionDeps {
   activeCompany: { id: string; name: string; identifier: string } | null
@@ -629,7 +630,10 @@ export async function executeAction(
         headers: chatHeaders,
         body: JSON.stringify({
           spaceId: space.name,
-          text: withExtraContext(spec.details.message || '', spec.details.additionalContext),
+          // Tagged: this post is sent AS the operator, and other agents in
+          // the space must be able to tell it wasn't the operator typing
+          // (lib/chat-post-tag.ts — the Phase 2 tagging convention).
+          text: tagHubChatPost(withExtraContext(spec.details.message || '', spec.details.additionalContext)),
         }),
       })
       if (!msgRes.ok) throw new Error(`Chat message failed: ${msgRes.status}`)
