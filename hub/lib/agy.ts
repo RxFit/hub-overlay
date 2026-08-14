@@ -292,7 +292,7 @@ export function stripTui(s: string): string {
     .replace(/[│╭╮╰╯─⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/g, '')
 }
 
-const AUTH_FAILURE_RE = /authentication required|not logged into antigravity|authentication timed out/i
+const AUTH_FAILURE_RE = /authentication required|not logged into antigravity|authentication (failed|timed out|failed or timed out)/i
 
 /** Find and parse the JSON object embedded in (possibly pty-wrapped) output. */
 export function extractJsonEnvelope(cleaned: string): unknown | undefined {
