@@ -38,6 +38,28 @@ export function resolvePrefs(stored: GooglePrefsValues | null): GooglePrefsValue
 }
 
 /**
+ * GSC properties are either a URL-prefix property ("https://example.com/") or
+ * a domain property ("sc-domain:example.com"). Anything else — above all a
+ * value containing whitespace or newlines — is rejected. This is a SECURITY
+ * shape, not just hygiene: the stored value is interpolated into the
+ * assistant's system prompt (the capability manifest), so free-form text here
+ * would be an instruction-smuggling channel into the trusted half of the
+ * prompt. Exported for direct testing.
+ */
+export function normalizeGscSiteUrl(value: string | undefined): string | undefined {
+  if (!value) return undefined
+  if (/\s/.test(value)) return undefined
+  if (/^sc-domain:[a-z0-9.-]+$/i.test(value)) return value
+  try {
+    const url = new URL(value)
+    if (url.protocol === 'http:' || url.protocol === 'https:') return value
+  } catch {
+    /* not a URL — drop below */
+  }
+  return undefined
+}
+
+/**
  * Harden admin-supplied values. Never throws — an unusable value is dropped
  * rather than stored, so a typo cannot wedge the analytics config.
  */
@@ -61,7 +83,7 @@ export function normalizePrefsInput(input: unknown): GooglePrefsValues {
     // GA4 property ids are numeric; callers sometimes paste "properties/123".
     out.ga4PropertyId = ga4 ? ga4.replace(/^properties\//, '').replace(/\D/g, '') || undefined : undefined
   }
-  if ('gscSiteUrl' in raw) out.gscSiteUrl = str(raw.gscSiteUrl)
+  if ('gscSiteUrl' in raw) out.gscSiteUrl = normalizeGscSiteUrl(str(raw.gscSiteUrl))
   if ('bigqueryProjectId' in raw) out.bigqueryProjectId = str(raw.bigqueryProjectId, 100)
   if ('timezone' in raw) out.timezone = str(raw.timezone, 64)
   if ('reports' in raw) out.reports = Array.isArray(raw.reports) ? raw.reports : []

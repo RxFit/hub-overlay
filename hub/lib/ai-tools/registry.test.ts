@@ -306,3 +306,36 @@ describe('list_file_access', () => {
     expect(getTool('list_file_access')!.schema.safeParse({}).success).toBe(false)
   })
 })
+
+describe('ga4_run_report — repair through the real entry (mutation guard)', () => {
+  it('repairs a renamed metric, succeeds, and discloses the adjustment in summary + payload', async () => {
+    // Property metadata knows keyEvents (current name), not conversions
+    // (Google's pre-2024 name). Without { repair: true } wired in execute(),
+    // this exact call throws — deleting the option must fail THIS test.
+    stubFetch(
+      {
+        metricHeaders: [{ name: 'keyEvents' }],
+        rows: [{ metricValues: [{ value: '42' }] }],
+        rowCount: 1,
+      },
+      {
+        dimensions: [{ apiName: 'pagePath' }],
+        metrics: [{ apiName: 'sessions' }, { apiName: 'keyEvents' }],
+      },
+    )
+
+    const tool = getTool('ga4_run_report')!
+    const result = await tool.execute(
+      { startDate: '2026-07-01', endDate: '2026-07-28', metrics: ['conversions'] },
+      ctx(),
+    )
+
+    // The summary names the metric the data actually holds, not the one asked for.
+    expect(result.summary).toContain('keyEvents')
+    expect(result.summary).not.toContain('conversions')
+    // The fenced payload discloses the rename so the model can say so.
+    expect(result.fenced).toContain('fieldAdjustments')
+    expect(result.fenced).toContain('"from":"conversions"')
+    expect(result.fenced).toContain('"to":"keyEvents"')
+  })
+})

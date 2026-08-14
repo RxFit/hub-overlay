@@ -86,6 +86,14 @@ function getDb() {
   const client = postgres(cleanUrl, {
     max: 10,
     idle_timeout: 20,
+    // Bound connection ESTABLISHMENT (library default: 30s). During a Cloud
+    // SQL incident with hanging connects, every pooled query used to wait the
+    // full 30s before failing — with this shared singleton behind chat, KPI
+    // sync and reports, that stacked into user-visible stalls. 10s fails fast
+    // to each caller's own fallback. (Deliberately NO statement_timeout here:
+    // embedding upserts and report jobs legitimately run long; per-path
+    // bounds belong at the call sites, e.g. lib/ai-tools/resolve.ts.)
+    connect_timeout: 10,
     ...(explicitHost && { host: explicitHost })
   })
   _db = drizzle(client, { schema })

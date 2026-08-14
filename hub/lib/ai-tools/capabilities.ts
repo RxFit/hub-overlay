@@ -41,17 +41,28 @@ function firstSentence(text: string): string {
   return end === -1 ? text : text.slice(0, end + 1)
 }
 
+/**
+ * Config values are admin-entered text landing UNFENCED in the trusted half of
+ * the prompt, so their shape is a security boundary: flatten to one short line
+ * with no markdown-structural characters, so a stored value can never smuggle
+ * instruction-shaped text. Defense in depth — the write path
+ * (normalizeGscSiteUrl in lib/google/prefs.ts) rejects malformed values too.
+ */
+function sanitizeConfigValue(value: string): string {
+  return value.replace(/[\r\n\t]+/g, ' ').replace(/[<>#`[\]]/g, '').slice(0, 100)
+}
+
 /** Configuration status line for the two tenant-configured analytics tools. */
 function configNote(name: string, input: CapabilityManifestInput): string {
   if (!input.prefsKnown) return ''
   if (name === 'ga4_run_report') {
     return input.ga4PropertyId
-      ? ` [CONFIGURED — GA4 property ${input.ga4PropertyId}]`
+      ? ` [CONFIGURED — GA4 property ${sanitizeConfigValue(input.ga4PropertyId)}]`
       : ' [NOT configured yet — an admin can pick the property in Settings → Analytics Sources]'
   }
   if (name === 'gsc_search_analytics') {
     return input.gscSiteUrl
-      ? ` [CONFIGURED — site ${input.gscSiteUrl}]`
+      ? ` [CONFIGURED — site ${sanitizeConfigValue(input.gscSiteUrl)}]`
       : ' [NOT configured yet — an admin can pick the site in Settings → Analytics Sources]'
   }
   return ''
@@ -80,9 +91,11 @@ export function buildCapabilityManifest(input: CapabilityManifestInput): string 
     '- NEVER tell the user you lack access to a source listed above, and never send them to an',
     '  external site (analytics.google.com, drive.google.com, …) as the first resort — the Hub',
     '  is their interface to this data.',
-    '- If a retrieval section shows a tool failed or did not run, say briefly what failed and',
-    '  invite the user to retry or rephrase (a retry often succeeds). Do NOT paper over the gap',
-    '  with generic education about the product, and never invent figures.',
+    '- If a retrieval section shows a tool failed, relay what the failure note says. A',
+    '  PERMISSION failure means the user\'s Google account lacks access to that source —',
+    '  retrying will not help; say so and suggest getting access granted. For other failures,',
+    '  invite a retry or rephrase, which often succeeds. Do NOT paper over the gap with',
+    '  generic education about the product, and never invent figures.',
     '- If the user clearly wants live figures but no retrieval section is present, ask them to',
     '  restate the question with a concrete metric and time range (e.g. "sessions in the last',
     '  28 days"), which triggers the lookup.',

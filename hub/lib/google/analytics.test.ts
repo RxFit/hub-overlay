@@ -376,3 +376,53 @@ describe('runGA4Report — repair option', () => {
     expect(result.repairs).toBeUndefined()
   })
 })
+
+describe('repairGA4Fields — dedupe and orderBy-only repair (audit follow-up)', () => {
+  const req2 = (over: Record<string, unknown>) => ({
+    propertyId: '1',
+    startDate: '7daysAgo',
+    endDate: 'today',
+    metrics: ['sessions'],
+    ...over,
+  })
+
+  it('dedupes when the stale name comes BEFORE its canonical twin', () => {
+    // A hedging model proposes both old and new names; GA4 400s on duplicates.
+    expect(repairGA4Fields(req2({ metrics: ['pageviews', 'screenPageViews'] }), repairMeta).request.metrics)
+      .toEqual(['screenPageViews'])
+    expect(repairGA4Fields(req2({ metrics: ['Sessions', 'sessions'] }), repairMeta).request.metrics)
+      .toEqual(['sessions'])
+    expect(repairGA4Fields(req2({ dimensions: ['PagePath', 'pagePath'] }), repairMeta).request.dimensions)
+      .toEqual(['pagePath'])
+  })
+
+  it('repairs orderByMetric via the alias table when its metric was requested under the new name', () => {
+    const { request } = repairGA4Fields(
+      req2({ metrics: ['keyEvents'], orderByMetric: 'conversions' }),
+      repairMeta,
+    )
+    expect(request.orderByMetric).toBe('keyEvents')
+  })
+})
+
+describe('runGA4Report — orderBy-only slip repairs even when validation is clean', () => {
+  it('rewrites a stale orderByMetric that validateFields cannot see', async () => {
+    const { calls } = stubJson([
+      { dimensions: [{ apiName: 'pagePath' }], metrics: [{ apiName: 'sessions' }, { apiName: 'keyEvents' }] },
+      { rows: [], rowCount: 0 },
+    ])
+    await runGA4Report(
+      'tok',
+      {
+        propertyId: 'p13',
+        startDate: '7daysAgo',
+        endDate: 'today',
+        metrics: ['keyEvents'],
+        orderByMetric: 'conversions', // metrics validate clean; only orderBy is stale
+      },
+      { repair: true },
+    )
+    const body = calls[1].body as { orderBys?: { metric?: { metricName?: string } }[] }
+    expect(body.orderBys?.[0]?.metric?.metricName).toBe('keyEvents')
+  })
+})
