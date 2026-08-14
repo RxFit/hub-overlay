@@ -24,10 +24,15 @@ import { planToolCalls } from './plan'
 import { executeToolCalls, renderToolOutcomes } from './execute'
 import { toolsFor } from './registry'
 import { buildCapabilityManifest } from './capabilities'
-import { getEffectivePrefs } from '../google/prefs-db'
+import { getEffectivePrefsDetailed } from '../google/prefs-db'
+import type { GooglePrefsValues } from '../google/prefs'
 import { authOptions } from '../auth'
 import { getChatSpacePreferences } from '../chat-space-preferences-db'
 import { EMPTY_CHAT_SPACE_PREFERENCES, type ChatSpacePreferences } from '../chat-spaces'
+import { withTimeout } from '../timeout'
+
+/** Ceiling on each of the two per-turn DB reads (prefs, chat visibility). */
+export const PREFS_TIMEOUT_MS = 5_000
 
 export interface ResolveResult {
   /** Rendered block for the system prompt, or undefined when nothing ran. */
@@ -69,15 +74,30 @@ export async function resolveReadTools(
     // Planning and the prefs lookup are independent — run them concurrently.
     // Prefs are fetched on EVERY eligible turn (not only when a plan produced
     // calls) because the capability manifest needs the configured state
-    // precisely on the turns where no tool ran. One indexed single-row read
-    // per chat turn; noise next to the route's other context fetches.
+    // precisely on the turns where no tool ran.
+    //
+    // Both DB reads are BOUNDED (withTimeout resolves with the fallback): a
+    // hanging connection or saturated pool must degrade the manifest to
+    // prefsKnown:false, never hold the turn — the route awaits this promise
+    // with no timeout of its own, so an unbounded read here would stall every
+    // chat turn for the length of a DB incident. And prefsKnown comes from
+    // getEffectivePrefsDetailed's storeReadFailed, not from a rejection (the
+    // function never rejects): a failed store read must render as "config
+    // state unknown", never as "NOT configured" to an admin who configured it.
     const [calls, prefsOutcome, chatSpacePreferences] = await Promise.all([
       planToolCalls(question, tools, now),
-      getEffectivePrefs().then(
-        prefs => ({ known: true as const, prefs }),
-        () => ({ known: false as const, prefs: {} as Awaited<ReturnType<typeof getEffectivePrefs>> }),
+      withTimeout(
+        getEffectivePrefsDetailed().then(o => ({ known: !o.storeReadFailed, prefs: o.prefs })),
+        PREFS_TIMEOUT_MS,
+        { known: false, prefs: {} as GooglePrefsValues },
+        'ai-tools-prefs',
       ),
-      resolveChatSpacePreferences(),
+      withTimeout(
+        resolveChatSpacePreferences(),
+        PREFS_TIMEOUT_MS,
+        EMPTY_CHAT_SPACE_PREFERENCES,
+        'ai-tools-chat-prefs',
+      ),
     ])
 
     const manifest = buildCapabilityManifest({

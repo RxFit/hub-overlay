@@ -256,3 +256,71 @@ describe('per-tool timeout override', () => {
     }
   })
 })
+
+describe('permission-denial classification (audit follow-up)', () => {
+  it('flags a bare Google 403 and spares rate-limit 403s', async () => {
+    const { isPermissionDenial } = await import('./execute')
+    expect(isPermissionDenial('ga4_run_report failed: Google API error 403: PERMISSION_DENIED')).toBe(true)
+    expect(isPermissionDenial('Google API error 403: userRateLimitExceeded')).toBe(false)
+    expect(isPermissionDenial('Google API error 403: quota exceeded for property')).toBe(false)
+    expect(isPermissionDenial('Google API error 500: backend error')).toBe(false)
+  })
+
+  it('renders a permission failure as a no-retry note that replaces the upstream text', () => {
+    const rendered = renderToolOutcomes([
+      {
+        name: 'ga4_run_report',
+        ok: false,
+        error: 'ga4_run_report failed: Google API error 403: User does not have sufficient permissions for this property.',
+      } as ToolOutcome,
+    ])
+    expect(rendered).toContain('PERMISSION error')
+    expect(rendered).toContain('Retrying will NOT help')
+    // The raw upstream body must not reach the prompt on this branch.
+    expect(rendered).not.toContain('sufficient permissions for this property')
+  })
+
+  it('keeps the generic note for non-permission failures', () => {
+    const rendered = renderToolOutcomes([
+      { name: 'ga4_run_report', ok: false, error: 'ga4_run_report timed out after 20000ms' } as ToolOutcome,
+    ])
+    expect(rendered).toContain('did not run')
+    expect(rendered).not.toContain('PERMISSION error')
+  })
+})
+
+describe('batch time budget (audit follow-up)', () => {
+  it('caps later calls at the remaining budget and skips once it is exhausted', async () => {
+    vi.useFakeTimers()
+    try {
+      // Metadata resolves; every report call hangs forever.
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string) => {
+          if (url.includes('/metadata')) {
+            return new Response(
+              JSON.stringify({ dimensions: [{ apiName: 'pagePath' }], metrics: [{ apiName: 'sessions' }] }),
+              { status: 200 },
+            )
+          }
+          return new Promise<Response>(() => {})
+        }),
+      )
+
+      const call = { name: 'ga4_run_report', args: validGa4 }
+      const pending = executeToolCalls([call, call, call], ctx())
+
+      // Call 1 runs at the full 20s tool ceiling (inside the 30s batch budget).
+      // Call 2 gets only the ~10s remainder. Call 3 finds the budget exhausted.
+      await vi.advanceTimersByTimeAsync(31_000)
+      const outcomes = await pending
+
+      expect(outcomes[0].error).toContain('timed out after 20000ms')
+      expect(outcomes[1].error).toContain('timed out after 10000ms')
+      expect(outcomes[2].error).toContain('skipped')
+      expect(outcomes[2].error).toContain('budget')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

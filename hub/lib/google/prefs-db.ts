@@ -35,17 +35,35 @@ export async function getStoredPrefs(tenantId = getTenantId()): Promise<GooglePr
   }
 }
 
+export interface EffectivePrefsOutcome {
+  prefs: GooglePrefsValues
+  /** True when the STORED-prefs read threw (DB failure). The env-fallback
+   *  values in `prefs` still keep tools working, but a caller describing the
+   *  tenant's configuration (the capability manifest) must not present a
+   *  failed read as "nothing is configured" — that is how a DB blip made the
+   *  assistant tell an admin their just-configured GA4 property didn't exist. */
+  storeReadFailed: boolean
+}
+
+/**
+ * Effective configuration WITH read-failure visibility: stored values over
+ * env-var fallback, plus whether the store read actually succeeded.
+ */
+export async function getEffectivePrefsDetailed(tenantId = getTenantId()): Promise<EffectivePrefsOutcome> {
+  try {
+    return { prefs: resolvePrefs(await getStoredPrefs(tenantId)), storeReadFailed: false }
+  } catch (err) {
+    console.error('[google-prefs] read failed (falling back to env vars):', err)
+    return { prefs: resolvePrefs(null), storeReadFailed: true }
+  }
+}
+
 /**
  * Effective configuration: stored values over env-var fallback. This is what
  * every analytics caller should use.
  */
 export async function getEffectivePrefs(tenantId = getTenantId()): Promise<GooglePrefsValues> {
-  try {
-    return resolvePrefs(await getStoredPrefs(tenantId))
-  } catch (err) {
-    console.error('[google-prefs] read failed (falling back to env vars):', err)
-    return resolvePrefs(null)
-  }
+  return (await getEffectivePrefsDetailed(tenantId)).prefs
 }
 
 /**

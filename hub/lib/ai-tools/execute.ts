@@ -72,8 +72,12 @@ function describeValidationError(err: unknown): string {
 
 /**
  * Execute one model-proposed tool call under all guards.
+ *
+ * `budgetMs` caps this call at the REMAINING share of the batch budget (see
+ * executeToolCalls) — a tool's own generous ceiling must not let a sequence
+ * of stalled calls eat the whole chat turn.
  */
-export async function executeToolCall(call: ToolCall, ctx: ToolContext): Promise<ToolOutcome> {
+export async function executeToolCall(call: ToolCall, ctx: ToolContext, budgetMs?: number): Promise<ToolOutcome> {
   const tool = getTool(call.name)
   if (!tool) {
     return { name: call.name, ok: false, error: `Unknown tool "${call.name}".` }
@@ -98,7 +102,8 @@ export async function executeToolCall(call: ToolCall, ctx: ToolContext): Promise
   }
 
   try {
-    const result = await withTimeout(tool.execute(parsed.data, ctx), tool.timeoutMs ?? TOOL_TIMEOUT_MS, tool.name)
+    const ceiling = Math.min(tool.timeoutMs ?? TOOL_TIMEOUT_MS, budgetMs ?? Number.POSITIVE_INFINITY)
+    const result = await withTimeout(tool.execute(parsed.data, ctx), ceiling, tool.name)
     return { name: tool.name, ok: true, result }
   } catch (err) {
     const message = err instanceof Error ? err.message : 'unknown error'
@@ -117,10 +122,31 @@ export async function executeToolCall(call: ToolCall, ctx: ToolContext): Promise
  */
 export const MAX_TOOL_CALLS_PER_TURN = 3
 
+/**
+ * Shared wall-clock budget for the WHOLE batch. Without it, per-tool ceilings
+ * compound: three sequential GA4 calls at their 20s ceiling would stall the
+ * turn 60s before the system prompt is even assembled — most of the 110s
+ * client budget gone before a model connects. 30s keeps the worst case at
+ * roughly what a single slow analytics turn already costs.
+ */
+export const TOOL_BATCH_BUDGET_MS = 30_000
+
 export async function executeToolCalls(calls: ToolCall[], ctx: ToolContext): Promise<ToolOutcome[]> {
   const outcomes: ToolOutcome[] = []
+  const deadline = Date.now() + TOOL_BATCH_BUDGET_MS
   for (const call of calls.slice(0, MAX_TOOL_CALLS_PER_TURN)) {
-    outcomes.push(await executeToolCall(call, ctx))
+    const remaining = deadline - Date.now()
+    if (remaining < 1_000) {
+      // Skipped, not silently dropped: the model must be able to say what it
+      // could not check instead of the result just being absent.
+      outcomes.push({
+        name: call.name,
+        ok: false,
+        error: 'skipped — the live-data time budget for this turn was exhausted by earlier lookups.',
+      })
+      continue
+    }
+    outcomes.push(await executeToolCall(call, ctx, remaining))
   }
   return outcomes
 }
@@ -142,10 +168,32 @@ export async function executeToolCalls(calls: ToolCall[], ctx: ToolContext): Pro
  * fence costs nothing: every label in a summary also appears inside the tool's
  * own fenced payload, so the model loses no information.
  */
+/**
+ * A Google 403 without a rate/quota reason is a PERMISSION denial — the
+ * signed-in account is not granted on the configured source. Retrying cannot
+ * fix it, so the manifest's "retry often succeeds" guidance must not apply;
+ * without this distinction the assistant told users to retry a permanent 403
+ * forever. Exported for direct testing.
+ */
+export function isPermissionDenial(error: string): boolean {
+  return /\b403\b/.test(error) && !/rate ?limit|quota|exhaust/i.test(error)
+}
+
 export function renderToolOutcomes(outcomes: ToolOutcome[]): string {
   if (!outcomes.length) return ''
 
   const parts = outcomes.map(outcome => {
+    if (!outcome.ok && outcome.error && isPermissionDenial(outcome.error)) {
+      // Deliberately REPLACES the upstream error text: the fixed wording tells
+      // the model exactly what to relay, and no third-party 403 body reaches
+      // the prompt.
+      return (
+        `Tool ${outcome.name} failed with a PERMISSION error: the signed-in Google account is not ` +
+        `granted access to the configured source. Retrying will NOT help. Tell the user plainly that ` +
+        `their Google account needs access granted to this data source (or an admin should re-check ` +
+        `the configured source in Settings → Analytics Sources).`
+      )
+    }
     if (!outcome.ok) return `Tool ${outcome.name} did not run: ${outcome.error}`
     if (outcome.result?.note === 'NOT_CONFIGURED') {
       return `Tool ${outcome.name}: ${fenceUntrusted(`${outcome.name} status`, outcome.result.summary)}\nTell the user an admin can set this in Settings → Analytics Sources.`

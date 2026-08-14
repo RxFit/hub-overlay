@@ -196,7 +196,10 @@ export function repairGA4Fields(
   const metrics: string[] = []
   for (const name of request.metrics) {
     if (metadata.metrics.has(name)) {
-      metrics.push(name)
+      // Dedupe exact matches too: a hedging model can propose both the old
+      // and new name ("pageviews" AND "screenPageViews"), and GA4 400s on a
+      // duplicated metric — which would turn a repair into a new failure.
+      if (!metrics.includes(name)) metrics.push(name)
       continue
     }
     const lower = name.toLowerCase()
@@ -227,7 +230,7 @@ export function repairGA4Fields(
     dimensions = []
     for (const name of request.dimensions) {
       if (metadata.dimensions.has(name)) {
-        dimensions.push(name)
+        if (!dimensions.includes(name)) dimensions.push(name)
         continue
       }
       const canonical = dimensionIndex.get(name.toLowerCase())
@@ -241,9 +244,17 @@ export function repairGA4Fields(
 
   let orderByMetric = request.orderByMetric
   if (orderByMetric && !metrics.includes(orderByMetric)) {
-    const renamed = renameMap.get(orderByMetric) ?? metricIndex.get(orderByMetric.toLowerCase())
-    if (renamed && metrics.includes(renamed)) {
-      orderByMetric = renamed
+    // Resolution order mirrors the metric pass: an already-applied rename,
+    // then canonical casing, then the alias table — and the result counts
+    // only if it names a metric actually in the (repaired) request, because
+    // GA4 rejects an orderBy that references a non-requested metric.
+    const resolved =
+      renameMap.get(orderByMetric) ??
+      metricIndex.get(orderByMetric.toLowerCase()) ??
+      GA4_METRIC_ALIASES[orderByMetric] ??
+      GA4_METRIC_ALIASES[orderByMetric.toLowerCase()]
+    if (resolved && metrics.includes(resolved)) {
+      orderByMetric = resolved
     } else {
       repairs.droppedOrderBy = orderByMetric
       orderByMetric = undefined
@@ -384,15 +395,22 @@ export async function runGA4Report(
   if (opts.validate !== false) {
     const metadata = await fetchGA4Metadata(accessToken, request.propertyId)
     const problem = validateFields(request, metadata)
-    if (problem) {
-      if (!opts.repair) {
-        throw new Error(`GA4 report rejected before sending — ${problem}`)
-      }
+    if (problem && !opts.repair) {
+      throw new Error(`GA4 report rejected before sending — ${problem}`)
+    }
+    if (opts.repair) {
+      // Run repair UNCONDITIONALLY under the flag, not only when validation
+      // flagged a problem: validateFields does not cover orderByMetric, so an
+      // orderBy-only slip ("keyEvents" requested, ordered by "conversions")
+      // validates clean yet 400s at Google. repairGA4Fields returns
+      // repairs:null when nothing changed, so clean requests are untouched.
       const repaired = repairGA4Fields(request, metadata)
       // Nothing usable survived: repair cannot conjure a metric, so surface
       // the original, name-listing validation error.
       if (repaired.request.metrics.length === 0) {
-        throw new Error(`GA4 report rejected before sending — ${problem}`)
+        throw new Error(
+          `GA4 report rejected before sending — ${problem ?? `unknown metric(s): ${request.metrics.join(', ')}`}`,
+        )
       }
       effective = repaired.request
       repairs = repaired.repairs
