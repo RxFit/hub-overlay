@@ -17,13 +17,14 @@ import { createHash } from 'node:crypto'
  *  - the JSON envelope is found inside TUI chrome and read under field aliases.
  */
 
-const { spawnMock, execFileMock, existsSyncMock, mkdirMock, writeFileMock, chmodMock } = vi.hoisted(() => ({
+const { spawnMock, execFileMock, existsSyncMock, mkdirMock, writeFileMock, chmodMock, rmMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
   execFileMock: vi.fn(),
   existsSyncMock: vi.fn(),
   mkdirMock: vi.fn(),
   writeFileMock: vi.fn(),
   chmodMock: vi.fn(),
+  rmMock: vi.fn(),
 }))
 
 vi.mock('node:child_process', () => ({
@@ -37,6 +38,7 @@ vi.mock('node:fs/promises', () => ({
   mkdir: mkdirMock,
   writeFile: writeFileMock,
   chmod: chmodMock,
+  rm: rmMock,
 }))
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
@@ -100,6 +102,7 @@ beforeEach(() => {
   mkdirMock.mockReset().mockResolvedValue(undefined)
   writeFileMock.mockReset().mockResolvedValue(undefined)
   chmodMock.mockReset().mockResolvedValue(undefined)
+  rmMock.mockReset().mockResolvedValue(undefined)
   // Default world: binary installed at the standard path, token file present.
   existsSyncMock.mockReturnValue(true)
 })
@@ -259,6 +262,71 @@ describe('agyGenerateText — runtime binary install (no binary on disk)', () =>
     vi.stubGlobal('fetch', fetchMock)
     nextRunEmits(ENVELOPE)
     await expect(agyGenerateText('probe')).resolves.toMatchObject({ text: 'hello from agy' })
+  })
+})
+
+/**
+ * The real release server hands back a .tar.gz (verified against
+ * antigravity-cli-auto-updater: one member, literally `antigravity`), so this
+ * is the branch that actually runs in production — the tests above exercise
+ * the bare-binary branch. The staging archive is ~55MB and /tmp is tmpfs on
+ * Cloud Run, so "was it deleted" is a memory-budget assertion, not tidiness.
+ */
+describe('agyGenerateText — runtime install from a .tar.gz release (the production path)', () => {
+  const payload = Buffer.from('fake-agy-tarball')
+  const tarManifest = {
+    version: '1.1.13',
+    url: 'https://storage.googleapis.com/antigravity-public/antigravity-cli/1.1.13/linux-x64/cli_linux_x64.tar.gz',
+    sha512: createHash('sha512').update(payload).digest('hex'),
+  }
+
+  /** Resolve execFile by invoking its trailing callback (tar, then mv). */
+  function execFileSucceeds() {
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const cb = args[args.length - 1]
+      if (typeof cb === 'function') queueMicrotask(() => (cb as (e: Error | null) => void)(null))
+    })
+  }
+
+  beforeEach(() => {
+    existsSyncMock.mockImplementation((p: string) => p === agyTokenPath())
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce({ ok: true, json: async () => tarManifest } as unknown as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          arrayBuffer: async () => payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength),
+        } as unknown as Response),
+    )
+  })
+
+  it('extracts, installs 0755, and deletes the staging archive', async () => {
+    execFileSucceeds()
+    nextRunEmits(ENVELOPE)
+
+    await expect(agyGenerateText('probe')).resolves.toMatchObject({ text: 'hello from agy' })
+
+    const staging = writeFileMock.mock.calls[0][0] as string
+    expect(staging).toMatch(/agy\.tar\.gz$/)
+    expect(execFileMock.mock.calls[0][0]).toBe('tar')
+    expect(execFileMock.mock.calls[0][1]).toEqual(expect.arrayContaining(['-xzf', staging, 'antigravity']))
+    expect(execFileMock.mock.calls[1][0]).toBe('mv')
+    expect(chmodMock).toHaveBeenCalledWith(expect.stringMatching(/agy$/), 0o755)
+    expect(rmMock).toHaveBeenCalledWith(staging, { force: true })
+  })
+
+  it('deletes the staging archive even when extraction fails', async () => {
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const cb = args[args.length - 1]
+      if (typeof cb === 'function') {
+        queueMicrotask(() => (cb as (e: Error | null) => void)(new Error('tar: unexpected EOF')))
+      }
+    })
+
+    await expect(agyGenerateText('probe')).rejects.toSatisfy((err: unknown) => agyErrorType(err) === 'install')
+    expect(rmMock).toHaveBeenCalledWith(expect.stringMatching(/agy\.tar\.gz$/), { force: true })
   })
 })
 

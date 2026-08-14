@@ -22,6 +22,13 @@ assumption; this runbook covers operating the production gateway.
   from replacing itself mid-request. `scripts/install-agy.mjs` still exists
   for local prebakes (`AGY_CLI_PATH` and `/usr/local/bin/agy` are checked
   before the runtime path).
+- **Instance memory cost.** Cloud Run's `/tmp` is tmpfs, so the provisioned
+  binary lives in RAM: ~206MB (CLI 1.1.13) held for the life of the instance,
+  against the 1Gi limit in `service.yaml`. The ~55MB download archive is
+  deleted right after extraction, so the steady-state cost is the binary
+  alone. If instances start OOMing after agy adoption, raise the memory limit
+  rather than trimming elsewhere — this cost is per-instance and unavoidable
+  while provisioning is lazy.
 - At request time the gateway materializes the OAuth token file from the
   `AGY_OAUTH_TOKEN` env var to `~/.gemini/antigravity-cli/antigravity-oauth-token`
   (0600, never overwriting an existing file), forces file-based token storage
