@@ -109,10 +109,13 @@ leaving Paperclip to escape):
 
 Three scope-shapers, decided after mapping what the Hub actually has today:
 
-1. **Conversations table.** Chat state is currently client-side only (React
-   state, last-20-window, lost on refresh) — the raw CLIs beat the Hub on
-   conversation persistence until this lands. Server-side `chats` +
-   `chat_messages` tables make "the Hub adds memory" true rather than aspirational.
+1. **Conversations table.** Server side ✅ shipped — `chats` + `chat_messages`
+   tables with `hub/lib/chat-store.ts` (client-minted chat ids, session-email
+   ownership, idempotent appends, best-effort writes) wired into `/api/chat`,
+   plus read endpoints at `/api/chats`. Remaining: client wiring in
+   `useChatEngine` (send the chatId, restore on load, a New-Chat control) —
+   until then chat state is still client-side in practice and the raw CLIs
+   beat the Hub on conversation persistence.
 2. **Engine-agnostic ledger.** ✅ shipped — `ai_runs` records `engine`
    (`agy | gemini | claude`), so metered turns can join the ledger without a
    migration. agy call sites (chat + health probe) write rows now; the metered

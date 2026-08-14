@@ -219,6 +219,9 @@ export const ChatMessageSchema = z.object({
 
 export const ChatRequestSchema = z.object({
   messages: ChatMessageSchema.array().min(1),
+  // Conversation persistence (Phase 2): client-minted conversation id. The
+  // route treats an invalid shape as absent (persistence off), never a 400.
+  chatId: z.string().min(8).max(64).regex(/^[A-Za-z0-9-]+$/).optional(),
   useCase: z.enum(['recall', 'deep_dive', 'execute', 'interview']).optional(),
   skillContext: z.string().optional(),
   // EXA Search mode — when true, the chat route bypasses all internal tools and

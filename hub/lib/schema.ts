@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, uniqueIndex, jsonb, integer, vector, index, uuid } from 'drizzle-orm/pg-core'
+import { pgTable, text, timestamp, uniqueIndex, jsonb, integer, serial, vector, index, uuid } from 'drizzle-orm/pg-core'
 
 /**
  * Hub database schema — Railway Postgres
@@ -349,6 +349,49 @@ export const aiActionLog = pgTable(
   (t) => ({
     userCreatedIdx: index('ai_action_log_user_created_idx').on(t.userEmail, t.createdAt.desc()),
   })
+)
+
+/* ── Conversations (Phase 2 of the agy migration) ────────────────────────── */
+/**
+ * Server-side chat persistence. Until these tables, conversation state lived
+ * entirely in client React state (re-POSTed each turn, last-20 window, lost on
+ * refresh) — the raw CLIs beat the Hub on conversation memory. The chat id is
+ * MINTED BY THE CLIENT (crypto.randomUUID per conversation) so the write path
+ * needs no round trip; ownership is the session email, and every read/write is
+ * scoped to it. Unlike the ai_runs ledger this stores CONTENT — conversations
+ * are product data, not telemetry — so reads are gated to the owning user.
+ */
+export const chats = pgTable(
+  'chats',
+  {
+    id:        text('id').primaryKey(),             // client-minted uuid
+    userEmail: text('user_email').notNull(),
+    title:     text('title'),                        // first user message, truncated
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    userUpdatedIdx: index('chats_user_updated_idx').on(t.userEmail, t.updatedAt.desc()),
+  }),
+)
+
+export const chatMessages = pgTable(
+  'chat_messages',
+  {
+    /** Client message id for user turns (retries dedupe via ON CONFLICT DO
+     *  NOTHING); a server-minted uuid for assistant turns. */
+    id:        text('id').primaryKey(),
+    chatId:    text('chat_id').notNull().references(() => chats.id),
+    /** Stable ordering — same-millisecond inserts make created_at unreliable. */
+    seq:       serial('seq').notNull(),
+    role:      text('role').notNull(),               // 'user' | 'assistant'
+    content:   text('content').notNull(),
+    model:     text('model'),                        // serving model badge (assistant turns)
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    chatSeqIdx: index('chat_messages_chat_seq_idx').on(t.chatId, t.seq),
+  }),
 )
 
 /* ── AI runs ledger (Phase 2 of the agy migration) ───────────────────────── */
