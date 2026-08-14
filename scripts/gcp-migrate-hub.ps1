@@ -22,10 +22,35 @@ switch ($Step) {
 
   'apis' {
     # Enable required services (one-time)
+
+    # Infrastructure (build / run / db / secrets)
     gcloud services enable run.googleapis.com cloudbuild.googleapis.com `
       artifactregistry.googleapis.com sqladmin.googleapis.com secretmanager.googleapis.com
+
+    # Google Workspace + analytics APIs the Hub calls with the signed-in user's
+    # OAuth token (scope list: GOOGLE_SCOPES in hub/lib/auth.ts; process:
+    # hub/docs/runbooks/google-oauth-scopes.md). Historically these were enabled
+    # one by one in the Console as features shipped, and the gap that practice
+    # leaves showed up on 2026-08-14: analyticsadmin.googleapis.com was never
+    # enabled, so Settings -> Analytics Sources hit 403 accessNotConfigured
+    # (surfaced as an endless re-consent prompt until PR #181). Enabling the
+    # full list here makes a fresh environment complete in one step.
+    #
+    # IMPORTANT: Google evaluates accessNotConfigured against the project that
+    # OWNS the OAuth client id (GOOGLE_CLIENT_ID), which is normally this
+    # project. If a feature still reports API_NOT_ENABLED after this step, read
+    # the "[auth] OAuth config" startup log line (deploy.ps1 prints it after
+    # each deploy) -- the client id's leading number is the owning project's
+    # number, and that is where the API must be enabled.
+    gcloud services enable tasks.googleapis.com calendar-json.googleapis.com `
+      drive.googleapis.com gmail.googleapis.com chat.googleapis.com `
+      people.googleapis.com docs.googleapis.com sheets.googleapis.com `
+      slides.googleapis.com analyticsadmin.googleapis.com `
+      analyticsdata.googleapis.com searchconsole.googleapis.com `
+      admin.googleapis.com
+
     gcloud artifacts repositories create hub --repository-format=docker --location=$Region 2>$null
-    Write-Host "APIs enabled, Artifact Registry repo 'hub' ready."
+    Write-Host "APIs enabled (infra + Workspace/analytics), Artifact Registry repo 'hub' ready."
   }
 
   'sql' {
