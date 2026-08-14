@@ -83,6 +83,9 @@ For **each** new scope:
 
 1. **Enable the API** — Cloud Console → *APIs & Services → Enable APIs & services*.
    Enabling the API is **separate** from the scope; the feature 500s without it.
+   Scriptable: `scripts/gcp-migrate-hub.ps1 -Step apis` enables the full current
+   list (infra + every Workspace/analytics API the Hub calls) in one idempotent
+   command — add new APIs there so the next environment gets them for free.
 2. **Register the scope** — *APIs & Services → OAuth consent screen → Add or
    remove scopes* → paste the scope URL → Save.
 3. **Trust the client** — Admin console → *Security → API controls → App access
