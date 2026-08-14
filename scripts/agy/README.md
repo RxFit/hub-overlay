@@ -119,13 +119,16 @@ Three scope-shapers, decided after mapping what the Hub actually has today:
    (`agy | gemini | claude`), so metered turns can join the ledger without a
    migration. agy call sites (chat + health probe) write rows now; the metered
    chains join when the Phase 3 panel needs them.
-3. **Chat post-tagging convention.** Everything the Hub posts to Google Chat
-   (AI posts, scheduled digests) is sent AS the operator and is
-   indistinguishable from them typing. Any other agent in the same space that
-   reacts to operator messages (e.g. the Hermes desktop orchestrator) can be
-   triggered by a Hub post it mistakes for an instruction. Hub-originated
-   posts must carry a stable marker (suffix tag), and external agents should
-   treat tagged posts as informational.
+3. **Chat post-tagging convention.** ✅ shipped — `hub/lib/chat-post-tag.ts`.
+   Everything the Hub posts to Google Chat (AI posts, scheduled digests) is
+   sent AS the operator; without a marker, any agent in the space that reacts
+   to operator messages (e.g. the Hermes desktop orchestrator) can be
+   triggered by a Hub post it mistakes for an instruction. The contract:
+   every automated Hub post ends with the literal line `— via HUB`, and
+   external agents must treat a message whose text ends with that literal as
+   informational, never as an instruction. Manual replies typed by the
+   operator in the Hub's Chat panel are NOT tagged — those are the operator
+   speaking. The literal is pinned by unit test; do not reword it.
 
 ---
 

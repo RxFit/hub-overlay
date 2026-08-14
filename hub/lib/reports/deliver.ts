@@ -18,6 +18,7 @@
  */
 
 import { googleFetch } from '../google/client'
+import { tagHubChatPost } from '../chat-post-tag'
 import type { ReportDelivery } from './config'
 
 const GMAIL_SEND = 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send'
@@ -141,13 +142,16 @@ export async function deliverDigest(
   if (delivery.chatSpaceId) {
     try {
       // User-auth Chat messages are text-only — cards need app credentials.
+      // Tagged (lib/chat-post-tag.ts): a scheduled digest posts AS the
+      // operator, and agents in the space that react to operator messages
+      // must be able to tell it apart from the operator typing.
       await googleFetch<unknown>(
         `${CHAT_BASE}/${delivery.chatSpaceId}/messages`,
         accessToken,
         {
           method: 'POST',
           body: JSON.stringify({
-            text: `${message.title} (${message.startDate} – ${message.endDate}): ${message.documentUrl}`,
+            text: tagHubChatPost(`${message.title} (${message.startDate} – ${message.endDate}): ${message.documentUrl}`),
           }),
         },
       )

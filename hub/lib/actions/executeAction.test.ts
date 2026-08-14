@@ -259,7 +259,9 @@ describe('executeAction: post_chat_message', () => {
     })
     expect(JSON.parse(init.body)).toEqual({
       spaceId: 'spaces/AAA',
-      text: 'Demo moved to 3pm',
+      // AI-originated posts carry the Hub tag (lib/chat-post-tag.ts) so other
+      // agents in the space can tell them from the operator typing.
+      text: 'Demo moved to 3pm\n\n— via HUB',
     })
     expect(result).toContain('Posted to RxFit Ops')
   })
@@ -327,7 +329,7 @@ describe('executeAction: post_chat_message', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
     const [url, init] = fetchMock.mock.calls[1]
     expect(url).toBe('/api/google/chat/messages')
-    expect(JSON.parse(init.body)).toEqual({ spaceId: 'spaces/AAA', text: 'hi' })
+    expect(JSON.parse(init.body)).toEqual({ spaceId: 'spaces/AAA', text: 'hi\n\n— via HUB' })
     expect(result).toContain('Posted to RxFit Ops')
   })
 
