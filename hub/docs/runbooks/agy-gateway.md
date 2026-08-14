@@ -13,8 +13,15 @@ assumption; this runbook covers operating the production gateway.
 
 ## How it works
 
-- The Dockerfile installs `agy` at `/usr/local/bin/agy` (checksum-verified,
-  `scripts/install-agy.mjs`) and sets `AGY_CLI_DISABLE_AUTO_UPDATE=true`.
+- The binary is provisioned at **runtime**, lazily: the first real run per
+  instance downloads it (sha512-verified against the release manifest) to
+  `/tmp/agy-cli/agy`. It is deliberately NOT installed at image build time —
+  a build-time download coupled `gcloud run deploy` to the undocumented
+  third-party release server and broke the deploy pipeline on 2026-08-14.
+  `AGY_CLI_DISABLE_AUTO_UPDATE=true` (Dockerfile) keeps a provisioned binary
+  from replacing itself mid-request. `scripts/install-agy.mjs` still exists
+  for local prebakes (`AGY_CLI_PATH` and `/usr/local/bin/agy` are checked
+  before the runtime path).
 - At request time the gateway materializes the OAuth token file from the
   `AGY_OAUTH_TOKEN` env var to `~/.gemini/antigravity-cli/antigravity-oauth-token`
   (0600, never overwriting an existing file), forces file-based token storage
@@ -68,7 +75,8 @@ assumption; this runbook covers operating the production gateway.
 | `errorClass` | Meaning | Action |
 |---|---|---|
 | `not_configured` | No `AGY_OAUTH_TOKEN` and no token file | Do the one-time setup above |
-| `not_installed` | Binary missing | Image built before the install layer, or `AGY_CLI_PATH` wrong |
+| `install` | Runtime binary provisioning failed (manifest/download/sha512) | Check egress to the release server from Cloud Run; retry (memo clears on failure); or prebake via `scripts/install-agy.mjs` + `AGY_CLI_PATH` |
+| `not_installed` | Binary missing on an unsupported platform | Set `AGY_CLI_PATH` to a manually installed binary |
 | `auth` | Token did not replay; agy fell back to interactive OAuth | Re-mint on a desktop and rotate the secret (step 1–2). If a fresh token still fails, upstream likely changed — stop using the gateway |
 | `empty` | Silent non-TTY drop or dead run | Check `script` exists in the image; retry once; treat repeats as an incident |
 | `timeout` | Run exceeded `AGY_TIMEOUT_MS` (default 120s) | Raise per-call `timeoutMs` for long prompts, or investigate upstream latency |

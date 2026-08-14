@@ -66,11 +66,12 @@ describe('GET /api/admin/agy-health', () => {
     expect(generateMock).not.toHaveBeenCalled()
   })
 
-  it('missing binary flips healthy false', async () => {
+  it('missing binary stays healthy (runtime install provisions it on first run)', async () => {
     versionMock.mockResolvedValue(null)
     const body = await (await GET(request())).json()
-    expect(body.binary).toEqual({ found: false })
-    expect(body.healthy).toBe(false)
+    expect(body.binary.found).toBe(false)
+    expect(body.binary.note).toContain('installs on first run')
+    expect(body.healthy).toBe(true)
   })
 
   it('probe=1 runs a marker prompt and reports verification + cache signal', async () => {
