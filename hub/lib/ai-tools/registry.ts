@@ -77,6 +77,11 @@ export interface ReadTool {
   description: string
   group: ToolGroup
   minRole: ToolRole
+  /** Per-tool override of the executor's shared TOOL_TIMEOUT_MS, for tools
+   *  whose happy path is more than one upstream round trip (GA4 pre-flights
+   *  property metadata before the report). Keep it well under the chat
+   *  route's budget — MAX_TOOL_CALLS_PER_TURN of these run sequentially. */
+  timeoutMs?: number
   /** Validates model-supplied arguments before anything is called. */
   schema: z.ZodTypeAny
   /** JSON Schema for the provider's function declaration. */
@@ -108,11 +113,17 @@ const ga4Tool: ReadTool = {
   name: 'ga4_run_report',
   description:
     'Query Google Analytics 4 for this business. Use for traffic, sessions, users, engagement, ' +
-    'conversions and page performance. Metric and dimension names must be GA4 API names ' +
-    '(e.g. metrics "sessions", "totalUsers", "conversions"; dimensions "pagePath", "sessionDefaultChannelGroup", "country", "date"). ' +
+    'key events and page performance. Metric and dimension names must be CURRENT GA4 Data API names ' +
+    '(e.g. metrics "sessions", "activeUsers", "totalUsers", "screenPageViews", "keyEvents", "engagementRate"; ' +
+    'dimensions "pagePath", "sessionDefaultChannelGroup", "country", "date"). ' +
+    'Google RENAMED some metrics — use "keyEvents" (not "conversions"), "screenPageViews" (not "pageviews"), ' +
+    '"activeUsers" or "totalUsers" (not "users"). ' +
     'Dates are YYYY-MM-DD or relative tokens like "28daysAgo" and "today".',
   group: 'analytics',
   minRole: 'staff',
+  // Metadata pre-flight + report = two sequential Google round trips on a cold
+  // cache; the shared 10s default fits one. See ReadTool.timeoutMs.
+  timeoutMs: 20_000,
   schema: Ga4Args,
   parameters: {
     type: 'object',
@@ -138,18 +149,28 @@ const ga4Tool: ReadTool = {
       }
     }
 
-    const report = await runGA4Report(ctx.accessToken, {
-      propertyId: ctx.ga4PropertyId,
-      startDate: args.startDate,
-      endDate: args.endDate,
-      metrics: args.metrics,
-      dimensions: args.dimensions,
-      limit: args.limit,
-      orderByMetric: args.orderByMetric,
-    })
+    // repair: one stale metric name must not zero out the whole answer — a
+    // renamed metric is mapped, an unknown one dropped, and the adjustments
+    // ride back in `repairs` for disclosure (the live 2026-08-14 failure:
+    // "conversions" — renamed to keyEvents by Google — rejected the report and
+    // the assistant answered with generic GA4 education instead of data).
+    const report = await runGA4Report(
+      ctx.accessToken,
+      {
+        propertyId: ctx.ga4PropertyId,
+        startDate: args.startDate,
+        endDate: args.endDate,
+        metrics: args.metrics,
+        dimensions: args.dimensions,
+        limit: args.limit,
+        orderByMetric: args.orderByMetric,
+      },
+      { repair: true },
+    )
 
     const rows = reportToSheetRows(report)
-    const summary = `GA4 ${args.metrics.join(', ')} for ${args.startDate}–${args.endDate} (${report.rows.length} rows)`
+    const served = report.metricHeaders.length ? report.metricHeaders : args.metrics
+    const summary = `GA4 ${served.join(', ')} for ${args.startDate}–${args.endDate} (${report.rows.length} rows)`
 
     return {
       summary,
@@ -158,7 +179,13 @@ const ga4Tool: ReadTool = {
       // context. They get the same fencing as any external content.
       fenced: fenceUntrusted(
         'Google Analytics report',
-        JSON.stringify({ range: [args.startDate, args.endDate], rows: report.rows }),
+        JSON.stringify({
+          range: [args.startDate, args.endDate],
+          // The model must describe the data it GOT, not the query it asked
+          // for — renames/drops are stated so figures are never mislabeled.
+          ...(report.repairs ? { fieldAdjustments: report.repairs } : {}),
+          rows: report.rows,
+        }),
       ),
       rows,
     }

@@ -183,6 +183,11 @@ export interface SystemPromptContext {
   /** Analytics retrieved by read-tools THIS TURN (GA4 / Search Console),
    *  already fenced by the tool layer. See lib/ai-tools/. */
   liveAnalytics?: string
+  /** What live data this deployment can fetch + configured state, derived
+   *  from the read-tool registry (lib/ai-tools/capabilities.ts). Per-request
+   *  (role/tenant), so it lives in the dynamic half — never the cached
+   *  static prefix. Our own instruction text: not fenced. */
+  capabilityManifest?: string
   injectedContext?: string
   activeSkill?: string
   activeSkillContent?: string
@@ -276,6 +281,17 @@ export function buildSystemPromptParts(context: SystemPromptContext): { staticPr
      it is not fenced. */
   if (context.googleAuthNotice) {
     prompt += `## Google Workspace Availability\n${context.googleAuthNotice}\n\n`
+  }
+
+  /* ── Live data capabilities ──
+     What the read-tool layer can fetch for this user, and whether each source
+     is configured. Without this the model only ever learned about a wired
+     feature from a successful retrieval — so any failure or non-trigger turn
+     produced "I don't have access to your GA4", to a user who had just
+     configured it. Placed before the data sections it explains. Our own
+     instruction text (registry descriptions + config state), not fenced. */
+  if (context.capabilityManifest) {
+    prompt += `${context.capabilityManifest}\n\n`
   }
 
   /* ── Google Workspace state ── */

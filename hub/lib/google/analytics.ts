@@ -56,6 +56,9 @@ export interface GA4ReportResult {
   rowCount: number
   /** Tokens consumed/remaining, when Google reported them. */
   quota?: { tokensConsumed?: number; tokensRemaining?: number }
+  /** Set when `repair: true` adjusted the request before running (renamed /
+   *  dropped fields) — callers disclose this so the answer matches the data. */
+  repairs?: GA4FieldRepairs
 }
 
 /**
@@ -134,6 +137,129 @@ export async function fetchGA4Metadata(
   }
   metadataCache.set(propertyId, { fetchedAt: now, value })
   return value
+}
+
+/**
+ * Metric names Google RENAMED in the Data API. Model-proposed queries keep
+ * using the old names — they are all over training data, older docs, and the
+ * UA-era vocabulary — and one unknown name used to reject the entire report
+ * (the live "issue with the metric configuration" failure, 2026-08-14). An
+ * alias is applied only when the property's own metadata confirms the target
+ * exists, so a repair can never introduce a new invalid name.
+ *
+ * users → activeUsers deliberately: GA4's own UI labels activeUsers "Users".
+ */
+export const GA4_METRIC_ALIASES: Record<string, string> = {
+  conversions: 'keyEvents',
+  users: 'activeUsers',
+  pageviews: 'screenPageViews',
+  views: 'screenPageViews',
+}
+
+export interface GA4FieldRepairs {
+  renamedMetrics: { from: string; to: string }[]
+  droppedMetrics: string[]
+  droppedDimensions: string[]
+  droppedOrderBy?: string
+}
+
+/** Case-insensitive lookup table for a metadata name set ("Sessions" →
+ *  "sessions"), so a casing slip repairs instead of rejecting. */
+function canonicalIndex(names: Set<string>): Map<string, string> {
+  const index = new Map<string, string>()
+  for (const name of names) index.set(name.toLowerCase(), name)
+  return index
+}
+
+/**
+ * Repair a report request against the property's metadata instead of rejecting
+ * it outright. Per unknown name, in order: exact match keeps it; a
+ * case-insensitive match restores canonical casing; a known rename maps it
+ * (only when the target exists on this property); otherwise it is dropped and
+ * recorded. `orderByMetric` follows its metric's rename and is dropped when its
+ * metric is. Pure and exported for direct testing.
+ *
+ * Returns `repairs: null` when nothing needed fixing. Callers must check the
+ * repaired request still has at least one metric — an all-unknown metric list
+ * is not repairable and should surface the validation error instead.
+ */
+export function repairGA4Fields(
+  request: GA4ReportRequest,
+  metadata: GA4Metadata,
+): { request: GA4ReportRequest; repairs: GA4FieldRepairs | null } {
+  const metricIndex = canonicalIndex(metadata.metrics)
+  const dimensionIndex = canonicalIndex(metadata.dimensions)
+
+  const repairs: GA4FieldRepairs = { renamedMetrics: [], droppedMetrics: [], droppedDimensions: [] }
+  const renameMap = new Map<string, string>()
+
+  const metrics: string[] = []
+  for (const name of request.metrics) {
+    if (metadata.metrics.has(name)) {
+      metrics.push(name)
+      continue
+    }
+    const lower = name.toLowerCase()
+    const resolved =
+      metricIndex.get(lower) ??
+      (() => {
+        const alias = GA4_METRIC_ALIASES[name] ?? GA4_METRIC_ALIASES[lower]
+        return alias && metadata.metrics.has(alias) ? alias : undefined
+      })()
+    if (resolved && !metrics.includes(resolved)) {
+      metrics.push(resolved)
+      repairs.renamedMetrics.push({ from: name, to: resolved })
+      renameMap.set(name, resolved)
+    } else if (resolved) {
+      // Renamed into a metric already requested — the duplicate is dropped.
+      repairs.renamedMetrics.push({ from: name, to: resolved })
+      renameMap.set(name, resolved)
+    } else {
+      repairs.droppedMetrics.push(name)
+    }
+  }
+
+  // Dimensions: exact match keeps, a casing slip restores canonical form,
+  // anything else is dropped and recorded. (No alias map — Google has not
+  // renamed dimensions the way it renamed metrics.)
+  let dimensions: string[] | undefined
+  if (request.dimensions) {
+    dimensions = []
+    for (const name of request.dimensions) {
+      if (metadata.dimensions.has(name)) {
+        dimensions.push(name)
+        continue
+      }
+      const canonical = dimensionIndex.get(name.toLowerCase())
+      if (canonical) {
+        if (!dimensions.includes(canonical)) dimensions.push(canonical)
+      } else {
+        repairs.droppedDimensions.push(name)
+      }
+    }
+  }
+
+  let orderByMetric = request.orderByMetric
+  if (orderByMetric && !metrics.includes(orderByMetric)) {
+    const renamed = renameMap.get(orderByMetric) ?? metricIndex.get(orderByMetric.toLowerCase())
+    if (renamed && metrics.includes(renamed)) {
+      orderByMetric = renamed
+    } else {
+      repairs.droppedOrderBy = orderByMetric
+      orderByMetric = undefined
+    }
+  }
+
+  const changed =
+    repairs.renamedMetrics.length > 0 ||
+    repairs.droppedMetrics.length > 0 ||
+    repairs.droppedDimensions.length > 0 ||
+    repairs.droppedOrderBy !== undefined
+
+  return {
+    request: { ...request, metrics, dimensions, orderByMetric },
+    repairs: changed ? repairs : null,
+  }
 }
 
 /**
@@ -238,27 +364,48 @@ export function shapeReport(raw: RawReportResponse): GA4ReportResult {
  *
  * `validate: false` skips the metadata round trip for queries built from known
  * -good fields (the KPI sync), where the extra call is pure overhead.
+ *
+ * `repair: true` (the model-facing read tool) fixes what it can instead of
+ * rejecting the whole report over one bad name: casing slips are restored,
+ * renamed metrics (GA4_METRIC_ALIASES) are mapped, unknown leftovers are
+ * dropped — and the result carries `repairs` so the caller can disclose what
+ * changed. The strict default is unchanged for programmatic callers (the
+ * /api/google/analytics/report route), where a loud validation error is the
+ * correctable contract.
  */
 export async function runGA4Report(
   accessToken: string,
   request: GA4ReportRequest,
-  opts: { validate?: boolean } = {},
+  opts: { validate?: boolean; repair?: boolean } = {},
 ): Promise<GA4ReportResult> {
+  let effective = request
+  let repairs: GA4FieldRepairs | null = null
+
   if (opts.validate !== false) {
     const metadata = await fetchGA4Metadata(accessToken, request.propertyId)
     const problem = validateFields(request, metadata)
     if (problem) {
-      throw new Error(`GA4 report rejected before sending — ${problem}`)
+      if (!opts.repair) {
+        throw new Error(`GA4 report rejected before sending — ${problem}`)
+      }
+      const repaired = repairGA4Fields(request, metadata)
+      // Nothing usable survived: repair cannot conjure a metric, so surface
+      // the original, name-listing validation error.
+      if (repaired.request.metrics.length === 0) {
+        throw new Error(`GA4 report rejected before sending — ${problem}`)
+      }
+      effective = repaired.request
+      repairs = repaired.repairs
     }
   }
 
   const raw = await googleFetch<RawReportResponse>(
-    `${DATA_BASE}/properties/${encodeURIComponent(request.propertyId)}:runReport`,
+    `${DATA_BASE}/properties/${encodeURIComponent(effective.propertyId)}:runReport`,
     accessToken,
-    { method: 'POST', body: JSON.stringify(buildReportBody(request)) },
+    { method: 'POST', body: JSON.stringify(buildReportBody(effective)) },
   )
 
-  return shapeReport(raw)
+  return { ...shapeReport(raw), ...(repairs ? { repairs } : {}) }
 }
 
 /** Convert a report to rows for `createFormattedSheet` (header row + values). */

@@ -220,3 +220,39 @@ describe('renderToolOutcomes — summary fencing (security regression)', () => {
     expect(rendered).not.toContain('<untrusted_data')
   })
 })
+
+describe('per-tool timeout override', () => {
+  it('gives ga4_run_report its 20s ceiling (metadata + report is two round trips)', async () => {
+    vi.useFakeTimers()
+    try {
+      // Metadata resolves; the report call hangs forever.
+      const fetchMock = vi.fn(async (url: string) => {
+        if (url.includes('/metadata')) {
+          return new Response(
+            JSON.stringify({ dimensions: [{ apiName: 'pagePath' }], metrics: [{ apiName: 'sessions' }] }),
+            { status: 200 },
+          )
+        }
+        return new Promise<Response>(() => {})
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      const pending = executeToolCall({ name: 'ga4_run_report', args: validGa4 }, ctx())
+
+      // Past the shared 10s default: the override must keep it alive.
+      await vi.advanceTimersByTimeAsync(15_000)
+      let settled = false
+      void pending.then(() => { settled = true })
+      await Promise.resolve()
+      expect(settled).toBe(false)
+
+      // Past the 20s override: now it times out, as a returned failure.
+      await vi.advanceTimersByTimeAsync(10_100)
+      const outcome = await pending
+      expect(outcome.ok).toBe(false)
+      expect(outcome.error).toContain('timed out after 20000ms')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
