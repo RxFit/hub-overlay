@@ -483,6 +483,7 @@ export default function HubPage() {
     injectExecute,
     injectDeepDive,
     handleActionApprove,
+    startNewChat,
   } = chat
 
   const handleMobileTab = (tab: MobileTab) => {
@@ -771,6 +772,18 @@ export default function HubPage() {
                 <span className={`chat-header-model-badge${activeModel?.includes('Claude') ? ' chat-header-model-badge--claude' : activeModel ? ' chat-header-model-badge--gemini' : ''}`}>
                   {activeModel || 'AI'}
                 </span>
+                {/* Conversations persist server-side (Phase 2) and the latest
+                    restores on load — this is now the only way to start fresh. */}
+                {messages.length > 0 && (
+                  <button
+                    className="chat-new-chat-btn"
+                    onClick={() => { haptic(); startNewChat() }}
+                    title="Start a new conversation (this one stays in history)"
+                    aria-label="Start a new conversation"
+                  >
+                    + New chat
+                  </button>
+                )}
               </div>
             </div>
 

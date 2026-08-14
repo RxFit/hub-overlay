@@ -461,31 +461,37 @@ export async function agyGenerateText(prompt: string, opts: AgyOptions = {}): Pr
   if (timedOut) {
     throw agyError('timeout', `agy run exceeded ${timeoutMs}ms hard ceiling and was killed`)
   }
-  if (AUTH_FAILURE_RE.test(cleaned)) {
-    throw agyError(
-      'auth',
-      'agy fell back to interactive OAuth — the token did not replay. Re-mint it on a desktop ' +
-        `(see docs/runbooks/agy-gateway.md). Output tail: ${cleaned.slice(-200)}`,
-    )
-  }
   if (cleaned === '') {
     // The silent-failure mode. Empty is NEVER success, whatever the exit code.
     throw agyError('empty', `agy produced no output (exit ${exitCode}) — treating as failure, never success`)
   }
 
+  // Classification order matters: a SUCCESSFUL answer that merely DISCUSSES
+  // auth failures (this Hub's operator asks about auth a lot) must not match
+  // AUTH_FAILURE_RE and read as a dead token — that would cool the gateway
+  // for 30 minutes on a perfectly good run. So: parse the envelope first, and
+  // treat auth-failure text as the verdict only when no usable answer exists.
   const envelope = extractJsonEnvelope(cleaned)
-  if (envelope === undefined) {
-    throw agyError(
-      'parse',
-      `agy output contained no JSON envelope despite --output-format json (exit ${exitCode}). ` +
-        `Output tail: ${cleaned.slice(-300)}`,
-    )
-  }
-  const { text, model: usedModel, usage } = interpretEnvelope(envelope)
-  if (text === undefined) {
+  const interpreted = envelope === undefined ? undefined : interpretEnvelope(envelope)
+  if (interpreted?.text === undefined) {
+    if (AUTH_FAILURE_RE.test(cleaned)) {
+      throw agyError(
+        'auth',
+        'agy fell back to interactive OAuth — the token did not replay. Re-mint it on a desktop ' +
+          `(see docs/runbooks/agy-gateway.md). Output tail: ${cleaned.slice(-200)}`,
+      )
+    }
+    if (envelope === undefined) {
+      throw agyError(
+        'parse',
+        `agy output contained no JSON envelope despite --output-format json (exit ${exitCode}). ` +
+          `Output tail: ${cleaned.slice(-300)}`,
+      )
+    }
     const keys = typeof envelope === 'object' && envelope !== null ? Object.keys(envelope).join(', ') : typeof envelope
     throw agyError('parse', `agy JSON envelope had no recognizable text field (top-level keys: ${keys})`)
   }
+  const { text, model: usedModel, usage } = interpreted
 
   const latencyMs = Date.now() - started
   log.info(

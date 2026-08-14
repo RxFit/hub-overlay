@@ -136,6 +136,21 @@ export function resolvePreCogVerdict(rawText: string, evalOk: boolean): PreCogVe
  * quote, so callers can unconditionally concatenate. Extracted as a pure
  * function so the "feed the whole message" contract is unit-tested.
  */
+/**
+ * Server-restored conversation (GET /api/chats/:id) → ChatMsg[] for state
+ * hydration. Pure and exported for direct testing. Unknown roles (a future
+ * 'system'/'tool' row) are dropped rather than rendered as a foreign bubble;
+ * the stored createdAt becomes the bubble timestamp.
+ */
+export function mapStoredMessages(
+  stored: { id: string; role: string; content: string; createdAt: string }[] | undefined,
+): ChatMsg[] {
+  if (!stored) return []
+  return stored
+    .filter((m): m is typeof m & { role: 'user' | 'assistant' } => m.role === 'user' || m.role === 'assistant')
+    .map((m) => ({ id: m.id, role: m.role, content: m.content, timestamp: m.createdAt }))
+}
+
 export function buildQuotedReplyContext(quoteContent: string | null | undefined): string {
   const quote = quoteContent?.trim()
   if (!quote) return ''
@@ -211,6 +226,44 @@ export function useChatEngine(options: UseChatEngineOptions) {
   // updater having already run (it has NOT, by the next line).
   const messagesRef = useRef<ChatMsg[]>([])
   useEffect(() => { messagesRef.current = messages }, [messages])
+
+  // ── Conversation persistence (Phase 2) ──
+  // The conversation id is CLIENT-MINTED and sent with every /api/chat POST;
+  // the server persists turns under it (lib/chat-store.ts, session-scoped).
+  // On mount, the most recent persisted conversation is restored ONCE — but
+  // never over a conversation the user has already started typing into.
+  const [chatId, setChatId] = useState<string>(() => crypto.randomUUID())
+  const restoreAttemptedRef = useRef(false)
+  useEffect(() => {
+    if (restoreAttemptedRef.current) return
+    restoreAttemptedRef.current = true
+    const controller = new AbortController()
+    ;(async () => {
+      try {
+        const listRes = await fetch('/api/chats?limit=1', { signal: controller.signal })
+        if (!listRes.ok) return // unauthenticated / persistence unavailable — start fresh
+        const { chats } = (await listRes.json()) as { chats?: { id: string }[] }
+        const latest = chats?.[0]
+        if (!latest) return
+        const msgRes = await fetch(`/api/chats/${encodeURIComponent(latest.id)}`, { signal: controller.signal })
+        if (!msgRes.ok) return
+        const { messages: stored } = (await msgRes.json()) as {
+          messages?: { id: string; role: string; content: string; createdAt: string }[]
+        }
+        const restored = mapStoredMessages(stored)
+        if (!restored.length) return
+        // The user beat the restore: never clobber a live conversation.
+        if (messagesRef.current.length > 0) return
+        setChatId(latest.id)
+        setMessages(restored)
+      } catch {
+        // Restore is an enhancement — any failure (abort, network, JSON) means
+        // starting fresh, exactly the pre-persistence behavior.
+      }
+    })()
+    return () => controller.abort()
+  }, [])
+
   const [input, setInput] = useState('')
   const [isTyping, setIsTyping] = useState(false)
   const [activeModel, setActiveModel] = useState<string | null>(null)
@@ -294,6 +347,9 @@ export function useChatEngine(options: UseChatEngineOptions) {
             content: m.content,
             timestamp: m.timestamp ?? new Date().toISOString(),
           })),
+          // Conversation persistence (Phase 2): the server stores this turn
+          // under our client-minted conversation id (lib/chat-store.ts).
+          chatId,
           useCase,
           attachments: msgAttachments && msgAttachments.length > 0 ? msgAttachments : undefined,
           // EXA mode ignores skills server-side; don't advertise one either.
@@ -416,7 +472,7 @@ export function useChatEngine(options: UseChatEngineOptions) {
     } finally {
       clearTimeout(timeoutId)
     }
-  }, [activeSkill, exaMode])
+  }, [activeSkill, exaMode, chatId])
 
   const doSend = useCallback((message: string, msgAttachments?: ChatAttachment[]) => {
     haptic()
@@ -1038,9 +1094,19 @@ Respond with EXACTLY one of:
     setSolutionSuggestion(null)
   }, [solutionSuggestion, getSuggestionMem])
 
+  /** Start a fresh conversation: new client-minted id, empty transcript. The
+   *  previous conversation stays on the server (restorable via /api/chats). */
+  const startNewChat = useCallback(() => {
+    setChatId(crypto.randomUUID())
+    setMessages([])
+    setSuggestedTools([])
+    setQuotedReply(null)
+  }, [])
+
   return {
     // ── State values (read in JSX) ──
     messages,
+    chatId,
     input,
     isTyping,
     activeModel,
@@ -1080,5 +1146,6 @@ Respond with EXACTLY one of:
     handleActionApprove,
     acceptSolution,
     dismissSolution,
+    startNewChat,
   }
 }
