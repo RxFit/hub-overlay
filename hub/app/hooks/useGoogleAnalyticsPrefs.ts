@@ -34,6 +34,9 @@ async function fetcher<T>(url: string): Promise<T> {
     const err = new Error(body?.error ?? `API error ${res.status}`)
     ;(err as any).status = res.status
     ;(err as any).code = body?.code
+    // API_NOT_ENABLED responses carry Google's console activation link so the
+    // operator gets a one-click path to the fix.
+    ;(err as any).activationUrl = body?.activationUrl
     throw err
   }
   return res.json()
@@ -92,6 +95,10 @@ export function useGA4Properties(enabled: boolean) {
     isLoading,
     error: error as Error | null,
     missingScope: (error as any)?.code === 'MISSING_SCOPE',
+    // A Google API disabled in the Cloud project — an operator problem that
+    // re-consent cannot fix, so the UI must NOT respond with a sign-in prompt.
+    apiNotEnabled: (error as any)?.code === 'API_NOT_ENABLED',
+    activationUrl: (error as any)?.activationUrl as string | undefined,
   }
 }
 
@@ -110,6 +117,8 @@ export function useGSCSites(enabled: boolean) {
     isLoading,
     error: error as Error | null,
     missingScope: (error as any)?.code === 'MISSING_SCOPE',
+    apiNotEnabled: (error as any)?.code === 'API_NOT_ENABLED',
+    activationUrl: (error as any)?.activationUrl as string | undefined,
   }
 }
 

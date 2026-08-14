@@ -4,6 +4,8 @@ import {
   mapGoogleErrorToStatus,
   googleApiErrorResponse,
   googleWriteErrorResponse,
+  isApiNotEnabledError,
+  extractApiActivationUrl,
   resolveGoogleAuth,
   resolveGoogleAccessTokenLenient,
 } from './google-session'
@@ -72,6 +74,78 @@ describe('googleWriteErrorResponse', () => {
     const body = await res.json()
     expect(body.code).toBeUndefined()
     expect(body.error).toBe('Google API error 404: not found')
+  })
+})
+
+/* "API not enabled" (accessNotConfigured / SERVICE_DISABLED) must NOT be
+   treated as a consent problem. Google labels it PERMISSION_DENIED, so before
+   this carve-out it became MISSING_SCOPE (write mapper) or a reauth 401
+   (generic mapper) — both of which send the user through an OAuth consent that
+   cannot enable a Cloud API. That was the live Settings → Analytics Sources
+   loop: authorize → consent → same 403 → authorize again, forever. */
+describe('API_NOT_ENABLED classification', () => {
+  // Google's current shape: PERMISSION_DENIED + ErrorInfo SERVICE_DISABLED.
+  const serviceDisabled = new Error(
+    'Google API error 403: {"error":{"code":403,"message":"Google Analytics Admin API has not been used in project 573834911 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/analyticsadmin.googleapis.com/overview?project=573834911 then retry.","status":"PERMISSION_DENIED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"SERVICE_DISABLED","domain":"googleapis.com"}]}}',
+  )
+  // Legacy shape: errors[].reason accessNotConfigured.
+  const accessNotConfigured = new Error(
+    'Google API error 403: {"error":{"errors":[{"domain":"usageLimits","reason":"accessNotConfigured","message":"Access Not Configured."}],"code":403,"message":"Access Not Configured. Search Console API has not been used in project 573834911 before or it is disabled."}}',
+  )
+
+  it('write mapper returns 403 API_NOT_ENABLED (never MISSING_SCOPE) with the activation link', async () => {
+    const res = googleWriteErrorResponse(serviceDisabled, 'Google Analytics')
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body.code).toBe('API_NOT_ENABLED')
+    expect(body.error).toMatch(/Google Analytics/)
+    expect(body.error).toMatch(/Cloud Console/)
+    expect(body.error).toMatch(/cannot fix/i)
+    expect(body.activationUrl).toBe(
+      'https://console.developers.google.com/apis/api/analyticsadmin.googleapis.com/overview?project=573834911',
+    )
+  })
+
+  it('write mapper classifies the legacy accessNotConfigured reason the same way', async () => {
+    const res = googleWriteErrorResponse(accessNotConfigured, 'Google Search Console')
+    const body = await res.json()
+    expect(res.status).toBe(403)
+    expect(body.code).toBe('API_NOT_ENABLED')
+  })
+
+  it('generic mapper returns 403 API_NOT_ENABLED instead of a reauth 401', async () => {
+    // Every consumer hook answers a reauth 401 with an automatic
+    // signIn('google') — for a disabled API that would loop the login screen.
+    const res = googleApiErrorResponse(serviceDisabled)
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body.code).toBe('API_NOT_ENABLED')
+    expect(body.reauth).toBeUndefined()
+  })
+
+  it('a genuine insufficient-scope 403 still maps to MISSING_SCOPE, not API_NOT_ENABLED', async () => {
+    const res = googleWriteErrorResponse(
+      new Error('Google API error 403: Request had insufficient authentication scopes.'),
+      'Google Docs',
+    )
+    const body = await res.json()
+    expect(body.code).toBe('MISSING_SCOPE')
+  })
+
+  it('isApiNotEnabledError requires a 403 plus an API-disabled marker', () => {
+    expect(isApiNotEnabledError(serviceDisabled.message)).toBe(true)
+    expect(isApiNotEnabledError(accessNotConfigured.message)).toBe(true)
+    // Permission denials without the markers are consent problems, not this.
+    expect(isApiNotEnabledError('Google API error 403: The caller does not have permission')).toBe(false)
+    // The marker without a 403 (e.g. quoted in a 400 validation message) is not it either.
+    expect(isApiNotEnabledError('Google API error 400: accessNotConfigured mentioned in passing')).toBe(false)
+  })
+
+  it('extractApiActivationUrl pulls the console link and tolerates its absence', () => {
+    expect(extractApiActivationUrl(serviceDisabled.message)).toBe(
+      'https://console.developers.google.com/apis/api/analyticsadmin.googleapis.com/overview?project=573834911',
+    )
+    expect(extractApiActivationUrl('Google API error 403: SERVICE_DISABLED')).toBeUndefined()
   })
 })
 

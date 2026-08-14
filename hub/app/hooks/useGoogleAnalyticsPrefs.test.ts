@@ -80,6 +80,32 @@ describe('useGA4Properties', () => {
     await settleUntil(() => result.current.missingScope)
 
     expect(result.current.missingScope).toBe(true)
+    expect(result.current.apiNotEnabled).toBe(false)
+    unmount()
+  })
+
+  it('surfaces API_NOT_ENABLED distinctly, with the console activation link', async () => {
+    // A disabled Cloud API must NOT read as a consent problem — offering
+    // re-consent for it is the Settings → Authorize → consent → Authorize loop.
+    stubFetch(() =>
+      json(
+        {
+          error: 'Google Analytics is unavailable: a Google API this feature needs is not enabled…',
+          code: 'API_NOT_ENABLED',
+          activationUrl: 'https://console.developers.google.com/apis/api/analyticsadmin.googleapis.com/overview?project=1',
+        },
+        403,
+      ),
+    )
+
+    const { result, unmount } = renderQueryHook(() => useGA4Properties(true))
+    await settleUntil(() => result.current.apiNotEnabled)
+
+    expect(result.current.apiNotEnabled).toBe(true)
+    expect(result.current.missingScope).toBe(false)
+    expect(result.current.activationUrl).toBe(
+      'https://console.developers.google.com/apis/api/analyticsadmin.googleapis.com/overview?project=1',
+    )
     unmount()
   })
 })
@@ -92,6 +118,17 @@ describe('useGSCSites', () => {
     await settleUntil(() => result.current.sites.length > 0)
 
     expect(result.current.sites).toEqual([{ siteUrl: 'https://x.test/', permissionLevel: 'siteOwner' }])
+    unmount()
+  })
+
+  it('surfaces API_NOT_ENABLED distinctly (same contract as the GA4 hook)', async () => {
+    stubFetch(() => json({ error: 'API disabled', code: 'API_NOT_ENABLED' }, 403))
+
+    const { result, unmount } = renderQueryHook(() => useGSCSites(true))
+    await settleUntil(() => result.current.apiNotEnabled)
+
+    expect(result.current.apiNotEnabled).toBe(true)
+    expect(result.current.missingScope).toBe(false)
     unmount()
   })
 })
