@@ -13,8 +13,15 @@ import {
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-// A live probe is a real model run; give it the same ceiling as chat.
-export const maxDuration = 120
+// A live probe is a real model run, and on a cold instance it is ALSO a ~55MB
+// download plus a ~206MB extract before the prompt starts (the binary
+// provisions itself on first use). Those two costs are sequential and the
+// install is not covered by agyGenerateText's own timeout, so a chat-sized
+// 120s ceiling could kill the request mid-install — surfacing as a dead
+// connection with no errorClass instead of the typed error the probe exists to
+// report. 300s matches the Cloud Run service ceiling (service.yaml
+// timeoutSeconds), which is the real outer bound.
+export const maxDuration = 300
 
 /**
  * GET /api/admin/agy-health — agy execution-gateway health (Phase 1).

@@ -1,7 +1,7 @@
 import { spawn, execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { chmod, mkdir, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, rm, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createLogger } from '@/lib/logger'
@@ -184,18 +184,27 @@ async function installBinary(): Promise<string> {
   const target = runtimeInstallPath()
   await mkdir(dirname(target), { recursive: true })
   if (/\.tar\.gz(\?|$)/.test(manifest.url)) {
+    // Cloud Run's /tmp is tmpfs, so every byte left here is RAM held for the
+    // life of the instance against a 1Gi limit. The extracted binary (~206MB
+    // as of 1.1.13) has to stay; the ~55MB archive does not, so it is removed
+    // as soon as extraction is done — and on the failure path too, so a broken
+    // install doesn't strand the archive in memory until the instance recycles.
     const staging = join(dirname(target), 'agy.tar.gz')
     await writeFile(staging, payload)
-    await new Promise<void>((resolve, reject) => {
-      execFile('tar', ['-xzf', staging, '-C', dirname(target), 'antigravity'], (err) =>
-        err ? reject(agyError('install', `agy archive extraction failed: ${err.message}`)) : resolve(),
-      )
-    })
-    await new Promise<void>((resolve, reject) => {
-      execFile('mv', [join(dirname(target), 'antigravity'), target], (err) =>
-        err ? reject(agyError('install', `agy binary move failed: ${err.message}`)) : resolve(),
-      )
-    })
+    try {
+      await new Promise<void>((resolve, reject) => {
+        execFile('tar', ['-xzf', staging, '-C', dirname(target), 'antigravity'], (err) =>
+          err ? reject(agyError('install', `agy archive extraction failed: ${err.message}`)) : resolve(),
+        )
+      })
+      await new Promise<void>((resolve, reject) => {
+        execFile('mv', [join(dirname(target), 'antigravity'), target], (err) =>
+          err ? reject(agyError('install', `agy binary move failed: ${err.message}`)) : resolve(),
+        )
+      })
+    } finally {
+      await rm(staging, { force: true })
+    }
   } else {
     await writeFile(target, payload)
   }
