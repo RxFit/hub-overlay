@@ -336,6 +336,22 @@ describe('agyGenerateText — Phase 0 survival rules', () => {
     await expect(agyGenerateText('probe')).rejects.toSatisfy((err: unknown) => agyErrorType(err) === 'empty')
   })
 
+  it("upstream's newer auth text ('authentication failed or timed out') classifies as auth", async () => {
+    nextRunEmits('Error: authentication failed or timed out\nPlease sign in to Antigravity', 1)
+    await expect(agyGenerateText('probe')).rejects.toSatisfy((err: unknown) => agyErrorType(err) === 'auth')
+  })
+
+  it('a SUCCESSFUL answer that merely discusses auth failures is NOT misclassified as auth', async () => {
+    nextRunEmits(
+      JSON.stringify({
+        response: 'Your Gmail sync shows authentication failed because the refresh token expired. Authentication required means the OAuth grant was revoked.',
+        model: 'gemini-3-flash',
+      }),
+    )
+    const result = await agyGenerateText('why does my gmail sync say authentication failed?')
+    expect(result.text).toContain('authentication failed')
+  })
+
   it('auth fallback text classifies as auth, not parse', async () => {
     nextRunEmits('Authentication required. Visit https://example.test to sign in', 1)
     await expect(agyGenerateText('probe')).rejects.toSatisfy((err: unknown) => agyErrorType(err) === 'auth')

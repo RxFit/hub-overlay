@@ -9,7 +9,32 @@ vi.mock('next-auth/react', () => ({
   signIn: (...args: unknown[]) => signInMock(...args),
 }))
 
-import { resolveChatError, resolvePreCogVerdict, buildQuotedReplyContext } from './useChatEngine'
+import { resolveChatError, resolvePreCogVerdict, buildQuotedReplyContext, mapStoredMessages } from './useChatEngine'
+
+describe('mapStoredMessages (server-restored conversation → chat state)', () => {
+  it('maps stored rows to ChatMsg with the stored timestamp', () => {
+    const out = mapStoredMessages([
+      { id: 'm1', role: 'user', content: 'q', createdAt: '2026-08-14T00:00:00.000Z' },
+      { id: 'm2', role: 'assistant', content: 'a', createdAt: '2026-08-14T00:00:05.000Z' },
+    ])
+    expect(out).toEqual([
+      { id: 'm1', role: 'user', content: 'q', timestamp: '2026-08-14T00:00:00.000Z' },
+      { id: 'm2', role: 'assistant', content: 'a', timestamp: '2026-08-14T00:00:05.000Z' },
+    ])
+  })
+
+  it('drops unknown roles instead of rendering foreign bubbles', () => {
+    const out = mapStoredMessages([
+      { id: 'm1', role: 'system', content: 'internal', createdAt: 'x' },
+      { id: 'm2', role: 'user', content: 'q', createdAt: 'x' },
+    ])
+    expect(out.map((m) => m.id)).toEqual(['m2'])
+  })
+
+  it('returns [] for undefined (restore fails open to a fresh chat)', () => {
+    expect(mapStoredMessages(undefined)).toEqual([])
+  })
+})
 
 describe('resolveChatError (chat error → bubble + reauth decision)', () => {
   it('flags a 401 for reauth (routes chat 401 through signIn like the other hooks)', () => {
