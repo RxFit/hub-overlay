@@ -1,6 +1,6 @@
 import { spawn, execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { chmod, mkdir, rm, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -99,6 +99,47 @@ export function agyTokenSource(): 'file' | 'env' | 'none' {
   if (existsSync(agyTokenPath())) return 'file'
   if (process.env.AGY_OAUTH_TOKEN) return 'env'
   return 'none'
+}
+
+/** Non-reversible identity of a credential: 12-hex sha256 prefix + byte
+ *  length. Enough to prove two copies are the same bytes; useless to an
+ *  attacker. Never returns any part of the token itself. */
+export function credentialFingerprint(value: string | null | undefined): { sha256: string; bytes: number } | null {
+  if (!value) return null
+  return {
+    sha256: createHash('sha256').update(value, 'utf8').digest('hex').slice(0, 12),
+    bytes: Buffer.byteLength(value, 'utf8'),
+  }
+}
+
+/**
+ * Which credential bytes THIS instance would actually use, fingerprinted.
+ *
+ * The experiment this exists for: "is the token we pushed to Secret Manager
+ * the token that just failed?" was unanswerable, because the health report
+ * only exposed a boolean. Worse, `ensureTokenFile()` returns early when a
+ * token file already exists, so a warm instance can serve from a stale
+ * on-disk copy while the env var holds a newer one — invisibly. Comparing
+ * `env.sha256` against the local file's hash proves delivery; `file` present
+ * with a DIFFERENT hash proves the run under test used older bytes.
+ */
+export function agyCredentialReport(): {
+  env: { sha256: string; bytes: number } | null
+  file: { sha256: string; bytes: number; mtime: string } | null
+} {
+  const env = credentialFingerprint(process.env.AGY_OAUTH_TOKEN)
+  let file: { sha256: string; bytes: number; mtime: string } | null = null
+  try {
+    const target = agyTokenPath()
+    if (existsSync(target)) {
+      const contents = readFileSync(target, 'utf8')
+      const fp = credentialFingerprint(contents)
+      if (fp) file = { ...fp, mtime: statSync(target).mtime.toISOString() }
+    }
+  } catch {
+    // Unreadable token file is not worth failing a health report over.
+  }
+  return { env, file }
 }
 
 /**
@@ -459,7 +500,21 @@ export async function agyGenerateText(prompt: string, opts: AgyOptions = {}): Pr
   const cleaned = stripTui(output).trim()
 
   if (timedOut) {
-    throw agyError('timeout', `agy run exceeded ${timeoutMs}ms hard ceiling and was killed`)
+    // A dead token can LOOK like a timeout: with stdin at EOF, agy's fallback
+    // to interactive OAuth blocks at a prompt until the hard ceiling fires.
+    // Classify on the captured text first — otherwise a permanent auth failure
+    // is filed as transient upstream latency and the evidence is discarded.
+    if (AUTH_FAILURE_RE.test(cleaned)) {
+      throw agyError(
+        'auth',
+        'agy blocked on interactive OAuth until the hard ceiling — the token did not replay. ' +
+          `Re-mint it on a desktop (see docs/runbooks/agy-gateway.md). Output tail: ${cleaned.slice(-200)}`,
+      )
+    }
+    throw agyError(
+      'timeout',
+      `agy run exceeded ${timeoutMs}ms hard ceiling and was killed. Output tail: ${cleaned.slice(-300)}`,
+    )
   }
   if (cleaned === '') {
     // The silent-failure mode. Empty is NEVER success, whatever the exit code.

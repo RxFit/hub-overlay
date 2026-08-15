@@ -7,6 +7,7 @@ import {
   agyVersion,
   agyErrorType,
   agyTokenSource,
+  agyCredentialReport,
   isAgyConfigured,
   truncateAgyError,
 } from '@/lib/agy'
@@ -55,6 +56,14 @@ export async function GET(req: NextRequest) {
     tokenSource: agyTokenSource(),
     envTokenPresent: Boolean(process.env.AGY_OAUTH_TOKEN),
     modelPin: process.env.AGY_MODEL || null,
+    // WHICH credential this instance would use, as a non-reversible
+    // fingerprint (12-hex sha256 prefix + byte count). A boolean could not
+    // answer "did the token we just pushed reach the instance that failed?",
+    // and a warm instance silently prefers a stale on-disk copy over a newer
+    // env var — `file` present with a hash differing from `env` is exactly
+    // that state. Compare `env.sha256` to the local file's hash to prove
+    // delivery before spending a probe.
+    credential: agyCredentialReport(),
   }
 
   // Passive check only — the binary provisions itself (checksum-verified) on
@@ -67,7 +76,15 @@ export async function GET(req: NextRequest) {
 
   let probe:
     | { ran: false }
-    | { ran: true; ok: true; markerVerified: boolean; model?: string; cacheReadTokens?: number; latencyMs: number }
+    | {
+        ran: true
+        ok: true
+        markerVerified: boolean
+        textPreview?: string
+        model?: string
+        cacheReadTokens?: number
+        latencyMs: number
+      }
     | { ran: true; ok: false; errorClass: string; error: string; latencyMs: number } = { ran: false }
 
   if (req.nextUrl.searchParams.get('probe') === '1') {
@@ -83,6 +100,11 @@ export async function GET(req: NextRequest) {
         ok: true,
         // A reply without the marker still proves auth replayed; report both.
         markerVerified,
+        // When the marker is MISSING the reply is inconclusive, not a pass:
+        // agy can deliver "Authentication required" as the envelope's text
+        // field, which parses fine and would otherwise read as success. Show
+        // the head of what actually came back so the operator can judge.
+        textPreview: markerVerified ? undefined : result.text.slice(0, 200),
         model: result.model,
         cacheReadTokens: result.usage?.cacheReadTokens,
         latencyMs: result.latencyMs,
@@ -119,7 +141,10 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  const healthy = config.configured && (!probe.ran || probe.ok)
+  // A probe that answered without echoing the marker is INCONCLUSIVE, not
+  // healthy — agy can return an auth-failure sentence as the envelope's text.
+  const healthy =
+    config.configured && (!probe.ran || (probe.ok && (!('markerVerified' in probe) || probe.markerVerified)))
   return NextResponse.json({
     generatedAt: new Date().toISOString(),
     healthy,

@@ -172,5 +172,27 @@ from here.
 
 The refresh token is durable until revoked. To kill it: `agy logout` on the
 desktop that minted it (or revoke the Google OAuth grant), then mint + store a
-fresh one. Cloud Run picks up `:latest` on the next instance start — force with
-a new revision (`gcloud run services update hub --region us-central1 --no-traffic --tag rotate` or just redeploy).
+fresh one.
+
+**Rolling a new token onto the service — the traffic trap.** Cloud Run resolves
+`secretKeyRef` env vars at *instance start*, and `ensureTokenFile()` returns
+early when a token file already exists, so a warm instance keeps serving the
+credential it materialized on its first run — forever. `--min-instances=1`
+guarantees one such instance is always warm. A rotation therefore requires a
+revision that actually **takes traffic**; an earlier version of this runbook
+suggested `--no-traffic --tag rotate`, which creates a revision serving 0% and
+leaves every probe hitting the OLD token:
+
+```bash
+gcloud run services update hub --region us-central1 \
+  --update-secrets AGY_OAUTH_TOKEN=hub-agy-oauth-token:latest
+gcloud run services update-traffic hub --region us-central1 --to-latest
+gcloud run services describe hub --region us-central1 --format='value(status.traffic)'
+```
+
+Confirm the new revision is at 100%, then verify delivery *before* spending a
+probe: `GET /api/admin/agy-health` returns `config.credential.env.sha256` (a
+12-hex fingerprint of the bytes this instance holds) — compare it to
+`sha256sum` of your local token file, truncated to 12 characters. If
+`config.credential.file` is present with a *different* hash, that instance is
+serving a stale on-disk copy and its result is meaningless: roll again.
