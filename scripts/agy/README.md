@@ -102,6 +102,7 @@ leaving Paperclip to escape):
 |-------|-----------|
 | **1 · Gateway** ✅ | Shipped as `hub/lib/agy.ts` (in-process gateway, not a separate proxy service) + `/api/admin/agy-health`. |
 | **2 · Worker + ledger** (in progress) | The accountability-wrapped `agy` runner + the `ai_runs` Postgres ledger, so every run is recorded. Chat integration shipped (`hub/lib/agy-chat.ts`, behind `AGY_CHAT_ENABLED`); ledger shipped (`hub/lib/runs.ts`). Remaining scope below. |
+| **2.5 · Desktop dispatch** (designed 2026-08-15) | **Unplanned insertion — the Cloud Run premise died.** Google refuses consumer-OAuth refresh from datacenter IPs: the same token that PASSES the Phase 0 clean room on the desktop auth-fails on Cloud Run (secrets verified hash-identical, so it is the egress IP, not the credential). Allotment execution therefore moves to a desktop worker; the Hub keeps orchestrating via a Postgres job queue the worker long-polls outbound. Design: [`hub/docs/architecture/DESKTOP_DISPATCH_2026-08-15.md`](../../hub/docs/architecture/DESKTOP_DISPATCH_2026-08-15.md). Until it ships, `AGY_CHAT_ENABLED` stays off in production and chat rides the metered chain — the runbook's intended fallback, working as designed. |
 | **3 · Rewire panel** | Point the right-panel feed at the runs ledger; retire the Paperclip proxy, instance, and `scripts/paperclip/` watchdogs. |
 | **4 · Reborn tooling** | Re-point Interview Mode, the score-context gate, Pre-Cog, and the skills loader from "assemble a REST payload" to "brief and verify an `agy` run." |
 

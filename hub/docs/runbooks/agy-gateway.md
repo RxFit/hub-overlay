@@ -11,6 +11,29 @@ assumption; this runbook covers operating the production gateway.
 > `auth` errors that a fresh token does not fix, assume upstream moved and
 > fall back to the metered providers (`lib/gemini.ts` / `lib/claude.ts`).
 
+> ## ⚠️ Read this before debugging an `auth` failure on Cloud Run
+>
+> **The token does not replay from Cloud Run, and no amount of re-minting will
+> fix it.** Established 2026-08-14/15 by three measurements: the Secret Manager
+> copy and the desktop file are a **perfect hash match**; the Phase 0 clean-room
+> container **PASSES on the desktop** (keyring-less Linux, same image, same
+> token); the same token **auth-fails from Cloud Run**. The clean room reproduces
+> production in every respect except the egress IP, so the conclusion is that
+> Google refuses consumer-OAuth refresh from datacenter address space. It is a
+> strong inference rather than a confirmed mechanism — but re-minting, rotating,
+> or re-uploading the secret will not change it.
+>
+> **Correct posture today:** leave `AGY_CHAT_ENABLED` off in production. Chat
+> rides the metered chain, which is this runbook's intended fallback working as
+> designed — not an outage. The `?probe=1` path will report `errorClass:'auth'`
+> from Cloud Run; that is now an *expected* result, not a regression.
+>
+> **The fix** is to run the allotment on the desktop (residential IP) with the
+> Hub dispatching work to it — designed in
+> [`../architecture/DESKTOP_DISPATCH_2026-08-15.md`](../architecture/DESKTOP_DISPATCH_2026-08-15.md)
+> (Phase 2.5), not yet built. Local/desktop use of the gateway is unaffected and
+> still works.
+
 ## How it works
 
 - The binary is provisioned at **runtime**, lazily: the first real run per
