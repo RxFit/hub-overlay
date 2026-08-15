@@ -17,10 +17,12 @@ import { createHash } from 'node:crypto'
  *  - the JSON envelope is found inside TUI chrome and read under field aliases.
  */
 
-const { spawnMock, execFileMock, existsSyncMock, mkdirMock, writeFileMock, chmodMock, rmMock } = vi.hoisted(() => ({
+const { spawnMock, execFileMock, existsSyncMock, readFileSyncMock, statSyncMock, mkdirMock, writeFileMock, chmodMock, rmMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
   execFileMock: vi.fn(),
   existsSyncMock: vi.fn(),
+  readFileSyncMock: vi.fn(),
+  statSyncMock: vi.fn(),
   mkdirMock: vi.fn(),
   writeFileMock: vi.fn(),
   chmodMock: vi.fn(),
@@ -33,6 +35,8 @@ vi.mock('node:child_process', () => ({
 }))
 vi.mock('node:fs', () => ({
   existsSync: existsSyncMock,
+  readFileSync: readFileSyncMock,
+  statSync: statSyncMock,
 }))
 vi.mock('node:fs/promises', () => ({
   mkdir: mkdirMock,
@@ -57,6 +61,7 @@ import {
   extractJsonEnvelope,
   interpretEnvelope,
   __resetAgyInstallForTest,
+  credentialFingerprint,
 } from './agy'
 
 interface FakeChild extends EventEmitter {
@@ -99,6 +104,8 @@ beforeEach(() => {
   spawnMock.mockReset()
   execFileMock.mockReset()
   existsSyncMock.mockReset()
+  readFileSyncMock.mockReset().mockReturnValue('{"refresh_token":"on-disk"}')
+  statSyncMock.mockReset().mockReturnValue({ mtime: new Date('2026-08-15T00:00:00Z') })
   mkdirMock.mockReset().mockResolvedValue(undefined)
   writeFileMock.mockReset().mockResolvedValue(undefined)
   chmodMock.mockReset().mockResolvedValue(undefined)
@@ -367,6 +374,25 @@ describe('agyGenerateText — Phase 0 survival rules', () => {
     await expect(agyGenerateText('probe')).rejects.toSatisfy((err: unknown) => agyErrorType(err) === 'parse')
   })
 
+  it('a timeout whose output shows the OAuth fallback classifies as auth, keeping the evidence', async () => {
+    // stdin is EOF under the pty, so a dead token BLOCKS at agy's interactive
+    // prompt until the ceiling — filing that as 'timeout' would call a
+    // permanent auth failure transient and discard the proof.
+    vi.useFakeTimers()
+    const child = makeFakeChild()
+    spawnMock.mockImplementationOnce(() => {
+      // Emit once the pty runner has actually attached its listeners — the
+      // token/binary awaits run before spawn, so emitting earlier is lost.
+      queueMicrotask(() => child.stdout.emit('data', Buffer.from('Authentication required. Opening browser…')))
+      return child
+    })
+    const pending = agyGenerateText('probe', { timeoutMs: 30_000 })
+    const settled = expect(pending).rejects.toSatisfy((err: unknown) => agyErrorType(err) === 'auth')
+    await vi.advanceTimersByTimeAsync(30_000)
+    child.emit('close', null)
+    await settled
+  })
+
   it('kills the run at the hard ceiling and classifies as timeout', async () => {
     vi.useFakeTimers()
     const child = makeFakeChild()
@@ -407,6 +433,21 @@ describe('agyVersion', () => {
     )
     existsSyncMock.mockReturnValue(true)
     await expect(agyVersion()).resolves.toBeNull()
+  })
+})
+
+describe('credential fingerprinting (proving WHICH token an instance holds)', () => {
+  it('fingerprints identical bytes identically and different bytes differently', () => {
+    const a = credentialFingerprint('{"refresh_token":"abc"}')
+    expect(a).toEqual({ sha256: expect.stringMatching(/^[0-9a-f]{12}$/), bytes: 23 })
+    expect(credentialFingerprint('{"refresh_token":"abc"}')).toEqual(a)
+    expect(credentialFingerprint('{"refresh_token":"xyz"}')!.sha256).not.toBe(a!.sha256)
+    expect(credentialFingerprint(null)).toBeNull()
+  })
+
+  it('never leaks the credential itself', () => {
+    const secret = '{"refresh_token":"SUPER-SECRET-VALUE"}'
+    expect(JSON.stringify(credentialFingerprint(secret))).not.toContain('SUPER-SECRET')
   })
 })
 

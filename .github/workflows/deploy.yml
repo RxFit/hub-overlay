@@ -131,6 +131,16 @@ jobs:
           # (service.yaml's startupProbe is reference-only — `--source` deploys
           # ignore it — and `gcloud run deploy` has no HTTP-startup-probe flag, so
           # a canary tag + validate + promote is the correct gate.)
+          #
+          # --timeout=300 is the PLATFORM ceiling, not a target: every route keeps
+          # its own shorter bound (chat's ladder tops out at 120s, the client
+          # aborts at 45s). It was 120s, which silently truncated the agy health
+          # probe — on a cold instance that request pays a ~55MB download plus a
+          # ~206MB extract BEFORE a 90s model run, so Cloud Run cut the connection
+          # mid-flight and returned a bare 504 with no typed errorClass, on
+          # exactly the probe used to decide whether the allotment works. Next.js
+          # `maxDuration` cannot fix this: it is a build-output hint honored by
+          # Vercel and inert under `next start`.
           gcloud run deploy "$SERVICE" \
             --source ./hub \
             --project="$GCP_PROJECT" \
@@ -139,7 +149,7 @@ jobs:
             --no-traffic \
             --tag=candidate \
             --memory=1Gi \
-            --timeout=120 \
+            --timeout=300 \
             --min-instances=1 \
             --max-instances=3 \
             --add-cloudsql-instances="$GCP_PROJECT:$REGION:hub-pg" \

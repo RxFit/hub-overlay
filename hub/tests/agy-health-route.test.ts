@@ -26,6 +26,7 @@ vi.mock('@/lib/agy', () => ({
   agyVersion: versionMock,
   agyErrorType: (err: unknown) => (err as { agyError?: { type?: string } })?.agyError?.type ?? 'unknown',
   agyTokenSource: () => 'env',
+  agyCredentialReport: () => ({ env: { sha256: 'abc123def456', bytes: 512 }, file: null }),
   isAgyConfigured: () => true,
   truncateAgyError: (err: unknown) => (err instanceof Error ? err.message : String(err)),
 }))
@@ -103,6 +104,23 @@ describe('GET /api/admin/agy-health', () => {
     const body = await (await GET(request('/api/admin/agy-health?probe=1'))).json()
     expect(body.probe.ok).toBe(true)
     expect(body.probe.markerVerified).toBe(false)
+  })
+
+  it('a marker-less reply is INCONCLUSIVE, not healthy — and shows what came back', async () => {
+    // agy can deliver an auth failure as the envelope's text field, which
+    // parses fine. Reporting healthy:true there is a false PASS on exactly
+    // the probe used to decide whether the allotment works.
+    generateMock.mockResolvedValue({ text: 'Authentication required. Please sign in.', raw: {}, latencyMs: 900 })
+    const body = await (await GET(request('/api/admin/agy-health?probe=1'))).json()
+    expect(body.probe.ok).toBe(true)
+    expect(body.probe.markerVerified).toBe(false)
+    expect(body.healthy).toBe(false)
+    expect(body.probe.textPreview).toContain('Authentication required')
+  })
+
+  it('reports the credential fingerprint so the operator can prove WHICH token is loaded', async () => {
+    const body = await (await GET(request())).json()
+    expect(body.config.credential).toEqual({ env: { sha256: 'abc123def456', bytes: 512 }, file: null })
   })
 
   it('probe failure surfaces the typed error class and flips healthy', async () => {
