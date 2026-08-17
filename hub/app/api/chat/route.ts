@@ -6,6 +6,7 @@ import { resolveDriveLinkContext } from '@/lib/drive-links'
 import { createLogger } from '@/lib/logger'
 import { streamChat, buildSystemPromptParts, friendlyModelError } from '@/lib/gemini'
 import { resolveReadTools } from '@/lib/ai-tools/resolve'
+import { buildCapabilityManifest } from '@/lib/ai-tools/capabilities'
 import type { SystemPromptParts } from '@/lib/claude'
 import { getCompanies, getIssues, getAgents, getRuns } from '@/lib/paperclip'
 import { searchSemanticBrain } from '@/lib/vertex'
@@ -17,7 +18,7 @@ import { needsInternalSearch, needsExternalSearch, isTrivialMessage } from '@/li
 import { ChatRequestSchema } from '@/lib/zod-schemas'
 import { boundHistory, MAX_HISTORY_MESSAGES } from '@/lib/history-window'
 import { extractSuggestedToolsJson, sanitizeAssistantHistoryContent } from '@/lib/model-output'
-import { buildGoogleWorkspaceContext } from '@/lib/google-context'
+import { buildGoogleWorkspaceContext, type GoogleWorkspaceContext } from '@/lib/google-context'
 import { getChatSpacePreferences } from '@/lib/chat-space-preferences-db'
 import { withTimeout } from '@/lib/timeout'
 import { chatErrorBody } from '@/lib/chat-error'
@@ -416,6 +417,17 @@ function streamModelResponse(
   })
 }
 
+/**
+ * Outcome of the live Google Workspace context fetch. `reason` distinguishes
+ * the three ways the section can be absent — an unwired session, a timeout, and
+ * a fetch error — because the model has to say something different about each,
+ * and saying nothing (the previous bare `null`) reads to the user as "you have
+ * no data".
+ */
+type WorkspaceContextOutcome =
+  | ({ ok: true } & GoogleWorkspaceContext)
+  | { ok: false; reason: 'timeout' | 'error' | 'no-session' }
+
 async function handleChat(req: NextRequest): Promise<Response> {
   // Auth check
   const session = await getServerSession(authOptions)
@@ -452,6 +464,13 @@ async function handleChat(req: NextRequest): Promise<Response> {
   }
 
   const { messages, useCase = 'deep_dive', attachments, activeSkill, exaMode = false } = body
+
+  // Role is read here rather than at the context-assembly block below because
+  // the EXA short-circuit needs it too — its capability manifest is role-gated
+  // exactly like the normal path's.
+  const chatUser = session.user as Record<string, unknown>
+  const chatRole = chatUser.role as string
+  const chatAssignedProjects = (chatUser.assignedProjects as string[]) ?? []
 
   // Validate core message structure — always validate the FULL incoming array.
   const msgValidation = ChatRequestSchema.pick({ messages: true }).safeParse({ messages })
@@ -576,6 +595,15 @@ async function handleChat(req: NextRequest): Promise<Response> {
     // (persona + policy) so repeat EXA turns read it at 0.1x input price.
     const exaSystemPrompt = buildSystemPromptParts({
       injectedContext: exaSearch.context || undefined,
+      // The read tools are off in this mode, but they EXIST — the manifest says
+      // so and tells the model to point at the EXA toggle rather than denying
+      // the capability. Built from the registry alone (no prefs read), so it
+      // adds no latency to the EXA path.
+      capabilityManifest: buildCapabilityManifest({
+        role: chatRole,
+        prefsKnown: false,
+        unavailable: 'exa-mode',
+      }),
       exaMode: true,
       exaSearchFailed: exaSearch.failed,
       exaInternalContext: internalSearch.context || undefined,
@@ -596,9 +624,6 @@ async function handleChat(req: NextRequest): Promise<Response> {
   //
   // The Google OAuth token is resolved first since it's a local JWT decode
   // (sub-ms) that both the Google WS fetch and attachment handling need.
-  const chatUser = session.user as Record<string, unknown>
-  const chatRole = chatUser.role as string
-  const chatAssignedProjects = (chatUser.assignedProjects as string[]) ?? []
   let projectContext = ''
   let agentActivity = ''
 
@@ -731,23 +756,31 @@ async function handleChat(req: NextRequest): Promise<Response> {
       'paperclip-context'
     ),
 
-    // Branch 2: Google Workspace context (6s timeout) — runs in parallel
+    // Branch 2: Google Workspace context (6s timeout) — runs in parallel.
+    //
+    // A timeout or fetch error used to resolve to plain `null`, exactly like
+    // "no Google session" — so the whole Live Google Workspace section simply
+    // vanished with nothing said about it. The model then had no way to tell a
+    // BROKEN lookup from an unwired one and answered "you have no upcoming
+    // events" to a user with a full calendar. The outcome is now tagged so the
+    // prompt can state which it was.
     googleAccessToken
-      ? withTimeout(
+      ? withTimeout<WorkspaceContextOutcome>(
           // The Chat section of this context honors the user's space visibility
           // preferences, so the model sees their real spaces instead of a wall
           // of auto-created Meet conversations. Fail-open to defaults.
           getChatSpacePreferences(session.user.email ?? '')
             .then(prefs => buildGoogleWorkspaceContext(googleAccessToken, prefs))
+            .then(ctx => ({ ok: true as const, ...ctx }))
             .catch((err) => {
             log.warn({ err }, 'Google Workspace context fetch failed — proceeding without it')
-            return null
+            return { ok: false as const, reason: 'error' as const }
           }),
           6_000,
-          null,
+          { ok: false, reason: 'timeout' },
           'google-workspace-context',
         )
-      : Promise.resolve(null),
+      : Promise.resolve<WorkspaceContextOutcome>({ ok: false, reason: 'no-session' }),
   ])
 
   projectContext = paperclipContextResult.projectContext
@@ -755,9 +788,17 @@ async function handleChat(req: NextRequest): Promise<Response> {
 
   let googleWorkspaceDetail: string | undefined
   let googleWorkspaceCounts: { taskCount?: number; upcomingEvents?: number; recentFiles?: number; unreadEmails?: number } = {}
-  if (googleWsResult) {
+  let googleWorkspaceNotice: string | undefined
+  if (googleWsResult.ok) {
     googleWorkspaceDetail = googleWsResult.detail
     googleWorkspaceCounts = googleWsResult.counts
+  } else if (googleWsResult.reason !== 'no-session') {
+    // 'no-session' is already explained by googleAuthNotice above; saying it
+    // twice in different words would be worse than saying it once.
+    googleWorkspaceNotice =
+      googleWsResult.reason === 'timeout'
+        ? '[The live Google Workspace lookup TIMED OUT this turn, so the "Live Google Workspace" section below is absent. The user\'s Google account IS connected and their Tasks, Calendar, Drive, Gmail and Chat data DOES exist — the Hub just could not fetch it in time. If they ask about it, say the lookup timed out and invite them to retry or use the left panel. NEVER say they have no tasks, no events, no files, or no mail, and never invent any.]'
+        : '[The live Google Workspace lookup FAILED this turn, so the "Live Google Workspace" section below is absent. The user\'s Google account IS connected and their data DOES exist — the fetch errored. If they ask about it, say the lookup failed and invite them to retry or use the left panel. NEVER say they have no tasks, no events, no files, or no mail, and never invent any.]'
   }
 
   const searchResults = await searchPromise
@@ -799,6 +840,7 @@ async function handleChat(req: NextRequest): Promise<Response> {
     googleWorkspace: Object.keys(googleWorkspaceCounts).length > 0 ? googleWorkspaceCounts : undefined,
     googleWorkspaceDetail,
     googleAuthNotice,
+    googleWorkspaceNotice,
     liveAnalytics: liveAnalytics.context,
     capabilityManifest: liveAnalytics.manifest,
     injectedContext: allInjectedContext || undefined,

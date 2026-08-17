@@ -389,3 +389,89 @@ describe('capability manifest placement', () => {
     expect(parts.staticPrefix + parts.dynamic).not.toContain('Live data capabilities')
   })
 })
+
+/* ── T-70: the capability manifest reaches EXA mode too ──
+   EXA Search mode short-circuits before read-tool resolution, so its prompt
+   carried NO manifest and its own text never mentioned analytics — the
+   original GA4 denial, reproduced verbatim for any user with the toggle on. */
+describe('capability manifest — EXA Search mode (T-70 fix #1)', () => {
+  const manifest =
+    '## Live data capabilities (wired into this app)\n- ga4_run_report: Query GA4.\n\nRETRIEVAL STATUS THIS TURN: EXA Search mode is ON'
+
+  it('renders in the EXA prompt when provided', () => {
+    const parts = buildSystemPromptParts({ exaMode: true, capabilityManifest: manifest })
+    expect(parts.dynamic).toContain('## Live data capabilities')
+    expect(parts.dynamic).toContain('ga4_run_report')
+    expect(parts.dynamic).toContain('EXA Search mode is ON')
+  })
+
+  it('keeps it in the DYNAMIC half — the EXA static prefix stays cacheable', () => {
+    const a = buildSystemPromptParts({ exaMode: true, capabilityManifest: manifest })
+    const b = buildSystemPromptParts({ exaMode: true, capabilityManifest: manifest + ' (staff)' })
+    expect(a.staticPrefix).toBe(b.staticPrefix)
+    expect(a.staticPrefix).not.toContain('ga4_run_report')
+  })
+
+  it('tells the model the tools EXIST but are off in this mode — never that the Hub lacks them', () => {
+    const parts = buildSystemPromptParts({ exaMode: true })
+    const prompt = parts.staticPrefix + parts.dynamic
+    // The old text only ever named Drive/Chat search; analytics, calendar and
+    // file access went entirely unmentioned, so the model denied them outright.
+    expect(prompt).toContain('Google Analytics and Search Console reporting')
+    expect(prompt).toContain('calendar availability')
+    expect(prompt).toContain('NEVER tell the user the Hub cannot do those things')
+    expect(prompt).toContain('turning EXA Search OFF')
+  })
+
+  it('renders nothing when no manifest is supplied', () => {
+    const parts = buildSystemPromptParts({ exaMode: true })
+    expect(parts.dynamic).not.toContain('## Live data capabilities')
+  })
+})
+
+/* ── T-70 fix #6: a BROKEN Workspace lookup must not read as "you have no data" ── */
+describe('buildSystemPrompt — live Workspace fetch failure notice', () => {
+  it('renders the notice in the availability section', () => {
+    const notice = '[The live Google Workspace lookup TIMED OUT this turn]'
+    const prompt = buildSystemPrompt({ googleWorkspaceNotice: notice })
+    expect(prompt).toContain('## Google Workspace Availability')
+    expect(prompt).toContain(notice)
+  })
+
+  it('renders alongside the auth notice without dropping either', () => {
+    const prompt = buildSystemPrompt({
+      googleAuthNotice: '[AUTH-NOTICE]',
+      googleWorkspaceNotice: '[WS-NOTICE]',
+    })
+    expect(prompt).toContain('[AUTH-NOTICE]')
+    expect(prompt).toContain('[WS-NOTICE]')
+    // One section, not two competing headings.
+    expect(prompt.split('## Google Workspace Availability')).toHaveLength(2)
+  })
+
+  it('stays absent when the fetch succeeded', () => {
+    expect(buildSystemPrompt({ googleWorkspaceDetail: 'Tasks: 3' })).not.toContain(
+      '## Google Workspace Availability',
+    )
+  })
+})
+
+/* ── T-70 fix #4: the prompt taught a section no code ever emits ──
+   The never-deny rule for Drive/Chat was anchored to a "Retrieved on demand"
+   heading that nothing in the codebase produces, so the rule's precondition
+   was never satisfiable. Re-anchored to the block that IS emitted. */
+describe('prompt references only sections the code actually emits', () => {
+  const prompt = buildSystemPrompt({})
+
+  it('no longer names the phantom "Retrieved on demand" section', () => {
+    expect(prompt).not.toContain('Retrieved on demand')
+  })
+
+  it('names the block renderToolOutcomes really emits', () => {
+    expect(prompt).toContain('LIVE DATA RETRIEVED THIS TURN')
+  })
+
+  it('states the never-deny rule WITHOUT depending on a retrieval block being present', () => {
+    expect(prompt).toContain('This rule does NOT depend on any retrieval block being present')
+  })
+})

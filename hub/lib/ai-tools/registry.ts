@@ -461,7 +461,31 @@ const freeBusyTool: ReadTool = {
       calendarIds: args.calendarIds,
     })
 
+    // Calendars Google refused to read are NOT free time. Reporting "clear"
+    // over an unreadable calendar is how the assistant offers a slot the user
+    // is already booked in, so unreadable calendars travel with the answer.
+    const unreadable = result.errors.map(e => `${e.calendarId} (${e.reason})`)
+
     if (!result.merged.length) {
+      if (unreadable.length) {
+        return {
+          summary:
+            `No busy time found between ${args.timeMin} and ${args.timeMax}, but ` +
+            `${unreadable.length} calendar(s) could not be read: ${unreadable.join(', ')}.`,
+          fenced: fenceUntrusted(
+            'Calendar free/busy',
+            JSON.stringify({
+              range: [args.timeMin, args.timeMax],
+              busy: [],
+              unreadableCalendars: unreadable,
+              caveat:
+                'These calendars returned an error, so their busy time is UNKNOWN — not free. Do not ' +
+                'call the range clear or propose a slot without telling the user which calendars could ' +
+                'not be checked.',
+            }),
+          ),
+        }
+      }
       // Genuinely-clear is a real answer, and a distinct one from "the lookup
       // failed" — say so plainly so the model does not hedge.
       return {
@@ -472,12 +496,25 @@ const freeBusyTool: ReadTool = {
     }
 
     return {
-      summary: `Calendar busy blocks between ${args.timeMin} and ${args.timeMax}: ${result.merged.length}`,
+      summary:
+        `Calendar busy blocks between ${args.timeMin} and ${args.timeMax}: ${result.merged.length}` +
+        (unreadable.length ? ` (${unreadable.length} calendar(s) unreadable)` : ''),
       // Busy blocks come from invitations other people created, and the merged
       // set is derived from their data.
       fenced: fenceUntrusted(
         'Calendar free/busy',
-        JSON.stringify({ range: [args.timeMin, args.timeMax], busy: result.merged }),
+        JSON.stringify({
+          range: [args.timeMin, args.timeMax],
+          busy: result.merged,
+          ...(unreadable.length
+            ? {
+                unreadableCalendars: unreadable,
+                caveat:
+                  'These calendars returned an error, so their busy time is UNKNOWN — not free. Say which ' +
+                  'calendars could not be checked before treating any gap as available.',
+              }
+            : {}),
+        }),
       ),
     }
   },

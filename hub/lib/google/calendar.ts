@@ -101,11 +101,24 @@ export interface BusyPeriod {
   end: string
 }
 
+/** A calendar Google could not read for us — permission, not-found, rate limit. */
+export interface CalendarReadError {
+  calendarId: string
+  /** Google's `reason` code, e.g. "notFound", "forbidden", "rateLimitExceeded". */
+  reason: string
+}
+
 export interface FreeBusyResult {
-  /** Busy blocks per calendar id. */
+  /** Busy blocks per calendar id — only calendars that were actually readable. */
   byCalendar: Record<string, BusyPeriod[]>
   /** All busy blocks merged and sorted — what "when am I free?" needs. */
   merged: BusyPeriod[]
+  /** Calendars freeBusy returned an error for. Google reports these INSIDE a
+   *  200 response, one entry per calendar, with `busy` absent. Dropping them
+   *  made an unreadable calendar indistinguishable from an empty one, so a
+   *  fully-booked calendar the user lacks permission on was reported as FREE —
+   *  the worst possible failure mode for an availability answer. */
+  errors: CalendarReadError[]
 }
 
 /**
@@ -148,7 +161,7 @@ export async function queryFreeBusy(
   const ids = (input.calendarIds?.length ? input.calendarIds : ['primary']).slice(0, 50)
 
   const data = await googleFetch<{
-    calendars?: Record<string, { busy?: BusyPeriod[] }>
+    calendars?: Record<string, { busy?: BusyPeriod[]; errors?: { domain?: string; reason?: string }[] }>
   }>(`${CALENDAR_BASE}/freeBusy`, accessToken, {
     method: 'POST',
     body: JSON.stringify({
@@ -161,11 +174,20 @@ export async function queryFreeBusy(
 
   const byCalendar: Record<string, BusyPeriod[]> = {}
   const all: BusyPeriod[] = []
+  const errors: CalendarReadError[] = []
   for (const [calendarId, entry] of Object.entries(data.calendars ?? {})) {
+    // An errored calendar is NOT an empty one. Record it and leave it out of
+    // byCalendar entirely, so no caller can read `[]` as "nothing scheduled".
+    if (entry.errors?.length) {
+      for (const err of entry.errors) {
+        errors.push({ calendarId, reason: err.reason || err.domain || 'unknown' })
+      }
+      continue
+    }
     const busy = entry.busy ?? []
     byCalendar[calendarId] = busy
     all.push(...busy)
   }
 
-  return { byCalendar, merged: mergeBusyPeriods(all) }
+  return { byCalendar, merged: mergeBusyPeriods(all), errors }
 }

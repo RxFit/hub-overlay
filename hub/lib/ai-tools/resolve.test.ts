@@ -11,12 +11,17 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 const hoisted = vi.hoisted(() => ({
   planCalls: [] as { name: string; args: unknown }[],
+  /** Overrides planCalls when set — lets a test make planning THROW. */
+  planBehavior: null as null | (() => never),
   prefsBehavior: null as null | (() => Promise<{ prefs: Record<string, unknown>; storeReadFailed: boolean }>),
   executeOutcomes: [] as unknown[],
 }))
 
 vi.mock('./plan', () => ({
-  planToolCalls: async () => hoisted.planCalls,
+  planToolCalls: async () => {
+    if (hoisted.planBehavior) hoisted.planBehavior()
+    return hoisted.planCalls
+  },
 }))
 vi.mock('./execute', async importOriginal => ({
   ...(await importOriginal<typeof import('./execute')>()),
@@ -38,6 +43,7 @@ import { resolveReadTools, PREFS_TIMEOUT_MS } from './resolve'
 
 beforeEach(() => {
   hoisted.planCalls = []
+  hoisted.planBehavior = null
   hoisted.prefsBehavior = () =>
     Promise.resolve({ prefs: { ga4PropertyId: '555' }, storeReadFailed: false })
   hoisted.executeOutcomes = []
@@ -76,9 +82,45 @@ describe('resolveReadTools — capability manifest', () => {
     expect(result.ran).toEqual(['ga4_run_report'])
   })
 
-  it('returns nothing without a Google session (no manifest to wrongly promise)', async () => {
+  /* T-70: the four states where the manifest used to vanish are exactly the
+     states where the model is most likely to deny the capability. Each one now
+     ships the manifest WITH the reason nothing ran. */
+
+  it('still ships the manifest without a Google session, naming the reason', async () => {
     const result = await resolveReadTools('traffic?', 'staff', undefined)
-    expect(result).toEqual({ ran: [] })
+    expect(result.ran).toEqual([])
+    expect(result.context).toBeUndefined()
+    expect(result.manifest).toContain('ga4_run_report')
+    expect(result.manifest).toContain("Google session could not be resolved")
+    expect(result.manifest).toContain('Do NOT say the capability does not exist')
+  })
+
+  it('still ships the manifest for a role with no eligible tool (the onboarding default)', async () => {
+    const result = await resolveReadTools('traffic?', 'onboarding', 'tok')
+    expect(result.ran).toEqual([])
+    // Listed with the role bar, not hidden: "it can, your role can't yet".
+    expect(result.manifest).toContain('ga4_run_report')
+    expect(result.manifest).toContain('[requires staff access]')
+    expect(result.manifest).toContain('NEVER tell the user the Hub cannot do these things')
+  })
+
+  it('still ships the manifest when resolution itself throws', async () => {
+    hoisted.planBehavior = () => {
+      throw new Error('planner exploded')
+    }
+    const result = await resolveReadTools('traffic?', 'staff', 'tok')
+    expect(result.ran).toEqual([])
+    expect(result.manifest).toContain('ga4_run_report')
+    expect(result.manifest).toContain('the retrieval step itself failed')
+    expect(result.manifest).toContain('Do NOT deny the capability')
+  })
+
+  it('does not tell the user to rephrase when nothing could have run', async () => {
+    // The rephrase hint is good advice on a turn where a lookup was possible
+    // and none triggered. On a no-session turn it loops the user against a
+    // lookup that is off for an unrelated reason.
+    const result = await resolveReadTools('traffic?', 'staff', undefined)
+    expect(result.manifest).not.toContain('restate the question with a concrete metric')
   })
 })
 

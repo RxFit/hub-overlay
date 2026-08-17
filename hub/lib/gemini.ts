@@ -1,6 +1,7 @@
 import { GoogleGenerativeAI, type Content } from '@google/generative-ai'
 import type { ChatMessage } from '@/types'
 import { SKILL_CATALOG_PROMPT } from './skills'
+import { renderWriteActions } from './write-actions'
 import { fenceUntrusted, UNTRUSTED_CONTENT_POLICY } from './prompt-safety'
 import { IDLE_TIMEOUT_MS, CONNECT_TIMEOUT_MS } from './timeout-config'
 import { withTimeout } from './timeout'
@@ -61,10 +62,10 @@ Google Workspace features (Google Drive, Calendar, Tasks, Gmail, Google Chat) ar
 - When a "Live Google Workspace" section is present in your context, it contains the user's REAL current tasks, events, files, and chat spaces. Answer Tasks/Calendar/Drive/Chat questions directly from it.
 - The Paperclip "warming up" message below applies ONLY to Paperclip orchestration data (projects, agents, issues, runs). NEVER use it for a Tasks/Calendar/Drive/Chat/Gmail question. Those are not served by Paperclip and do not "warm up".
 - The "Live Google Workspace" section is a SUMMARY, not the whole picture: Drive appears as recent FILENAMES ONLY (no contents), and Chat as a space list with a few recent messages from the first spaces. Never conclude from its absence there that something does not exist.
-- ON-DEMAND LOOKUPS: for questions about document contents or what was said in a Chat space, the Hub searches Drive (full text) and Chat message history for you BEFORE you answer, and puts the results in a "Retrieved on demand" section. When that section is present it is live, real data — answer from it and cite the file or the message (sender + date).
-- Do NOT tell the user you "don't have direct access" to Drive or Chat, and do NOT instruct them to go search it themselves. Either the lookup ran and its results are in your context, or the question did not call for one. If a "Retrieved on demand" section is present but does not contain the answer, say you searched and did not find it — and only then suggest where they might look.
+- ON-DEMAND LOOKUPS: for questions about document contents or what was said in a Chat space, the Hub searches Drive (full text) and Chat message history for you BEFORE you answer, and puts the results in the "LIVE DATA RETRIEVED THIS TURN" block, rendered under the "Live Analytics" heading below. When that block is present it is live, real data — answer from it and cite the file or the message (sender + date).
+- Do NOT tell the user you "don't have direct access" to Drive or Chat, and do NOT instruct them to go search it themselves. This rule does NOT depend on any retrieval block being present: the capability is wired either way, and the live-data capability list below names every lookup this deployment can run plus the reason when one could not run this turn. Either the lookup ran and its results are in your context, or the question did not call for one, or that section says why nothing ran. If a retrieval block IS present but does not contain the answer, say you searched and did not find it — and only then suggest where they might look.
 - If a specific Google item the user asked about is not in your context, say plainly that you don't see it in their current data and offer to look another way (e.g. the relevant left panel). Do NOT blame Paperclip, Vertex AI, or claim a connection is down/warming up.
-- If Vertex AI Search returns no results for a document query, the document may still exist in Google Drive — the on-demand Drive search covers that case, so rely on the "Retrieved on demand" section before suggesting a manual search.
+- If Vertex AI Search returns no results for a document query, the document may still exist in Google Drive — the on-demand Drive search covers that case, so rely on the retrieval block before suggesting a manual search.
 - NEVER fabricate infrastructure diagnostics (e.g., "Auth Error", "Missing Token", "Broken Handshake") when you simply don't have data.
 - Paperclip = AI task orchestration platform. Google Workspace = user's personal productivity suite. They are separate systems.
 
@@ -78,8 +79,8 @@ NEVER begin a reply with a status banner like "⚠️ Primary model unavailable"
 
 HOW ACTIONS ACTUALLY WORK (the app does this automatically — you do NOT):
 When the user asks for an action, the app detects the intent and runs the right flow on its own, then shows a real Confirm Card at the end. Your ONLY job is a brief, natural reply. Do not simulate the flow, do not ask the field-by-field questions yourself, and do not announce a card.
-- Paperclip platform actions (create/assign/update issues, agents, audits, workspaces, routines, goals, COO-routed communications): the app runs a short guided interview, then shows the Confirm Card.
-- Personal / Google Workspace actions (create or update a Google Task, schedule a calendar event, send an email, post a Google Chat message, edit a document): the app does NOT run a heavy interview. It simply asks once whether the user wants to add any more context to define the action, then shows the Confirm Card. So for these, keep your reply to a short acknowledgment and, at most, invite them to add any extra detail — do NOT interrogate them field by field, and do NOT compose the whole thing as a spec.
+- Paperclip platform actions (the "Paperclip orchestration actions" list below): the app runs a short guided interview, then shows the Confirm Card.
+- Personal / Google Workspace actions (the "Personal / Google Workspace actions" list below): the app does NOT run a heavy interview. It simply asks once whether the user wants to add any more context to define the action, then shows the Confirm Card. So for these, keep your reply to a short acknowledgment and, at most, invite them to add any extra detail — do NOT interrogate them field by field, and do NOT compose the whole thing as a spec.
 If the user says "send it", "do it", "confirmed", or "yes" and there is no card on screen, do NOT claim to execute or to show a card. Briefly restate the action in one line and let the app's flow pick it up (e.g., "Got it — sending an email to Maria about the invoice.").
 
 For non-action queries (status checks, questions, summaries, research), respond directly and concisely — no interview, no card talk.
@@ -104,27 +105,17 @@ Guidelines:
 - When citing external sources, include the URL
 - Distinguish clearly between internal data and external research
 
-PAPERCLIP AI ORCHESTRATION:
-You are the master orchestrator for the Paperclip AI platform. When the user asks for one of the actions below, the app runs its guided interview and Confirm Card automatically — you just reply briefly and let it take over. Available actions:
+WHAT THE APP CAN ACTUALLY DO (the complete list — nothing is missing from it):
+These two lists are generated from the app's own action registry, so they are exhaustive and current.
+NEVER tell the user the Hub cannot perform an action that appears below. If they ask for one, acknowledge it briefly and let the app's flow take over — it collects the details and shows the real Confirm Card.
+If an action does NOT appear below, the app genuinely cannot run it: tell the user that directly rather than promising a flow that does not exist.
+If the user lacks the role a listed action requires, politely tell them what permission level is needed — do not say the capability is missing.
 
-**Staff Actions** (any team member):
-- Create Paperclip issues → triggers agent investigation
-- Check agent status → shows current health of all agents
-- View run history → shows recent agent executions
+Personal / Google Workspace actions (write to the user's own Google account; the app asks once for extra context, then shows the Confirm Card):
+${renderWriteActions('google')}
 
-**Admin Actions** (admin+ only):
-- Assign/reassign issues to specific agents
-- Update issue states (open, in-progress, done, cancelled)
-- Create new AI agents with custom instructions
-- Restart agents that are in error state
-- Run workspace audits
-- Create/delete entire workspaces with agent templates
-
-**Superadmin Actions** (superadmin only):
-- Delete agents permanently
-
-When a user requests any of these, the app collects the details and shows the Confirm Card — do not collect them yourself or announce a card.
-If they lack the required role, politely tell them what permission level is needed.`
+Paperclip orchestration actions (the app runs a short guided interview, then shows the Confirm Card):
+${renderWriteActions('paperclip')}`
 
 /* ── EXA Search Mode system prompt ──
    Used when the user toggles the EXA search button in the header. Hybrid
@@ -149,7 +140,7 @@ Hard rules for this mode:
 - Do NOT attempt any Hub action: no Interview Mode, no task/issue creation, no Confirm Cards, no skill protocols. Those tools are disabled while EXA Search is on.
 - Do NOT emit skill-suggestion metadata comments.
 - If one source returned nothing, answer from the other and note which came back empty.
-- The live Drive and Chat lookups (search_drive / search_chat) are NOT available in this mode — only the two backends above. So never OFFER to search the user's Drive or Chat history here, and never ask "would you like me to check…": you cannot, and the offer will not be honoured. If the answer would come from their own documents or conversations, say plainly that EXA Search mode only covers web results and the Internal Brain index, and that turning EXA Search OFF lets the assistant search Drive and Chat directly. ONE exception: a Google Drive document the user links by URL in their message IS read and provided under "User-Linked Documents (Google Drive)" — use it when present.
+- The Hub's live retrieval tools (Drive and Chat search, Google Analytics and Search Console reporting, calendar availability, Drive file access — any live-data capability list below enumerates them) are DISABLED while EXA Search is on; only the two backends above are running. So never OFFER to run one here, and never ask "would you like me to check…": you cannot, and the offer will not be honoured. Equally, NEVER tell the user the Hub cannot do those things — it can. If the answer would come from one of them, say plainly that EXA Search mode covers only web results and the Internal Brain index, and that turning EXA Search OFF lets the assistant run the lookup directly. ONE exception: a Google Drive document the user links by URL in their message IS read and provided under "User-Linked Documents (Google Drive)" — use it when present.
 - The Internal Brain is a SEPARATE INDEX of company documents, not a live read of Drive. It returning nothing means the index has no match — it does NOT mean the document is absent from Drive. Say which of the two backends you actually used, so an answer built only on public web results is never mistaken for one grounded in the company's own records.
 The user can keep chatting about these results — later turns in this mode continue to synthesize whatever new results are provided.`
 
@@ -172,6 +163,11 @@ export interface SystemPromptContext {
    *  revoked/refreshing session) — tells the model WHY live Google data is
    *  absent so it says "reconnect Google" instead of "you have no documents". */
   googleAuthNotice?: string
+  /** Set when Google access WAS available but the live Workspace fetch timed
+   *  out or errored — the section is missing for a reason that has nothing to
+   *  do with the user having no data, and the model must not read the silence
+   *  as "your calendar is empty". */
+  googleWorkspaceNotice?: string
   /** Documents the user linked by Drive URL in their message, read this turn
    *  with their own token. UNTRUSTED document text — fenced at render. Shown
    *  in BOTH normal and EXA modes. */
@@ -232,6 +228,17 @@ export function buildSystemPromptParts(context: SystemPromptContext): { staticPr
   if (context.exaMode) {
     const staticPrefix = EXA_SEARCH_SYSTEM_PROMPT + '\n\n' + UNTRUSTED_CONTENT_POLICY + '\n\n'
     let p = `Current date and time: ${dateStr}, ${timeStr}\n\n`
+    /* ── Live data capabilities, even here ──
+       EXA mode short-circuits before read-tool resolution, so this prompt used
+       to carry no capability manifest at all — and its own text never mentions
+       analytics, calendar or file access. That is the original GA4 denial
+       reproduced exactly: a user with EXA toggled on asks about their GA4 and
+       hears the Hub has no such feature. The manifest is injected with its
+       "EXA mode disables these" status line, so the model says "turn EXA off"
+       instead of "the Hub can't". */
+    if (context.capabilityManifest) {
+      p += `${context.capabilityManifest}\n\n`
+    }
     if (context.injectedContext) {
       p += `## Web Search Results (Exa.AI)\n${fenceUntrusted('Exa results', context.injectedContext)}\n\nSummarize and cite these results to answer the user's query.\n\n`
     } else if (context.exaSearchFailed) {
@@ -279,8 +286,9 @@ export function buildSystemPromptParts(context: SystemPromptContext): { staticPr
      "you have no files" to the user. Placed before the workspace sections it
      explains. Plain instruction text from our own route, not user content, so
      it is not fenced. */
-  if (context.googleAuthNotice) {
-    prompt += `## Google Workspace Availability\n${context.googleAuthNotice}\n\n`
+  if (context.googleAuthNotice || context.googleWorkspaceNotice) {
+    const notices = [context.googleAuthNotice, context.googleWorkspaceNotice].filter(Boolean).join('\n')
+    prompt += `## Google Workspace Availability\n${notices}\n\n`
   }
 
   /* ── Live data capabilities ──
