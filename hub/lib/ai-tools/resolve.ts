@@ -23,7 +23,7 @@ import { getServerSession } from 'next-auth'
 import { planToolCalls } from './plan'
 import { executeToolCalls, renderToolOutcomes } from './execute'
 import { toolsFor } from './registry'
-import { buildCapabilityManifest } from './capabilities'
+import { buildCapabilityManifest, type RetrievalUnavailableReason } from './capabilities'
 import { getEffectivePrefsDetailed } from '../google/prefs-db'
 import type { GooglePrefsValues } from '../google/prefs'
 import { authOptions } from '../auth'
@@ -38,10 +38,12 @@ export interface ResolveResult {
   /** Rendered block for the system prompt, or undefined when nothing ran. */
   context?: string
   /** Capability manifest for the system prompt — what live data THIS
-   *  deployment can fetch and whether it is configured. Built on every
-   *  eligible turn (not only when tools ran), because the turns where NOTHING
-   *  ran are exactly the ones where the model would otherwise deny having the
-   *  capability. Undefined without a Google session or runnable tools. */
+   *  deployment can fetch and whether it is configured. Built on EVERY turn,
+   *  including the ones where nothing could run: no Google session, no
+   *  role-eligible tool, or a resolver that threw. Those are precisely the
+   *  turns where the model would otherwise deny having the capability, so
+   *  dropping the manifest there reproduced the bug it exists to prevent.
+   *  Always populated. */
   manifest?: string
   /** Names of tools that actually returned data — for logging. */
   ran: string[]
@@ -64,11 +66,18 @@ export async function resolveReadTools(
   now: Date = new Date(),
 ): Promise<ResolveResult> {
   // No Google session means no reads — cheaper to bail than to plan a call
-  // that could never execute.
-  if (!accessToken || !question.trim()) return { ran: [] }
+  // that could never execute. The manifest still goes out, naming the reason:
+  // a turn with no token is one of the likeliest turns for the model to tell a
+  // user the Hub has no analytics at all.
+  if (!accessToken) {
+    return { manifest: manifestOnly(role, 'no-google-session'), ran: [] }
+  }
+  if (!question.trim()) return { manifest: manifestOnly(role), ran: [] }
 
   const tools = [...toolsFor('analytics', role), ...toolsFor('workspace', role)]
-  if (!tools.length) return { ran: [] }
+  // No role-eligible tool (the default for `onboarding`) — nothing can run,
+  // but the capabilities still exist and the manifest says so, gated by role.
+  if (!tools.length) return { manifest: manifestOnly(role), ran: [] }
 
   try {
     // Planning and the prefs lookup are independent — run them concurrently.
@@ -125,8 +134,20 @@ export async function resolveReadTools(
     }
   } catch (err) {
     console.warn('[ai-tools] read-tool resolution failed; answering without it:', err)
-    return { ran: [] }
+    // Answering without the DATA is fine. Answering without the MANIFEST is
+    // how a transient resolver failure turns into "the Hub has no GA4".
+    return { manifest: manifestOnly(role, 'resolution-failed'), ran: [] }
   }
+}
+
+/**
+ * Manifest for a turn where no retrieval ran, so no prefs were read. Config
+ * state is reported as unknown (prefsKnown:false) rather than guessed —
+ * claiming "NOT configured" to an admin who configured it is the same class of
+ * error as denying the capability.
+ */
+function manifestOnly(role: string | undefined, unavailable?: RetrievalUnavailableReason): string {
+  return buildCapabilityManifest({ role, prefsKnown: false, unavailable })
 }
 
 /** Read the caller's Chat visibility overrides, defaulting to none. */

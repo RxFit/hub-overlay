@@ -155,5 +155,43 @@ describe('queryFreeBusy', () => {
     stub({})
     const result = await queryFreeBusy('tok', { timeMin: 'a', timeMax: 'b' })
     expect(result.merged).toEqual([])
+    expect(result.errors).toEqual([])
+  })
+
+  /* T-70 fix #8. freeBusy reports per-calendar failures INSIDE a 200 response,
+     with `busy` absent. Dropping those errors made an unreadable calendar
+     indistinguishable from an empty one, so the availability answer said FREE
+     over a calendar that might be fully booked. */
+  it('reports an errored calendar as unreadable — never as free', async () => {
+    stub({
+      calendars: {
+        primary: { busy: [{ start: '2026-07-28T09:00:00Z', end: '2026-07-28T10:00:00Z' }] },
+        'team@x.test': { errors: [{ domain: 'global', reason: 'notFound' }] },
+      },
+    })
+
+    const result = await queryFreeBusy('tok', { timeMin: 'a', timeMax: 'b' })
+
+    expect(result.errors).toEqual([{ calendarId: 'team@x.test', reason: 'notFound' }])
+    // Crucially NOT present as an empty array — no caller can read `[]` here
+    // as "nothing scheduled".
+    expect(result.byCalendar).not.toHaveProperty('team@x.test')
+    expect(result.merged).toHaveLength(1)
+  })
+
+  it('falls back to the error domain when Google sends no reason', async () => {
+    stub({ calendars: { work: { errors: [{ domain: 'calendar' }] } } })
+    const result = await queryFreeBusy('tok', { timeMin: 'a', timeMax: 'b' })
+    expect(result.errors).toEqual([{ calendarId: 'work', reason: 'calendar' }])
+  })
+
+  it('reports every error a calendar returns', async () => {
+    stub({
+      calendars: {
+        a: { errors: [{ reason: 'forbidden' }, { reason: 'rateLimitExceeded' }] },
+      },
+    })
+    const result = await queryFreeBusy('tok', { timeMin: 'a', timeMax: 'b' })
+    expect(result.errors).toHaveLength(2)
   })
 })

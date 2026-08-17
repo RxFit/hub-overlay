@@ -242,6 +242,64 @@ describe('calendar_freebusy', () => {
     const tool = getTool('calendar_freebusy')!
     expect(tool.schema.safeParse({ timeMin: '2026-07-30T00:00:00Z' }).success).toBe(false)
   })
+
+  /* T-70 fix #8. An unreadable calendar is UNKNOWN time, not free time. The
+     old code dropped freeBusy's per-calendar errors, so a calendar the user
+     lacks permission on was silently reported as clear — and the assistant
+     would happily offer a slot the user is already booked in. */
+  it('does NOT call the range clear when a calendar could not be read', async () => {
+    stubFetch({
+      calendars: {
+        primary: { busy: [] },
+        'team@x.test': { errors: [{ domain: 'global', reason: 'notFound' }] },
+      },
+    })
+
+    const result = await getTool('calendar_freebusy')!.execute(
+      { timeMin: '2026-07-30T00:00:00Z', timeMax: '2026-07-31T00:00:00Z' },
+      ctx(),
+    )
+
+    expect(result.note).not.toBe('NO_RESULTS')
+    expect(result.summary).not.toContain('the calendar is clear')
+    expect(result.summary).toContain('could not be read')
+    expect(result.summary).toContain('team@x.test')
+    // The caveat travels WITH the data, where the model reasons over it.
+    const payload = JSON.parse(result.fenced.split('\n')[1])
+    expect(payload.unreadableCalendars).toEqual(['team@x.test (notFound)'])
+    expect(payload.caveat).toContain('UNKNOWN — not free')
+  })
+
+  it('carries unreadable calendars alongside real busy blocks too', async () => {
+    stubFetch({
+      calendars: {
+        primary: { busy: [{ start: '2026-07-30T15:00:00Z', end: '2026-07-30T16:00:00Z' }] },
+        'team@x.test': { errors: [{ reason: 'forbidden' }] },
+      },
+    })
+
+    const result = await getTool('calendar_freebusy')!.execute(
+      { timeMin: '2026-07-30T00:00:00Z', timeMax: '2026-07-31T00:00:00Z' },
+      ctx(),
+    )
+
+    expect(result.summary).toContain('1 calendar(s) unreadable')
+    const payload = JSON.parse(result.fenced.split('\n')[1])
+    expect(payload.busy).toHaveLength(1)
+    expect(payload.unreadableCalendars).toEqual(['team@x.test (forbidden)'])
+  })
+
+  it('stays silent about unreadable calendars when every calendar read fine', async () => {
+    stubFetch({
+      calendars: { primary: { busy: [{ start: '2026-07-30T15:00:00Z', end: '2026-07-30T16:00:00Z' }] } },
+    })
+    const result = await getTool('calendar_freebusy')!.execute(
+      { timeMin: '2026-07-30T00:00:00Z', timeMax: '2026-07-31T00:00:00Z' },
+      ctx(),
+    )
+    expect(result.summary).not.toContain('unreadable')
+    expect(result.fenced).not.toContain('unreadableCalendars')
+  })
 })
 
 describe('list_file_access', () => {
