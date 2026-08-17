@@ -48,8 +48,16 @@ function verifyCronSecret(header: string | null, secret: string): boolean {
   }
 }
 
-/** GA4 headline metrics for a digest. Kept small — quota is per property. */
-const DIGEST_METRICS = ['sessions', 'totalUsers', 'screenPageViews', 'conversions']
+/**
+ * GA4 headline metrics for a digest. Kept small — quota is per property.
+ *
+ * `keyEvents`, not `conversions`: Google renamed that metric in the Data API,
+ * and the old name is not merely ignored — it fails the whole request, so a
+ * single stale name took the ENTIRE traffic section out of every scheduled
+ * digest while the report still published looking complete. Same rename the
+ * chat path repairs via GA4_METRIC_ALIASES (lib/google/analytics.ts).
+ */
+const DIGEST_METRICS = ['sessions', 'totalUsers', 'screenPageViews', 'keyEvents']
 
 interface RunSummary {
   reportId: string
@@ -121,23 +129,36 @@ export async function POST(req: NextRequest) {
         // still produce a digest with the traffic half in it.
         const [ga4, ga4Previous, gsc, gscTopPages] = await Promise.all([
           prefs.ga4PropertyId
-            ? runGA4Report(token.accessToken, {
-                propertyId: prefs.ga4PropertyId,
-                startDate: window.startDate,
-                endDate: window.endDate,
-                metrics: DIGEST_METRICS,
-              }).catch(err => {
+            ? runGA4Report(
+                token.accessToken,
+                {
+                  propertyId: prefs.ga4PropertyId,
+                  startDate: window.startDate,
+                  endDate: window.endDate,
+                  metrics: DIGEST_METRICS,
+                },
+                // Repair rather than reject. Nobody is watching at 7am, and the
+                // strict path turns one metric a property happens not to expose
+                // into a digest with no traffic section at all. Dropping that
+                // metric and publishing the rest is the better failure — and it
+                // is disclosed in the notes below, never silent.
+                { repair: true },
+              ).catch(err => {
                 notes.push(`Google Analytics data unavailable: ${err instanceof Error ? err.message : 'error'}`)
                 return undefined
               })
             : Promise.resolve(undefined),
           prefs.ga4PropertyId
-            ? runGA4Report(token.accessToken, {
-                propertyId: prefs.ga4PropertyId,
-                startDate: previousStart(window.startDate, window.endDate),
-                endDate: previousEnd(window.startDate),
-                metrics: DIGEST_METRICS,
-              }).catch(() => undefined)
+            ? runGA4Report(
+                token.accessToken,
+                {
+                  propertyId: prefs.ga4PropertyId,
+                  startDate: previousStart(window.startDate, window.endDate),
+                  endDate: previousEnd(window.startDate),
+                  metrics: DIGEST_METRICS,
+                },
+                { repair: true },
+              ).catch(() => undefined)
             : Promise.resolve(undefined),
           prefs.gscSiteUrl
             ? querySearchConsole(token.accessToken, {
@@ -162,6 +183,16 @@ export async function POST(req: NextRequest) {
 
         if (!prefs.ga4PropertyId) notes.push('No Google Analytics property is configured.')
         if (!prefs.gscSiteUrl) notes.push('No Search Console site is configured.')
+
+        // A repaired report is still a partial one. Say which metrics this
+        // property could not answer, so a shorter traffic table reads as
+        // "unavailable here" rather than as "we measured zero".
+        const dropped = ga4?.repairs?.droppedMetrics ?? []
+        if (dropped.length) {
+          notes.push(
+            `Google Analytics metrics unavailable on this property and omitted: ${dropped.join(', ')}.`,
+          )
+        }
 
         // `kind` decides the artifact type. It was previously ignored, so a
         // report configured as a review DECK silently produced another digest
