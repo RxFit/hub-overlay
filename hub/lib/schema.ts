@@ -473,3 +473,66 @@ export const webhookChannels = pgTable(
     tenantKindUniq: uniqueIndex('webhook_channels_tenant_kind_uniq').on(t.tenantId, t.kind),
   })
 )
+
+/* ── Desktop dispatch (Phase 2.5) ────────────────────────────────────────── */
+/**
+ * The allotment job queue. Cloud Run cannot spend the agy allotment itself
+ * (Google refuses consumer-OAuth refresh from datacenter IPs — see
+ * docs/architecture/DESKTOP_DISPATCH_2026-08-15.md), so the Hub enqueues work
+ * here and the desktop worker long-polls it outbound over /api/worker/*.
+ *
+ * payload_text / result_text are CONTENT and deliberately transient: both are
+ * nulled in the same UPDATE that delivers or terminates the job, with
+ * prompt_chars + prompt_sha256 (the ai_runs fingerprint convention) surviving
+ * as provenance. ai_runs remains the only long-lived record of a run.
+ */
+export const dispatchJobs = pgTable(
+  'dispatch_jobs',
+  {
+    id:                uuid('id').primaryKey().defaultRandom(),
+    createdAt:         timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt:         timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+    kind:              text('kind').notNull(),                      // 'chat_turn' | 'work_item' (open union)
+    priority:          integer('priority').default(100).notNull(),  // chat_turn=0; claim orders priority ASC
+    state:             text('state').default('queued').notNull(),   // queued|leased|succeeded|failed|cancelled|expired
+    attempt:           integer('attempt').default(0).notNull(),
+    maxAttempts:       integer('max_attempts').default(1).notNull(),// chat_turn:1 (at-most-once), work_item:3
+    deadlineAt:        timestamp('deadline_at', { withTimezone: true }).notNull(),
+    payloadText:       text('payload_text'),                        // the prompt — transient content
+    payloadMeta:       jsonb('payload_meta').$type<Record<string, unknown>>(),
+    promptChars:       integer('prompt_chars'),
+    promptSha256:      text('prompt_sha256'),
+    leasedBy:          text('leased_by'),
+    leasedAt:          timestamp('leased_at', { withTimezone: true }),
+    leaseExpiresAt:    timestamp('lease_expires_at', { withTimezone: true }),
+    cancelRequestedAt: timestamp('cancel_requested_at', { withTimezone: true }),
+    resultText:        text('result_text'),                         // transient content
+    resultMeta:        jsonb('result_meta').$type<Record<string, unknown>>(),
+    errorClass:        text('error_class'),                         // AgyErrorType + dispatch classes
+    error:             text('error'),                               // single-line, truncated
+    latencyMs:         integer('latency_ms'),
+    finishedAt:        timestamp('finished_at', { withTimezone: true }),
+    deliveredAt:       timestamp('delivered_at', { withTimezone: true }),
+    scrubbedAt:        timestamp('scrubbed_at', { withTimezone: true }),
+    requestId:         text('request_id'),
+  },
+  (t) => ({
+    claimIdx:   index('dispatch_jobs_claim_idx').on(t.state, t.priority, t.createdAt),
+    createdIdx: index('dispatch_jobs_created_idx').on(t.createdAt.desc()),
+  }),
+)
+
+/**
+ * One row per worker machine (webhook_channels-style upsert registry).
+ * last_seen_at is touched by every /api/worker/claim call, making a dead
+ * worker detectable in one indexed read — the ~5ms liveness gate that keeps a
+ * chat turn from ever waiting on a machine that isn't there.
+ */
+export const dispatchWorkers = pgTable('dispatch_workers', {
+  id:          text('id').primaryKey(),                             // e.g. 'danny-desktop'
+  firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).defaultNow().notNull(),
+  lastSeenAt:  timestamp('last_seen_at', { withTimezone: true }).defaultNow().notNull(),
+  version:     text('version'),                                     // worker git SHA (drift vs Hub GIT_SHA)
+  agyVersion:  text('agy_version'),
+  meta:        jsonb('meta').$type<Record<string, unknown>>(),
+})

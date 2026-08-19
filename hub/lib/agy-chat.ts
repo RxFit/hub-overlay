@@ -11,6 +11,11 @@ import {
   truncateAgyError,
   warmAgyBinary,
 } from './agy'
+import { dispatchGenerateText, isDispatchConfigured, isDispatchEnabled } from './agy-dispatch'
+
+/** Dispatch-layer availability failures — cheap to detect per turn, so they
+ *  fall through without cooling the allotment path (unlike run failures). */
+const DISPATCH_AVAILABILITY_CLASSES = new Set(['no_worker', 'queue_full', 'claim_timeout', 'lease_expired'])
 
 /**
  * lib/agy-chat.ts — Phase 2 of the agy execution gateway: chat traffic on the
@@ -76,7 +81,11 @@ export function __resetAgyChatCooldownForTest(): void {
 /** Operator opt-in: AGY_CHAT_ENABLED=true (or 1) AND a credential present. */
 export function isAgyChatEnabled(): boolean {
   const flag = process.env.AGY_CHAT_ENABLED
-  return (flag === 'true' || flag === '1') && isAgyConfigured()
+  if (flag !== 'true' && flag !== '1') return false
+  // The "configured" check follows the transport: local execution needs the
+  // OAuth token on this machine; desktop dispatch (Phase 2.5) needs only the
+  // worker credential — the token stays on the desktop, which is the point.
+  return isDispatchEnabled() ? isDispatchConfigured() : isAgyConfigured()
 }
 
 /**
@@ -147,7 +156,9 @@ export async function* tryAgyChat(
   if (signal?.aborted) return 'served'
 
   // Cold instance: provision in the background, serve this turn from Gemini.
-  if (!isAgyBinaryReady()) {
+  // Dispatch mode skips this entirely — the desktop runs the binary, and
+  // warming a ~206MB binary Cloud Run will never execute is pure waste.
+  if (!isDispatchEnabled() && !isAgyBinaryReady()) {
     warmAgyBinary()
     console.info('[agy-chat] binary not provisioned yet — warming in background, serving from the metered chain')
     return 'fallthrough'
@@ -162,13 +173,23 @@ export async function* tryAgyChat(
   const prompt = buildAgyPrompt(messages, sysText(systemPrompt))
   const started = Date.now()
   try {
-    const result = await agyGenerateText(prompt, {
-      timeoutMs: agyChatTimeoutMs(),
-    })
+    // The Phase 2.5 transport switch: same AgyResult shape, same typed-error
+    // contract, so everything below (ledger, cooldown tiers, fallback) is
+    // transport-agnostic.
+    const result = isDispatchEnabled()
+      ? await dispatchGenerateText(prompt, {
+          budgetMs: agyChatTimeoutMs(),
+          requestId: obs.requestId,
+          signal,
+        })
+      : await agyGenerateText(prompt, {
+          timeoutMs: agyChatTimeoutMs(),
+        })
     // Ledger write is fire-and-forget: recordAiRun is internally best-effort
     // and must not add latency between the answer arriving and it reaching
     // the wire. Recorded even when the client aborted below — the allotment
     // was spent either way, and the ledger's job is to say so.
+    const dispatchRaw = result.raw as { dispatch?: boolean; jobId?: string; workerId?: string } | null
     void recordAiRun({
       engine: 'agy',
       model: result.model,
@@ -178,6 +199,9 @@ export async function* tryAgyChat(
       prompt,
       usage: result.usage,
       requestId: obs.requestId,
+      meta: dispatchRaw?.dispatch
+        ? { dispatch: true, jobId: dispatchRaw.jobId, workerId: dispatchRaw.workerId }
+        : undefined,
     })
     // Client gave up while the run was in flight: stop quietly (terminal), the
     // same contract as the Claude/Gemini abort paths — nothing is restarted.
@@ -197,10 +221,17 @@ export async function* tryAgyChat(
       requestId: obs.requestId,
     })
     if (signal?.aborted) return 'served'
+    // Dispatch AVAILABILITY classes never cool down: their detection is
+    // already cheap and self-limiting (~5ms liveness gate, ≤5s claim window,
+    // fail-fast lease check), and cooling would blind the Hub to the worker's
+    // return for 5 minutes for no saving — the design forbids exactly that
+    // (DESKTOP_DISPATCH §5, failure row 1: "no cooldown to wait out").
     // A dead token can't heal in minutes; not_configured means the env var
     // vanished — both get the long auth tier. Everything else (timeout,
     // empty, parse, install, spawn) is the 5-min real-failure tier.
-    recordAgyChatFailure(type === 'auth' || type === 'not_configured')
+    if (!DISPATCH_AVAILABILITY_CLASSES.has(type)) {
+      recordAgyChatFailure(type === 'auth' || type === 'not_configured')
+    }
     emit({
       type: 'ai_fallback',
       requestId: obs.requestId,

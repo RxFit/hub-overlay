@@ -106,6 +106,9 @@ jobs:
           ENV_VARS="$ENV_VARS,USER_DISPLAY_NAME_OVERRIDES=caroljean37@gmail.com:Carol-Jean"
           ENV_VARS="$ENV_VARS,VERTEX_ENGINE_ID=semanticbrain_1779229063037"
           ENV_VARS="$ENV_VARS,VERTEX_GCP_PROJECT=semantic-brain-desktop"
+          # Deployed commit, echoed by /api/worker/claim so the desktop worker
+          # can detect version drift (dispatch-health shows the SHA pair).
+          ENV_VARS="$ENV_VARS,GIT_SHA=$GITHUB_SHA"
 
           # --add-cloudsql-instances pins the documented DB attachment
           # (service.yaml / scripts/gcp-migrate-hub.ps1) on EVERY deploy.
