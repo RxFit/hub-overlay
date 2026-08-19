@@ -68,8 +68,14 @@ export async function POST(req: NextRequest) {
   }
   const waitMs = Math.min(Math.max(Number(body.waitMs) || 0, 0), MAX_WAIT_MS)
 
+  // Version strings are git SHAs / semvers; the row has no scrub or TTL and
+  // is echoed to dispatch-health, so bound what an authenticated caller can
+  // park there.
+  const version = typeof body.version === 'string' ? body.version.slice(0, 64) : undefined
+  const agyVersion = typeof body.agyVersion === 'string' ? body.agyVersion.slice(0, 64) : undefined
+
   try {
-    await upsertWorker(workerId, { version: body.version, agyVersion: body.agyVersion })
+    await upsertWorker(workerId, { version, agyVersion })
     await reapExpired()
 
     const deadline = Date.now() + waitMs

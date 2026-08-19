@@ -158,4 +158,52 @@ describe('POST /api/worker/jobs/[id]/result', () => {
     const res = await resultPost(request('/api/worker/jobs/j1/result', { workerId: 'w1' }), { params: { id: 'j1' } })
     expect(res.status).toBe(400)
   })
+
+  it('400s status:ok without non-empty text — empty output is never success, even at the wire', async () => {
+    const res = await resultPost(
+      request('/api/worker/jobs/j1/result', { workerId: 'w1', attempt: 1, status: 'ok', text: '   ' }),
+      { params: { id: 'j1' } },
+    )
+    expect(res.status).toBe(400)
+    expect(store.postResult).not.toHaveBeenCalled()
+  })
+
+  it('413s an oversized body via content-length before parsing', async () => {
+    const req = new NextRequest('http://localhost:3000/api/worker/jobs/j1/result', {
+      method: 'POST',
+      body: '{}',
+      headers: { 'x-worker-secret': SECRET, 'content-length': String(5_000_000) },
+    })
+    const res = await resultPost(req, { params: { id: 'j1' } })
+    expect(res.status).toBe(413)
+  })
+
+  it('flattens and truncates worker-supplied error to the ≤300-char column contract', async () => {
+    store.postResult.mockResolvedValue({ outcome: 'recorded', prompt: 'p', requestId: 'r1' })
+    await resultPost(
+      request('/api/worker/jobs/j1/result', {
+        workerId: 'w1',
+        attempt: 1,
+        status: 'error',
+        errorClass: 'unknown',
+        error: `line1\nline2   line3${'x'.repeat(500)}`,
+      }),
+      { params: { id: 'j1' } },
+    )
+    const stored = store.postResult.mock.calls[0][1].error as string
+    expect(stored).not.toContain('\n')
+    expect(stored.length).toBeLessThanOrEqual(301)
+  })
+
+  it('reduces worker-supplied usage to the four numeric counters — no content smuggling into result_meta', async () => {
+    store.postResult.mockResolvedValue({ outcome: 'recorded', prompt: 'p', requestId: 'r1' })
+    await resultPost(
+      request('/api/worker/jobs/j1/result', {
+        ...base,
+        usage: { inputTokens: 120.6, echo: 'smuggled prompt text', nested: { deep: true }, outputTokens: 'NaN' },
+      }),
+      { params: { id: 'j1' } },
+    )
+    expect(store.postResult.mock.calls[0][1].usage).toEqual({ inputTokens: 121 })
+  })
 })

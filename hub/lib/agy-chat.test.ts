@@ -432,3 +432,35 @@ describe('Phase 2.5 — dispatch transport (desktop worker)', () => {
     expect(okRow?.meta).toEqual({ dispatch: true, jobId: 'j7', workerId: 'danny-desktop' })
   })
 })
+
+describe('Phase 2.5 — dispatch availability failures never cool the allotment path', () => {
+  it('no_worker: the very next turn still attempts dispatch (no 5-min blackout)', async () => {
+    process.env.AGY_CHAT_ENABLED = 'true'
+    hoisted.dispatchEnabled = true
+    hoisted.dispatchBehavior = () =>
+      Promise.reject(Object.assign(new Error('no worker'), { agyError: { type: 'no_worker', message: 'no worker' } }))
+    hoisted.geminiBehavior = () => geminiStream(['metered'])
+
+    await collect(streamChat(MESSAGES, 'sys', 'recall'))
+    expect(hoisted.dispatchCalls).toHaveLength(1)
+    // Worker restarts seconds later; the design's ~5ms gate must run again.
+    hoisted.dispatchBehavior = () => Promise.resolve({ text: 'back online' })
+    const second = await collect(streamChat(MESSAGES, 'sys', 'recall'))
+    expect(second.text).toBe('back online')
+    expect(hoisted.dispatchCalls).toHaveLength(2)
+  })
+
+  it('a genuine run failure (timeout) still cools for 5 minutes', async () => {
+    process.env.AGY_CHAT_ENABLED = 'true'
+    hoisted.dispatchEnabled = true
+    hoisted.dispatchBehavior = () =>
+      Promise.reject(Object.assign(new Error('slow'), { agyError: { type: 'timeout', message: 'slow' } }))
+    hoisted.geminiBehavior = () => geminiStream(['metered'])
+
+    await collect(streamChat(MESSAGES, 'sys', 'recall'))
+    expect(hoisted.dispatchCalls).toHaveLength(1)
+    const second = await collect(streamChat(MESSAGES, 'sys', 'recall'))
+    expect(second.text).toBe('metered')
+    expect(hoisted.dispatchCalls).toHaveLength(1) // cooled — not attempted
+  })
+})

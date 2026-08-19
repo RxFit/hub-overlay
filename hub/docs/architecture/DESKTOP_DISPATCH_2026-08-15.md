@@ -376,6 +376,10 @@ return for 5 minutes for no saving.
 - **`/api/admin/dispatch-health`**: cheap by default, `?probe=1` to spend and verify.
 - **Telemetry:** new `dispatch_enqueued | dispatch_claimed | dispatch_result |
   dispatch_cancelled | dispatch_expired` events on the existing `emit` seam.
+  **Deliberately deferred to PR 2** (the worker PR): the events only carry
+  signal once a worker exists to claim jobs, and they must land before rollout
+  step 4's 48-hour watch, which reads them. Until then, dispatch visibility is
+  `ai_runs.error_class` plus dispatch-health.
 
 ---
 
@@ -415,8 +419,9 @@ Each step independently verifiable; real non-draft PRs per CLAUDE.md.
    change**. Verify: CI green; tables exist; `/api/worker/claim` returns 503;
    dispatch-health shows "no workers".
 2. **PR 2 — worker runtime.** `dispatch-worker.ts`, `scripts/agy-worker/`,
-   runbook. Verify: set the secret both sides, start the worker, dispatch-health
-   goes green with a version pair.
+   runbook, and the `dispatch_*` telemetry events (§6 — they must exist before
+   step 4's watch). Verify: set the secret both sides, start the worker,
+   dispatch-health goes green with a version pair.
 3. **Probe end-to-end, still dark to users:** `dispatch-health?probe=1` round-trips
    a marker job on the residential IP.
 4. **Flip `AGY_DISPATCH_ENABLED=true`.** Verify: live turn shows the Antigravity

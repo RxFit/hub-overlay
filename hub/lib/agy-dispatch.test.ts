@@ -20,7 +20,10 @@ const store = vi.hoisted(() => ({
   cancelJob: vi.fn(),
 }))
 
+const ledger = vi.hoisted(() => ({ recordAiRun: vi.fn().mockResolvedValue(undefined) }))
+
 vi.mock('@/lib/dispatch-store', () => store)
+vi.mock('@/lib/runs', () => ledger)
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
 }))
@@ -38,6 +41,7 @@ beforeEach(() => {
   store.getJobView.mockReset()
   store.deliverResult.mockReset()
   store.cancelJob.mockReset().mockResolvedValue(undefined)
+  ledger.recordAiRun.mockClear()
 })
 
 describe('flag probes', () => {
@@ -146,14 +150,17 @@ describe('dispatchGenerateText — the never-stall ladder', () => {
     expect(store.cancelJob).toHaveBeenCalledWith('job-1')
   })
 
-  it('a pre-aborted signal throws abort and cancels without polling', async () => {
+  it('a pre-aborted signal throws abort, cancels, and delivers nothing', async () => {
     const controller = new AbortController()
     controller.abort()
     await expect(
       dispatchGenerateText('p', { budgetMs: 10_000, signal: controller.signal }),
     ).rejects.toSatisfy((e: unknown) => agyErrorType(e) === 'abort')
     expect(store.cancelJob).toHaveBeenCalledWith('job-1')
-    expect(store.getJobView).not.toHaveBeenCalled()
+    // settleAbandoned may peek at the row (the give-up race fix), but with no
+    // succeeded result there is nothing to deliver or ledger.
+    expect(store.deliverResult).not.toHaveBeenCalled()
+    expect(ledger.recordAiRun).not.toHaveBeenCalled()
   })
 
   it('wraps a mid-wait store failure as no_worker and cancels', async () => {
@@ -162,5 +169,40 @@ describe('dispatchGenerateText — the never-stall ladder', () => {
       (e: unknown) => agyErrorType(e) === 'no_worker',
     )
     expect(store.cancelJob).toHaveBeenCalledWith('job-1')
+  })
+
+  it('empty delivered text is never success — throws the Phase 0 empty class', async () => {
+    store.getJobView.mockResolvedValue({ state: 'succeeded', leaseExpiresAt: null, errorClass: null, error: null })
+    store.deliverResult.mockResolvedValue({ text: '   ', resultMeta: {} })
+    await expect(dispatchGenerateText('p', { budgetMs: 10_000 })).rejects.toSatisfy(
+      (e: unknown) => agyErrorType(e) === 'empty',
+    )
+  })
+
+  it('give-up race: a result that won the CAS during the last sleep is ledgered as discarded spend', async () => {
+    // The row reads as leased (valid lease) until the budget check fires and
+    // cancels; settleAbandoned's re-read after that sees the worker won.
+    store.getJobView.mockImplementation(async () =>
+      store.cancelJob.mock.calls.length > 0
+        ? { state: 'succeeded', leaseExpiresAt: null, errorClass: null, error: null }
+        : { state: 'leased', leaseExpiresAt: new Date(Date.now() + 60_000), errorClass: null, error: null },
+    )
+    store.deliverResult.mockResolvedValue({
+      text: 'raced in',
+      resultMeta: { model: 'm', workerId: 'danny-desktop', latencyMs: 800 },
+    })
+    await expect(dispatchGenerateText('p', { budgetMs: 600, requestId: 'req-1' })).rejects.toSatisfy(
+      (e: unknown) => agyErrorType(e) === 'timeout',
+    )
+    await vi.waitFor(() => {
+      expect(ledger.recordAiRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          engine: 'agy',
+          status: 'ok',
+          requestId: 'req-1',
+          meta: expect.objectContaining({ dispatch: true, discarded: true, raceWin: true }),
+        }),
+      )
+    })
   })
 })

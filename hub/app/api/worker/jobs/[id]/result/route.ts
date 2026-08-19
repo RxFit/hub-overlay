@@ -36,6 +36,32 @@ interface ResultBody {
   latencyMs?: number
 }
 
+// A chat answer is KBs, not MBs. Reject early on content-length, cap stored
+// text defensively, and hold worker-supplied error text to the ≤300-char
+// single-line column contract (truncateAgyError convention).
+const MAX_BODY_BYTES = 2_000_000
+const MAX_TEXT_CHARS = 262_144
+
+function flattenError(s: string): string {
+  const flat = s.replace(/\s+/g, ' ').trim()
+  return flat.length > 300 ? `${flat.slice(0, 300)}…` : flat
+}
+
+/** Worker-supplied usage is reduced to the four known numeric counters —
+ *  result_meta outlives the content scrub, so it must never carry free-form
+ *  JSON (a content-smuggling channel past the transient-content contract). */
+function sanitizeUsage(usage: unknown): Record<string, number> | undefined {
+  if (typeof usage !== 'object' || usage === null) return undefined
+  const u = usage as Record<string, unknown>
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : undefined)
+  const out: Record<string, number> = {}
+  for (const key of ['inputTokens', 'outputTokens', 'cacheReadTokens', 'totalTokens'] as const) {
+    const v = num(u[key])
+    if (v !== undefined) out[key] = v
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const secret = process.env.AGY_WORKER_SECRET
   if (!secret) {
@@ -43,6 +69,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
   if (!verifyCronSecret(req.headers.get('x-worker-secret'), secret)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const contentLength = Number(req.headers.get('content-length'))
+  if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) {
+    return NextResponse.json({ error: 'body too large' }, { status: 413 })
   }
 
   let body: ResultBody
@@ -58,17 +89,22 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   ) {
     return NextResponse.json({ error: 'workerId, attempt, and status required' }, { status: 400 })
   }
+  if (body.status === 'ok' && (typeof body.text !== 'string' || body.text.trim() === '')) {
+    // Phase 0 doctrine holds at the wire too: empty output is never success.
+    return NextResponse.json({ error: 'status ok requires non-empty text' }, { status: 400 })
+  }
 
+  const usage = sanitizeUsage(body.usage)
   try {
     const outcome = await postResult(params.id, {
       status: body.status,
-      text: typeof body.text === 'string' ? body.text : undefined,
-      model: typeof body.model === 'string' ? body.model : undefined,
-      usage: body.usage,
+      text: typeof body.text === 'string' ? body.text.slice(0, MAX_TEXT_CHARS) : undefined,
+      model: typeof body.model === 'string' ? body.model.slice(0, 100) : undefined,
+      usage,
       errorClass: typeof body.errorClass === 'string' ? body.errorClass.slice(0, 60) : undefined,
-      error: typeof body.error === 'string' ? body.error : undefined,
+      error: typeof body.error === 'string' ? flattenError(body.error) : undefined,
       latencyMs: Number.isFinite(body.latencyMs) ? Math.round(body.latencyMs as number) : undefined,
-      workerId: body.workerId,
+      workerId: body.workerId.slice(0, 100),
       attempt: body.attempt as number,
     })
 
@@ -80,15 +116,21 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       // ledger's job is to say so. Best-effort by recordAiRun's own contract.
       void recordAiRun({
         engine: 'agy',
-        model: body.model,
+        model: typeof body.model === 'string' ? body.model.slice(0, 100) : undefined,
         source: 'chat',
         status: body.status === 'ok' ? 'ok' : 'error',
-        errorClass: body.status === 'error' ? (body.errorClass ?? 'unknown') : undefined,
+        errorClass: body.status === 'error' ? (body.errorClass ?? 'unknown').slice(0, 60) : undefined,
         latencyMs: body.latencyMs && Number.isFinite(body.latencyMs) ? Math.round(body.latencyMs) : 0,
         prompt: 'prompt' in outcome ? outcome.prompt : undefined,
-        usage: body.usage as { inputTokens?: number } | undefined,
+        usage,
         requestId: 'requestId' in outcome ? outcome.requestId : undefined,
-        meta: { dispatch: true, discarded: true, jobId: params.id, workerId: body.workerId, outcome: outcome.outcome },
+        meta: {
+          dispatch: true,
+          discarded: true,
+          jobId: params.id,
+          workerId: body.workerId.slice(0, 100),
+          outcome: outcome.outcome,
+        },
       })
     }
     return NextResponse.json({ outcome: outcome.outcome })

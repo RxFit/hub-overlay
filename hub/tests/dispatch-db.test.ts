@@ -188,6 +188,41 @@ describeDb('dispatch store (Postgres)', () => {
     expect(await workerFresh(45_000)).toBe(false)
   })
 
+  it('SKIP LOCKED under real contention: a row locked by another transaction is skipped, not blocked on', async () => {
+    await enqueueJob({ kind: 'chat_turn', prompt: 'p', deadlineMs: 45_000 })
+    const sql = getSql()
+    // Hold the only queued row under FOR UPDATE in a second connection's open
+    // transaction — a concurrent claim must return null promptly (SKIP LOCKED)
+    // instead of blocking until the lock releases or double-leasing.
+    await sql.begin(async (tx) => {
+      const locked = await tx`SELECT id FROM dispatch_jobs WHERE state = 'queued' FOR UPDATE`
+      expect(locked).toHaveLength(1)
+      const start = Date.now()
+      const claimed = await claimNext('w1', ['chat_turn'])
+      expect(claimed).toBeNull()
+      expect(Date.now() - start).toBeLessThan(2_000) // skipped, not waited out
+    })
+    // Lock released — the claim now succeeds.
+    const after = await claimNext('w1', ['chat_turn'])
+    expect(after?.payloadText).toBe('p')
+  })
+
+  it('a cancelled-then-lapsed work_item goes terminal cancelled — never requeued with a stale flag', async () => {
+    const out = await enqueueJob({ kind: 'work_item', prompt: 'p', deadlineMs: 600_000 })
+    const id = (out as { id: string }).id
+    await claimNext('w1', ['work_item'])
+    await cancelJob(id) // leased ⇒ cancel_requested_at set
+    const sql = getSql()
+    await sql`UPDATE dispatch_jobs SET lease_expires_at = now() - interval '1 second' WHERE id = ${id}`
+    await reapExpired()
+    const view = await getJobView(id)
+    expect(view?.state).toBe('cancelled')
+    expect(await claimNext('w2', ['work_item'])).toBeNull()
+    const [row] = await sql`SELECT payload_text, scrubbed_at FROM dispatch_jobs WHERE id = ${id}`
+    expect(row.payload_text).toBeNull()
+    expect(row.scrubbed_at).not.toBeNull()
+  })
+
   it('unclaimed jobs past their deadline expire on reap and are never handed out', async () => {
     const out = await enqueueJob({ kind: 'chat_turn', prompt: 'p', deadlineMs: 45_000 })
     const id = (out as { id: string }).id

@@ -33,7 +33,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   try {
-    const outcome = await heartbeatJob(params.id, body.workerId, body.attempt as number)
+    const outcome = await heartbeatJob(params.id, body.workerId.slice(0, 100), body.attempt as number)
     return NextResponse.json(outcome)
   } catch (err) {
     if (isMissingTableError(err)) {

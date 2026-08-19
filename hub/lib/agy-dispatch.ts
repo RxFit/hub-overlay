@@ -7,6 +7,7 @@ import {
   workerFresh,
 } from '@/lib/dispatch-store'
 import { createLogger } from '@/lib/logger'
+import { recordAiRun } from '@/lib/runs'
 
 /**
  * lib/agy-dispatch.ts — Hub-side desktop dispatch (Phase 2.5).
@@ -58,6 +59,32 @@ function dispatchError(type: string, message: string): Error {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * Close the give-up race honestly: the worker may have won the result CAS in
+ * the instant between our last poll and the abort/budget check, in which case
+ * its 'recorded' outcome wrote no ledger row (it assumed we were waiting).
+ * One final look; if the job actually succeeded, deliver (scrubs content) and
+ * ledger the spend as discarded — §2.4's "who pays: both" accounting.
+ * Best-effort and fire-and-forget, like every ledger write.
+ */
+async function settleAbandoned(jobId: string, requestId?: string): Promise<void> {
+  const view = await getJobView(jobId)
+  if (view?.state !== 'succeeded') return
+  const delivered = await deliverResult(jobId)
+  if (!delivered) return // another reader (or the sweep) already settled it
+  const meta = (delivered.resultMeta ?? {}) as WorkerResultMeta
+  await recordAiRun({
+    engine: 'agy',
+    model: meta.model,
+    source: 'chat',
+    status: 'ok',
+    latencyMs: meta.latencyMs ?? 0,
+    usage: meta.usage,
+    requestId,
+    meta: { dispatch: true, discarded: true, jobId, workerId: meta.workerId, raceWin: true },
+  })
 }
 
 export interface DispatchOptions {
@@ -119,11 +146,13 @@ export async function dispatchGenerateText(prompt: string, opts: DispatchOptions
     for (;;) {
       if (opts.signal?.aborted) {
         void cancelJob(jobId).catch(() => {})
+        void settleAbandoned(jobId, opts.requestId).catch(() => {})
         throw dispatchError('abort', 'client aborted while dispatch was in flight')
       }
       const elapsed = Date.now() - started
       if (elapsed >= opts.budgetMs) {
         void cancelJob(jobId).catch(() => {})
+        void settleAbandoned(jobId, opts.requestId).catch(() => {})
         throw dispatchError('timeout', `dispatch budget (${opts.budgetMs}ms) exhausted`)
       }
 
@@ -145,6 +174,10 @@ export async function dispatchGenerateText(prompt: string, opts: DispatchOptions
         const delivered = await deliverResult(jobId)
         if (!delivered) {
           throw dispatchError('unknown', 'job succeeded but its result was not deliverable (already read or scrubbed)')
+        }
+        if (delivered.text.trim() === '') {
+          // Phase 0 doctrine, transport-independent: empty is NEVER success.
+          throw dispatchError('empty', 'worker posted ok with empty text — empty output is never success')
         }
         const meta = (delivered.resultMeta ?? {}) as WorkerResultMeta
         return {
