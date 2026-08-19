@@ -23,6 +23,10 @@ const hoisted = vi.hoisted(() => ({
   agyBinaryReady: true,
   warmCalls: 0,
   runCalls: [] as Record<string, unknown>[],
+  dispatchEnabled: false,
+  dispatchConfigured: true,
+  dispatchBehavior: null as null | ((prompt: string) => Promise<{ text: string; raw?: unknown }>),
+  dispatchCalls: [] as { prompt: string; budgetMs?: number }[],
 }))
 
 // The runs ledger is stubbed at the same seam agy-chat consumes it: capture
@@ -46,6 +50,17 @@ vi.mock('@/lib/agy', () => ({
     hoisted.agyCalls.push({ prompt, timeoutMs: opts?.timeoutMs })
     if (!hoisted.agyBehavior) throw new Error('agyBehavior not set')
     return hoisted.agyBehavior(prompt)
+  },
+}))
+
+// Phase 2.5: the dispatch transport, stubbed at the seam agy-chat consumes it.
+vi.mock('@/lib/agy-dispatch', () => ({
+  isDispatchEnabled: () => hoisted.dispatchEnabled,
+  isDispatchConfigured: () => hoisted.dispatchConfigured,
+  dispatchGenerateText: (prompt: string, opts?: { budgetMs?: number }) => {
+    hoisted.dispatchCalls.push({ prompt, budgetMs: opts?.budgetMs })
+    if (!hoisted.dispatchBehavior) throw new Error('dispatchBehavior not set')
+    return hoisted.dispatchBehavior(prompt)
   },
 }))
 
@@ -125,6 +140,10 @@ beforeEach(() => {
   hoisted.agyBinaryReady = true
   hoisted.warmCalls = 0
   hoisted.runCalls.length = 0
+  hoisted.dispatchEnabled = false
+  hoisted.dispatchConfigured = true
+  hoisted.dispatchBehavior = null
+  hoisted.dispatchCalls.length = 0
   process.env.GEMINI_API_KEY = 'test-key'
   delete process.env.AGY_CHAT_ENABLED
   delete process.env.AGY_CHAT_TIMEOUT_MS
@@ -336,5 +355,80 @@ describe('EXA mode exclusion', () => {
     expect(models).toEqual(['Claude Fable 5'])
     expect(hoisted.agyCalls).toHaveLength(0)
     expect(hoisted.warmCalls).toBe(0)
+  })
+})
+
+describe('Phase 2.5 — dispatch transport (desktop worker)', () => {
+  it('routes the turn through dispatchGenerateText, never the local subprocess', async () => {
+    process.env.AGY_CHAT_ENABLED = 'true'
+    hoisted.dispatchEnabled = true
+    hoisted.dispatchBehavior = () =>
+      Promise.resolve({ text: 'desktop answer', raw: { dispatch: true, jobId: 'j1', workerId: 'danny-desktop' } })
+
+    const { text, models, error } = await collect(streamChat(MESSAGES, 'sys', 'recall'))
+    expect(error).toBeNull()
+    expect(text).toBe('desktop answer')
+    expect(models).toEqual(['Antigravity'])
+    expect(hoisted.dispatchCalls).toHaveLength(1)
+    expect(hoisted.dispatchCalls[0].budgetMs).toBe(45_000)
+    expect(hoisted.agyCalls).toHaveLength(0)
+  })
+
+  it('skips the binary gate — Cloud Run never warms a binary it will not run', async () => {
+    process.env.AGY_CHAT_ENABLED = 'true'
+    hoisted.dispatchEnabled = true
+    hoisted.agyBinaryReady = false // would fall through + warm in local mode
+    hoisted.dispatchBehavior = () => Promise.resolve({ text: 'ok' })
+
+    const { text } = await collect(streamChat(MESSAGES, 'sys', 'recall'))
+    expect(text).toBe('ok')
+    expect(hoisted.warmCalls).toBe(0)
+  })
+
+  it('is enabled without a local token — dispatch needs only the worker secret', async () => {
+    process.env.AGY_CHAT_ENABLED = 'true'
+    hoisted.dispatchEnabled = true
+    hoisted.agyConfigured = false // no AGY_OAUTH_TOKEN on this machine
+    hoisted.dispatchBehavior = () => Promise.resolve({ text: 'ok' })
+
+    const { text } = await collect(streamChat(MESSAGES, 'sys', 'recall'))
+    expect(text).toBe('ok')
+  })
+
+  it('stays dark when dispatch is on but the worker secret is missing', async () => {
+    process.env.AGY_CHAT_ENABLED = 'true'
+    hoisted.dispatchEnabled = true
+    hoisted.dispatchConfigured = false
+    hoisted.geminiBehavior = () => geminiStream(['gem'])
+
+    const { text } = await collect(streamChat(MESSAGES, 'sys', 'recall'))
+    expect(text).toBe('gem')
+    expect(hoisted.dispatchCalls).toHaveLength(0)
+  })
+
+  it('a dispatch failure falls through to Gemini with the wire untouched', async () => {
+    process.env.AGY_CHAT_ENABLED = 'true'
+    hoisted.dispatchEnabled = true
+    hoisted.dispatchBehavior = () =>
+      Promise.reject(Object.assign(new Error('no worker'), { agyError: { type: 'no_worker', message: 'no worker' } }))
+    hoisted.geminiBehavior = () => geminiStream(['metered answer'])
+
+    const { text, models, error } = await collect(streamChat(MESSAGES, 'sys', 'recall'))
+    expect(error).toBeNull()
+    expect(text).toBe('metered answer')
+    expect(models).toEqual(['Antigravity', 'Gemini 3.5 Flash'])
+    const errorRow = hoisted.runCalls.find((r) => r.status === 'error')
+    expect(errorRow?.errorClass).toBe('no_worker')
+  })
+
+  it('served dispatch turns ledger with the job attribution in meta', async () => {
+    process.env.AGY_CHAT_ENABLED = 'true'
+    hoisted.dispatchEnabled = true
+    hoisted.dispatchBehavior = () =>
+      Promise.resolve({ text: 'ok', raw: { dispatch: true, jobId: 'j7', workerId: 'danny-desktop' } })
+
+    await collect(streamChat(MESSAGES, 'sys', 'recall'))
+    const okRow = hoisted.runCalls.find((r) => r.status === 'ok')
+    expect(okRow?.meta).toEqual({ dispatch: true, jobId: 'j7', workerId: 'danny-desktop' })
   })
 })

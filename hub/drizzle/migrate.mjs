@@ -516,6 +516,61 @@ async function run() {
   `
   console.log('[migrate] ✓ ai_runs table')
 
+  // Desktop dispatch (Phase 2.5) — the allotment job queue. Cloud Run cannot
+  // refresh the consumer OAuth token (datacenter-IP rejection); the desktop
+  // worker long-polls these rows outbound. Content columns (payload_text,
+  // result_text) are transient by contract — nulled on delivery/terminal
+  // transitions; provenance (prompt_chars + prompt_sha256) survives.
+  await sql`
+    CREATE TABLE IF NOT EXISTS dispatch_jobs (
+      id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      created_at          TIMESTAMPTZ DEFAULT now() NOT NULL,
+      updated_at          TIMESTAMPTZ DEFAULT now() NOT NULL,
+      kind                TEXT NOT NULL,
+      priority            INTEGER DEFAULT 100 NOT NULL,
+      state               TEXT DEFAULT 'queued' NOT NULL,
+      attempt             INTEGER DEFAULT 0 NOT NULL,
+      max_attempts        INTEGER DEFAULT 1 NOT NULL,
+      deadline_at         TIMESTAMPTZ NOT NULL,
+      payload_text        TEXT,
+      payload_meta        JSONB,
+      prompt_chars        INTEGER,
+      prompt_sha256       TEXT,
+      leased_by           TEXT,
+      leased_at           TIMESTAMPTZ,
+      lease_expires_at    TIMESTAMPTZ,
+      cancel_requested_at TIMESTAMPTZ,
+      result_text         TEXT,
+      result_meta         JSONB,
+      error_class         TEXT,
+      error               TEXT,
+      latency_ms          INTEGER,
+      finished_at         TIMESTAMPTZ,
+      delivered_at        TIMESTAMPTZ,
+      scrubbed_at         TIMESTAMPTZ,
+      request_id          TEXT
+    )
+  `
+  await sql`
+    CREATE INDEX IF NOT EXISTS dispatch_jobs_claim_idx
+    ON dispatch_jobs (state, priority, created_at)
+  `
+  await sql`
+    CREATE INDEX IF NOT EXISTS dispatch_jobs_created_idx
+    ON dispatch_jobs (created_at DESC)
+  `
+  await sql`
+    CREATE TABLE IF NOT EXISTS dispatch_workers (
+      id            TEXT PRIMARY KEY,
+      first_seen_at TIMESTAMPTZ DEFAULT now() NOT NULL,
+      last_seen_at  TIMESTAMPTZ DEFAULT now() NOT NULL,
+      version       TEXT,
+      agy_version   TEXT,
+      meta          JSONB
+    )
+  `
+  console.log('[migrate] ✓ dispatch_jobs + dispatch_workers tables')
+
   await sql`
     INSERT INTO tenants (id, name, domain)
     VALUES ('rxfit', 'RxFit Athletics', 'rxfitatx.com')

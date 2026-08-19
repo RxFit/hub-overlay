@@ -103,6 +103,9 @@ export const config = {
      *   These are public brand images — nothing sensitive ships with these
      *   extensions, and no route handler serves them.
      */
-    '/((?!login|api/auth|api/chat|api/embeddings|api/webhooks|api/healthz|_next|static|.*\\.(?:png|ico|svg|webmanifest)$).*)',
+    // - /api/worker (desktop-dispatch machine routes — a worker can never hold
+    //   a NextAuth cookie; each handler enforces its own constant-time
+    //   x-worker-secret auth and 503s when the secret is unconfigured)
+    '/((?!login|api/auth|api/chat|api/embeddings|api/webhooks|api/healthz|api/worker|_next|static|.*\\.(?:png|ico|svg|webmanifest)$).*)',
   ],
 }

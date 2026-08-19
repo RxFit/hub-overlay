@@ -57,6 +57,10 @@ export interface AgyResult {
   latencyMs: number
 }
 
+// Open union (the RunSource pattern): the gateway's own classes are named,
+// and transports layered on top — desktop dispatch adds no_worker, queue_full,
+// claim_timeout, lease_expired, abort — flow through the same typed channel
+// without widening this file every time.
 export type AgyErrorType =
   | 'not_configured'
   | 'not_installed'
@@ -67,6 +71,7 @@ export type AgyErrorType =
   | 'parse'
   | 'spawn'
   | 'unknown'
+  | (string & {})
 
 export interface AgyError {
   type: AgyErrorType
