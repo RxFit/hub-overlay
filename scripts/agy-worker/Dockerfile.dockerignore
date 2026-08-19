@@ -1,0 +1,6 @@
+.git
+hub/node_modules
+hub/.next
+hub/coverage
+hub/playwright-report
+hub/test-results

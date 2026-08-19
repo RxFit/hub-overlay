@@ -7,6 +7,7 @@ import {
   upsertWorker,
   type DispatchKind,
 } from '@/lib/dispatch-store'
+import { emit } from '@/lib/observability'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -76,12 +77,26 @@ export async function POST(req: NextRequest) {
 
   try {
     await upsertWorker(workerId, { version, agyVersion })
-    await reapExpired()
+    const reaped = await reapExpired()
+    if (reaped.leaseExpired > 0) {
+      emit({ type: 'dispatch_expired', count: reaped.leaseExpired, reason: 'lease_expired' })
+    }
+    if (reaped.deadlineExpired > 0) {
+      emit({ type: 'dispatch_expired', count: reaped.deadlineExpired, reason: 'deadline' })
+    }
 
     const deadline = Date.now() + waitMs
     for (;;) {
       const job = await claimNext(workerId, kinds)
       if (job) {
+        emit({
+          type: 'dispatch_claimed',
+          jobId: job.id,
+          kind: job.kind,
+          workerId,
+          attempt: job.attempt,
+          queueMs: Date.now() - job.createdAt.getTime(),
+        })
         return NextResponse.json({ job, hubSha: process.env.GIT_SHA ?? null })
       }
       if (Date.now() + POLL_INTERVAL_MS > deadline) {

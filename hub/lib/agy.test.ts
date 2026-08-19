@@ -413,6 +413,19 @@ describe('agyGenerateText — Phase 0 survival rules', () => {
     })
     await expect(agyGenerateText('probe')).rejects.toSatisfy((err: unknown) => agyErrorType(err) === 'spawn')
   })
+
+  it('an abort signal SIGTERMs the child and classifies as abort (Phase 2.5 cancel)', async () => {
+    const controller = new AbortController()
+    const child = makeFakeChild()
+    spawnMock.mockImplementationOnce(() => child)
+    const pending = agyGenerateText('probe', { timeoutMs: 60_000, signal: controller.signal })
+    // spawn happens only after the async ensureTokenFile/ensureBinary resolve.
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled())
+    controller.abort()
+    await vi.waitFor(() => expect(child.kill).toHaveBeenCalledWith('SIGTERM'))
+    child.emit('close', null)
+    await expect(pending).rejects.toSatisfy((err: unknown) => agyErrorType(err) === 'abort')
+  })
 })
 
 describe('agyVersion', () => {

@@ -7,6 +7,7 @@ import {
   workerFresh,
 } from '@/lib/dispatch-store'
 import { createLogger } from '@/lib/logger'
+import { emit } from '@/lib/observability'
 import { recordAiRun } from '@/lib/runs'
 
 /**
@@ -133,6 +134,7 @@ export async function dispatchGenerateText(prompt: string, opts: DispatchOptions
       throw dispatchError('queue_full', 'dispatch queue at chat capacity — desktop cannot drain more in this budget')
     }
     jobId = outcome.id
+    emit({ type: 'dispatch_enqueued', jobId, kind: 'chat_turn', requestId: opts.requestId })
   } catch (err) {
     if ((err as { agyError?: unknown }).agyError) throw err
     throw dispatchError('no_worker', `dispatch enqueue failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -147,12 +149,14 @@ export async function dispatchGenerateText(prompt: string, opts: DispatchOptions
       if (opts.signal?.aborted) {
         void cancelJob(jobId).catch(() => {})
         void settleAbandoned(jobId, opts.requestId).catch(() => {})
+        emit({ type: 'dispatch_cancelled', jobId, reason: 'client_abort', requestId: opts.requestId })
         throw dispatchError('abort', 'client aborted while dispatch was in flight')
       }
       const elapsed = Date.now() - started
       if (elapsed >= opts.budgetMs) {
         void cancelJob(jobId).catch(() => {})
         void settleAbandoned(jobId, opts.requestId).catch(() => {})
+        emit({ type: 'dispatch_cancelled', jobId, reason: 'budget_exhausted', requestId: opts.requestId })
         throw dispatchError('timeout', `dispatch budget (${opts.budgetMs}ms) exhausted`)
       }
 
@@ -163,11 +167,13 @@ export async function dispatchGenerateText(prompt: string, opts: DispatchOptions
 
       if (view.state === 'queued' && Date.now() > claimDeadline) {
         void cancelJob(jobId).catch(() => {})
+        emit({ type: 'dispatch_cancelled', jobId, reason: 'claim_timeout', requestId: opts.requestId })
         throw dispatchError('claim_timeout', `worker looked alive but did not claim within ${dispatchClaimTimeoutMs()}ms`)
       }
       if (view.state === 'leased' && view.leaseExpiresAt !== null && view.leaseExpiresAt.getTime() < Date.now()) {
         // Fail fast — never wait for the lazy reaper to notice.
         void cancelJob(jobId).catch(() => {})
+        emit({ type: 'dispatch_cancelled', jobId, reason: 'lease_expired', requestId: opts.requestId })
         throw dispatchError('lease_expired', 'worker went silent mid-run (lease lapsed)')
       }
       if (view.state === 'succeeded') {

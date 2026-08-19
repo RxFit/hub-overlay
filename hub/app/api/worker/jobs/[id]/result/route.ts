@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { verifyCronSecret } from '@/lib/cron-auth'
 import { isMissingTableError, postResult } from '@/lib/dispatch-store'
+import { emit } from '@/lib/observability'
 import { recordAiRun } from '@/lib/runs'
 
 export const runtime = 'nodejs'
@@ -111,6 +112,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     if (outcome.outcome === 'not_found') {
       return NextResponse.json({ error: 'job not found' }, { status: 404 })
     }
+    emit({
+      type: 'dispatch_result',
+      jobId: params.id,
+      workerId: body.workerId.slice(0, 100),
+      outcome: outcome.outcome,
+      status: body.status,
+      requestId: 'requestId' in outcome ? (outcome.requestId ?? undefined) : undefined,
+    })
     if (outcome.outcome === 'discarded_cancelled' || outcome.outcome === 'discarded_lease_lost') {
       // The spend happened even though nobody will read the answer — the
       // ledger's job is to say so. Best-effort by recordAiRun's own contract.

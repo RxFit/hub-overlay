@@ -52,6 +52,15 @@ export type TelemetryEvent =
   | { type: 'ai_truncated'; provider: AiProvider; model: string; requestId?: string }
   | { type: 'ai_fallback'; requestId: string; from: string; to: string; reason: string }
   | { type: 'ai_error'; requestId: string; provider?: AiProvider; code: string; message: string }
+  /* Desktop dispatch (Phase 2.5) lifecycle — DESKTOP_DISPATCH_2026-08-15.md §6.
+   * jobId is the correlation spine; requestId ties chat-originated jobs back
+   * to the turn. Stdout-only (not in PERSISTED_EVENT_TYPES): the durable
+   * record is ai_runs; these exist for claim-latency/cancel/expiry rates. */
+  | { type: 'dispatch_enqueued'; jobId: string; kind: string; requestId?: string }
+  | { type: 'dispatch_claimed'; jobId: string; kind: string; workerId: string; attempt: number; queueMs: number; requestId?: string }
+  | { type: 'dispatch_result'; jobId: string; workerId: string; outcome: string; status: string; requestId?: string }
+  | { type: 'dispatch_cancelled'; jobId: string; reason: string; requestId?: string }
+  | { type: 'dispatch_expired'; jobId?: string; count: number; reason: 'lease_expired' | 'deadline'; requestId?: string }
 
 /**
  * Cheap guard so the seam can be turned off entirely (default ON, including in

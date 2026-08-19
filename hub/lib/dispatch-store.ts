@@ -190,6 +190,7 @@ export interface ClaimedJob {
   attempt: number
   payloadText: string | null
   payloadMeta: Record<string, unknown> | null
+  createdAt: Date
   deadlineAt: Date
   leaseExpiresAt: Date
   heartbeatMs: number
@@ -210,13 +211,20 @@ export async function upsertWorker(id: string, info: { version?: string; agyVers
  * The chat wait-loop does NOT depend on this: it fails fast on
  * lease_expires_at itself, so user latency never waits for a reap.
  */
-export async function reapExpired(): Promise<void> {
+export interface ReapCounts {
+  cancelled: number
+  requeued: number
+  leaseExpired: number
+  deadlineExpired: number
+}
+
+export async function reapExpired(): Promise<ReapCounts> {
   const now = new Date()
   // A cancelled-then-lapsed lease goes terminal, never back into the queue:
   // the Hub already gave up on the job, and requeueing it would either burn
   // an attempt on work nobody wants or poison the next claim with a stale
   // cancel flag (the fresh worker's first heartbeat would tell it to abort).
-  await db
+  const cancelled = await db
     .update(dispatchJobs)
     .set({
       state: 'cancelled',
@@ -231,8 +239,9 @@ export async function reapExpired(): Promise<void> {
       lt(dispatchJobs.leaseExpiresAt, now),
       sql`cancel_requested_at IS NOT NULL`,
     ))
+    .returning({ id: dispatchJobs.id })
   // Lapsed work_item leases with attempts left → back to queued.
-  await db
+  const requeued = await db
     .update(dispatchJobs)
     .set({ state: 'queued', leasedBy: null, leaseExpiresAt: null, updatedAt: now })
     .where(and(
@@ -241,8 +250,9 @@ export async function reapExpired(): Promise<void> {
       eq(dispatchJobs.kind, 'work_item'),
       sql`attempt < max_attempts`,
     ))
+    .returning({ id: dispatchJobs.id })
   // Lapsed chat leases (at-most-once) and spent work_items → terminal expired.
-  await db
+  const leaseExpired = await db
     .update(dispatchJobs)
     .set({
       state: 'expired',
@@ -254,8 +264,9 @@ export async function reapExpired(): Promise<void> {
       updatedAt: now,
     })
     .where(and(eq(dispatchJobs.state, 'leased'), lt(dispatchJobs.leaseExpiresAt, now)))
+    .returning({ id: dispatchJobs.id })
   // Unclaimed jobs past their deadline: executing them is pointless.
-  await db
+  const deadlineExpired = await db
     .update(dispatchJobs)
     .set({
       state: 'expired',
@@ -267,6 +278,13 @@ export async function reapExpired(): Promise<void> {
       updatedAt: now,
     })
     .where(and(eq(dispatchJobs.state, 'queued'), lt(dispatchJobs.deadlineAt, now)))
+    .returning({ id: dispatchJobs.id })
+  return {
+    cancelled: cancelled.length,
+    requeued: requeued.length,
+    leaseExpired: leaseExpired.length,
+    deadlineExpired: deadlineExpired.length,
+  }
 }
 
 export async function claimNext(workerId: string, kinds: DispatchKind[]): Promise<ClaimedJob | null> {
@@ -302,6 +320,7 @@ export async function claimNext(workerId: string, kinds: DispatchKind[]): Promis
         attempt: dispatchJobs.attempt,
         payloadText: dispatchJobs.payloadText,
         payloadMeta: dispatchJobs.payloadMeta,
+        createdAt: dispatchJobs.createdAt,
         deadlineAt: dispatchJobs.deadlineAt,
         leaseExpiresAt: dispatchJobs.leaseExpiresAt,
       })
@@ -313,6 +332,7 @@ export async function claimNext(workerId: string, kinds: DispatchKind[]): Promis
       attempt: row.attempt,
       payloadText: row.payloadText,
       payloadMeta: row.payloadMeta ?? null,
+      createdAt: row.createdAt,
       deadlineAt: row.deadlineAt,
       leaseExpiresAt: row.leaseExpiresAt as Date,
       heartbeatMs: policy.heartbeatMs,
