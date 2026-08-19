@@ -100,11 +100,16 @@ async function postJson(
   ctx: SlotContext,
   path: string,
   body: unknown,
+  timeoutMs: number,
 ): Promise<{ status: number; json: Record<string, unknown> | null }> {
+  // A residential NAT link can silently drop an idle mapping mid-long-poll,
+  // leaving the socket half-open: without a signal the fetch would stall for
+  // undici's ~300s default instead of the intended window. Bound every call.
   const res = await ctx.fetchFn(`${ctx.cfg.hubUrl}${path}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-worker-secret': ctx.cfg.secret },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
   })
   let json: Record<string, unknown> | null = null
   try {
@@ -128,18 +133,27 @@ export async function executeJob(ctx: SlotContext, job: ClaimedJobWire): Promise
   const heartbeat = setInterval(() => {
     void (async () => {
       try {
-        const { status, json } = await postJson(ctx, `/api/worker/jobs/${job.id}/heartbeat`, {
-          workerId: ctx.cfg.workerId,
-          attempt: job.attempt,
-        })
-        if (status !== 200 || json?.ok !== true) {
-          log.warn({ jobId: job.id, status, reason: json?.reason }, 'lease lost — aborting run')
+        const { status, json } = await postJson(
+          ctx,
+          `/api/worker/jobs/${job.id}/heartbeat`,
+          { workerId: ctx.cfg.workerId, attempt: job.attempt },
+          5_000,
+        )
+        // Only an HTTP-200 verdict is definitive: { ok:false } is genuine
+        // lease loss and { cancelRequested:true } a genuine Hub cancel. Any
+        // non-200 (route 500 on a DB blip, platform 429/502/503) is
+        // transient — skip the beat and lean on the 2.5x lease slack, else a
+        // single hiccup aborts a near-complete run and burns the allotment.
+        if (status === 200 && json?.ok !== true) {
+          log.warn({ jobId: job.id, reason: json?.reason }, 'lease lost — aborting run')
           cancelSeen = true
           controller.abort()
-        } else if (json?.cancelRequested === true) {
+        } else if (status === 200 && json?.cancelRequested === true) {
           log.info({ jobId: job.id }, 'Hub cancelled — aborting run (allotment stops here)')
           cancelSeen = true
           controller.abort()
+        } else if (status !== 200) {
+          log.warn({ jobId: job.id, status }, 'heartbeat got a transient error — skipping this beat')
         }
       } catch {
         // Network blip: skip this beat. The lease has 2.5x heartbeat slack.
@@ -181,7 +195,7 @@ export async function executeJob(ctx: SlotContext, job: ClaimedJobWire): Promise
   // The result CAS is idempotent — retries can only produce 'duplicate'.
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const { status, json } = await postJson(ctx, `/api/worker/jobs/${job.id}/result`, post)
+      const { status, json } = await postJson(ctx, `/api/worker/jobs/${job.id}/result`, post, 15_000)
       if (status === 200 || status === 404) {
         log.info({ jobId: job.id, kind: job.kind, outcome: json?.outcome ?? status, status: post.status }, 'result posted')
         return
@@ -200,13 +214,18 @@ export async function runSlot(ctx: SlotContext): Promise<void> {
   let lastHubSha: string | null = null
   while (!ctx.stop.aborted) {
     try {
-      const { status, json } = await postJson(ctx, '/api/worker/claim', {
-        workerId: ctx.cfg.workerId,
-        kinds: ctx.kinds,
-        waitMs: 25_000,
-        version: ctx.cfg.version,
-        agyVersion: ctx.agyVersionValue,
-      })
+      const { status, json } = await postJson(
+        ctx,
+        '/api/worker/claim',
+        {
+          workerId: ctx.cfg.workerId,
+          kinds: ctx.kinds,
+          waitMs: 25_000,
+          version: ctx.cfg.version,
+          agyVersion: ctx.agyVersionValue,
+        },
+        32_000, // just above the 25s long-poll so a healthy wait completes
+      )
       if (status === 200 && json?.job) {
         failures = 0
         const hubSha = typeof json.hubSha === 'string' ? json.hubSha : null

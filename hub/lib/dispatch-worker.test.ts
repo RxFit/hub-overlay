@@ -206,6 +206,33 @@ describe('claim → execute → post cycle', () => {
     expect(result?.body).toMatchObject({ status: 'error', errorClass: 'abort' })
   }, 10_000)
 
+  it('a transient heartbeat 500 skips the beat — the run completes and posts ok', async () => {
+    const stop = new AbortController()
+    const { fetchFn, calls } = makeFetch({
+      claim: (n) => {
+        if (n === 1) return jsonRes(200, { job: jobWire({ heartbeatMs: 1_000 }) })
+        stop.abort()
+        return jsonRes(204)
+      },
+      heartbeat: () => jsonRes(500, { error: 'db blip' }), // must NOT abort
+    })
+    // The run outlives one heartbeat, then completes normally.
+    const runFn = vi.fn().mockImplementation(
+      (_p: string, opts: { signal?: AbortSignal }) =>
+        new Promise((resolve, reject) => {
+          opts.signal?.addEventListener('abort', () =>
+            reject(Object.assign(new Error('aborted'), { agyError: { type: 'abort', message: 'aborted' } })),
+          )
+          setTimeout(() => resolve({ text: 'survived the blip', raw: {}, latencyMs: 1_500 }), 1_500)
+        }),
+    )
+
+    await startWorker(CFG, { fetchFn, runFn, sleepFn: instantSleep, agyVersionFn: async () => null }, stop.signal)
+
+    const result = calls.find((c) => c.path === 'result')
+    expect(result?.body).toMatchObject({ status: 'ok', text: 'survived the blip' })
+  }, 10_000)
+
   it('retries the result post into the idempotent CAS until acked', async () => {
     const stop = new AbortController()
     const { fetchFn, counts } = makeFetch({
