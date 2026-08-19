@@ -24,6 +24,7 @@ const ledger = vi.hoisted(() => ({ recordAiRun: vi.fn().mockResolvedValue(undefi
 
 vi.mock('@/lib/dispatch-store', () => store)
 vi.mock('@/lib/runs', () => ledger)
+vi.mock('@/lib/observability', () => ({ emit: vi.fn() }))
 
 import { POST as claimPost } from '@/app/api/worker/claim/route'
 import { POST as heartbeatPost } from '@/app/api/worker/jobs/[id]/heartbeat/route'
@@ -43,7 +44,7 @@ beforeEach(() => {
   vi.unstubAllEnvs()
   vi.stubEnv('AGY_WORKER_SECRET', SECRET)
   store.claimNext.mockReset().mockResolvedValue(null)
-  store.reapExpired.mockReset().mockResolvedValue(undefined)
+  store.reapExpired.mockReset().mockResolvedValue({ cancelled: 0, requeued: 0, leaseExpired: 0, deadlineExpired: 0 })
   store.upsertWorker.mockReset().mockResolvedValue(undefined)
   store.heartbeatJob.mockReset()
   store.postResult.mockReset()
@@ -72,7 +73,7 @@ describe('POST /api/worker/claim', () => {
 
   it('claims: upserts liveness, reaps, returns the job with the hub SHA', async () => {
     vi.stubEnv('GIT_SHA', 'deadbeef')
-    const job = { id: 'j1', kind: 'chat_turn', attempt: 1, payloadText: 'p', heartbeatMs: 10_000 }
+    const job = { id: 'j1', kind: 'chat_turn', attempt: 1, payloadText: 'p', heartbeatMs: 10_000, createdAt: new Date() }
     store.claimNext.mockResolvedValue(job)
     const res = await claimPost(
       request('/api/worker/claim', { workerId: 'w1', kinds: ['chat_turn'], version: 'abc' }),

@@ -1,0 +1,9 @@
+.git
+hub/node_modules
+hub/.next
+hub/coverage
+hub/playwright-report
+hub/test-results
+hub/.env
+hub/.env.local
+hub/.env*.local

@@ -1,0 +1,19 @@
+# Desktop dispatch worker. Run from anywhere:
+#   docker compose -f scripts/agy-worker/docker-compose.yml up -d
+# .env (next to this file, NOT committed) holds HUB_URL / AGY_WORKER_SECRET /
+# WORKER_* — see .env.example. The token directory mounts READ-WRITE because
+# agy refreshes the token in place and that refresh must persist to the host,
+# keeping the desktop CLI and the worker on one rotating credential.
+services:
+  agy-worker:
+    build:
+      context: ../..
+      dockerfile: scripts/agy-worker/Dockerfile
+      args:
+        WORKER_GIT_SHA: ${WORKER_GIT_SHA:-dev}
+    image: agy-worker:local
+    container_name: agy-worker
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ${USERPROFILE}/.gemini/antigravity-cli:/home/agyuser/.gemini/antigravity-cli:rw

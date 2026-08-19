@@ -84,6 +84,10 @@ export interface AgyOptions {
   effort?: 'low' | 'medium' | 'high'
   /** Hard wall-clock ceiling for the whole run. Default 120s (AGY_TIMEOUT_MS). */
   timeoutMs?: number
+  /** Abort mid-run (Phase 2.5 worker: a Hub cancel arriving on the heartbeat
+   *  SIGTERMs the agy child instead of letting it burn allotment for a reader
+   *  that already left). Throws the typed 'abort' class. */
+  signal?: AbortSignal
 }
 
 /** Where agy's file-based storage expects the OAuth token. */
@@ -405,9 +409,10 @@ interface RunOutcome {
   output: string
   exitCode: number | null
   timedOut: boolean
+  aborted: boolean
 }
 
-function runUnderPty(inner: string, timeoutMs: number): Promise<RunOutcome> {
+function runUnderPty(inner: string, timeoutMs: number, signal?: AbortSignal): Promise<RunOutcome> {
   return new Promise((resolve, reject) => {
     const child = spawn('script', ['-qec', inner, '/dev/null'], {
       env: {
@@ -424,6 +429,7 @@ function runUnderPty(inner: string, timeoutMs: number): Promise<RunOutcome> {
 
     let output = ''
     let timedOut = false
+    let aborted = false
     let settled = false
 
     const termTimer = setTimeout(() => {
@@ -431,6 +437,19 @@ function runUnderPty(inner: string, timeoutMs: number): Promise<RunOutcome> {
       child.kill('SIGTERM')
     }, timeoutMs)
     const killTimer = setTimeout(() => child.kill('SIGKILL'), timeoutMs + 10_000)
+
+    // Same kill ladder as the timeout, driven externally. The process still
+    // settles through 'close', so output/settlement stay single-pathed. The
+    // follow-up SIGKILL timer is tracked so 'close'/'error' can clear it —
+    // otherwise it keeps the event loop alive for 10s after a clean abort.
+    let abortKillTimer: ReturnType<typeof setTimeout> | undefined
+    const onAbort = () => {
+      aborted = true
+      child.kill('SIGTERM')
+      abortKillTimer = setTimeout(() => child.kill('SIGKILL'), 10_000)
+    }
+    if (signal?.aborted) onAbort()
+    else signal?.addEventListener('abort', onAbort, { once: true })
 
     child.stdout?.on('data', (chunk: Buffer) => {
       output += chunk.toString('utf8')
@@ -443,6 +462,8 @@ function runUnderPty(inner: string, timeoutMs: number): Promise<RunOutcome> {
       settled = true
       clearTimeout(termTimer)
       clearTimeout(killTimer)
+      if (abortKillTimer) clearTimeout(abortKillTimer)
+      signal?.removeEventListener('abort', onAbort)
       reject(agyError('spawn', `failed to spawn pty runner: ${err.message}`))
     })
     child.on('close', (code) => {
@@ -450,7 +471,9 @@ function runUnderPty(inner: string, timeoutMs: number): Promise<RunOutcome> {
       settled = true
       clearTimeout(termTimer)
       clearTimeout(killTimer)
-      resolve({ output, exitCode: code, timedOut })
+      if (abortKillTimer) clearTimeout(abortKillTimer)
+      signal?.removeEventListener('abort', onAbort)
+      resolve({ output, exitCode: code, timedOut, aborted })
     })
   })
 }
@@ -501,9 +524,12 @@ export async function agyGenerateText(prompt: string, opts: AgyOptions = {}): Pr
   if (model) parts.push(`--model ${shQuote(model)}`)
   if (opts.effort) parts.push(`--effort ${shQuote(opts.effort)}`)
 
-  const { output, exitCode, timedOut } = await runUnderPty(parts.join(' '), timeoutMs)
+  const { output, exitCode, timedOut, aborted } = await runUnderPty(parts.join(' '), timeoutMs, opts.signal)
   const cleaned = stripTui(output).trim()
 
+  if (aborted) {
+    throw agyError('abort', 'agy run aborted by caller (cancel delivered mid-run)')
+  }
   if (timedOut) {
     // A dead token can LOOK like a timeout: with stdin at EOF, agy's fallback
     // to interactive OAuth blocks at a prompt until the hard ceiling fires.

@@ -28,11 +28,11 @@ assumption; this runbook covers operating the production gateway.
 > designed — not an outage. The `?probe=1` path will report `errorClass:'auth'`
 > from Cloud Run; that is now an *expected* result, not a regression.
 >
-> **The fix** is to run the allotment on the desktop (residential IP) with the
-> Hub dispatching work to it — designed in
-> [`../architecture/DESKTOP_DISPATCH_2026-08-15.md`](../architecture/DESKTOP_DISPATCH_2026-08-15.md)
-> (Phase 2.5), not yet built. Local/desktop use of the gateway is unaffected and
-> still works.
+> **The fix** is Phase 2.5 — the allotment runs on the desktop (residential
+> IP) with the Hub dispatching work to it over a Postgres queue: designed in
+> [`../architecture/DESKTOP_DISPATCH_2026-08-15.md`](../architecture/DESKTOP_DISPATCH_2026-08-15.md),
+> substrate + worker shipped (see § Phase 2.5 below). Local/desktop use of the
+> gateway is unaffected and still works.
 
 ## How it works
 
@@ -196,3 +196,29 @@ probe: `GET /api/admin/agy-health` returns `config.credential.env.sha256` (a
 `sha256sum` of your local token file, truncated to 12 characters. If
 `config.credential.file` is present with a *different* hash, that instance is
 serving a stale on-disk copy and its result is meaningless: roll again.
+
+## Phase 2.5 — desktop dispatch (`AGY_DISPATCH_ENABLED`)
+
+The transport that makes `AGY_CHAT_ENABLED` viable on Cloud Run: chat turns are
+enqueued in Postgres (`dispatch_jobs`) and executed by the desktop worker
+(`scripts/agy-worker/` — setup, slot policy, and supervision live in its
+README). Architecture + failure modes: `docs/architecture/DESKTOP_DISPATCH_2026-08-15.md`.
+
+- **Enable:** `AGY_WORKER_SECRET` in Secret Manager + the desktop `.env`
+  (byte-identical), worker running (dispatch-health shows it fresh), then
+  `AGY_DISPATCH_ENABLED=true` alongside `AGY_CHAT_ENABLED=true`.
+- **Verify:** `GET /api/admin/dispatch-health` (admin) — cheap: worker
+  liveness/version pair, queue depths, last 20 jobs. `?probe=1` round-trips a
+  marker job through enqueue → desktop claim → agy on the residential IP →
+  result. That probe is the production replay test of the whole phase.
+- **Kill switches, strongest first (all env-only, no deploy):** unset
+  `AGY_CHAT_ENABLED` (pre-Phase-2 chat, byte-identical) → unset
+  `AGY_DISPATCH_ENABLED` (dispatch dark) → unset `AGY_WORKER_SECRET`
+  (worker routes 503) → stop the desktop container.
+- **Dispatch failure classes** (in `ai_runs.error_class` and dispatch-health):
+  `no_worker` (desktop offline — costs each turn ~5ms, no cooldown, metered
+  serves), `queue_full` (backpressure refusal), `claim_timeout` (worker alive
+  but wedged, 5s bound), `lease_expired` (worker died mid-run, ≤25s bound),
+  `abort` (client left / Hub cancel). None of these cool the allotment path;
+  worker-reported `auth` still gets the 30-min tier — re-mint on the desktop,
+  **no Hub deploy needed** (the token never leaves the machine).
