@@ -20,11 +20,31 @@ globally, production included.
    # generate
    -join ((1..64) | % { '{0:x}' -f (Get-Random -Max 16) })
    ```
+
+   > **⚠️ Never pipe the secret through PowerShell.** `printf ... | gcloud`
+   > run from PowerShell silently appends CRLF, storing a 68-byte secret
+   > instead of the 64-byte hex string — the Hub's constant-time compare then
+   > 401s every worker call, forever, with nothing else looking wrong (found
+   > the hard way 2026-08-19; this project's third CRLF incident). Byte-exact
+   > paths only:
+
    ```bash
-   # Hub side (Cloud Shell): store + attach
+   # Hub side, from a REAL bash shell (Cloud Shell): store + attach
    printf '%s' '<the secret>' | gcloud secrets create hub-agy-worker-secret --data-file=-
    gcloud run services update hub --region us-central1 \
      --update-secrets AGY_WORKER_SECRET=hub-agy-worker-secret:latest
+   ```
+   ```powershell
+   # Or from PowerShell: write the file WITHOUT newline handling, then upload
+   [IO.File]::WriteAllText("$env:TEMP\worker-secret.txt", '<the secret>')
+   gcloud secrets create hub-agy-worker-secret --data-file="$env:TEMP\worker-secret.txt"
+   Remove-Item "$env:TEMP\worker-secret.txt"
+   gcloud run services update hub --region us-central1 --update-secrets AGY_WORKER_SECRET=hub-agy-worker-secret:latest
+   ```
+
+   Sanity check after storing — the byte count must match your string exactly:
+   ```bash
+   gcloud secrets versions access latest --secret hub-agy-worker-secret | wc -c   # expect 64
    ```
 2. Desktop side:
    ```powershell
