@@ -207,6 +207,15 @@ README). Architecture + failure modes: `docs/architecture/DESKTOP_DISPATCH_2026-
 - **Enable:** `AGY_WORKER_SECRET` in Secret Manager + the desktop `.env`
   (byte-identical), worker running (dispatch-health shows it fresh), then
   `AGY_DISPATCH_ENABLED=true` alongside `AGY_CHAT_ENABLED=true`.
+  > **If the update says "serving 0 percent of traffic":** your flip raced a
+  > deploy.yml run — its blue-green flow pins traffic during the candidate
+  > window, so out-of-band revisions park at 0% (happened live 2026-08-20).
+  > Usually self-heals: the workflow's final promote is `--to-latest`, which
+  > picks up your (newer) revision. Verify with
+  > `gcloud run services describe hub --region us-central1 --format="value(status.traffic)"`
+  > — expect the latest revision at 100%; if it still shows an older pinned
+  > revision once the Actions run finishes, promote manually with
+  > `gcloud run services update-traffic hub --region us-central1 --to-latest`.
 - **Verify:** `GET /api/admin/dispatch-health` (admin) — cheap: worker
   liveness/version pair, queue depths, last 20 jobs. `?probe=1` round-trips a
   marker job through enqueue → desktop claim → agy on the residential IP →
