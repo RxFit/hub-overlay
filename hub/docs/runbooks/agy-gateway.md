@@ -231,3 +231,41 @@ README). Architecture + failure modes: `docs/architecture/DESKTOP_DISPATCH_2026-
   `abort` (client left / Hub cancel). None of these cool the allotment path;
   worker-reported `auth` still gets the 30-min tier — re-mint on the desktop,
   **no Hub deploy needed** (the token never leaves the machine).
+
+## Push alerting (hardening move 1)
+
+Every dispatch failure degrades silently into metered spend, so failure has a
+push path instead of waiting to be noticed on dispatch-health (which also now
+counts a dead worker against `healthy` whenever dispatch is enabled):
+
+- **Mechanism:** `.github/workflows/dispatch-alert.yml` fires hourly and calls
+  `POST /api/cron/dispatch-alert` (constant-time `CRON_SECRET`; `/api/cron` is
+  middleware-excluded like `/api/worker`). It targets the Cloud Run `.run.app`
+  URL directly — never `hub.casatrejo.com`, whose Cloudflare front challenges
+  CI curls (the false-failure class deploy.yml refuses to gate on). The tick
+  is cheap — it never runs `?probe=1` — and also guarantees the hourly queue
+  reap + content sweep (now advisory-locked in `sweepStale`).
+- **Conditions** (`hub/lib/dispatch-alerts.ts`): worker stale while dispatch
+  is enabled; the newest 3 agy runs in `ai_runs` all failed (classes named);
+  allotment collapse — metered chat serving with zero allotment successes in
+  24h (inert until the metered chains ledger, hardening move 3).
+- **Delivery:** Google Chat, posted as the operator with the pinned
+  `— via HUB` tag, to `ALERT_CHAT_SPACE` (env) or the first scheduled report
+  that already posts to a space. **No space configured, or the post fails →
+  the workflow run fails, and GitHub's failure email is the alert.** An
+  unchanged condition re-posts every 6h (the window keys off the last
+  *delivered* post, so a flapping worker damps to one alert per window
+  instead of posting on every flip); recovery posts once, and only when the
+  clear is affirmative — evidence merely aging out of a window records the
+  state change silently. State lives in `event_log` (`dispatch.alert` rows),
+  never in-memory.
+- **One-time setup:** add repository secret `CRON_SECRET` (GitHub → Settings →
+  Secrets and variables → Actions) with the same value the Cloud Run service
+  holds. Optionally set `ALERT_CHAT_SPACE=spaces/XXXX` on the service to pick
+  the space; until then the GitHub failure email carries the alerts. Then run
+  the workflow once by hand (Actions → "Dispatch alert tick" → Run workflow)
+  to confirm the endpoint answers — and, if you make it fail (wrong secret),
+  that the failure notification email actually reaches you.
+- **Silence it:** disable the workflow in the Actions tab (or delete the
+  `CRON_SECRET` repo secret — every run then fails loudly, which is the
+  point: this alarm fails toward noise, not toward silence).

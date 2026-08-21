@@ -106,6 +106,10 @@ export const config = {
     // - /api/worker (desktop-dispatch machine routes — a worker can never hold
     //   a NextAuth cookie; each handler enforces its own constant-time
     //   x-worker-secret auth and 503s when the secret is unconfigured)
-    '/((?!login|api/auth|api/chat|api/embeddings|api/webhooks|api/healthz|api/worker|_next|static|.*\\.(?:png|ico|svg|webmanifest)$).*)',
+    // - /api/cron/ (scheduler-fired machine routes — same reasoning as
+    //   /api/worker; each handler enforces its own constant-time x-cron-secret
+    //   auth and 503s when CRON_SECRET is unconfigured. Trailing slash keeps
+    //   the exclusion segment-anchored: /api/cronx stays middlewared)
+    '/((?!login|api/auth|api/chat|api/embeddings|api/webhooks|api/healthz|api/worker|api/cron/|_next|static|.*\\.(?:png|ico|svg|webmanifest)$).*)',
   ],
 }

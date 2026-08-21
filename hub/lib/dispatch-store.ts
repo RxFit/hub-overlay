@@ -478,49 +478,61 @@ export async function postResult(id: string, post: ResultPost): Promise<ResultOu
 /* ── Hygiene + admin visibility ──────────────────────────────────────────── */
 
 export async function sweepStale(): Promise<void> {
-  const now = new Date()
-  // Failure mode "Hub instance dies mid-wait": the worker's result posted as
-  // 'recorded', but the ai_runs row the waiting request would have written is
-  // gone with the instance. Before scrubbing such rows, ledger the spend —
-  // §7 #4's "late result still lands ⇒ spend recorded" promise. delivered_at
-  // excludes every normally-served or race-settled row, so no double count.
-  const orphaned = await db
-    .select({
-      id: dispatchJobs.id,
-      resultMeta: dispatchJobs.resultMeta,
-      latencyMs: dispatchJobs.latencyMs,
-      requestId: dispatchJobs.requestId,
-    })
-    .from(dispatchJobs)
-    .where(and(
-      eq(dispatchJobs.state, 'succeeded'),
-      lt(dispatchJobs.finishedAt, new Date(Date.now() - CONTENT_TTL_MS)),
-      sql`delivered_at IS NULL`,
-      sql`scrubbed_at IS NULL`,
-    ))
-  for (const row of orphaned) {
-    const meta = (row.resultMeta ?? {}) as { model?: string; usage?: Record<string, number>; workerId?: string }
-    await recordAiRun({
-      engine: 'agy',
-      model: meta.model,
-      source: 'chat',
-      status: 'ok',
-      latencyMs: row.latencyMs ?? 0,
-      usage: meta.usage,
-      requestId: row.requestId,
-      meta: { dispatch: true, discarded: true, undelivered: true, jobId: row.id, workerId: meta.workerId },
-    })
-  }
-  await db
-    .update(dispatchJobs)
-    .set({ payloadText: null, resultText: null, scrubbedAt: now, updatedAt: now })
-    .where(and(
-      lt(dispatchJobs.finishedAt, new Date(Date.now() - CONTENT_TTL_MS)),
-      sql`scrubbed_at IS NULL`,
-    ))
-  await db
-    .delete(dispatchJobs)
-    .where(lt(dispatchJobs.createdAt, new Date(Date.now() - ROW_TTL_DAYS * 86_400_000)))
+  // Serialized by a transaction-scoped advisory lock: the sweep is invoked
+  // probabilistically from enqueue, from dispatch-health GETs, and hourly by
+  // the alert tick — two sweeps interleaving between the orphan SELECT and
+  // the scrub UPDATE would each ledger the same undelivered spend. try-lock,
+  // not wait: a sweep that finds the lock held simply defers to the holder.
+  await withTransaction(async (tx) => {
+    const lock = (await tx.execute(
+      sql`SELECT pg_try_advisory_xact_lock(hashtext('dispatch_sweep')) AS locked`,
+    )) as unknown as Array<{ locked: boolean }>
+    if (!lock[0]?.locked) return
+
+    const now = new Date()
+    // Failure mode "Hub instance dies mid-wait": the worker's result posted as
+    // 'recorded', but the ai_runs row the waiting request would have written is
+    // gone with the instance. Before scrubbing such rows, ledger the spend —
+    // §7 #4's "late result still lands ⇒ spend recorded" promise. delivered_at
+    // excludes every normally-served or race-settled row, so no double count.
+    const orphaned = await tx
+      .select({
+        id: dispatchJobs.id,
+        resultMeta: dispatchJobs.resultMeta,
+        latencyMs: dispatchJobs.latencyMs,
+        requestId: dispatchJobs.requestId,
+      })
+      .from(dispatchJobs)
+      .where(and(
+        eq(dispatchJobs.state, 'succeeded'),
+        lt(dispatchJobs.finishedAt, new Date(Date.now() - CONTENT_TTL_MS)),
+        sql`delivered_at IS NULL`,
+        sql`scrubbed_at IS NULL`,
+      ))
+    for (const row of orphaned) {
+      const meta = (row.resultMeta ?? {}) as { model?: string; usage?: Record<string, number>; workerId?: string }
+      await recordAiRun({
+        engine: 'agy',
+        model: meta.model,
+        source: 'chat',
+        status: 'ok',
+        latencyMs: row.latencyMs ?? 0,
+        usage: meta.usage,
+        requestId: row.requestId,
+        meta: { dispatch: true, discarded: true, undelivered: true, jobId: row.id, workerId: meta.workerId },
+      })
+    }
+    await tx
+      .update(dispatchJobs)
+      .set({ payloadText: null, resultText: null, scrubbedAt: now, updatedAt: now })
+      .where(and(
+        lt(dispatchJobs.finishedAt, new Date(Date.now() - CONTENT_TTL_MS)),
+        sql`scrubbed_at IS NULL`,
+      ))
+    await tx
+      .delete(dispatchJobs)
+      .where(lt(dispatchJobs.createdAt, new Date(Date.now() - ROW_TTL_DAYS * 86_400_000)))
+  })
 }
 
 export async function queueDepths(): Promise<Record<string, number>> {

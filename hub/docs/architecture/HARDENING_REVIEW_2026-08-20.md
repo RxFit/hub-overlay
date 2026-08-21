@@ -22,6 +22,13 @@ system's only guaranteed failure detector today is the monthly bill.
 
 ### 1. Make failure push, not pull — one alerting mechanism retires five findings
 
+> **✅ Shipped 2026-08-21** — `healthy` now includes `workerAlive` when
+> dispatch is enabled; hourly `.github/workflows/dispatch-alert.yml` →
+> `POST /api/cron/dispatch-alert` → Google Chat (`— via HUB`), with the
+> workflow's failure email as the fallback push. Ops: the "Push alerting"
+> section of `hub/docs/runbooks/agy-gateway.md`. The allotment-collapse
+> condition is wired but inert until move 3 ledgers the metered chains.
+
 `dispatch-health`'s `healthy` field **does not include `workerAlive`**
 (app/api/admin/dispatch-health/route.ts — it reports `healthy: true` with a
 dead worker), and nothing anywhere pushes a signal. The honest answer to
