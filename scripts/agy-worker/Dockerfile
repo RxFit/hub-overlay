@@ -24,7 +24,21 @@ USER agyuser
 WORKDIR /home/agyuser
 ENV HOME=/home/agyuser
 
-RUN curl -fsSL https://antigravity.google/cli/install.sh | bash \
+# PINNED agy install (hardening move 2): exact artifact + IN-REPO sha512 from
+# scripts/agy/agy-version.lock, replacing curl|bash "latest" whose version was
+# Docker-cache-controlled (how 1.1.16 arrived untested and produced the first
+# dispatch `parse` failure). Changing the lock busts this layer — an upgrade
+# is now a deliberate PR (scripts/agy/update-agy-pin.sh + Phase 0 replay).
+COPY --chown=agyuser:agyuser scripts/agy/agy-version.lock /tmp/agy-version.lock
+RUN . /tmp/agy-version.lock \
+ && echo "installing pinned agy ${AGY_VERSION}" \
+ && mkdir -p /home/agyuser/.local/bin \
+ && curl -fsSL -o /tmp/agy.tar.gz "${AGY_URL}" \
+ && echo "${AGY_SHA512}  /tmp/agy.tar.gz" | sha512sum -c - \
+ && tar -xzf /tmp/agy.tar.gz -C /tmp antigravity \
+ && mv /tmp/antigravity /home/agyuser/.local/bin/agy \
+ && chmod +x /home/agyuser/.local/bin/agy \
+ && rm -f /tmp/agy.tar.gz /tmp/agy-version.lock \
  && /home/agyuser/.local/bin/agy --version || true
 ENV PATH="/home/agyuser/.local/bin:${PATH}"
 
