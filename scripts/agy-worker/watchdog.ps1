@@ -17,6 +17,11 @@ function Write-Log($msg) {
   if ((Get-Item $log).Length -gt 1MB) { Move-Item -Force $log "$log.1" }
 }
 
+# Free-disk breadcrumb per tick (review move 4): the WSL2 vhdx grows until the
+# disk chokes, and the first legible symptom used to be everything failing.
+$freeGb = [math]::Round((Get-PSDrive C).Free / 1GB, 1)
+if ($freeGb -lt 15) { Write-Log "LOW DISK: C: has ${freeGb}GB free — run update.ps1 (prunes) or clean the vhdx" }
+
 docker info *> $null
 if ($LASTEXITCODE -ne 0) {
   Write-Log 'docker not responding — starting Docker Desktop'

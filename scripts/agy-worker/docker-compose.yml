@@ -10,7 +10,10 @@ services:
       context: ../..
       dockerfile: scripts/agy-worker/Dockerfile
       args:
-        WORKER_GIT_SHA: ${WORKER_GIT_SHA:-dev}
+        # REQUIRED, not defaulted: a manual `docker compose build` without the
+        # SHA used to ship version "dev", re-opening the drift blindspot
+        # dispatch-health exists to close (observed day 1). update.ps1 sets it.
+        WORKER_GIT_SHA: ${WORKER_GIT_SHA:?set by update.ps1 — for a manual build, export WORKER_GIT_SHA=$(git rev-parse --short=12 HEAD)}
     image: agy-worker:local
     container_name: agy-worker
     restart: unless-stopped
