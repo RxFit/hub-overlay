@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
-import { getSpaceReadState, listChatMessages } from '@/lib/google'
+import { getSpaceReadState, countChatMessagesSince } from '@/lib/google'
 
 export const runtime = 'nodejs'
 
@@ -43,11 +43,10 @@ export async function GET(req: NextRequest) {
             const readState = await getSpaceReadState(accessToken, spaceId)
             if (!readState.lastReadTime) return
 
-            const messages = await listChatMessages(accessToken, spaceId, 50)
-            const lastRead = new Date(readState.lastReadTime).getTime()
-            const count = messages.filter(
-              m => new Date(m.createTime).getTime() > lastRead
-            ).length
+            // Server-side `createTime >` filter + field mask: Google returns
+            // only the names of unread messages, not 50 full bodies per space
+            // per poll. Count semantics unchanged (capped at 50).
+            const count = await countChatMessagesSince(accessToken, spaceId, readState.lastReadTime, 50)
 
             unread[spaceId] = count
             total += count

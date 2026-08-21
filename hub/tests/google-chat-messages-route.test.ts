@@ -15,8 +15,10 @@ const { state } = vi.hoisted(() => ({
     session: null as unknown,
     token: null as unknown,
     auditRows: [] as Record<string, unknown>[],
-    listChatMessages: vi.fn(),
+    listChatMessagesPage: vi.fn(),
     sendChatMessage: vi.fn(),
+    updateChatMessage: vi.fn(),
+    deleteChatMessage: vi.fn(),
   },
 }))
 
@@ -29,13 +31,15 @@ vi.mock('@/lib/ai-audit', () => ({
   }),
 }))
 vi.mock('@/lib/google', () => ({
-  listChatMessages: (...a: unknown[]) => state.listChatMessages(...a),
+  listChatMessagesPage: (...a: unknown[]) => state.listChatMessagesPage(...a),
   sendChatMessage: (...a: unknown[]) => state.sendChatMessage(...a),
+  updateChatMessage: (...a: unknown[]) => state.updateChatMessage(...a),
+  deleteChatMessage: (...a: unknown[]) => state.deleteChatMessage(...a),
 }))
 
 process.env.NEXTAUTH_SECRET = 'test-gate-secret'
 
-import { GET, POST } from '@/app/api/google/chat/messages/route'
+import { GET, POST, PATCH, DELETE } from '@/app/api/google/chat/messages/route'
 import { issueGateToken } from '@/lib/gateToken'
 import { _reset as resetRateLimit, ACTION_LIMITS } from '@/lib/rate-limit'
 
@@ -54,8 +58,10 @@ beforeEach(() => {
   state.session = { user: { email: 'danny@rxfitatx.com' } }
   state.token = { accessToken: 'goog-token' }
   state.auditRows = []
-  state.listChatMessages.mockReset()
+  state.listChatMessagesPage.mockReset()
   state.sendChatMessage.mockReset()
+  state.updateChatMessage.mockReset()
+  state.deleteChatMessage.mockReset()
   vi.spyOn(console, 'error').mockImplementation(() => {})
   resetRateLimit()
 })
@@ -74,38 +80,54 @@ describe('GET /api/google/chat/messages', () => {
     expect((await res.json()).error).toBe('Missing spaceId')
   })
 
-  it('returns messages, forwarding spaceId and pageSize', async () => {
-    state.listChatMessages.mockResolvedValue([{ name: 'm1' }])
+  it('returns messages + continuation token, forwarding spaceId and pageSize', async () => {
+    state.listChatMessagesPage.mockResolvedValue({ messages: [{ name: 'm1' }], nextPageToken: 'older-1' })
     const res = await GET(getReq('?spaceId=spaces/x&pageSize=25'))
     expect(res.status).toBe(200)
-    expect((await res.json()).messages).toEqual([{ name: 'm1' }])
-    expect(state.listChatMessages).toHaveBeenCalledWith('goog-token', 'spaces/x', 25, { threadName: undefined })
+    expect(await res.json()).toEqual({ messages: [{ name: 'm1' }], nextPageToken: 'older-1' })
+    expect(state.listChatMessagesPage).toHaveBeenCalledWith('goog-token', 'spaces/x', 25, {
+      threadName: undefined,
+      pageToken: undefined,
+    })
+  })
+
+  it('forwards pageToken so "Show earlier messages" continues the listing', async () => {
+    state.listChatMessagesPage.mockResolvedValue({ messages: [] })
+    await GET(getReq('?spaceId=spaces/x&pageToken=older-1'))
+    expect(state.listChatMessagesPage).toHaveBeenCalledWith('goog-token', 'spaces/x', 50, {
+      threadName: undefined,
+      pageToken: 'older-1',
+    })
   })
 
   it('forwards a well-formed threadName so the thread view gets the FULL thread', async () => {
-    state.listChatMessages.mockResolvedValue([])
+    state.listChatMessagesPage.mockResolvedValue({ messages: [] })
     const res = await GET(getReq('?spaceId=spaces/x&threadName=' + encodeURIComponent('spaces/x/threads/t1')))
     expect(res.status).toBe(200)
-    expect(state.listChatMessages).toHaveBeenCalledWith('goog-token', 'spaces/x', 50, {
+    expect(state.listChatMessagesPage).toHaveBeenCalledWith('goog-token', 'spaces/x', 50, {
       threadName: 'spaces/x/threads/t1',
+      pageToken: undefined,
     })
   })
 
   it('drops a malformed threadName instead of letting it reach Google as a filter', async () => {
-    state.listChatMessages.mockResolvedValue([])
+    state.listChatMessagesPage.mockResolvedValue({ messages: [] })
     await GET(getReq('?spaceId=spaces/x&threadName=' + encodeURIComponent('spaces/x/threads/t1" OR x')))
-    expect(state.listChatMessages).toHaveBeenCalledWith('goog-token', 'spaces/x', 50, { threadName: undefined })
+    expect(state.listChatMessagesPage).toHaveBeenCalledWith('goog-token', 'spaces/x', 50, {
+      threadName: undefined,
+      pageToken: undefined,
+    })
   })
 
   it('keeps the dedicated 403 MISSING_SCOPE contract for a missing Chat scope (before the generic mapper)', async () => {
-    state.listChatMessages.mockRejectedValue(new Error('Google API error 403: insufficientPermissions'))
+    state.listChatMessagesPage.mockRejectedValue(new Error('Google API error 403: insufficientPermissions'))
     const res = await GET(getReq('?spaceId=spaces/x'))
     expect(res.status).toBe(403) // NOT folded into a reauth 401
     expect((await res.json()).code).toBe('MISSING_SCOPE')
   })
 
   it('maps other upstream failures through the generic mapper (500 → 502)', async () => {
-    state.listChatMessages.mockRejectedValue(new Error('Google API error 500: boom'))
+    state.listChatMessagesPage.mockRejectedValue(new Error('Google API error 500: boom'))
     const res = await GET(getReq('?spaceId=spaces/x'))
     expect(res.status).toBe(502)
   })
@@ -206,5 +228,78 @@ describe('POST /api/google/chat/messages', () => {
     expect(Number(res.headers.get('Retry-After'))).toBeGreaterThan(0)
     expect(state.auditRows[limit]).toMatchObject({ status: 'failed', error: 'rate_limited' })
     expect(state.sendChatMessage).toHaveBeenCalledTimes(limit)
+  })
+})
+
+function patchReq(body: unknown, headers: Record<string, string> = {}) {
+  return new NextRequest('http://localhost/api/google/chat/messages', {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+    headers: { 'content-type': 'application/json', ...headers },
+  })
+}
+function deleteReq(messageName: string, headers: Record<string, string> = {}) {
+  return new NextRequest(
+    `http://localhost/api/google/chat/messages?messageName=${encodeURIComponent(messageName)}`,
+    { method: 'DELETE', headers },
+  )
+}
+
+describe('PATCH /api/google/chat/messages (edit own message)', () => {
+  it('edits via the lib adapter and returns the updated message', async () => {
+    state.updateChatMessage.mockResolvedValue({ name: 'spaces/x/messages/m1', text: 'fixed' })
+    const res = await PATCH(patchReq({ messageName: 'spaces/x/messages/m1', text: ' fixed ' }))
+    expect(res.status).toBe(200)
+    expect((await res.json()).message.text).toBe('fixed')
+    expect(state.updateChatMessage).toHaveBeenCalledWith('goog-token', 'spaces/x/messages/m1', 'fixed')
+  })
+
+  it('is a MANUAL-ONLY surface: an AI-marked request is refused outright', async () => {
+    const res = await PATCH(patchReq(
+      { messageName: 'spaces/x/messages/m1', text: 'x' },
+      { 'x-ai-intent': 'post_chat_message' },
+    ))
+    expect(res.status).toBe(403)
+    expect(state.updateChatMessage).not.toHaveBeenCalled()
+  })
+
+  it('400s a malformed message name before anything reaches Google', async () => {
+    const res = await PATCH(patchReq({ messageName: 'spaces/x/threads/t1', text: 'x' }))
+    expect(res.status).toBe(400)
+    expect(state.updateChatMessage).not.toHaveBeenCalled()
+  })
+
+  it("maps Google's ownership 403 to an actionable message", async () => {
+    state.updateChatMessage.mockRejectedValue(new Error('Google API error 403: PERMISSION_DENIED'))
+    const res = await PATCH(patchReq({ messageName: 'spaces/x/messages/m1', text: 'x' }))
+    expect(res.status).toBe(403)
+    expect((await res.json()).error).toMatch(/your own messages/)
+  })
+})
+
+describe('DELETE /api/google/chat/messages (delete own message)', () => {
+  it('deletes via the lib adapter', async () => {
+    state.deleteChatMessage.mockResolvedValue(undefined)
+    const res = await DELETE(deleteReq('spaces/x/messages/m1'))
+    expect(res.status).toBe(200)
+    expect((await res.json()).ok).toBe(true)
+    expect(state.deleteChatMessage).toHaveBeenCalledWith('goog-token', 'spaces/x/messages/m1')
+  })
+
+  it('is MANUAL-ONLY: an AI-marked request is refused outright', async () => {
+    const res = await DELETE(deleteReq('spaces/x/messages/m1', { 'x-ai-intent': 'post_chat_message' }))
+    expect(res.status).toBe(403)
+    expect(state.deleteChatMessage).not.toHaveBeenCalled()
+  })
+
+  it('400s a missing/malformed messageName', async () => {
+    expect((await DELETE(deleteReq(''))).status).toBe(400)
+    expect((await DELETE(deleteReq('spaces/x/messages/../up'))).status).toBe(400)
+    expect(state.deleteChatMessage).not.toHaveBeenCalled()
+  })
+
+  it('maps upstream failures through the generic mapper (500 -> 502)', async () => {
+    state.deleteChatMessage.mockRejectedValue(new Error('Google API error 500: down'))
+    expect((await DELETE(deleteReq('spaces/x/messages/m1'))).status).toBe(502)
   })
 })

@@ -203,6 +203,76 @@ describe('gsc_search_analytics', () => {
   })
 })
 
+describe('search_gmail', () => {
+  const GMAIL_THREAD = {
+    id: 'thr-1',
+    messages: [
+      {
+        id: 'msg-1',
+        threadId: 'thr-1',
+        labelIds: ['INBOX', 'UNREAD'],
+        snippet: 'Here is the June invoice you asked about',
+        internalDate: '1755000000000',
+        payload: {
+          headers: [
+            { name: 'From', value: 'billing@vendor.com' },
+            { name: 'To', value: 'danny@rxfitatx.com' },
+            { name: 'Subject', value: 'June invoice' },
+            { name: 'Date', value: 'Mon, 11 Aug 2026 09:00:00 -0500' },
+            { name: 'List-Unsubscribe', value: '<https://vendor.com/unsub>' },
+          ],
+        },
+      },
+    ],
+  }
+
+  function stubGmail() {
+    const calls: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        calls.push(url)
+        if (/\/threads\?/.test(url)) {
+          return new Response(JSON.stringify({ threads: [{ id: 'thr-1' }] }), { status: 200 })
+        }
+        return new Response(JSON.stringify(GMAIL_THREAD), { status: 200 })
+      }),
+    )
+    return calls
+  }
+
+  it('searches with the Gmail query grammar and returns fenced compact summaries', async () => {
+    const calls = stubGmail()
+    const tool = getTool('search_gmail')!
+    const result = await tool.execute({ query: 'from:vendor invoice newer_than:60d' }, ctx())
+
+    // The grammar reaches Gmail verbatim (encoded), unrestricted to INBOX.
+    expect(decodeURIComponent(calls[0].replace(/\+/g, ' '))).toContain('q=from:vendor invoice newer_than:60d')
+    expect(calls[0]).not.toContain('labelIds')
+
+    expect(result.summary).toContain('1 thread(s)')
+    expect(result.fenced).toContain('June invoice')
+    expect(result.fenced).toContain('billing@vendor.com')
+    expect(result.fenced).toContain('https://mail.google.com/mail/u/0/#all/thr-1')
+    // Compact subset only — the raw sender-controlled header map must NOT ship.
+    expect(result.fenced).not.toContain('List-Unsubscribe')
+  })
+
+  it('reports NO_RESULTS as a note, not an error', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({}), { status: 200 })))
+    const result = await getTool('search_gmail')!.execute({ query: 'zzz-nothing' }, ctx())
+    expect(result.note).toBe('NO_RESULTS')
+    expect(result.fenced).toBe('')
+  })
+
+  it('rejects out-of-shape arguments before anything is called', async () => {
+    const calls = stubGmail()
+    await expect(getTool('search_gmail')!.execute({ query: 'x' }, ctx())).rejects.toThrow()
+    await expect(getTool('search_gmail')!.execute({ query: 'ok query', maxResults: 999 }, ctx())).rejects.toThrow()
+    expect(calls).toHaveLength(0)
+  })
+})
+
 describe('calendar_freebusy', () => {
   it('is registered in the workspace group and reachable by staff', () => {
     // The defect this closes: queryFreeBusy shipped with no consumer at all.

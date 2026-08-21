@@ -8113,6 +8113,102 @@ a:hover .rx-arrow {
   color: var(--text-primary);
   line-height: 1.6;
   word-break: break-word;
+  /* Chat messages are frequently multi-line; without this every newline
+     collapsed into a space. */
+  white-space: pre-wrap;
+}
+
+/* ── Scrollback ── */
+.chat-load-older {
+  align-self: center;
+  margin: 0 auto var(--space-2);
+  padding: 4px 14px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
+}
+
+.chat-load-older:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent-border);
+}
+
+.chat-load-older:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* ── In-message Chat markup ── */
+.chat-msg__code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0 4px;
+}
+
+.chat-msg__codeblock {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  margin: 4px 0;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.chat-msg__link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  word-break: break-all;
+}
+
+/* ── Attachment chips ── */
+.chat-msg__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: 2px;
+}
+
+.chat-msg-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  color: var(--text-primary);
+  text-decoration: none;
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+a.chat-msg-attachment:hover {
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
+.chat-msg-attachment--nolink {
+  color: var(--text-muted);
+}
+
+.chat-msg-attachment__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 260px;
 }
 
 /* App/bot sender + space badge */
@@ -8135,40 +8231,116 @@ a:hover .rx-arrow {
   font-style: italic;
 }
 
-/* ── Reply in thread (hover action + collapsed-thread chip) ── */
-.chat-msg__reply-action {
+/* ── Message hover actions (reply in thread / edit / delete) ── */
+.chat-msg__actions {
   position: absolute;
   top: -6px;
   right: 4px;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
+  gap: 2px;
+  padding: 1px;
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  color: var(--text-secondary);
-  cursor: pointer;
   opacity: 0;
-  transition: opacity var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+  transition: opacity var(--duration-fast) var(--ease-out);
 }
 
-.chat-msg:hover .chat-msg__reply-action,
-.chat-msg__reply-action:focus-visible {
+.chat-msg:hover .chat-msg__actions,
+.chat-msg__actions:focus-within {
   opacity: 1;
 }
 
-/* No hover on touch — keep the action discoverable at rest */
+/* No hover on touch — keep the actions discoverable at rest */
 @media (hover: none) {
-  .chat-msg__reply-action {
+  .chat-msg__actions {
     opacity: 0.55;
   }
 }
 
-.chat-msg__reply-action:hover {
+.chat-msg__action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out);
+}
+
+.chat-msg__action:hover:not(:disabled) {
   color: var(--accent);
-  border-color: var(--accent-border);
+  background: var(--bg-card);
+}
+
+.chat-msg__action--danger {
+  color: var(--danger);
+}
+
+.chat-msg__action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ── Inline edit of an own message ── */
+.chat-msg-edit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.chat-msg-edit__input {
+  width: 100%;
+}
+
+.chat-msg-edit__buttons {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.chat-msg-edit__btn {
+  padding: 3px 12px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.chat-msg-edit__btn--save {
+  background: var(--accent-gradient);
+  border: none;
+  color: var(--btn-text);
+  font-weight: 600;
+}
+
+.chat-msg-edit__btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.chat-msg-edit__error,
+.chat-msg__action-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--text-2xs);
+  color: var(--danger);
+}
+
+.chat-msg__action-error button {
+  background: none;
+  border: none;
+  color: var(--danger);
+  cursor: pointer;
+  padding: 0 4px;
 }
 
 .chat-thread-group {

@@ -351,6 +351,21 @@ export const GoogleChatSendSchema = z.object({
   threadKey: z.string().max(256).optional(),
 })
 
+/** Message resource-name shape shared by the edit/delete bodies below.
+ *  Message ids may contain dots (unlike space/thread ids). */
+const chatMessageName = z.string().trim().regex(/^spaces\/[\w-]+\/messages\/[\w.-]+$/).max(512)
+
+/** Edit the text of one of the CALLER'S OWN messages (Google enforces ownership). */
+export const GoogleChatEditSchema = z.object({
+  messageName: chatMessageName,
+  text: z.string().trim().min(1).max(4096),
+})
+
+/** Delete one of the caller's own messages. */
+export const GoogleChatDeleteSchema = z.object({
+  messageName: chatMessageName,
+})
+
 /**
  * Grant access to a Drive file the Hub created.
  *

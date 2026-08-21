@@ -747,6 +747,38 @@ export async function listRecentGmailThreads(
   return threads.filter((t): t is GmailThreadSummary => t !== null)
 }
 
+/**
+ * Search Gmail threads with the FULL Gmail query grammar (from:, to:,
+ * subject:, newer_than:, has:attachment, …). Deliberately not restricted to
+ * INBOX — search exists precisely to reach archived mail. Same metadata-only
+ * fan-out and fail-soft per-thread handling as listRecentGmailThreads.
+ */
+export async function searchGmailThreads(
+  accessToken: string,
+  query: string,
+  opts?: { maxResults?: number; userEmail?: string }
+): Promise<GmailThreadSummary[]> {
+  const maxResults = opts?.maxResults ?? 10
+  const params = new URLSearchParams({ q: query, maxResults: String(maxResults) })
+  const list = await googleFetch<{ threads?: { id: string }[] }>(
+    `${GMAIL_BASE}/threads?${params}`,
+    accessToken
+  )
+  if (!list.threads?.length) return []
+
+  const threads = await Promise.all(
+    list.threads.map(t =>
+      googleFetch<GmailThread>(
+        `${GMAIL_BASE}/threads/${t.id}?format=metadata&${GMAIL_TRIAGE_HEADER_QS}`,
+        accessToken
+      )
+        .then(thread => parseGmailThreadMeta(thread, { userEmail: opts?.userEmail }))
+        .catch(() => null)
+    )
+  )
+  return threads.filter((t): t is GmailThreadSummary => t !== null)
+}
+
 /* ══════════════════════════════════════════
    Google Chat  —  https://chat.googleapis.com/v1
    ══════════════════════════════════════════ */
@@ -763,6 +795,19 @@ export interface ChatSpace {
   adminInstalled?: boolean
   /** THREADED_MESSAGES | GROUPED_MESSAGES | UNTHREADED_MESSAGES — gates the reply-in-thread UI. */
   spaceThreadingState?: string
+}
+
+/** One file attached to a Chat message (the API field is `attachment[]`). */
+export interface ChatAttachment {
+  name?: string                   // "spaces/x/messages/y/attachments/z"
+  contentName?: string            // original filename
+  contentType?: string            // MIME type
+  thumbnailUri?: string
+  /** Browser-facing download URL (session-cookie authed on Google's side). */
+  downloadUri?: string
+  source?: string                 // 'DRIVE_FILE' | 'UPLOADED_CONTENT'
+  driveDataRef?: { driveFileId?: string }
+  attachmentDataRef?: { resourceName?: string }
 }
 
 export interface ChatMessage {
@@ -783,6 +828,9 @@ export interface ChatMessage {
   space?: { name: string }
   clientAssignedMessageId?: string
   annotations?: unknown[]
+  /** Files dropped into the message — without rendering these, a screenshot
+   *  or PDF share appears in the Hub as a blank bubble. */
+  attachment?: ChatAttachment[]
   /** Present on card-only app messages (no text body to render). */
   cardsV2?: unknown[]
 }
@@ -817,13 +865,24 @@ export async function listChatSpaces(
   return data.spaces ?? []
 }
 
-/** List recent messages from a Google Chat space (optionally one thread's messages). */
-export async function listChatMessages(
+export interface ChatMessagesPage {
+  /** Chronological (oldest first) within this page. */
+  messages: ChatMessage[]
+  /** Continues the createTime-desc listing — i.e. the next page is OLDER. */
+  nextPageToken?: string
+}
+
+/**
+ * One page of a space's messages (optionally one thread's), newest window
+ * first. `pageToken` walks BACKWARD through history — that is what the
+ * panel's "Show earlier messages" control feeds back in.
+ */
+export async function listChatMessagesPage(
   accessToken: string,
   spaceId: string,
   pageSize = 50,
-  opts: { threadName?: string } = {}
-): Promise<ChatMessage[]> {
+  opts: { threadName?: string; pageToken?: string } = {}
+): Promise<ChatMessagesPage> {
   // spaceId can be "spaces/XXXXXXXX" or just "XXXXXXXX"
   const spaceName = spaceId.startsWith('spaces/') ? spaceId : `spaces/${spaceId}`
   const params = new URLSearchParams({
@@ -833,12 +892,61 @@ export async function listChatMessages(
   // Scoping to one thread fetches its COMPLETE history, including replies older
   // than the space view's page window. (Filter grammar wants no quotes here.)
   if (opts.threadName) params.set('filter', `thread.name = ${opts.threadName}`)
+  // Opaque continuation token — URL-encoded transport only, never interpreted.
+  if (opts.pageToken) params.set('pageToken', opts.pageToken)
   const data = await googleFetch<ChatMessagesResponse>(
     `${CHAT_BASE}/${spaceName}/messages?${params}`,
     accessToken
   )
   // Return in chronological order (oldest first for chat display)
-  return (data.messages ?? []).reverse()
+  return { messages: (data.messages ?? []).reverse(), nextPageToken: data.nextPageToken }
+}
+
+/** List recent messages from a Google Chat space (optionally one thread's messages). */
+export async function listChatMessages(
+  accessToken: string,
+  spaceId: string,
+  pageSize = 50,
+  opts: { threadName?: string } = {}
+): Promise<ChatMessage[]> {
+  return (await listChatMessagesPage(accessToken, spaceId, pageSize, opts)).messages
+}
+
+/**
+ * Count messages newer than `sinceIso` in a space — the unread-badge read.
+ *
+ * The previous approach pulled the latest 50 FULL messages per space and
+ * compared timestamps in JS, which at a 60s poll across a dozen spaces moved
+ * megabytes an hour to paint badge numbers. Here Google does both halves:
+ * the `createTime >` filter runs server-side and the `fields` mask strips the
+ * response to bare names + timestamps, so each space costs a few hundred bytes.
+ * The count semantics are unchanged (capped at `cap`, like the old 50-message
+ * window).
+ */
+export async function countChatMessagesSince(
+  accessToken: string,
+  spaceId: string,
+  sinceIso: string,
+  cap = 50
+): Promise<number> {
+  // `sinceIso` comes from Google's own readstate response, but it lands inside
+  // a filter expression — refuse anything that could rewrite the grammar.
+  if (!/^[0-9TZ:.+-]+$/.test(sinceIso)) {
+    throw new Error(`countChatMessagesSince: malformed timestamp ${JSON.stringify(sinceIso)}`)
+  }
+  const spaceName = spaceId.startsWith('spaces/') ? spaceId : `spaces/${spaceId}`
+  const params = new URLSearchParams({
+    pageSize: String(cap),
+    // createTime comparisons take a double-quoted RFC 3339 timestamp (unlike
+    // thread.name, which the grammar wants bare).
+    filter: `createTime > "${sinceIso}"`,
+    fields: 'messages(name,createTime)',
+  })
+  const data = await googleFetch<ChatMessagesResponse>(
+    `${CHAT_BASE}/${spaceName}/messages?${params}`,
+    accessToken
+  )
+  return (data.messages ?? []).length
 }
 
 /**
@@ -886,6 +994,65 @@ export async function sendChatMessage(
       body: JSON.stringify(body),
     }
   )
+}
+
+/** Message resource name: "spaces/<id>/messages/<id>" (ids may contain dots). */
+export const CHAT_MESSAGE_NAME_RE = /^spaces\/[\w-]+\/messages\/[\w.-]+$/
+
+/**
+ * Edit the text of a message the CALLER authored. Google enforces ownership —
+ * a PATCH against someone else's message fails with 403; the Hub adds no
+ * ownership logic of its own beyond hiding the affordance.
+ */
+export async function updateChatMessage(
+  accessToken: string,
+  messageName: string,
+  text: string
+): Promise<ChatMessage> {
+  if (!CHAT_MESSAGE_NAME_RE.test(messageName)) {
+    throw new Error(`updateChatMessage: malformed message name ${JSON.stringify(messageName)}`)
+  }
+  return googleFetch<ChatMessage>(
+    `${CHAT_BASE}/${messageName}?updateMask=text`,
+    accessToken,
+    { method: 'PATCH', body: JSON.stringify({ text }) }
+  )
+}
+
+/** Delete a message the caller authored (Google enforces ownership). */
+export async function deleteChatMessage(
+  accessToken: string,
+  messageName: string
+): Promise<void> {
+  if (!CHAT_MESSAGE_NAME_RE.test(messageName)) {
+    throw new Error(`deleteChatMessage: malformed message name ${JSON.stringify(messageName)}`)
+  }
+  await googleFetch<Record<string, never>>(
+    `${CHAT_BASE}/${messageName}`,
+    accessToken,
+    { method: 'DELETE' }
+  )
+}
+
+/**
+ * The caller's own Chat user resource name ("users/<id>"), or null.
+ *
+ * Chat message senders carry only "users/<id>" — no email — so "is this
+ * message MINE?" needs the caller's People id, which people/me exposes as
+ * "people/<id>" (same id space). Null on any failure: the UI then simply
+ * never offers edit/delete, which is the correct degradation.
+ */
+export async function getChatSelfUserName(accessToken: string): Promise<string | null> {
+  try {
+    const me = await googleFetch<{ resourceName?: string }>(
+      'https://people.googleapis.com/v1/people/me?personFields=metadata',
+      accessToken
+    )
+    const id = me.resourceName?.match(/^people\/(.+)$/)?.[1]
+    return id ? `users/${id}` : null
+  } catch {
+    return null
+  }
 }
 
 /* ── Space Members (for @mentions) ── */

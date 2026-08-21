@@ -1,9 +1,14 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
+  countChatMessagesSince,
+  deleteChatMessage,
+  getChatSelfUserName,
   hydrateBotDmDisplayNames,
   listChatMessages,
+  listChatMessagesPage,
   listChatSpaces,
   sendChatMessage,
+  updateChatMessage,
   type ChatSpace,
 } from './google'
 
@@ -93,6 +98,104 @@ describe('listChatMessages — thread scoping', () => {
     const fetchMock = stubFetch({ messages: [] })
     await listChatMessages('tok', 'spaces/S')
     expect(calledUrl(fetchMock)).not.toContain('filter=')
+  })
+})
+
+describe('listChatMessagesPage — scrollback continuation', () => {
+  it('forwards the pageToken, reverses to chronological order and returns the next token', async () => {
+    const fetchMock = stubFetch({
+      messages: [
+        { name: 'spaces/S/messages/m9', createTime: '2026-08-20T10:09:00Z' },
+        { name: 'spaces/S/messages/m8', createTime: '2026-08-20T10:08:00Z' },
+      ],
+      nextPageToken: 'older-2',
+    })
+    const page = await listChatMessagesPage('tok', 'spaces/S', 50, { pageToken: 'older-1' })
+
+    expect(calledUrl(fetchMock)).toContain('pageToken=older-1')
+    expect(page.messages.map(m => m.name)).toEqual([
+      'spaces/S/messages/m8',
+      'spaces/S/messages/m9',
+    ])
+    expect(page.nextPageToken).toBe('older-2')
+  })
+
+  it('omits pageToken (and returns no continuation) on a final page', async () => {
+    const fetchMock = stubFetch({ messages: [] })
+    const page = await listChatMessagesPage('tok', 'spaces/S')
+    expect(calledUrl(fetchMock)).not.toContain('pageToken=')
+    expect(page.nextPageToken).toBeUndefined()
+  })
+})
+
+describe('updateChatMessage / deleteChatMessage — own-message maintenance', () => {
+  it('PATCHes only the text field of the named message', async () => {
+    const fetchMock = stubFetch({ name: 'spaces/S/messages/m1', text: 'fixed' })
+    await updateChatMessage('tok', 'spaces/S/messages/m1', 'fixed')
+
+    const url = calledUrl(fetchMock)
+    expect(url).toContain('/spaces/S/messages/m1?updateMask=text')
+    const init = (fetchMock.mock.calls[0] as unknown[])[1] as RequestInit
+    expect(init.method).toBe('PATCH')
+    expect(JSON.parse(init.body as string)).toEqual({ text: 'fixed' })
+  })
+
+  it('DELETEs the named message', async () => {
+    const fetchMock = stubFetch({})
+    await deleteChatMessage('tok', 'spaces/S/messages/m1.sub')
+    const init = (fetchMock.mock.calls[0] as unknown[])[1] as RequestInit
+    expect(init.method).toBe('DELETE')
+    expect(calledUrl(fetchMock)).toContain('/spaces/S/messages/m1.sub')
+  })
+
+  it('refuses malformed message names before anything reaches the wire', async () => {
+    const fetchMock = stubFetch({})
+    await expect(updateChatMessage('tok', 'spaces/S/messages/../evil', 'x')).rejects.toThrow(/malformed/)
+    await expect(deleteChatMessage('tok', 'not-a-name')).rejects.toThrow(/malformed/)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('getChatSelfUserName', () => {
+  it('maps the People id onto the Chat users/ namespace', async () => {
+    stubFetch({ resourceName: 'people/108234' })
+    expect(await getChatSelfUserName('tok')).toBe('users/108234')
+  })
+
+  it('returns null (never throws) when the lookup fails or is shapeless', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { status: 403 })))
+    expect(await getChatSelfUserName('tok')).toBeNull()
+    stubFetch({})
+    expect(await getChatSelfUserName('tok')).toBeNull()
+  })
+})
+
+describe('countChatMessagesSince — the lean unread read', () => {
+  it('sends a quoted createTime filter plus a field mask, and returns the count', async () => {
+    const fetchMock = stubFetch({
+      messages: [
+        { name: 'spaces/S/messages/m1', createTime: '2026-08-20T10:05:00Z' },
+        { name: 'spaces/S/messages/m2', createTime: '2026-08-20T10:06:00Z' },
+      ],
+    })
+    const count = await countChatMessagesSince('tok', 'spaces/S', '2026-08-20T10:00:00Z')
+    expect(count).toBe(2)
+
+    const url = decodeURIComponent(calledUrl(fetchMock).replace(/\+/g, ' '))
+    expect(url).toContain('filter=createTime > "2026-08-20T10:00:00Z"')
+    expect(url).toContain('fields=messages(name,createTime)')
+  })
+
+  it('returns 0 for an empty (fields-masked) response body', async () => {
+    stubFetch({})
+    expect(await countChatMessagesSince('tok', 'spaces/S', '2026-08-20T10:00:00Z')).toBe(0)
+  })
+
+  it('refuses a timestamp that could rewrite the filter grammar', async () => {
+    stubFetch({})
+    await expect(
+      countChatMessagesSince('tok', 'spaces/S', '2026" OR createTime > "1970'),
+    ).rejects.toThrow(/malformed timestamp/)
   })
 })
 

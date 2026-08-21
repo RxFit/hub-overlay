@@ -3,8 +3,8 @@ import type { NextRequest } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
-import { listChatMessages, sendChatMessage } from '@/lib/google'
-import { GoogleChatSendSchema } from '@/lib/zod-schemas'
+import { listChatMessagesPage, sendChatMessage, updateChatMessage, deleteChatMessage } from '@/lib/google'
+import { GoogleChatSendSchema, GoogleChatEditSchema, GoogleChatDeleteSchema } from '@/lib/zod-schemas'
 import { requireAiGate, AI_INTENT_HEADER, GATE_TOKEN_HEADER } from '@/lib/requireGate'
 import { recordAiAction } from '@/lib/ai-audit'
 import { checkActionLimit } from '@/lib/rate-limit'
@@ -25,14 +25,19 @@ export async function GET(req: NextRequest) {
     threadNameRaw && /^spaces\/[\w-]+\/threads\/[\w-]+$/.test(threadNameRaw)
       ? threadNameRaw
       : undefined
+  // Continuation token for "Show earlier messages". Opaque to us — bounded and
+  // passed through as an encoded query value, never interpreted.
+  const pageTokenRaw = searchParams.get('pageToken')
+  const pageToken =
+    pageTokenRaw && pageTokenRaw.length <= 2048 ? pageTokenRaw : undefined
 
   if (!spaceId) {
     return NextResponse.json({ error: 'Missing spaceId' }, { status: 400 })
   }
 
   try {
-    const messages = await listChatMessages(auth.accessToken, spaceId, pageSize, { threadName })
-    return NextResponse.json({ messages })
+    const page = await listChatMessagesPage(auth.accessToken, spaceId, pageSize, { threadName, pageToken })
+    return NextResponse.json({ messages: page.messages, nextPageToken: page.nextPageToken })
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error'
     console.error('[api/google/chat/messages GET]', msg)
@@ -130,5 +135,88 @@ export async function POST(req: NextRequest) {
     const msg = err instanceof Error ? err.message : 'Unknown error'
     console.error('[api/google/chat/messages POST]', msg)
     return googleApiErrorResponse(err)
+  }
+}
+
+/**
+ * Ownership 403s from Google get a user-actionable message. Genuine
+ * missing-scope also lands here, but the panel cannot load at all without the
+ * chat scopes, so "not your message" is the case a signed-in user actually
+ * hits. All other failures go through the generic mapper.
+ */
+function mapModifyError(err: unknown, verb: 'edit' | 'delete') {
+  const msg = err instanceof Error ? err.message : 'Unknown error'
+  console.error(`[api/google/chat/messages ${verb.toUpperCase()}]`, msg)
+  if (msg.includes('403') || msg.includes('PERMISSION_DENIED')) {
+    return NextResponse.json(
+      { error: `Google refused the change — you can only ${verb} your own messages.` },
+      { status: 403 }
+    )
+  }
+  return googleApiErrorResponse(err)
+}
+
+/** True when the request carries the AI marker — edit/delete are MANUAL-only
+ *  surfaces: there is deliberately no gate/intent pathway for them at all. */
+function isAiMarked(req: NextRequest): boolean {
+  return req.headers.get(AI_INTENT_HEADER) !== null
+}
+
+/** PATCH — edit the text of one of the caller's own messages. */
+export async function PATCH(req: NextRequest) {
+  const auth = await resolveGoogleAuth(req)
+  if (!auth.ok) return auth.response
+  if (isAiMarked(req)) {
+    return NextResponse.json(
+      { error: 'Editing Chat messages is not available to AI actions.' },
+      { status: 403 }
+    )
+  }
+
+  try {
+    const parsed = GoogleChatEditSchema.safeParse(await req.json())
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: 'Validation failed', details: parsed.error.issues },
+        { status: 400 }
+      )
+    }
+    const message = await updateChatMessage(
+      auth.accessToken,
+      parsed.data.messageName,
+      parsed.data.text
+    )
+    return NextResponse.json({ message })
+  } catch (err) {
+    return mapModifyError(err, 'edit')
+  }
+}
+
+/** DELETE — remove one of the caller's own messages (?messageName=...). */
+export async function DELETE(req: NextRequest) {
+  const auth = await resolveGoogleAuth(req)
+  if (!auth.ok) return auth.response
+  if (isAiMarked(req)) {
+    return NextResponse.json(
+      { error: 'Deleting Chat messages is not available to AI actions.' },
+      { status: 403 }
+    )
+  }
+
+  const parsed = GoogleChatDeleteSchema.safeParse({
+    messageName: new URL(req.url).searchParams.get('messageName') ?? '',
+  })
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: 'Validation failed', details: parsed.error.issues },
+      { status: 400 }
+    )
+  }
+
+  try {
+    await deleteChatMessage(auth.accessToken, parsed.data.messageName)
+    return NextResponse.json({ ok: true })
+  } catch (err) {
+    return mapModifyError(err, 'delete')
   }
 }
