@@ -85,6 +85,33 @@ const OPS_MESSAGES = [
   },
 ]
 
+/** Fourth OPS message: Chat markup + a Drive attachment (own message → editable). */
+const OPS_EXTRA_MESSAGE = {
+  name: 'spaces/OPS/messages/m4',
+  sender: sender('danny', 'Danny', 'HUMAN'),
+  createTime: '2026-08-12T14:15:00Z',
+  text: 'Review the *movement screening* deck',
+  thread: { name: 'spaces/OPS/threads/T3' },
+  attachment: [{
+    name: 'spaces/OPS/messages/m4/attachments/1',
+    contentName: 'screening-deck.pdf',
+    contentType: 'application/pdf',
+    source: 'DRIVE_FILE',
+    driveDataRef: { driveFileId: 'dfile123' },
+  }],
+}
+
+/** Page of OLDER history behind the live window (served for pageToken=older-1). */
+const OPS_OLDER_MESSAGES = [
+  {
+    name: 'spaces/OPS/messages/m0',
+    sender: sender('alex', 'Alex', 'HUMAN'),
+    createTime: '2026-08-12T13:00:00Z',
+    text: 'welcome to the space',
+    thread: { name: 'spaces/OPS/threads/T0' },
+  },
+]
+
 const HERMES_MESSAGES = [
   {
     name: 'spaces/HERMES/messages/h1',
@@ -127,6 +154,7 @@ async function mockBackend(page: Page) {
   await page.route('**/api/tool-artifacts**', route => route.fulfill({ json: { artifacts: [] } }))
 
   // Google Chat mocks — specific enough to serve the panel's whole lifecycle.
+  await page.route('**/api/google/chat/me', route => route.fulfill({ json: { name: 'users/danny' } }))
   await page.route('**/api/google/chat/spaces**', route => route.fulfill({ json: SPACES_PAYLOAD }))
   await page.route('**/api/google/chat/members**', route => route.fulfill({ json: { members: [] } }))
   await page.route('**/api/google/chat/unread**', route => route.fulfill({ json: { unread: {}, total: 0 } }))
@@ -135,6 +163,12 @@ async function mockBackend(page: Page) {
     const req = route.request()
     if (req.method() === 'POST') {
       return route.fulfill({ json: { message: { name: 'spaces/X/messages/new' } } })
+    }
+    if (req.method() === 'PATCH') {
+      return route.fulfill({ json: { message: { name: 'edited' } } })
+    }
+    if (req.method() === 'DELETE') {
+      return route.fulfill({ json: { ok: true } })
     }
     const url = new URL(req.url())
     const spaceId = url.searchParams.get('spaceId')
@@ -145,7 +179,12 @@ async function mockBackend(page: Page) {
     if (spaceId === 'spaces/HERMES') {
       return route.fulfill({ json: { messages: HERMES_MESSAGES } })
     }
-    return route.fulfill({ json: { messages: OPS_MESSAGES } })
+    if (url.searchParams.get('pageToken') === 'older-1') {
+      return route.fulfill({ json: { messages: OPS_OLDER_MESSAGES } })
+    }
+    return route.fulfill({
+      json: { messages: [...OPS_MESSAGES, OPS_EXTRA_MESSAGE], nextPageToken: 'older-1' },
+    })
   })
 }
 
@@ -234,4 +273,59 @@ test('an app DM (Hermes) is listed under Apps, renders the APP badge, and plain 
   expect(body).toMatchObject({ spaceId: 'spaces/HERMES', text: 'status?' })
   expect(body.threadName).toBeUndefined()
   expect(body.threadKey).toBeUndefined()
+})
+
+test('Chat markup renders, attachments become chips, and scrollback loads older history', async ({ page }) => {
+  await page.getByRole('option', { name: /RxFit Ops/ }).tap()
+  await expect(page.getByText('Standup moved to 3pm')).toBeVisible({ timeout: 15_000 })
+
+  // *single-asterisk* is BOLD in Chat's grammar (markdown would say italic).
+  await expect(page.locator('.chat-msg__bubble strong', { hasText: 'movement screening' })).toBeVisible()
+
+  // The attachment renders as a chip linking to the Drive viewer.
+  const chip = page.locator('a.chat-msg-attachment')
+  await expect(chip).toHaveText(/screening-deck\.pdf/)
+  await expect(chip).toHaveAttribute('href', 'https://drive.google.com/file/d/dfile123/view')
+
+  // Scrollback: the older page loads and renders ABOVE the live window.
+  const [olderReq] = await Promise.all([
+    page.waitForRequest(r => r.url().includes('pageToken=older-1')),
+    page.getByRole('button', { name: 'Show earlier messages' }).tap(),
+  ])
+  expect(olderReq.method()).toBe('GET')
+  await expect(page.getByText('welcome to the space')).toBeVisible()
+})
+
+test('own messages can be edited in place and deleted with a two-tap confirm', async ({ page }) => {
+  await page.getByRole('option', { name: /RxFit Ops/ }).tap()
+  const ownRow = page.locator('.chat-msg', { hasText: 'movement screening' })
+  await expect(ownRow).toBeVisible({ timeout: 15_000 })
+
+  // Edit: pencil → inline editor prefilled with the RAW text (markup intact).
+  await ownRow.getByRole('button', { name: 'Edit message' }).tap()
+  const editor = page.getByRole('textbox', { name: 'Edit message' })
+  await expect(editor).toHaveValue('Review the *movement screening* deck')
+  await editor.fill('Review the updated deck')
+  const [patchReq] = await Promise.all([
+    page.waitForRequest(r => r.method() === 'PATCH' && r.url().includes('/api/google/chat/messages')),
+    page.getByRole('button', { name: 'Save', exact: true }).tap(),
+  ])
+  expect(patchReq.postDataJSON()).toEqual({
+    messageName: 'spaces/OPS/messages/m4',
+    text: 'Review the updated deck',
+  })
+
+  // Delete: trash → explicit confirm → DELETE names the exact message.
+  const otherOwnRow = page.locator('.chat-msg', { hasText: 'Shipping the new screening flow today' })
+  await otherOwnRow.getByRole('button', { name: 'Delete message' }).tap()
+  const [deleteReq] = await Promise.all([
+    page.waitForRequest(r => r.method() === 'DELETE' && r.url().includes('/api/google/chat/messages')),
+    otherOwnRow.getByRole('button', { name: 'Confirm delete' }).tap(),
+  ])
+  expect(decodeURIComponent(deleteReq.url())).toContain('messageName=spaces/OPS/messages/m1')
+
+  // A message that is NOT the caller's own offers no edit/delete.
+  const foreignRow = page.locator('.chat-msg', { hasText: 'Standup moved to 3pm' })
+  await expect(foreignRow.getByRole('button', { name: 'Edit message' })).toHaveCount(0)
+  await expect(foreignRow.getByRole('button', { name: 'Delete message' })).toHaveCount(0)
 })
