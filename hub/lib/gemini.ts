@@ -6,6 +6,7 @@ import { fenceUntrusted, UNTRUSTED_CONTENT_POLICY } from './prompt-safety'
 import { IDLE_TIMEOUT_MS, CONNECT_TIMEOUT_MS } from './timeout-config'
 import { withTimeout } from './timeout'
 import { emit, newRequestId, startTimer, type AiProvider } from './observability'
+import { recordAiRun } from './runs'
 import { shouldTryAgyChat, tryAgyChat } from './agy-chat'
 import type { SystemPromptParts } from './claude'
 
@@ -685,6 +686,21 @@ export async function* streamChat(
       provider: obs.provider ?? 'unknown',
       model: obs.model ?? 'unknown',
     })
+    // Hardening review move 3: the METERED chain joins the ai_runs ledger.
+    // One terminal row per request naming who SERVED — that is the number the
+    // allotment-vs-metered alert thresholds on. agy serves are recorded inside
+    // tryAgyChat (same source 'chat'); recording them here too would double-
+    // count. Fire-and-forget: recordAiRun is internally best-effort.
+    if (obs.provider === 'gemini' || obs.provider === 'claude') {
+      void recordAiRun({
+        engine: obs.provider,
+        model: obs.model,
+        source: 'chat',
+        status: 'ok',
+        latencyMs: obs.timer(),
+        requestId,
+      })
+    }
   } catch (err) {
     emit({
       type: 'ai_error',
@@ -693,6 +709,23 @@ export async function* streamChat(
       code: telemetryErrorCode(err),
       message: telemetryErrorMessage(err),
     })
+    // Terminal metered failure — every fallthrough that ends in an error is a
+    // ledger row too, so "the whole ladder is failing" is a query, not a
+    // Cloud Logging expedition. agy attempt failures were already recorded by
+    // tryAgyChat; provider undefined means nothing connected (default the
+    // chain head's engine).
+    if (obs.provider !== 'agy') {
+      void recordAiRun({
+        engine: obs.provider ?? 'gemini',
+        model: obs.model,
+        source: 'chat',
+        status: 'error',
+        errorClass: telemetryErrorCode(err),
+        error: telemetryErrorMessage(err),
+        latencyMs: obs.timer(),
+        requestId,
+      })
+    }
     throw err
   }
 }

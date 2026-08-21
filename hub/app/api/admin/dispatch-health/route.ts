@@ -12,7 +12,7 @@ import {
   reapExpired,
   sweepStale,
 } from '@/lib/dispatch-store'
-import { recordAiRun } from '@/lib/runs'
+import { chatServeCounts, recordAiRun } from '@/lib/runs'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -127,6 +127,12 @@ export async function GET(req: NextRequest) {
     tablesReady &&
     (!config.dispatchEnabled || workerAlive) &&
     (!probe.ran || probe.ok)
+
+  // Move 3: who actually served the last 24h of chat (status ok, by engine) —
+  // the allotment-vs-metered ratio the alerting thresholds on. Best-effort:
+  // a ledger read failure must not take the health surface down.
+  const served24h = await chatServeCounts().catch(() => ({}) as Record<string, number>)
+
   return NextResponse.json({
     generatedAt: new Date().toISOString(),
     healthy,
@@ -136,6 +142,7 @@ export async function GET(req: NextRequest) {
     workers,
     queueDepths: depths,
     recentJobs: recent,
+    served24h,
     probe,
   })
 }

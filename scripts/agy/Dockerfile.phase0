@@ -32,10 +32,23 @@ USER agyuser
 WORKDIR /home/agyuser
 ENV HOME=/home/agyuser
 
-# Install agy at build time. Pin auto-update off so the binary can't rewrite
-# itself between build and run.
+# Install agy at build time — PINNED (hardening move 2). The curl|bash
+# installer took whatever the release server served that day; the lock file
+# names the exact artifact and the IN-REPO sha512 computed from its bytes
+# when the pin was set, so a build fails loudly rather than silently absorb a
+# new, untested version. Bump deliberately via scripts/agy/update-agy-pin.sh.
+# Auto-update stays off so the binary can't rewrite itself between build and run.
 ENV AGY_CLI_DISABLE_AUTO_UPDATE=true
-RUN curl -fsSL https://antigravity.google/cli/install.sh | bash \
+COPY --chown=agyuser:agyuser agy-version.lock /tmp/agy-version.lock
+RUN . /tmp/agy-version.lock \
+ && echo "installing pinned agy ${AGY_VERSION}" \
+ && mkdir -p /home/agyuser/.local/bin \
+ && curl -fsSL -o /tmp/agy.tar.gz "${AGY_URL}" \
+ && echo "${AGY_SHA512}  /tmp/agy.tar.gz" | sha512sum -c - \
+ && tar -xzf /tmp/agy.tar.gz -C /tmp antigravity \
+ && mv /tmp/antigravity /home/agyuser/.local/bin/agy \
+ && chmod +x /home/agyuser/.local/bin/agy \
+ && rm -f /tmp/agy.tar.gz /tmp/agy-version.lock \
  && /home/agyuser/.local/bin/agy --version || true
 ENV PATH="/home/agyuser/.local/bin:${PATH}"
 

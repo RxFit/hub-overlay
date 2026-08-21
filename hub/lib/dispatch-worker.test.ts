@@ -19,7 +19,7 @@ vi.mock('@/lib/agy', () => ({
   truncateAgyError: (err: unknown) => (err instanceof Error ? err.message : String(err)),
 }))
 
-import { startWorker, workerConfigFromEnv, type WorkerConfig } from './dispatch-worker'
+import { BOOT_CANARY_MARKER, startWorker, workerConfigFromEnv, type WorkerConfig } from './dispatch-worker'
 
 const CFG: WorkerConfig = {
   hubUrl: 'https://hub.test',
@@ -294,5 +294,92 @@ describe('claim → execute → post cycle', () => {
     )
     expect(counts.claim).toBeGreaterThanOrEqual(3)
     expect(sleeps).toHaveLength(0)
+  })
+})
+
+describe('boot canary (hardening move 2)', () => {
+  it('workerConfigFromEnv defaults the canary ON, with WORKER_CANARY=off as the escape hatch', () => {
+    const base = { HUB_URL: 'https://hub.test', AGY_WORKER_SECRET: 's' }
+    const on = workerConfigFromEnv(base) as WorkerConfig
+    expect(on.canary).toBe(true)
+    const off = workerConfigFromEnv({ ...base, WORKER_CANARY: 'off' }) as WorkerConfig
+    expect(off.canary).toBe(false)
+    const tuned = workerConfigFromEnv({ ...base, WORKER_CANARY_RETRY_MS: '60000' }) as WorkerConfig
+    expect(tuned.canaryRetryMs).toBe(60_000)
+  })
+
+  it('a passing canary runs BEFORE any claim, then slots proceed', async () => {
+    const stop = new AbortController()
+    const { fetchFn, counts } = makeFetch({
+      claim: () => {
+        stop.abort()
+        return jsonRes(204)
+      },
+    })
+    const prompts: string[] = []
+    const runFn = vi.fn(async (prompt: string) => {
+      prompts.push(prompt)
+      return { text: `sure: ${BOOT_CANARY_MARKER}`, model: 'm', raw: {}, latencyMs: 5 }
+    })
+    await startWorker({ ...CFG, canary: true }, { fetchFn, runFn, sleepFn: instantSleep, agyVersionFn: async () => null }, stop.signal)
+
+    expect(prompts[0]).toContain(BOOT_CANARY_MARKER) // canary ran first…
+    expect(counts.claim).toBeGreaterThan(0)          // …and slots then claimed
+  })
+
+  it('envelope drift (readable text WITHOUT the marker) blocks claiming until a retry passes', async () => {
+    const stop = new AbortController()
+    const { fetchFn, counts } = makeFetch({
+      claim: () => {
+        stop.abort()
+        return jsonRes(204)
+      },
+    })
+    let calls = 0
+    const runFn = vi.fn(async () => {
+      calls += 1
+      // First answer is drifted noise; the retry round-trips the marker.
+      return calls === 1
+        ? { text: 'thinking about your request…', raw: {}, latencyMs: 5 }
+        : { text: BOOT_CANARY_MARKER, raw: {}, latencyMs: 5 }
+    })
+    const sleeps: number[] = []
+    const sleepFn = async (ms: number) => { sleeps.push(ms) }
+
+    await startWorker(
+      { ...CFG, canary: true, canaryRetryMs: 123_000 },
+      { fetchFn, runFn, sleepFn, agyVersionFn: async () => null },
+      stop.signal,
+    )
+
+    expect(runFn).toHaveBeenCalledTimes(2)
+    expect(sleeps).toContain(123_000) // the failing gate waited on the slow clock
+    expect(counts.claim).toBeGreaterThan(0)
+  })
+
+  it('a typed agy failure also blocks claiming (no claim before the gate passes)', async () => {
+    const stop = new AbortController()
+    const { fetchFn, counts } = makeFetch({})
+    const runFn = vi.fn(async () => {
+      throw Object.assign(new Error('bad token'), { agyError: { type: 'auth', message: 'bad token' } })
+    })
+    // Abort from the sleep between retries — the worker never reaches a claim.
+    const sleepFn = async () => { stop.abort() }
+
+    await startWorker({ ...CFG, canary: true }, { fetchFn, runFn, sleepFn, agyVersionFn: async () => null }, stop.signal)
+    expect(counts.claim).toBe(0)
+  })
+
+  it('canary absent/off: behavior is exactly the pre-canary worker (no marker prompt)', async () => {
+    const stop = new AbortController()
+    const { fetchFn } = makeFetch({
+      claim: () => {
+        stop.abort()
+        return jsonRes(204)
+      },
+    })
+    const runFn = vi.fn()
+    await startWorker(CFG, { fetchFn, runFn, sleepFn: instantSleep, agyVersionFn: async () => null }, stop.signal)
+    expect(runFn).not.toHaveBeenCalled()
   })
 })

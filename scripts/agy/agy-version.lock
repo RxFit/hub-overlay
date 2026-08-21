@@ -1,0 +1,21 @@
+# agy version lock (hardening review 2026-08-20, move 2).
+#
+# The worker's agy version used to be Docker-cache-controlled: curl|bash
+# installed "latest" in a cached layer, so the version jumped whenever the
+# cache happened to bust, to whatever the release server served that day,
+# untested (that is exactly how 1.1.16 arrived and produced the first
+# dispatch `parse` failure). The manifest's own sha512 is self-attesting —
+# same server as the binary — so THIS file is the trust anchor: the hash
+# below was computed FROM THE DOWNLOADED BYTES when the pin was set, and the
+# Dockerfiles verify against it, not against the manifest.
+#
+# To upgrade DELIBERATELY:
+#   1. ./scripts/agy/update-agy-pin.sh        (fetches, hashes, rewrites this file)
+#   2. Run the Phase 0 replay test against the new version (see README.md).
+#   3. Commit the changed lock — the next worker build uses it.
+# Rollback = git revert of this file + rebuild.
+#
+# Format: sh-sourceable KEY="value" lines only.
+AGY_VERSION="1.1.17"
+AGY_URL="https://storage.googleapis.com/antigravity-public/antigravity-cli/1.1.17-5084709148033024/linux-x64/cli_linux_x64.tar.gz"
+AGY_SHA512="5c6047a19e80025ea7cecc8152fb263a7f14e80591ee75bdf1ca10191cc0cd1639b5b5ebdce4d1c9d43b14bd2446f038a457821694579f4392b6ca9736512936"

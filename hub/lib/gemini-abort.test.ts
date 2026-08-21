@@ -25,6 +25,10 @@ const hoisted = vi.hoisted(() => ({
   capturedSignals: [] as (AbortSignal | undefined)[],
 }))
 
+// Hardening move 3: streamChat writes terminal ai_runs rows; mocked so this
+// suite stays DB-free (rows are asserted in gemini-rotation.test.ts).
+vi.mock('@/lib/runs', () => ({ recordAiRun: vi.fn(async () => {}) }))
+
 vi.mock('@/lib/claude', () => ({
   isClaudeConfigured: () => false,
   streamClaudeChat: () => { throw new Error('claude should not be used in these tests') },

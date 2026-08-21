@@ -36,6 +36,12 @@ export interface WorkerConfig {
   chatSlots: number
   workSlots: number
   version?: string
+  /** Run the boot canary before claiming (workerConfigFromEnv defaults ON;
+   *  WORKER_CANARY=off is the escape hatch). Absent = off, so test harnesses
+   *  that build configs by hand opt in explicitly. */
+  canary?: boolean
+  /** Delay between canary retries while the gate is failing. */
+  canaryRetryMs?: number
 }
 
 export interface WorkerDeps {
@@ -73,6 +79,8 @@ export function workerConfigFromEnv(
     chatSlots: int(env.WORKER_CHAT_SLOTS, 1),
     workSlots: int(env.WORKER_WORK_SLOTS, 0),
     version: env.WORKER_GIT_SHA?.slice(0, 64),
+    canary: env.WORKER_CANARY !== 'off',
+    canaryRetryMs: int(env.WORKER_CANARY_RETRY_MS, 15 * 60 * 1000),
   }
 }
 
@@ -208,6 +216,46 @@ export async function executeJob(ctx: SlotContext, job: ClaimedJobWire): Promise
   log.error({ jobId: job.id }, 'result post failed after retries — lease will lapse and the Hub reaper finalizes')
 }
 
+/** The boot-canary marker — a drifted envelope cannot round-trip it. */
+export const BOOT_CANARY_MARKER = 'AGY_WORKER_BOOT_OK'
+
+/**
+ * Boot canary (hardening move 2): one marker prompt through the real agy
+ * runner BEFORE any job is claimed. This catches envelope drift — an agy
+ * update whose output interpretEnvelope can no longer read — at worker boot
+ * instead of on a user's chat turn. While the gate fails the worker claims
+ * NOTHING and retries on a slow clock; with no claims there is no fresh
+ * heartbeat, so dispatch-health goes workerAlive:false and the move-1
+ * alerting surfaces the flag within the hour.
+ */
+export async function runBootCanary(
+  runFn: (prompt: string, opts: AgyOptions) => Promise<AgyResult>,
+  sleepFn: (ms: number) => Promise<void>,
+  retryMs: number,
+  stop: AbortSignal,
+): Promise<void> {
+  const prompt = `Reply with exactly this token and nothing else: ${BOOT_CANARY_MARKER}`
+  while (!stop.aborted) {
+    try {
+      const result = await runFn(prompt, { timeoutMs: 90_000, signal: stop })
+      if (result.text.includes(BOOT_CANARY_MARKER)) {
+        log.info({ model: result.model, latencyMs: result.latencyMs }, 'boot canary passed — starting slots')
+        return
+      }
+      log.error(
+        { got: result.text.slice(0, 80) },
+        'boot canary: agy answered but the text lacks the marker — envelope drift suspected; refusing to claim jobs',
+      )
+    } catch (err) {
+      log.error(
+        { class: agyErrorType(err), error: truncateAgyError(err) },
+        'boot canary failed — refusing to claim jobs',
+      )
+    }
+    await sleepFn(retryMs)
+  }
+}
+
 /** One slot's forever-loop: claim → execute → repeat, with backoff on trouble. */
 export async function runSlot(ctx: SlotContext): Promise<void> {
   let failures = 0
@@ -261,6 +309,12 @@ export async function startWorker(cfg: WorkerConfig, deps: WorkerDeps = {}, stop
     { hubUrl: cfg.hubUrl, workerId: cfg.workerId, chatSlots: cfg.chatSlots, workSlots: cfg.workSlots, agyVersion: agyVersionValue },
     'dispatch worker starting (PARALLEL_OK slot policy)',
   )
+
+  // Envelope-drift gate: no claims until one marker prompt round-trips.
+  if (cfg.canary === true) {
+    await runBootCanary(runFn, sleepFn, cfg.canaryRetryMs ?? 15 * 60 * 1000, signal)
+    if (signal.aborted) return
+  }
 
   const slots: Promise<void>[] = []
   for (let i = 0; i < cfg.chatSlots; i++) {

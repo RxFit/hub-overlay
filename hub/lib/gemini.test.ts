@@ -25,6 +25,10 @@ const hoisted = vi.hoisted(() => ({
   claudeConfigured: false,
 }))
 
+// Hardening move 3: streamChat writes terminal ai_runs rows; mocked so this
+// suite stays DB-free (rows are asserted in gemini-rotation.test.ts).
+vi.mock('@/lib/runs', () => ({ recordAiRun: vi.fn(async () => {}) }))
+
 vi.mock('@/lib/claude', () => ({
   CLAUDE_PRIMARY_MODEL: 'claude-fable-5',
   CLAUDE_BACKUP_MODEL: 'claude-sonnet-4-6',

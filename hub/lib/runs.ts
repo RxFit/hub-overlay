@@ -1,5 +1,5 @@
 import crypto from 'crypto'
-import { desc } from 'drizzle-orm'
+import { and, desc, eq, gt, sql } from 'drizzle-orm'
 import { db } from './db'
 import { aiRuns } from './schema'
 import { emit, type AiProvider } from './observability'
@@ -185,6 +185,23 @@ export interface AiRunRecord {
   requestId: string | null
   userEmail: string | null
   meta: Record<string, unknown> | null
+}
+
+/**
+ * Terminal chat SERVES by engine inside a window — "who actually answered".
+ * status='ok' only: an agy failure followed by a Gemini serve counts once,
+ * for Gemini. This is the allotment-vs-metered ratio surfaced on
+ * dispatch-health (hardening review move 3); the alert evaluator in
+ * lib/dispatch-alerts.ts runs its own windowed reads.
+ */
+export async function chatServeCounts(windowMs = 24 * 60 * 60 * 1000): Promise<Record<string, number>> {
+  const cutoff = new Date(Date.now() - windowMs)
+  const rows = await db
+    .select({ engine: aiRuns.engine, n: sql<number>`count(*)::int` })
+    .from(aiRuns)
+    .where(and(eq(aiRuns.source, 'chat'), eq(aiRuns.status, 'ok'), gt(aiRuns.createdAt, cutoff)))
+    .groupBy(aiRuns.engine)
+  return Object.fromEntries(rows.map((r) => [r.engine, r.n]))
 }
 
 /** Read recent runs, newest first. `limit` is expected pre-clamped by the
