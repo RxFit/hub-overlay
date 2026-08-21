@@ -765,6 +765,19 @@ export interface ChatSpace {
   spaceThreadingState?: string
 }
 
+/** One file attached to a Chat message (the API field is `attachment[]`). */
+export interface ChatAttachment {
+  name?: string                   // "spaces/x/messages/y/attachments/z"
+  contentName?: string            // original filename
+  contentType?: string            // MIME type
+  thumbnailUri?: string
+  /** Browser-facing download URL (session-cookie authed on Google's side). */
+  downloadUri?: string
+  source?: string                 // 'DRIVE_FILE' | 'UPLOADED_CONTENT'
+  driveDataRef?: { driveFileId?: string }
+  attachmentDataRef?: { resourceName?: string }
+}
+
 export interface ChatMessage {
   name: string                    // "spaces/xxx/messages/yyy"
   sender: {
@@ -783,6 +796,9 @@ export interface ChatMessage {
   space?: { name: string }
   clientAssignedMessageId?: string
   annotations?: unknown[]
+  /** Files dropped into the message — without rendering these, a screenshot
+   *  or PDF share appears in the Hub as a blank bubble. */
+  attachment?: ChatAttachment[]
   /** Present on card-only app messages (no text body to render). */
   cardsV2?: unknown[]
 }

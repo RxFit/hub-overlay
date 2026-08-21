@@ -12,6 +12,7 @@ import {
   type ChatSpaceKind,
   type ChatSpacePreferences,
 } from '@/lib/chat-spaces'
+import type { AttachmentLike } from '@/lib/chat-attachments'
 
 /* ── Shared fetcher (reuses the same error contract as useHubData) ── */
 
@@ -70,6 +71,8 @@ export interface ChatMessage {
   thread?: { name: string }
   /** Output-only Chat API flag: true when the message is a reply inside a thread. */
   threadReply?: boolean
+  /** Files dropped into the message (see lib/chat-attachments.ts). */
+  attachment?: AttachmentLike[]
   /** Present on card-only app messages (no text body to render). */
   cardsV2?: unknown[]
 }

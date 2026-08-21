@@ -15,6 +15,8 @@ import {
   threadReplyCount,
   type ThreadGroup,
 } from '@/lib/chat-threads'
+import { renderableAttachments, type AttachmentKind } from '@/lib/chat-attachments'
+import { tokenizeChatMarkup } from '@/lib/chat-markup'
 
 
 /* ══════════════════════════════════════════
@@ -216,6 +218,38 @@ function formatMsgTime(iso: string): string {
   } catch { return '' }
 }
 
+const ATTACHMENT_ICONS: Record<AttachmentKind, string> = {
+  image: '🖼️',
+  video: '🎬',
+  audio: '🎵',
+  pdf: '📄',
+  file: '📎',
+}
+
+/**
+ * Chat markup → React elements. Tokens only, no HTML strings, so message
+ * content can never smuggle markup; links are forced into new tabs with an
+ * opener-safe rel.
+ */
+function renderChatMarkup(text: string): React.ReactNode[] {
+  return tokenizeChatMarkup(text).map((tok, i) => {
+    switch (tok.type) {
+      case 'bold': return <strong key={i}>{tok.text}</strong>
+      case 'italic': return <em key={i}>{tok.text}</em>
+      case 'strike': return <del key={i}>{tok.text}</del>
+      case 'code': return <code key={i} className="chat-msg__code">{tok.text}</code>
+      case 'codeblock': return <pre key={i} className="chat-msg__codeblock">{tok.text}</pre>
+      case 'link':
+        return (
+          <a key={i} href={tok.href} target="_blank" rel="noopener noreferrer" className="chat-msg__link">
+            {tok.text}
+          </a>
+        )
+      default: return <span key={i}>{tok.text}</span>
+    }
+  })
+}
+
 function MessageBubble({
   msg,
   prevMsg,
@@ -229,9 +263,11 @@ function MessageBubble({
   const showSender = !prevMsg || prevMsg.sender.name !== msg.sender.name
   const time = formatMsgTime(msg.createTime)
   const isApp = (msg.sender.type ?? '').toUpperCase() === 'BOT'
+  const bodyText = msg.text || msg.formattedText || ''
+  const attachments = renderableAttachments(msg.attachment)
   // Apps often send card-only messages (no text body the REST list exposes) —
   // an empty bubble reads as a bug, so say what it actually is.
-  const cardOnly = !msg.text && !msg.formattedText && (msg.cardsV2?.length ?? 0) > 0
+  const cardOnly = !bodyText && attachments.length === 0 && (msg.cardsV2?.length ?? 0) > 0
 
   return (
     <div className="chat-msg">
@@ -242,13 +278,47 @@ function MessageBubble({
           <span className="chat-msg__time">{time}</span>
         </div>
       )}
-      <div className="chat-msg__bubble">
-        {cardOnly ? (
-          <span className="chat-msg__card-note">Interactive card — open Google Chat to view it.</span>
-        ) : (
-          msg.text || msg.formattedText || ''
-        )}
-      </div>
+      {/* Attachment-only messages skip the text bubble — chips carry the message. */}
+      {(bodyText || cardOnly || attachments.length === 0) && (
+        <div className="chat-msg__bubble">
+          {cardOnly ? (
+            <span className="chat-msg__card-note">Interactive card — open Google Chat to view it.</span>
+          ) : (
+            renderChatMarkup(bodyText)
+          )}
+        </div>
+      )}
+      {attachments.length > 0 && (
+        <div className="chat-msg__attachments">
+          {attachments.map(a => {
+            const inner = (
+              <>
+                <span aria-hidden="true">{ATTACHMENT_ICONS[a.kind]}</span>
+                <span className="chat-msg-attachment__name">{a.label}</span>
+              </>
+            )
+            return a.href ? (
+              <a
+                key={a.key}
+                className="chat-msg-attachment"
+                href={a.href}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {inner}
+              </a>
+            ) : (
+              <span
+                key={a.key}
+                className="chat-msg-attachment chat-msg-attachment--nolink"
+                title="Open in Google Chat to view this file"
+              >
+                {inner}
+              </span>
+            )
+          })}
+        </div>
+      )}
       {onReplyInThread && (
         <button
           type="button"
