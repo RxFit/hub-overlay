@@ -15,7 +15,7 @@ const { state } = vi.hoisted(() => ({
     session: null as unknown,
     token: null as unknown,
     auditRows: [] as Record<string, unknown>[],
-    listChatMessages: vi.fn(),
+    listChatMessagesPage: vi.fn(),
     sendChatMessage: vi.fn(),
   },
 }))
@@ -29,7 +29,7 @@ vi.mock('@/lib/ai-audit', () => ({
   }),
 }))
 vi.mock('@/lib/google', () => ({
-  listChatMessages: (...a: unknown[]) => state.listChatMessages(...a),
+  listChatMessagesPage: (...a: unknown[]) => state.listChatMessagesPage(...a),
   sendChatMessage: (...a: unknown[]) => state.sendChatMessage(...a),
 }))
 
@@ -54,7 +54,7 @@ beforeEach(() => {
   state.session = { user: { email: 'danny@rxfitatx.com' } }
   state.token = { accessToken: 'goog-token' }
   state.auditRows = []
-  state.listChatMessages.mockReset()
+  state.listChatMessagesPage.mockReset()
   state.sendChatMessage.mockReset()
   vi.spyOn(console, 'error').mockImplementation(() => {})
   resetRateLimit()
@@ -74,38 +74,54 @@ describe('GET /api/google/chat/messages', () => {
     expect((await res.json()).error).toBe('Missing spaceId')
   })
 
-  it('returns messages, forwarding spaceId and pageSize', async () => {
-    state.listChatMessages.mockResolvedValue([{ name: 'm1' }])
+  it('returns messages + continuation token, forwarding spaceId and pageSize', async () => {
+    state.listChatMessagesPage.mockResolvedValue({ messages: [{ name: 'm1' }], nextPageToken: 'older-1' })
     const res = await GET(getReq('?spaceId=spaces/x&pageSize=25'))
     expect(res.status).toBe(200)
-    expect((await res.json()).messages).toEqual([{ name: 'm1' }])
-    expect(state.listChatMessages).toHaveBeenCalledWith('goog-token', 'spaces/x', 25, { threadName: undefined })
+    expect(await res.json()).toEqual({ messages: [{ name: 'm1' }], nextPageToken: 'older-1' })
+    expect(state.listChatMessagesPage).toHaveBeenCalledWith('goog-token', 'spaces/x', 25, {
+      threadName: undefined,
+      pageToken: undefined,
+    })
+  })
+
+  it('forwards pageToken so "Show earlier messages" continues the listing', async () => {
+    state.listChatMessagesPage.mockResolvedValue({ messages: [] })
+    await GET(getReq('?spaceId=spaces/x&pageToken=older-1'))
+    expect(state.listChatMessagesPage).toHaveBeenCalledWith('goog-token', 'spaces/x', 50, {
+      threadName: undefined,
+      pageToken: 'older-1',
+    })
   })
 
   it('forwards a well-formed threadName so the thread view gets the FULL thread', async () => {
-    state.listChatMessages.mockResolvedValue([])
+    state.listChatMessagesPage.mockResolvedValue({ messages: [] })
     const res = await GET(getReq('?spaceId=spaces/x&threadName=' + encodeURIComponent('spaces/x/threads/t1')))
     expect(res.status).toBe(200)
-    expect(state.listChatMessages).toHaveBeenCalledWith('goog-token', 'spaces/x', 50, {
+    expect(state.listChatMessagesPage).toHaveBeenCalledWith('goog-token', 'spaces/x', 50, {
       threadName: 'spaces/x/threads/t1',
+      pageToken: undefined,
     })
   })
 
   it('drops a malformed threadName instead of letting it reach Google as a filter', async () => {
-    state.listChatMessages.mockResolvedValue([])
+    state.listChatMessagesPage.mockResolvedValue({ messages: [] })
     await GET(getReq('?spaceId=spaces/x&threadName=' + encodeURIComponent('spaces/x/threads/t1" OR x')))
-    expect(state.listChatMessages).toHaveBeenCalledWith('goog-token', 'spaces/x', 50, { threadName: undefined })
+    expect(state.listChatMessagesPage).toHaveBeenCalledWith('goog-token', 'spaces/x', 50, {
+      threadName: undefined,
+      pageToken: undefined,
+    })
   })
 
   it('keeps the dedicated 403 MISSING_SCOPE contract for a missing Chat scope (before the generic mapper)', async () => {
-    state.listChatMessages.mockRejectedValue(new Error('Google API error 403: insufficientPermissions'))
+    state.listChatMessagesPage.mockRejectedValue(new Error('Google API error 403: insufficientPermissions'))
     const res = await GET(getReq('?spaceId=spaces/x'))
     expect(res.status).toBe(403) // NOT folded into a reauth 401
     expect((await res.json()).code).toBe('MISSING_SCOPE')
   })
 
   it('maps other upstream failures through the generic mapper (500 → 502)', async () => {
-    state.listChatMessages.mockRejectedValue(new Error('Google API error 500: boom'))
+    state.listChatMessagesPage.mockRejectedValue(new Error('Google API error 500: boom'))
     const res = await GET(getReq('?spaceId=spaces/x'))
     expect(res.status).toBe(502)
   })

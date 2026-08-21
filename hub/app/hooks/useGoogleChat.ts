@@ -257,6 +257,8 @@ export function useLegacyPinnedSpaceMigration(
 
 interface MessagesResponse {
   messages: ChatMessage[]
+  /** Continuation into OLDER history (the wire lists newest-first). */
+  nextPageToken?: string
 }
 
 /**
@@ -274,6 +276,13 @@ export function messagesQueryKey(spaceId: string, threadName?: string) {
  * Messages for a space — or, given `threadName`, ONE thread's complete
  * history (the server filters by thread.name, so replies older than the
  * space view's 50-message window still appear in the thread panel).
+ *
+ * Scrollback: the polled query always holds the NEWEST window; `loadOlder`
+ * walks the server's continuation token backward and the hook merges the
+ * accumulated older pages in front of the live window. Older pages sit
+ * outside the react-query cache on purpose — an infinite query would refetch
+ * every loaded page on each 30s poll, which is exactly the cost this panel
+ * keeps avoiding.
  */
 export function useMessages(spaceId: string | null, threadName?: string) {
   const { data, error, isLoading, refetch } = useQuery<MessagesResponse>({
@@ -292,11 +301,66 @@ export function useMessages(spaceId: string | null, threadName?: string) {
     staleTime: 5_000,
   })
 
+  const [older, setOlder] = useState<ChatMessage[]>([])
+  const [isLoadingOlder, setIsLoadingOlder] = useState(false)
+  const [olderExhausted, setOlderExhausted] = useState(false)
+  // undefined = no older page loaded yet (continue from the live window's
+  // token); a string = continue the anchored chain; null = history exhausted.
+  const olderTokenRef = useRef<string | null | undefined>(undefined)
+  // Freshest live-window token, for the FIRST older load only.
+  const mainTokenRef = useRef<string | undefined>(undefined)
+  useEffect(() => { mainTokenRef.current = data?.nextPageToken }, [data])
+
+  // Space/thread switch resets the scrollback chain — it belongs to the old scope.
+  const scopeKey = `${spaceId ?? ''}|${threadName ?? ''}`
+  useEffect(() => {
+    setOlder([])
+    setIsLoadingOlder(false)
+    setOlderExhausted(false)
+    olderTokenRef.current = undefined
+  }, [scopeKey])
+
+  const loadOlder = useCallback(async (): Promise<void> => {
+    if (!spaceId || isLoadingOlder) return
+    const token = olderTokenRef.current === undefined ? mainTokenRef.current : olderTokenRef.current
+    if (!token) return
+    setIsLoadingOlder(true)
+    try {
+      const page = await fetcher<MessagesResponse>(
+        `/api/google/chat/messages?spaceId=${encodeURIComponent(spaceId)}&pageSize=50` +
+        `&pageToken=${encodeURIComponent(token)}` +
+        (threadName ? `&threadName=${encodeURIComponent(threadName)}` : '')
+      )
+      setOlder(prev => [...(page.messages ?? []), ...prev])
+      olderTokenRef.current = page.nextPageToken ?? null
+      if (!page.nextPageToken) setOlderExhausted(true)
+    } catch {
+      // Leave the chain untouched — the button simply allows a retry.
+    } finally {
+      setIsLoadingOlder(false)
+    }
+  }, [spaceId, threadName, isLoadingOlder])
+
+  // Older pages are strictly older than the live window at capture time; the
+  // name-dedupe is cheap insurance against boundary drift. Known tradeoff: if
+  // 50+ messages arrive AFTER older pages were loaded, the span that slid out
+  // of the live window is not re-stitched — reopening the space resets cleanly.
+  const messages = useMemo(() => {
+    const main = data?.messages ?? []
+    if (older.length === 0) return main
+    const inMain = new Set(main.map(m => m.name))
+    return [...older.filter(m => !inMain.has(m.name)), ...main]
+  }, [data, older])
+
   return {
-    messages: data?.messages ?? [],
+    messages,
     isLoading,
     error: error ?? undefined,
     refetch,
+    loadOlder,
+    isLoadingOlder,
+    /** True while there is (or may be) more history behind the merged view. */
+    hasOlder: !olderExhausted && (older.length > 0 || !!data?.nextPageToken),
   }
 }
 

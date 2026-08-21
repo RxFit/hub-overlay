@@ -833,13 +833,24 @@ export async function listChatSpaces(
   return data.spaces ?? []
 }
 
-/** List recent messages from a Google Chat space (optionally one thread's messages). */
-export async function listChatMessages(
+export interface ChatMessagesPage {
+  /** Chronological (oldest first) within this page. */
+  messages: ChatMessage[]
+  /** Continues the createTime-desc listing — i.e. the next page is OLDER. */
+  nextPageToken?: string
+}
+
+/**
+ * One page of a space's messages (optionally one thread's), newest window
+ * first. `pageToken` walks BACKWARD through history — that is what the
+ * panel's "Show earlier messages" control feeds back in.
+ */
+export async function listChatMessagesPage(
   accessToken: string,
   spaceId: string,
   pageSize = 50,
-  opts: { threadName?: string } = {}
-): Promise<ChatMessage[]> {
+  opts: { threadName?: string; pageToken?: string } = {}
+): Promise<ChatMessagesPage> {
   // spaceId can be "spaces/XXXXXXXX" or just "XXXXXXXX"
   const spaceName = spaceId.startsWith('spaces/') ? spaceId : `spaces/${spaceId}`
   const params = new URLSearchParams({
@@ -849,12 +860,24 @@ export async function listChatMessages(
   // Scoping to one thread fetches its COMPLETE history, including replies older
   // than the space view's page window. (Filter grammar wants no quotes here.)
   if (opts.threadName) params.set('filter', `thread.name = ${opts.threadName}`)
+  // Opaque continuation token — URL-encoded transport only, never interpreted.
+  if (opts.pageToken) params.set('pageToken', opts.pageToken)
   const data = await googleFetch<ChatMessagesResponse>(
     `${CHAT_BASE}/${spaceName}/messages?${params}`,
     accessToken
   )
   // Return in chronological order (oldest first for chat display)
-  return (data.messages ?? []).reverse()
+  return { messages: (data.messages ?? []).reverse(), nextPageToken: data.nextPageToken }
+}
+
+/** List recent messages from a Google Chat space (optionally one thread's messages). */
+export async function listChatMessages(
+  accessToken: string,
+  spaceId: string,
+  pageSize = 50,
+  opts: { threadName?: string } = {}
+): Promise<ChatMessage[]> {
+  return (await listChatMessagesPage(accessToken, spaceId, pageSize, opts)).messages
 }
 
 /**

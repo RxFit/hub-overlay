@@ -8118,6 +8118,31 @@ a:hover .rx-arrow {
   white-space: pre-wrap;
 }
 
+/* ── Scrollback ── */
+.chat-load-older {
+  align-self: center;
+  margin: 0 auto var(--space-2);
+  padding: 4px 14px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
+}
+
+.chat-load-older:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent-border);
+}
+
+.chat-load-older:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 /* ── In-message Chat markup ── */
 .chat-msg__code {
   font-family: var(--font-mono);

@@ -3,7 +3,7 @@ import type { NextRequest } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
-import { listChatMessages, sendChatMessage } from '@/lib/google'
+import { listChatMessagesPage, sendChatMessage } from '@/lib/google'
 import { GoogleChatSendSchema } from '@/lib/zod-schemas'
 import { requireAiGate, AI_INTENT_HEADER, GATE_TOKEN_HEADER } from '@/lib/requireGate'
 import { recordAiAction } from '@/lib/ai-audit'
@@ -25,14 +25,19 @@ export async function GET(req: NextRequest) {
     threadNameRaw && /^spaces\/[\w-]+\/threads\/[\w-]+$/.test(threadNameRaw)
       ? threadNameRaw
       : undefined
+  // Continuation token for "Show earlier messages". Opaque to us — bounded and
+  // passed through as an encoded query value, never interpreted.
+  const pageTokenRaw = searchParams.get('pageToken')
+  const pageToken =
+    pageTokenRaw && pageTokenRaw.length <= 2048 ? pageTokenRaw : undefined
 
   if (!spaceId) {
     return NextResponse.json({ error: 'Missing spaceId' }, { status: 400 })
   }
 
   try {
-    const messages = await listChatMessages(auth.accessToken, spaceId, pageSize, { threadName })
-    return NextResponse.json({ messages })
+    const page = await listChatMessagesPage(auth.accessToken, spaceId, pageSize, { threadName, pageToken })
+    return NextResponse.json({ messages: page.messages, nextPageToken: page.nextPageToken })
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error'
     console.error('[api/google/chat/messages GET]', msg)

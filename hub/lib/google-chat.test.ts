@@ -3,6 +3,7 @@ import {
   countChatMessagesSince,
   hydrateBotDmDisplayNames,
   listChatMessages,
+  listChatMessagesPage,
   listChatSpaces,
   sendChatMessage,
   type ChatSpace,
@@ -94,6 +95,33 @@ describe('listChatMessages — thread scoping', () => {
     const fetchMock = stubFetch({ messages: [] })
     await listChatMessages('tok', 'spaces/S')
     expect(calledUrl(fetchMock)).not.toContain('filter=')
+  })
+})
+
+describe('listChatMessagesPage — scrollback continuation', () => {
+  it('forwards the pageToken, reverses to chronological order and returns the next token', async () => {
+    const fetchMock = stubFetch({
+      messages: [
+        { name: 'spaces/S/messages/m9', createTime: '2026-08-20T10:09:00Z' },
+        { name: 'spaces/S/messages/m8', createTime: '2026-08-20T10:08:00Z' },
+      ],
+      nextPageToken: 'older-2',
+    })
+    const page = await listChatMessagesPage('tok', 'spaces/S', 50, { pageToken: 'older-1' })
+
+    expect(calledUrl(fetchMock)).toContain('pageToken=older-1')
+    expect(page.messages.map(m => m.name)).toEqual([
+      'spaces/S/messages/m8',
+      'spaces/S/messages/m9',
+    ])
+    expect(page.nextPageToken).toBe('older-2')
+  })
+
+  it('omits pageToken (and returns no continuation) on a final page', async () => {
+    const fetchMock = stubFetch({ messages: [] })
+    const page = await listChatMessagesPage('tok', 'spaces/S')
+    expect(calledUrl(fetchMock)).not.toContain('pageToken=')
+    expect(page.nextPageToken).toBeUndefined()
   })
 })
 

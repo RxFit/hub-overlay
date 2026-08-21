@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useEffect, useCallback, useReducer } from 'react'
+import { useState, useRef, useEffect, useCallback, useLayoutEffect, useReducer } from 'react'
 import { useSpaces, useMessages, useSendMessage, useSpaceMembers, useUnreadCounts, useMarkSpaceRead, useLegacyPinnedSpaceMigration } from '@/app/hooks/useGoogleChat'
 import type { ChatSpace, ChatMessage, ChatThreadTarget, SpaceMember } from '@/app/hooks/useGoogleChat'
 import { MentionPicker, useMentionTrigger } from '@/app/components/MentionPicker'
@@ -650,7 +650,7 @@ function ThreadPanel({
 function MessageThread({ space }: { space: ChatSpace }) {
   const spaceId = space.name
   const spaceName = space.displayName || space.name.split('/')[1]
-  const { messages, isLoading } = useMessages(spaceId)
+  const { messages, isLoading, loadOlder, hasOlder, isLoadingOlder } = useMessages(spaceId)
   const { markRead } = useMarkSpaceRead()
   const { members } = useSpaceMembers(spaceId)
   // Reply-in-thread only where Google supports it (named spaces). DMs and
@@ -698,6 +698,24 @@ function MessageThread({ space }: { space: ChatSpace }) {
     markRead(spaceId, messages[messages.length - 1]?.name)
   }, [messages, spaceId, markRead])
 
+  // Scrollback anchoring: capture the scroll geometry when "Show earlier
+  // messages" is tapped, then, on the very next messages commit, offset
+  // scrollTop by the prepended height so the reader stays on the message they
+  // were looking at instead of being teleported to the new top.
+  const pendingAnchorRef = useRef<{ height: number; top: number } | null>(null)
+  const handleLoadOlder = useCallback(() => {
+    const el = threadRef.current
+    if (el) pendingAnchorRef.current = { height: el.scrollHeight, top: el.scrollTop }
+    void loadOlder()
+  }, [loadOlder])
+  useLayoutEffect(() => {
+    const anchor = pendingAnchorRef.current
+    const el = threadRef.current
+    if (!anchor || !el) return
+    pendingAnchorRef.current = null
+    el.scrollTop = anchor.top + (el.scrollHeight - anchor.height)
+  }, [messages])
+
   // A thread is open: the column shows that thread alone (root, replies and a
   // composer that replies INTO it), with a back button to the conversation —
   // Google Chat's own thread-panel flow.
@@ -737,6 +755,16 @@ function MessageThread({ space }: { space: ChatSpace }) {
 
       {/* Messages */}
       <div ref={threadRef} onScroll={handleThreadScroll} className="chat-thread" role="log" aria-label={`Messages in ${spaceName}`} aria-live="polite">
+        {hasOlder && messages.length > 0 && (
+          <button
+            type="button"
+            className="chat-load-older"
+            onClick={handleLoadOlder}
+            disabled={isLoadingOlder}
+          >
+            {isLoadingOlder ? 'Loading earlier messages…' : 'Show earlier messages'}
+          </button>
+        )}
         {messages.length === 0 ? (
           <div className="chat-thread__empty">No messages yet</div>
         ) : groups ? (
