@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
+  countChatMessagesSince,
   hydrateBotDmDisplayNames,
   listChatMessages,
   listChatSpaces,
@@ -93,6 +94,35 @@ describe('listChatMessages — thread scoping', () => {
     const fetchMock = stubFetch({ messages: [] })
     await listChatMessages('tok', 'spaces/S')
     expect(calledUrl(fetchMock)).not.toContain('filter=')
+  })
+})
+
+describe('countChatMessagesSince — the lean unread read', () => {
+  it('sends a quoted createTime filter plus a field mask, and returns the count', async () => {
+    const fetchMock = stubFetch({
+      messages: [
+        { name: 'spaces/S/messages/m1', createTime: '2026-08-20T10:05:00Z' },
+        { name: 'spaces/S/messages/m2', createTime: '2026-08-20T10:06:00Z' },
+      ],
+    })
+    const count = await countChatMessagesSince('tok', 'spaces/S', '2026-08-20T10:00:00Z')
+    expect(count).toBe(2)
+
+    const url = decodeURIComponent(calledUrl(fetchMock).replace(/\+/g, ' '))
+    expect(url).toContain('filter=createTime > "2026-08-20T10:00:00Z"')
+    expect(url).toContain('fields=messages(name,createTime)')
+  })
+
+  it('returns 0 for an empty (fields-masked) response body', async () => {
+    stubFetch({})
+    expect(await countChatMessagesSince('tok', 'spaces/S', '2026-08-20T10:00:00Z')).toBe(0)
+  })
+
+  it('refuses a timestamp that could rewrite the filter grammar', async () => {
+    stubFetch({})
+    await expect(
+      countChatMessagesSince('tok', 'spaces/S', '2026" OR createTime > "1970'),
+    ).rejects.toThrow(/malformed timestamp/)
   })
 })
 

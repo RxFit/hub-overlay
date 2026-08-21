@@ -842,6 +842,43 @@ export async function listChatMessages(
 }
 
 /**
+ * Count messages newer than `sinceIso` in a space — the unread-badge read.
+ *
+ * The previous approach pulled the latest 50 FULL messages per space and
+ * compared timestamps in JS, which at a 60s poll across a dozen spaces moved
+ * megabytes an hour to paint badge numbers. Here Google does both halves:
+ * the `createTime >` filter runs server-side and the `fields` mask strips the
+ * response to bare names + timestamps, so each space costs a few hundred bytes.
+ * The count semantics are unchanged (capped at `cap`, like the old 50-message
+ * window).
+ */
+export async function countChatMessagesSince(
+  accessToken: string,
+  spaceId: string,
+  sinceIso: string,
+  cap = 50
+): Promise<number> {
+  // `sinceIso` comes from Google's own readstate response, but it lands inside
+  // a filter expression — refuse anything that could rewrite the grammar.
+  if (!/^[0-9TZ:.+-]+$/.test(sinceIso)) {
+    throw new Error(`countChatMessagesSince: malformed timestamp ${JSON.stringify(sinceIso)}`)
+  }
+  const spaceName = spaceId.startsWith('spaces/') ? spaceId : `spaces/${spaceId}`
+  const params = new URLSearchParams({
+    pageSize: String(cap),
+    // createTime comparisons take a double-quoted RFC 3339 timestamp (unlike
+    // thread.name, which the grammar wants bare).
+    filter: `createTime > "${sinceIso}"`,
+    fields: 'messages(name,createTime)',
+  })
+  const data = await googleFetch<ChatMessagesResponse>(
+    `${CHAT_BASE}/${spaceName}/messages?${params}`,
+    accessToken
+  )
+  return (data.messages ?? []).length
+}
+
+/**
  * Where a sent message should land.
  *
  * `threadName` replies to an EXISTING thread by resource name (what the
