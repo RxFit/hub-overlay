@@ -747,6 +747,38 @@ export async function listRecentGmailThreads(
   return threads.filter((t): t is GmailThreadSummary => t !== null)
 }
 
+/**
+ * Search Gmail threads with the FULL Gmail query grammar (from:, to:,
+ * subject:, newer_than:, has:attachment, …). Deliberately not restricted to
+ * INBOX — search exists precisely to reach archived mail. Same metadata-only
+ * fan-out and fail-soft per-thread handling as listRecentGmailThreads.
+ */
+export async function searchGmailThreads(
+  accessToken: string,
+  query: string,
+  opts?: { maxResults?: number; userEmail?: string }
+): Promise<GmailThreadSummary[]> {
+  const maxResults = opts?.maxResults ?? 10
+  const params = new URLSearchParams({ q: query, maxResults: String(maxResults) })
+  const list = await googleFetch<{ threads?: { id: string }[] }>(
+    `${GMAIL_BASE}/threads?${params}`,
+    accessToken
+  )
+  if (!list.threads?.length) return []
+
+  const threads = await Promise.all(
+    list.threads.map(t =>
+      googleFetch<GmailThread>(
+        `${GMAIL_BASE}/threads/${t.id}?format=metadata&${GMAIL_TRIAGE_HEADER_QS}`,
+        accessToken
+      )
+        .then(thread => parseGmailThreadMeta(thread, { userEmail: opts?.userEmail }))
+        .catch(() => null)
+    )
+  )
+  return threads.filter((t): t is GmailThreadSummary => t !== null)
+}
+
 /* ══════════════════════════════════════════
    Google Chat  —  https://chat.googleapis.com/v1
    ══════════════════════════════════════════ */

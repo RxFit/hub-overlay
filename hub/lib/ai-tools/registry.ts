@@ -29,7 +29,7 @@ import { fenceUntrusted } from '../prompt-safety'
 import { searchDriveWithContents, searchChatHistory } from './workspace-search'
 import { queryFreeBusy } from '../google/calendar'
 import { listFileAccess, describeAccessEntry } from '../google/sharing'
-import { searchDriveFiles } from '../google'
+import { searchDriveFiles, searchGmailThreads } from '../google'
 import type { ChatSpacePreferences } from '../chat-spaces'
 
 /** Tool groups keep each request's advertised tool set small — model providers
@@ -409,6 +409,86 @@ const searchChatTool: ReadTool = {
 }
 
 /* ══════════════════════════════════════════
+   search_gmail
+   ══════════════════════════════════════════ */
+
+const GmailArgs = z.object({
+  query: z.string().min(2).max(300),
+  maxResults: z.number().int().min(1).max(20).optional(),
+})
+
+/**
+ * Email search. The assistant could already read Drive and Chat but not the
+ * user's LARGEST corpus — Gmail — despite gmail.readonly being granted since
+ * the Gmail panel shipped; "what did the vendor quote us?" dead-ended. This
+ * closes that. Read-only by construction: threads.list + per-thread metadata
+ * fetches, never bodies, never labels/sends.
+ */
+const searchGmailTool: ReadTool = {
+  name: 'search_gmail',
+  description:
+    'Search the user\'s Gmail — inbox AND archive — with Gmail query syntax. Use for what an ' +
+    'email said, who sent something, invoices, confirmations, introductions, or attachments. ' +
+    'Supports operators like from:, to:, subject:, newer_than:30d, has:attachment — e.g. ' +
+    '"from:stripe invoice newer_than:60d". Returns thread summaries (subject, sender, date, ' +
+    'snippet), not full bodies.',
+  group: 'workspace',
+  minRole: 'staff',
+  // Two sequential upstream round trips (thread list, then metadata fan-out) —
+  // same reasoning as the GA4 override.
+  timeoutMs: 20_000,
+  schema: GmailArgs,
+  parameters: {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: 'Gmail search query, e.g. "from:maria proposal newer_than:60d"' },
+      maxResults: { type: 'integer', description: 'Max threads to return (default 10, max 20)' },
+    },
+    required: ['query'],
+  },
+
+  async execute(rawArgs, ctx) {
+    const args = GmailArgs.parse(rawArgs)
+    const threads = await searchGmailThreads(ctx.accessToken, args.query, {
+      maxResults: args.maxResults ?? 10,
+    })
+
+    if (threads.length === 0) {
+      return {
+        summary: `No Gmail threads matched "${args.query}".`,
+        fenced: '',
+        note: 'NO_RESULTS',
+      }
+    }
+
+    // Compact, bounded subset — subject/from/date/snippet plus reply-state
+    // flags. Deliberately NOT the raw header map: that is a much larger
+    // sender-controlled surface than the model needs to answer with.
+    const hits = threads.map(t => ({
+      threadId: t.id,
+      subject: t.subject,
+      from: t.from,
+      date: t.date,
+      snippet: t.snippet,
+      unread: t.isUnread,
+      messageCount: t.messageCount,
+      userReplied: t.userReplied,
+      link: `https://mail.google.com/mail/u/0/#all/${t.id}`,
+    }))
+
+    return {
+      summary: `Gmail search "${args.query}" — ${threads.length} thread(s)`,
+      // Email is third-party authored content landing in the model's context;
+      // fenced like every other external payload.
+      fenced: fenceUntrusted(
+        'Gmail search results',
+        JSON.stringify({ query: args.query, threads: hits }),
+      ),
+    }
+  },
+}
+
+/* ══════════════════════════════════════════
    calendar_freebusy
    ══════════════════════════════════════════ */
 
@@ -566,6 +646,7 @@ export const READ_TOOLS: readonly ReadTool[] = [
   gscTool,
   searchDriveTool,
   searchChatTool,
+  searchGmailTool,
   freeBusyTool,
   fileAccessTool,
 ]
