@@ -964,6 +964,65 @@ export async function sendChatMessage(
   )
 }
 
+/** Message resource name: "spaces/<id>/messages/<id>" (ids may contain dots). */
+export const CHAT_MESSAGE_NAME_RE = /^spaces\/[\w-]+\/messages\/[\w.-]+$/
+
+/**
+ * Edit the text of a message the CALLER authored. Google enforces ownership —
+ * a PATCH against someone else's message fails with 403; the Hub adds no
+ * ownership logic of its own beyond hiding the affordance.
+ */
+export async function updateChatMessage(
+  accessToken: string,
+  messageName: string,
+  text: string
+): Promise<ChatMessage> {
+  if (!CHAT_MESSAGE_NAME_RE.test(messageName)) {
+    throw new Error(`updateChatMessage: malformed message name ${JSON.stringify(messageName)}`)
+  }
+  return googleFetch<ChatMessage>(
+    `${CHAT_BASE}/${messageName}?updateMask=text`,
+    accessToken,
+    { method: 'PATCH', body: JSON.stringify({ text }) }
+  )
+}
+
+/** Delete a message the caller authored (Google enforces ownership). */
+export async function deleteChatMessage(
+  accessToken: string,
+  messageName: string
+): Promise<void> {
+  if (!CHAT_MESSAGE_NAME_RE.test(messageName)) {
+    throw new Error(`deleteChatMessage: malformed message name ${JSON.stringify(messageName)}`)
+  }
+  await googleFetch<Record<string, never>>(
+    `${CHAT_BASE}/${messageName}`,
+    accessToken,
+    { method: 'DELETE' }
+  )
+}
+
+/**
+ * The caller's own Chat user resource name ("users/<id>"), or null.
+ *
+ * Chat message senders carry only "users/<id>" — no email — so "is this
+ * message MINE?" needs the caller's People id, which people/me exposes as
+ * "people/<id>" (same id space). Null on any failure: the UI then simply
+ * never offers edit/delete, which is the correct degradation.
+ */
+export async function getChatSelfUserName(accessToken: string): Promise<string | null> {
+  try {
+    const me = await googleFetch<{ resourceName?: string }>(
+      'https://people.googleapis.com/v1/people/me?personFields=metadata',
+      accessToken
+    )
+    const id = me.resourceName?.match(/^people\/(.+)$/)?.[1]
+    return id ? `users/${id}` : null
+  } catch {
+    return null
+  }
+}
+
 /* ── Space Members (for @mentions) ── */
 
 export interface SpaceMember {

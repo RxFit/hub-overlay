@@ -417,6 +417,100 @@ export function useSendMessage() {
 }
 
 /* ══════════════════════════════════════════
+   useChatSelf — who am I in Chat? (gates the edit/delete affordances)
+   ══════════════════════════════════════════ */
+
+/**
+ * The caller's own Chat user name ("users/<id>") — message senders carry only
+ * this opaque id, so ownership can't be derived from the session email. null
+ * (lookup unavailable) simply hides the edit/delete affordances.
+ */
+export function useChatSelf() {
+  const { data } = useQuery<{ name: string | null }>({
+    queryKey: ['chat', 'self'],
+    queryFn: () => fetcher<{ name: string | null }>('/api/google/chat/me'),
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    retry: 1,
+  })
+  return { selfName: data?.name ?? null }
+}
+
+/* ══════════════════════════════════════════
+   useOwnMessageActions — edit/delete the caller's own messages
+   ══════════════════════════════════════════ */
+
+export function useOwnMessageActions() {
+  const queryClient = useQueryClient()
+  const [busyName, setBusyName] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+
+  // The space is the prefix of the message name; invalidating its key prefix
+  // refreshes the live window and any open thread. (A message deleted from
+  // loaded SCROLLBACK pages lingers until the space is reopened — the older
+  // pages live outside the query cache by design.)
+  const invalidateSpaceOf = useCallback(async (messageName: string) => {
+    const spaceId = messageName.split('/messages/')[0]
+    await queryClient.invalidateQueries({ queryKey: messagesQueryKey(spaceId) })
+  }, [queryClient])
+
+  const editMessage = useCallback(async (messageName: string, text: string): Promise<boolean> => {
+    if (!text.trim() || busyName) return false
+    setBusyName(messageName)
+    setActionError(null)
+    try {
+      const res = await fetch('/api/google/chat/messages', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messageName, text: text.trim() }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body?.error ?? `Edit failed (${res.status})`)
+      }
+      await invalidateSpaceOf(messageName)
+      return true
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Failed to edit message')
+      return false
+    } finally {
+      setBusyName(null)
+    }
+  }, [busyName, invalidateSpaceOf])
+
+  const deleteMessage = useCallback(async (messageName: string): Promise<boolean> => {
+    if (busyName) return false
+    setBusyName(messageName)
+    setActionError(null)
+    try {
+      const res = await fetch(
+        `/api/google/chat/messages?messageName=${encodeURIComponent(messageName)}`,
+        { method: 'DELETE' }
+      )
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body?.error ?? `Delete failed (${res.status})`)
+      }
+      await invalidateSpaceOf(messageName)
+      return true
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Failed to delete message')
+      return false
+    } finally {
+      setBusyName(null)
+    }
+  }, [busyName, invalidateSpaceOf])
+
+  return {
+    editMessage,
+    deleteMessage,
+    busyName,
+    actionError,
+    clearActionError: () => setActionError(null),
+  }
+}
+
+/* ══════════════════════════════════════════
    useSpaceMembers — for @mention picker
    ══════════════════════════════════════════ */
 

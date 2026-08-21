@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback, useLayoutEffect, useReducer } from 'react'
-import { useSpaces, useMessages, useSendMessage, useSpaceMembers, useUnreadCounts, useMarkSpaceRead, useLegacyPinnedSpaceMigration } from '@/app/hooks/useGoogleChat'
+import { useSpaces, useMessages, useSendMessage, useSpaceMembers, useUnreadCounts, useMarkSpaceRead, useLegacyPinnedSpaceMigration, useChatSelf, useOwnMessageActions } from '@/app/hooks/useGoogleChat'
 import type { ChatSpace, ChatMessage, ChatThreadTarget, SpaceMember } from '@/app/hooks/useGoogleChat'
 import { MentionPicker, useMentionTrigger } from '@/app/components/MentionPicker'
 import { InfoPopover } from '@/app/components/InfoPopover'
@@ -250,15 +250,80 @@ function renderChatMarkup(text: string): React.ReactNode[] {
   })
 }
 
+/** Inline editor swapped in place of the bubble while editing an own message. */
+function MessageEditView({
+  initial,
+  busy,
+  error,
+  onSave,
+  onCancel,
+}: {
+  initial: string
+  busy: boolean
+  error: string | null
+  onSave: (text: string) => void
+  onCancel: () => void
+}) {
+  const [draft, setDraft] = useState(initial)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => {
+    const el = inputRef.current
+    if (!el) return
+    el.focus()
+    el.setSelectionRange(el.value.length, el.value.length)
+  }, [])
+
+  return (
+    <div className="chat-msg-edit">
+      <textarea
+        ref={inputRef}
+        className="chat-composer__input chat-msg-edit__input"
+        value={draft}
+        rows={2}
+        disabled={busy}
+        aria-label="Edit message"
+        onChange={e => setDraft(e.target.value)}
+        onKeyDown={e => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault()
+            if (draft.trim()) onSave(draft)
+          } else if (e.key === 'Escape') {
+            e.preventDefault()
+            onCancel()
+          }
+        }}
+      />
+      {error && <div className="chat-msg-edit__error" role="alert">{error}</div>}
+      <div className="chat-msg-edit__buttons">
+        <button
+          type="button"
+          className="chat-msg-edit__btn chat-msg-edit__btn--save"
+          onClick={() => onSave(draft)}
+          disabled={busy || !draft.trim()}
+        >
+          {busy ? 'Saving…' : 'Save'}
+        </button>
+        <button type="button" className="chat-msg-edit__btn" onClick={onCancel} disabled={busy}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function MessageBubble({
   msg,
   prevMsg,
   onReplyInThread,
+  selfName,
 }: {
   msg: ChatMessage
   prevMsg: ChatMessage | null
   /** When set, a hover/focus "Reply in thread" action shows on the message. */
   onReplyInThread?: () => void
+  /** The caller's own Chat user name — gates the edit/delete actions. */
+  selfName?: string | null
 }) {
   const showSender = !prevMsg || prevMsg.sender.name !== msg.sender.name
   const time = formatMsgTime(msg.createTime)
@@ -268,6 +333,39 @@ function MessageBubble({
   // Apps often send card-only messages (no text body the REST list exposes) —
   // an empty bubble reads as a bug, so say what it actually is.
   const cardOnly = !bodyText && attachments.length === 0 && (msg.cardsV2?.length ?? 0) > 0
+
+  // Own-message actions. Google enforces real ownership server-side; selfName
+  // only decides whether the affordances render at all. Editing is limited to
+  // plain text messages — attachment/card bodies aren't editable here.
+  const isOwn = !!selfName && msg.sender.name === selfName
+  const canEdit = isOwn && !!bodyText
+  const [editing, setEditing] = useState(false)
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const { editMessage, deleteMessage, busyName, actionError, clearActionError } = useOwnMessageActions()
+  const busy = busyName === msg.name
+
+  if (editing) {
+    return (
+      <div className="chat-msg">
+        {showSender && (
+          <div className="chat-msg__header">
+            <span className="chat-msg__sender">{msg.sender.displayName}</span>
+            <span className="chat-msg__time">{time}</span>
+          </div>
+        )}
+        <MessageEditView
+          initial={msg.text || ''}
+          busy={busy}
+          error={actionError}
+          onSave={async text => {
+            const ok = await editMessage(msg.name, text)
+            if (ok) setEditing(false)
+          }}
+          onCancel={() => { setEditing(false); clearActionError() }}
+        />
+      </div>
+    )
+  }
 
   return (
     <div className="chat-msg">
@@ -319,21 +417,89 @@ function MessageBubble({
           })}
         </div>
       )}
-      {onReplyInThread && (
-        <button
-          type="button"
-          className="chat-msg__reply-action"
-          onClick={onReplyInThread}
-          aria-label="Reply in thread"
-          title="Reply in thread"
-        >
-          <span className="rx-icon rx-icon--sm" aria-hidden="true">
-            <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-              <polyline points="9 17 4 12 9 7" />
-              <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
-            </svg>
-          </span>
-        </button>
+      {actionError && (
+        <div className="chat-msg__action-error" role="alert">
+          <span>{actionError}</span>
+          <button onClick={clearActionError} aria-label="Dismiss error">✕</button>
+        </div>
+      )}
+      {(onReplyInThread || isOwn) && (
+        <div className="chat-msg__actions">
+          {onReplyInThread && (
+            <button
+              type="button"
+              className="chat-msg__action"
+              onClick={onReplyInThread}
+              aria-label="Reply in thread"
+              title="Reply in thread"
+            >
+              <span className="rx-icon rx-icon--sm" aria-hidden="true">
+                <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <polyline points="9 17 4 12 9 7" />
+                  <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
+                </svg>
+              </span>
+            </button>
+          )}
+          {canEdit && (
+            <button
+              type="button"
+              className="chat-msg__action"
+              onClick={() => { setEditing(true); setConfirmingDelete(false); clearActionError() }}
+              aria-label="Edit message"
+              title="Edit message"
+            >
+              <span className="rx-icon rx-icon--sm" aria-hidden="true">
+                <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z" />
+                </svg>
+              </span>
+            </button>
+          )}
+          {isOwn && !confirmingDelete && (
+            <button
+              type="button"
+              className="chat-msg__action"
+              onClick={() => setConfirmingDelete(true)}
+              aria-label="Delete message"
+              title="Delete message"
+            >
+              <span className="rx-icon rx-icon--sm" aria-hidden="true">
+                <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <polyline points="3 6 5 6 21 6" />
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                </svg>
+              </span>
+            </button>
+          )}
+          {isOwn && confirmingDelete && (
+            <>
+              <button
+                type="button"
+                className="chat-msg__action chat-msg__action--danger"
+                disabled={busy}
+                onClick={async () => {
+                  const ok = await deleteMessage(msg.name)
+                  if (ok) setConfirmingDelete(false)
+                }}
+                aria-label="Confirm delete"
+                title="Confirm delete"
+              >
+                {busy ? '…' : '✓'}
+              </button>
+              <button
+                type="button"
+                className="chat-msg__action"
+                disabled={busy}
+                onClick={() => setConfirmingDelete(false)}
+                aria-label="Cancel delete"
+                title="Cancel delete"
+              >
+                ✕
+              </button>
+            </>
+          )}
+        </div>
       )}
     </div>
   )
@@ -348,11 +514,13 @@ function ThreadGroupBlock({
   prevRoot,
   canReply,
   onOpenThread,
+  selfName,
 }: {
   group: ThreadGroup<ChatMessage>
   prevRoot: ChatMessage | null
   canReply: boolean
   onOpenThread: (threadName: string) => void
+  selfName?: string | null
 }) {
   const replies = threadReplyCount(group)
   const openable = canReply && !!group.threadName
@@ -363,6 +531,7 @@ function ThreadGroupBlock({
         msg={group.root}
         prevMsg={prevRoot}
         onReplyInThread={openable ? () => onOpenThread(group.threadName!) : undefined}
+        selfName={selfName}
       />
       {openable && replies > 0 && (
         <button
@@ -580,6 +749,7 @@ function ThreadPanel({
   // the COMPLETE thread even when its replies predate the space view's window.
   const { messages, isLoading } = useMessages(spaceId, threadName)
   const { markRead } = useMarkSpaceRead()
+  const { selfName } = useChatSelf()
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -621,14 +791,14 @@ function ThreadPanel({
           <div className="chat-thread__empty">No messages in this thread yet</div>
         ) : (
           <>
-            <MessageBubble msg={root} prevMsg={null} />
+            <MessageBubble msg={root} prevMsg={null} selfName={selfName} />
             {replies.length > 0 && (
               <div className="chat-thread-divider" aria-hidden="true">
                 <span>{replies.length} {replies.length === 1 ? 'reply' : 'replies'}</span>
               </div>
             )}
             {replies.map((m, i) => (
-              <MessageBubble key={m.name} msg={m} prevMsg={replies[i - 1] ?? null} />
+              <MessageBubble key={m.name} msg={m} prevMsg={replies[i - 1] ?? null} selfName={selfName} />
             ))}
           </>
         )}
@@ -653,6 +823,7 @@ function MessageThread({ space }: { space: ChatSpace }) {
   const { messages, isLoading, loadOlder, hasOlder, isLoadingOlder } = useMessages(spaceId)
   const { markRead } = useMarkSpaceRead()
   const { members } = useSpaceMembers(spaceId)
+  const { selfName } = useChatSelf()
   // Reply-in-thread only where Google supports it (named spaces). DMs and
   // group chats — including app DMs like Hermes — stay flat, as in Google Chat.
   const threadsEnabled = spaceSupportsThreadReplies(space)
@@ -775,11 +946,12 @@ function MessageThread({ space }: { space: ChatSpace }) {
               prevRoot={groups[i - 1]?.root ?? null}
               canReply
               onOpenThread={setOpenThreadName}
+              selfName={selfName}
             />
           ))
         ) : (
           messages.map((msg, i) => (
-            <MessageBubble key={msg.name} msg={msg} prevMsg={messages[i - 1] ?? null} />
+            <MessageBubble key={msg.name} msg={msg} prevMsg={messages[i - 1] ?? null} selfName={selfName} />
           ))
         )}
         <div ref={bottomRef} />

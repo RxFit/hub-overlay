@@ -1,11 +1,14 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
   countChatMessagesSince,
+  deleteChatMessage,
+  getChatSelfUserName,
   hydrateBotDmDisplayNames,
   listChatMessages,
   listChatMessagesPage,
   listChatSpaces,
   sendChatMessage,
+  updateChatMessage,
   type ChatSpace,
 } from './google'
 
@@ -122,6 +125,48 @@ describe('listChatMessagesPage — scrollback continuation', () => {
     const page = await listChatMessagesPage('tok', 'spaces/S')
     expect(calledUrl(fetchMock)).not.toContain('pageToken=')
     expect(page.nextPageToken).toBeUndefined()
+  })
+})
+
+describe('updateChatMessage / deleteChatMessage — own-message maintenance', () => {
+  it('PATCHes only the text field of the named message', async () => {
+    const fetchMock = stubFetch({ name: 'spaces/S/messages/m1', text: 'fixed' })
+    await updateChatMessage('tok', 'spaces/S/messages/m1', 'fixed')
+
+    const url = calledUrl(fetchMock)
+    expect(url).toContain('/spaces/S/messages/m1?updateMask=text')
+    const init = (fetchMock.mock.calls[0] as unknown[])[1] as RequestInit
+    expect(init.method).toBe('PATCH')
+    expect(JSON.parse(init.body as string)).toEqual({ text: 'fixed' })
+  })
+
+  it('DELETEs the named message', async () => {
+    const fetchMock = stubFetch({})
+    await deleteChatMessage('tok', 'spaces/S/messages/m1.sub')
+    const init = (fetchMock.mock.calls[0] as unknown[])[1] as RequestInit
+    expect(init.method).toBe('DELETE')
+    expect(calledUrl(fetchMock)).toContain('/spaces/S/messages/m1.sub')
+  })
+
+  it('refuses malformed message names before anything reaches the wire', async () => {
+    const fetchMock = stubFetch({})
+    await expect(updateChatMessage('tok', 'spaces/S/messages/../evil', 'x')).rejects.toThrow(/malformed/)
+    await expect(deleteChatMessage('tok', 'not-a-name')).rejects.toThrow(/malformed/)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('getChatSelfUserName', () => {
+  it('maps the People id onto the Chat users/ namespace', async () => {
+    stubFetch({ resourceName: 'people/108234' })
+    expect(await getChatSelfUserName('tok')).toBe('users/108234')
+  })
+
+  it('returns null (never throws) when the lookup fails or is shapeless', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { status: 403 })))
+    expect(await getChatSelfUserName('tok')).toBeNull()
+    stubFetch({})
+    expect(await getChatSelfUserName('tok')).toBeNull()
   })
 })
 
