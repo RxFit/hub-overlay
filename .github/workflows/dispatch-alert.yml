@@ -1,0 +1,82 @@
+name: Dispatch alert tick
+
+# Hourly push path for the agy dispatch system (hardening move 1,
+# hub/docs/architecture/HARDENING_REVIEW_2026-08-20.md): calls
+# POST /api/cron/dispatch-alert, which evaluates worker liveness, agy failure
+# streaks, and allotment collapse from the Hub's own ledgers, and posts to
+# Google Chat (tagged "— via HUB") when something is wrong.
+#
+# THIS WORKFLOW'S FAILURE EMAIL IS PART OF THE DESIGN. The run fails when:
+#   - the endpoint is unreachable / non-200 (the Hub itself may be down), or
+#   - alert conditions exist but no Chat channel could deliver them
+#     (delivery: "github" — no space configured — or "post_failed").
+# GitHub notifies the repo owner about a failed scheduled run, so a completely
+# dark Hub still reaches the operator without any extra alerting infra.
+#
+# One-time setup: add repository secret CRON_SECRET with the SAME value the
+# Cloud Run service holds (Settings → Secrets and variables → Actions). The
+# probe deliberately does NOT hit ?probe=1 — the tick stays free of allotment
+# spend.
+
+on:
+  schedule:
+    # Hourly at :07 — on-the-hour GitHub cron slots are the most congested and
+    # the most delayed. GitHub crons are best-effort (minutes of slop), which
+    # is fine for an hourly alerting cadence.
+    - cron: '7 * * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: dispatch-alert
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    name: Evaluate & push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call the alert endpoint
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::CRON_SECRET repository secret is not set. Add the same value the Cloud Run service uses (Settings → Secrets and variables → Actions → New repository secret)."
+            exit 1
+          fi
+
+          # Probe the Cloud Run service URL DIRECTLY, never hub.casatrejo.com:
+          # the custom domain sits behind Cloudflare, which 403s/JS-challenges
+          # non-browser CI curls even when the app is healthy — the documented
+          # false-failure class deploy.yml refuses to gate on (its custom-domain
+          # check is warning-only for exactly this reason). A Cloudflare
+          # challenge here wouldn't just misreport: the tick would never reach
+          # the Hub at all. This is the service's stable deterministic URL
+          # (https://SERVICE-PROJECTNUMBER.REGION.run.app); if it ever changes,
+          # `gcloud run services describe hub --region us-central1 --format='value(status.url)'`
+          # is the source of truth.
+          CODE=$(curl -s -o /tmp/alert.json -w '%{http_code}' --max-time 90 \
+            -X POST -H "x-cron-secret: $CRON_SECRET" \
+            "https://hub-11747747730.us-central1.run.app/api/cron/dispatch-alert" || echo 000)
+          echo "POST /api/cron/dispatch-alert -> HTTP $CODE"
+          cat /tmp/alert.json 2>/dev/null || true
+          echo
+
+          if [ "$CODE" != "200" ]; then
+            echo "::error::dispatch-alert endpoint returned HTTP $CODE — the Hub may be down, or CRON_SECRET mismatched (401) / unset on the service (503). This failure email is the alert."
+            exit 1
+          fi
+
+          DELIVERY=$(jq -r '.delivery // "unknown"' /tmp/alert.json)
+          ALERTS=$(jq -r '.alerts | length' /tmp/alert.json)
+          echo "delivery=$DELIVERY alerts=$ALERTS"
+
+          # 'github' = alert conditions exist and no Chat space is configured;
+          # 'post_failed' = a Chat post was attempted and failed. Both mean the
+          # push did not reach Chat — fail the run so GitHub's email delivers
+          # it instead. The endpoint's JSON above names the conditions.
+          if [ "$DELIVERY" = "github" ] || [ "$DELIVERY" = "post_failed" ]; then
+            SUMMARY=$(jq -r '[.alerts[].kind] | join(", ")' /tmp/alert.json)
+            echo "::error::Dispatch alert conditions active ($SUMMARY) and Chat delivery was not possible (delivery=$DELIVERY). This failure email is the alert — see the JSON above for details."
+            exit 1
+          fi

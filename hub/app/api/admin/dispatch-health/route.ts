@@ -118,7 +118,15 @@ export async function GET(req: NextRequest) {
   }
 
   const workerAlive = workers.some((w) => w.fresh)
-  const healthy = config.workerSecretPresent && tablesReady && (!probe.ran || probe.ok)
+  // With dispatch enabled, a dead worker means every chat turn silently rides
+  // the metered chain — the exact failure this endpoint exists to surface, so
+  // it must flip `healthy` (hardening move 1). With dispatch disabled the
+  // worker is expected to be absent and does not count against health.
+  const healthy =
+    config.workerSecretPresent &&
+    tablesReady &&
+    (!config.dispatchEnabled || workerAlive) &&
+    (!probe.ran || probe.ok)
   return NextResponse.json({
     generatedAt: new Date().toISOString(),
     healthy,

@@ -11,10 +11,11 @@ import { NextRequest } from 'next/server'
  * error classes surface instead of stack text.
  */
 
-const { sessionMock, adminMock, dispatchMock } = vi.hoisted(() => ({
+const { sessionMock, adminMock, dispatchMock, dispatchEnabledMock } = vi.hoisted(() => ({
   sessionMock: vi.fn(),
   adminMock: vi.fn(),
   dispatchMock: vi.fn(),
+  dispatchEnabledMock: vi.fn(),
 }))
 const storeMock = vi.hoisted(() => ({
   reapExpired: vi.fn().mockResolvedValue(undefined),
@@ -36,7 +37,7 @@ vi.mock('@/lib/agy', () => ({
 }))
 vi.mock('@/lib/agy-dispatch', () => ({
   dispatchGenerateText: dispatchMock,
-  isDispatchEnabled: () => true,
+  isDispatchEnabled: dispatchEnabledMock,
   isDispatchConfigured: () => true,
   dispatchFreshMs: () => 45_000,
 }))
@@ -51,6 +52,7 @@ beforeEach(() => {
   sessionMock.mockReset().mockResolvedValue({ user: { email: 'admin@rxfitatx.com', role: 'admin' } })
   adminMock.mockReset().mockReturnValue(true)
   dispatchMock.mockReset()
+  dispatchEnabledMock.mockReset().mockReturnValue(true)
   storeMock.listWorkers.mockResolvedValue([])
 })
 
@@ -74,9 +76,29 @@ describe('GET /api/admin/dispatch-health', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.workerAlive).toBe(true)
+    expect(body.healthy).toBe(true)
     expect(body.workers[0].fresh).toBe(true)
     expect(body.probe).toEqual({ ran: false })
     expect(dispatchMock).not.toHaveBeenCalled()
+  })
+
+  // Hardening move 1: `healthy` was true with a dead worker — the operator's
+  // one glanceable bit lied about the exact failure mode that silently costs
+  // money. Dead worker + dispatch enabled must flip it.
+  it('dead worker with dispatch ENABLED flips healthy', async () => {
+    storeMock.listWorkers.mockResolvedValue([
+      { id: 'danny-desktop', lastSeenAt: new Date(Date.now() - 10 * 60_000), version: 'abc', agyVersion: '1.1.16' },
+    ])
+    const body = await (await GET(request())).json()
+    expect(body.workerAlive).toBe(false)
+    expect(body.healthy).toBe(false)
+  })
+
+  it('dead worker with dispatch DISABLED stays healthy — an absent worker is the expected state', async () => {
+    dispatchEnabledMock.mockReturnValue(false)
+    const body = await (await GET(request())).json()
+    expect(body.workerAlive).toBe(false)
+    expect(body.healthy).toBe(true)
   })
 
   it('missing tables degrade to tablesReady:false, not a 500', async () => {
