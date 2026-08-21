@@ -310,24 +310,36 @@ describe('runs ledger (Phase 2 accountability)', () => {
     expect(typeof run.requestId).toBe('string')
   })
 
-  it('a failed attempt records one error row with the typed class, then the Gemini rescue is not double-counted', async () => {
+  it('a failed attempt records the agy error row AND the Gemini rescue records its own serve (hardening move 3)', async () => {
     process.env.AGY_CHAT_ENABLED = 'true'
     hoisted.agyBehavior = () => agyFailure('empty')
     hoisted.geminiBehavior = () => geminiStream(['gem rescue'])
 
     await collect(streamChat(MESSAGES, 'sys', 'recall'))
-    expect(hoisted.runCalls).toHaveLength(1)
-    const run = hoisted.runCalls[0]
-    expect(run.status).toBe('error')
-    expect(run.errorClass).toBe('empty')
-    expect(run.engine).toBe('agy')
-    expect(run.source).toBe('chat')
+    // Two rows, two different facts: the allotment attempt failed (agy/error)
+    // and the metered chain served the turn (gemini/ok). The agy RUN is not
+    // double-counted — the terminal row names a different engine.
+    expect(hoisted.runCalls).toHaveLength(2)
+    const agyRun = hoisted.runCalls.find((r) => r.engine === 'agy')!
+    expect(agyRun).toMatchObject({ status: 'error', errorClass: 'empty', source: 'chat' })
+    const geminiRun = hoisted.runCalls.find((r) => r.engine === 'gemini')!
+    expect(geminiRun).toMatchObject({ status: 'ok', source: 'chat' })
   })
 
-  it('no ledger row when agy is not attempted (flag off)', async () => {
+  it('an agy-SERVED turn writes exactly one row — the terminal wrapper must not double-count it', async () => {
+    process.env.AGY_CHAT_ENABLED = 'true'
+    hoisted.agyBehavior = () =>
+      Promise.resolve({ text: 'allotment answer', model: 'gemini-3-pro', latencyMs: 900, usage: {} })
+    await collect(streamChat(MESSAGES, 'sys', 'recall'))
+    expect(hoisted.runCalls).toHaveLength(1)
+    expect(hoisted.runCalls[0].engine).toBe('agy')
+  })
+
+  it('flag off: the metered serve still ledgers (move 3), with no agy row', async () => {
     hoisted.geminiBehavior = () => geminiStream(['gem'])
     await collect(streamChat(MESSAGES, 'sys', 'recall'))
-    expect(hoisted.runCalls).toHaveLength(0)
+    expect(hoisted.runCalls).toHaveLength(1)
+    expect(hoisted.runCalls[0]).toMatchObject({ engine: 'gemini', status: 'ok', source: 'chat' })
   })
 })
 

@@ -18,6 +18,15 @@ const hoisted = vi.hoisted(() => ({
   // False = the emergency cross-provider fallback (P0) stays disengaged, so
   // every assertion below exercises the same terminal paths as pre-P0.
   claudeConfigured: false,
+  ledgerRows: [] as Record<string, unknown>[],
+}))
+
+// Hardening move 3: streamChat writes a terminal ai_runs row per request.
+// Mocked so the suite stays DB-free; the rows themselves are asserted below.
+vi.mock('@/lib/runs', () => ({
+  recordAiRun: vi.fn(async (row: Record<string, unknown>) => {
+    hoisted.ledgerRows.push(row)
+  }),
 }))
 
 vi.mock('@/lib/claude', () => ({
@@ -83,6 +92,7 @@ beforeEach(() => {
   hoisted.claudeCalls.length = 0
   hoisted.geminiCalls.length = 0
   hoisted.claudeConfigured = false
+  hoisted.ledgerRows.length = 0
   __resetModelCooldownsForTest()
   vi.useFakeTimers()
   vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -241,4 +251,41 @@ describe('input contract + legacy wrapper', () => {
     expect(error?.message).toBe('Last message must be from the user')
   })
 
+})
+
+/* ── Hardening move 3: the metered chain joins the ai_runs ledger ── */
+describe('terminal ledger rows (hardening move 3)', () => {
+  it('a Gemini-served request writes ONE ok row naming the serving engine', async () => {
+    hoisted.geminiBehavior = () => geminiStream(['answer'])
+    const { text } = await collect(streamChat(MESSAGES, 'sys', 'recall'))
+    expect(text).toBe('answer')
+    expect(hoisted.ledgerRows).toHaveLength(1)
+    expect(hoisted.ledgerRows[0]).toMatchObject({
+      engine: 'gemini',
+      source: 'chat',
+      status: 'ok',
+    })
+    expect(hoisted.ledgerRows[0].model).toBeTruthy()
+  })
+
+  it('a request the whole ladder fails writes ONE error row with a typed class', async () => {
+    hoisted.geminiBehavior = () => Promise.reject(Object.assign(new Error('401 API key not valid'), {}))
+    const { error } = await collect(streamChat(MESSAGES, 'sys', 'recall'))
+    expect(error).toBeTruthy()
+    expect(hoisted.ledgerRows).toHaveLength(1)
+    expect(hoisted.ledgerRows[0]).toMatchObject({
+      engine: 'gemini',
+      source: 'chat',
+      status: 'error',
+    })
+    expect(hoisted.ledgerRows[0].errorClass).toBeTruthy()
+  })
+
+  it('a Claude-served EXA request ledgers engine claude', async () => {
+    hoisted.claudeBehavior = () => claudeYield(['exa answer'])
+    const { text } = await collect(streamChat(MESSAGES, 'sys', 'exa_search', false))
+    expect(text).toBe('exa answer')
+    expect(hoisted.ledgerRows).toHaveLength(1)
+    expect(hoisted.ledgerRows[0]).toMatchObject({ engine: 'claude', status: 'ok', source: 'chat' })
+  })
 })

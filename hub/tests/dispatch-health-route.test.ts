@@ -30,7 +30,10 @@ vi.mock('next-auth', () => ({ getServerSession: sessionMock }))
 vi.mock('@/lib/auth', () => ({ authOptions: {} }))
 vi.mock('@/lib/roles', () => ({ canAccessAdminRoute: adminMock }))
 vi.mock('@/lib/dispatch-store', () => storeMock)
-vi.mock('@/lib/runs', () => ({ recordAiRun: vi.fn().mockResolvedValue(undefined) }))
+vi.mock('@/lib/runs', () => ({
+  recordAiRun: vi.fn().mockResolvedValue(undefined),
+  chatServeCounts: vi.fn().mockResolvedValue({ agy: 12, gemini: 3 }),
+}))
 vi.mock('@/lib/agy', () => ({
   agyErrorType: (err: unknown) => (err as { agyError?: { type?: string } })?.agyError?.type ?? 'unknown',
   truncateAgyError: (err: unknown) => (err instanceof Error ? err.message : String(err)),
@@ -99,6 +102,11 @@ describe('GET /api/admin/dispatch-health', () => {
     const body = await (await GET(request())).json()
     expect(body.workerAlive).toBe(false)
     expect(body.healthy).toBe(true)
+  })
+
+  it('reports the 24h allotment-vs-metered serve counts (hardening move 3)', async () => {
+    const body = await (await GET(request())).json()
+    expect(body.served24h).toEqual({ agy: 12, gemini: 3 })
   })
 
   it('missing tables degrade to tablesReady:false, not a 500', async () => {
