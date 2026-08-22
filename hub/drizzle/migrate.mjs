@@ -571,6 +571,38 @@ async function run() {
   `
   console.log('[migrate] ✓ dispatch_jobs + dispatch_workers tables')
 
+  // Hub Secrets — operator-managed third-party credentials, moved off
+  // Paperclip's Secrets API when Paperclip was retired. `ciphertext` is an
+  // AES-256-GCM envelope (lib/secret-crypto.ts), never a plaintext value.
+  // `key_id` duplicates the envelope's key id as a column so a key rotation
+  // can find the rows that still need re-sealing in one indexed query.
+  // company_id is deliberately NOT a foreign key — workspaces were a
+  // Paperclip concept and no Hub table owns them; scoping is enforced in
+  // lib/secrets-store.ts.
+  await sql`
+    CREATE TABLE IF NOT EXISTS hub_secrets (
+      id          TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id   TEXT NOT NULL REFERENCES tenants(id),
+      company_id  TEXT NOT NULL,
+      name        TEXT NOT NULL,
+      ciphertext  TEXT NOT NULL,
+      key_id      TEXT NOT NULL,
+      provider    TEXT,
+      created_by  TEXT,
+      created_at  TIMESTAMPTZ DEFAULT now() NOT NULL,
+      updated_at  TIMESTAMPTZ DEFAULT now() NOT NULL
+    )
+  `
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS hub_secrets_scope_name_uniq
+    ON hub_secrets(tenant_id, company_id, name)
+  `
+  await sql`
+    CREATE INDEX IF NOT EXISTS hub_secrets_key_id_idx
+    ON hub_secrets(key_id)
+  `
+  console.log('[migrate] \u2713 hub_secrets table')
+
   await sql`
     INSERT INTO tenants (id, name, domain)
     VALUES ('rxfit', 'RxFit Athletics', 'rxfitatx.com')
