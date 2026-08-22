@@ -6,7 +6,8 @@
 > being rebuilt on the **Antigravity CLI (`agy`) execution engine**. Historical design docs
 > that mention Paperclip (`hub/docs/architecture/RIGHT_PANEL_ARCHITECTURE_2026-07-19.md`,
 > `hub/docs/architecture/PHASE6_PAPERCLIP_AS_SOLUTION_2026-07-19.md`, `docs/archive/`,
-> `docs/ops/paperclip-live-cleanup-2026-07-19.md`) are kept for archaeology only.
+> `docs/ops/paperclip-live-cleanup-2026-07-19.md`) are kept for archaeology only —
+> the replacement design is `hub/docs/architecture/PHASE3_EXECUTION_PANEL_2026-08-22.md`.
 
 ## The New Execution Engine: `agy`
 
@@ -61,7 +62,7 @@ a disruption can't dark the Hub.
 | **0 · Replay proof** | ✅ done (`scripts/agy/`) | Token replays on a keyring-less box |
 | **1 · Gateway** | ✅ done (`hub/lib/agy.ts`, PRs #178–#181) | `agyGenerateText()`, runtime binary provisioning, `/api/admin/agy-health` |
 | **2 · Worker + ledger** | in progress | Chat integration ✅ (`hub/lib/agy-chat.ts`, `AGY_CHAT_ENABLED`); `ai_runs` ledger ✅ (`hub/lib/runs.ts`, engine-agnostic). Remaining: conversations table, Chat post-tagging convention — see `scripts/agy/README.md` § Phase 2 remaining scope |
-| **3 · Rewire right panel** | planned | Point the panel's feed at the runs ledger |
+| **3 · Rewire right panel** | designed, executing | Runs feed + dispatch ops rail, ops-only writes, Paperclip rip-out. Design + PR-by-PR plan: `hub/docs/architecture/PHASE3_EXECUTION_PANEL_2026-08-22.md` — **read it before touching the panel** (it names the blocking keys migration and the rip-out landmines) |
 | **4 · Reborn tooling** | planned | Re-point Interview Mode, the score-context gate, Pre-Cog, and the skills loader from "assemble a REST payload" to "brief and verify an `agy` run" |
 
 ## Right Panel — Target Structure (CLI engine version)
@@ -73,12 +74,20 @@ The panel's three-layer mental model is unchanged; only the Execution engine swa
 - **Center — AI Assistant.** Conversational control surface: Interview Mode, the
   context-sufficiency gate, Pre-Cog validation, action intents.
 - **Right panel — Execution Layer.** *How* work gets done. New version represents
-  the `agy` engine: the **runs ledger** (every run recorded in Postgres with
-  status, typed errors, token usage, latency) replaces the old agent/org views.
+  the `agy` engine across two planes: the **runs ledger** (every run recorded in
+  Postgres with status, typed errors, token usage, latency) and a **dispatch ops
+  rail** (worker heartbeat, queue depth, allotment-vs-metered share, alert
+  timeline). Both replace the old agent/org/issue/routine views. A third plane —
+  GitHub delivery state, where Hermes' work actually lands — is designed but gated
+  on the Hub having a server-side GitHub token.
+
+Writes in Phase 3 are **ops-only** (cancel a job, fire a probe), admin-gated.
+Briefing an `agy` run from the panel is Phase 4 and waits on the reborn
+context-sufficiency gate — do not add a brief button before it exists.
 
 Design guardrails from the old panel carry over: every write is wrapped in the AI
-Assistant's guardrails (role gates, gate tokens, interview flows), and the UI is
-poll-friendly.
+Assistant's guardrails (role gates, gate tokens, interview flows), everything
+visible is injectable into the assistant, and the UI is poll-friendly.
 
 ## Orchestration Model — Hermes orchestrates, CLI workers author
 
