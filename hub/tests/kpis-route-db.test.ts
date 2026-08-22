@@ -167,14 +167,40 @@ describeDb('GET /api/kpis — DB-backed aggregation', () => {
     expect(kpis.filter((k) => k.source === 'paperclip')).toHaveLength(10)
   })
 
-  it('returns 500 with an empty payload when company discovery itself fails', async () => {
+  /* Paperclip is retired, so getCompanies() now fails permanently. This used
+     to 500 with an empty payload, which meant a dead upstream also suppressed
+     the business KPIs the Hub reads from its OWN table two steps later. The
+     contract is now: serve what the Hub owns, and say the response is
+     degraded rather than looking healthy while missing half its data. */
+  it('still serves Hub-native business KPIs when company discovery fails', async () => {
     paperclip.getCompanies.mockRejectedValue(new Error('total outage'))
+    await seedKpi({ label: 'Monthly Revenue', value: '42000', scope: 'global', visibility: 'staff' })
 
     const res = await GET(req())
-    expect(res.status).toBe(500)
-    const body = await res.json()
-    expect(body.kpis).toEqual([])
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { kpis: KpiOut[]; projects: unknown[]; degraded?: boolean }
+
+    // The Hub's own KPI survives the upstream outage — the point of the fix.
+    const business = body.kpis.filter((k) => k.source === 'business')
+    expect(business).toHaveLength(1)
+    expect(business[0].label).toBe('Monthly Revenue')
+
+    // Nothing Paperclip-derived can exist without companies, and the outage
+    // is reported rather than swallowed.
+    expect(body.kpis.filter((k) => k.source === 'paperclip')).toHaveLength(0)
     expect(body.projects).toEqual([])
-    expect(body.error).toBeTruthy()
+    expect(body.degraded).toBe(true)
+
+    // Discovery failed, so no per-company fetch should have been attempted.
+    expect(paperclip.getIssues).not.toHaveBeenCalled()
+  })
+
+  it('omits the degraded flag entirely when Paperclip is healthy', async () => {
+    await seedKpi({ label: 'Monthly Revenue', scope: 'global' })
+
+    const body = (await (await GET(req())).json()) as { degraded?: boolean }
+
+    // Additive-only: a healthy response is unchanged from before the fix.
+    expect(body).not.toHaveProperty('degraded')
   })
 })

@@ -27,9 +27,23 @@ export async function GET(req: NextRequest) {
   let allKpis: LiveKPI[] = []
   let allProjects: ProjectKPI[] = []
 
+  // Paperclip is retired (AGENTS.md), so company discovery now fails
+  // permanently. It used to abort this entire handler — including step 3,
+  // which reads the Hub's OWN `kpis` table and has nothing to do with
+  // Paperclip. A dead upstream must not suppress KPIs the Hub can serve
+  // itself, so discovery failure degrades to "no operational KPIs" and the
+  // response says `degraded` rather than quietly looking healthy.
+  let degraded = false
+
   try {
     // 1. Determine companies to query
-    let targetCompanies = await getCompanies()
+    let targetCompanies: Awaited<ReturnType<typeof getCompanies>> = []
+    try {
+      targetCompanies = await getCompanies()
+    } catch (err) {
+      degraded = true
+      console.warn('[kpis] Paperclip company discovery failed — serving Hub-native KPIs only:', err)
+    }
 
     if (role === 'staff' && !assignedProjects.includes('*')) {
       targetCompanies = targetCompanies.filter(c => assignedProjects.includes(c.id))
@@ -113,9 +127,12 @@ export async function GET(req: NextRequest) {
     // 4. Apply role-based filtering
     const visibleKpis = filterByRole(allKpis, role, assignedProjects)
 
+    // `degraded` is additive and only present when something actually failed,
+    // so a healthy response is byte-identical to before.
     return NextResponse.json({
       kpis: visibleKpis,
-      projects: allProjects
+      projects: allProjects,
+      ...(degraded ? { degraded: true } : {}),
     })
 
   } catch (error) {
