@@ -536,3 +536,42 @@ export const dispatchWorkers = pgTable('dispatch_workers', {
   agyVersion:  text('agy_version'),
   meta:        jsonb('meta').$type<Record<string, unknown>>(),
 })
+
+/* ── Hub Secrets (operator-managed third-party credentials) ── */
+/**
+ * Credentials the operator enters in Settings → Connected Services.
+ *
+ * Storage moved here from Paperclip's Secrets API when Paperclip was retired
+ * (see hub/docs/architecture/PHASE3_EXECUTION_PANEL_2026-08-22.md). Two
+ * contracts hold and both are load-bearing:
+ *
+ *  1. `ciphertext` is an AES-256-GCM envelope from lib/secret-crypto.ts —
+ *     never a plaintext value. Nothing in an API response may carry it.
+ *  2. `key_id` mirrors the key id inside that envelope so "which rows still
+ *     use the retired key" is an indexed query rather than a full scan of
+ *     opaque blobs. Rotating the encryption key is a migration, and this
+ *     column is what makes it one.
+ *
+ * `company_id` is the workspace scope. It is NOT a foreign key: workspaces
+ * were Paperclip's concept and no Hub table owns them yet, so a reference
+ * would be unenforceable. Scoping is enforced in lib/secrets-store.ts.
+ */
+export const hubSecrets = pgTable(
+  'hub_secrets',
+  {
+    id:         text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+    tenantId:   text('tenant_id').notNull().references(() => tenants.id),
+    companyId:  text('company_id').notNull(),
+    name:       text('name').notNull(),                             // e.g. STRIPE_SECRET_KEY
+    ciphertext: text('ciphertext').notNull(),                       // sealed envelope, never plaintext
+    keyId:      text('key_id').notNull(),                           // encryption key id (rotation)
+    provider:   text('provider'),                                   // optional bundle hint: stripe | gbp | …
+    createdBy:  text('created_by'),                                 // operator email (audit)
+    createdAt:  timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt:  timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    scopeNameUniq: uniqueIndex('hub_secrets_scope_name_uniq').on(t.tenantId, t.companyId, t.name),
+    keyIdIdx:      index('hub_secrets_key_id_idx').on(t.keyId),
+  }),
+)

@@ -124,9 +124,16 @@ one is replacing.
 
 The blocking item: **`hub/app/api/settings/keys/route.ts` stores every Hub-managed
 API key in Paperclip's secret store.** Its own header says *"No secrets are stored in
-the HUB database — all persistence is in Paperclip."* Deleting `lib/paperclip.ts`
-before migrating that store destroys the Hub's key management. **This is PR 1, and
+the HUB database — all persistence is in Paperclip."* Deleting that dependency
+before migrating the store destroys the Hub's key management. **This is PR 1, and
 nothing else starts until it lands.**
+
+> **Correction (2026-08-22, applied in PR 1).** This section originally named
+> `lib/paperclip.ts` as the blocking file. That is wrong: `keys/route.ts:17`
+> imported only **`lib/paperclipSession.ts`** and never `lib/paperclip.ts`.
+> `paperclipSession.ts` is also the *only* auth path to Paperclip, so it is the
+> file whose deletion closes any remaining export window — check before PR 5
+> removes it, not after.
 
 ### 3.4 Face and access — savings-led, admin-first
 
@@ -225,14 +232,23 @@ Each of these was verified in the codebase and will bite someone who does not kn
 
 ### 6.1 `PAPERCLIP_API_KEY` is a false positive — **do not delete it**
 
-It is *not* a Paperclip platform credential. It is the Hub's **own** bearer secret
-for its embeddings-ingest endpoint (`app/api/embeddings/upsert/route.ts:17-35`),
-which deliberately **fails closed** when the variable is unset. Deleting it during
-the rip-out silently breaks embeddings ingestion — or worse, someone "fixes" the
-failure by removing the fail-closed check. **Rename it** (e.g. `INGEST_API_KEY`) with
-the deploy-side variable updated in the same change, or leave it alone. Its
-appearance in `app/api/admin/paperclip-health/route.ts:42` *is* Paperclip-related and
-dies with that route.
+**Correction (2026-08-22, applied in PR 1): this variable is double-duty, and the
+original "just rename it" advice was unsafe.** It serves two unrelated purposes:
+
+1. **Inbound** — the Hub's own bearer secret for its embeddings-ingest endpoint
+   (`app/api/embeddings/upsert/route.ts:17-35`), which deliberately **fails
+   closed** when unset.
+2. **Outbound** — `lib/paperclipSession.ts:132` reads the same variable and sends
+   it to Paperclip as `Authorization: Bearer` (`:143-145`), as the fallback when
+   email/password session auth fails.
+
+So a bare rename breaks Paperclip authentication as well as ingest, and deleting
+it breaks ingest silently. One secret authenticating in both directions is itself
+worth fixing: split it into `INGEST_API_KEY` (inbound) and the Paperclip
+credential (outbound, dies with the rip-out), updating `service.yaml:76` and the
+deploy workflow in the same change. Its appearance in
+`app/api/admin/paperclip-health/route.ts:42` *is* Paperclip-related and dies with
+that route.
 
 ### 6.2 `isPaperclipIntent` is defined as a negation and fails open
 

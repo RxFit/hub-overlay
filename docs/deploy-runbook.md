@@ -135,6 +135,48 @@ echo -n "NEW_VALUE" | gcloud secrets versions add hub-nextauth-secret --data-fil
 # The next deploy will pick up the latest version automatically (key: latest)
 ```
 
+### ⚠️ `SECRET_ENCRYPTION_KEY` is the exception — the procedure above DESTROYS data
+
+The generic rotation above is correct for every secret **except** the at-rest
+credential key. `SECRET_ENCRYPTION_KEY` seals the `hub_secrets` table
+(operator-entered third-party API keys, Settings → Connected Services). Adding a
+new version and rolling a deploy swaps the key under existing rows, and every
+stored credential becomes undecryptable.
+
+**Nothing detects this.** No request path reads a credential value back, so the
+settings page keeps rendering `✓ Set` for every key, indefinitely, over garbage.
+
+**Format.** `<keyId>:<base64 32 bytes>` — e.g. `v1:9Qx…`. The key id is required
+and is stamped into every stored envelope and into `hub_secrets.key_id`.
+
+```bash
+# Generate a new key (note the NEW id — never reuse an id)
+echo -n "v2:$(openssl rand -base64 32)" |   gcloud secrets versions add hub-secret-encryption-key --data-file=- --project=rxfit-automation
+```
+
+**Rotation is a three-step migration, not a one-liner:**
+
+1. **Keep the old key readable.** Before rolling, set
+   `SECRET_ENCRYPTION_KEYS_PREVIOUS` to the *old* `<keyId>:<base64>` (comma-separated
+   if more than one). Existing rows stay decryptable; new writes use the new key.
+2. **Re-seal.** Re-enter each credential in Settings → Connected Services, or run a
+   re-seal against `getSecretValue`/`putSecret`. Rows still on the old key are a
+   query, which is what the `key_id` column is for:
+   ```sql
+   SELECT company_id, name FROM hub_secrets WHERE key_id <> 'v2';
+   ```
+3. **Retire.** Once that query returns zero rows, clear
+   `SECRET_ENCRYPTION_KEYS_PREVIOUS` and destroy the old Secret Manager version.
+
+**Never** set `SECRET_ENCRYPTION_KEY` to the same value as `NEXTAUTH_SECRET` — the
+app refuses to start credential storage if you do. `NEXTAUTH_SECRET` is documented
+above as routinely rotatable, and sharing it would orphan every credential on the
+next session-secret rotation.
+
+**If the key is lost with no previous key retained**, the stored credentials are
+unrecoverable. Recovery is: delete the rows and have the operator re-enter each
+credential.
+
 ---
 
 ## Post-Deploy Verification
