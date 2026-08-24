@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { canAccessStaffRoute } from '@/lib/roles'
-import { isMissingTableError, workerFresh } from '@/lib/dispatch-store'
+import { isMissingTableError, workCapableWorkerFresh } from '@/lib/dispatch-store'
 import { dispatchFreshMs, isDispatchConfigured, isDispatchEnabled } from '@/lib/agy-dispatch'
 
 export const runtime = 'nodejs'
@@ -34,7 +34,11 @@ export async function GET() {
     return NextResponse.json({ available: false, reason: 'dispatch_disabled', workerFresh: false })
   }
   try {
-    const fresh = await workerFresh(dispatchFreshMs())
+    // WORK-capable freshness, not process liveness: at WORKER_WORK_SLOTS=0
+    // (the shipped default) chat heartbeats keep the worker row fresh while
+    // deep runs would sit queued to their deadline — the chips must not call
+    // that live.
+    const fresh = await workCapableWorkerFresh(dispatchFreshMs())
     return NextResponse.json({
       available: fresh,
       reason: fresh ? null : 'no_worker',

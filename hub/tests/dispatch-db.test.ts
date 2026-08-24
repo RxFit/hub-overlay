@@ -11,6 +11,7 @@ import {
   postResult,
   reapExpired,
   upsertWorker,
+  workCapableWorkerFresh,
   workerFresh,
 } from '@/lib/dispatch-store'
 import {
@@ -197,6 +198,28 @@ describeDb('dispatch store (Postgres)', () => {
     const sql = getSql()
     await sql`UPDATE dispatch_workers SET last_seen_at = now() - interval '2 minutes'`
     expect(await workerFresh(45_000)).toBe(false)
+  })
+
+  it('work-capable freshness keys on the work_item stamp — chat heartbeats alone never count', async () => {
+    // Chat-only worker (WORKER_WORK_SLOTS=0, the shipped default): process
+    // alive, deep lane must read offline.
+    await upsertWorker('danny-desktop', { version: 'abc', kinds: ['chat_turn'] })
+    expect(await workerFresh(45_000)).toBe(true)
+    expect(await workCapableWorkerFresh(45_000)).toBe(false)
+
+    // A work slot claims → capable.
+    await upsertWorker('danny-desktop', { version: 'abc', kinds: ['work_item'] })
+    expect(await workCapableWorkerFresh(45_000)).toBe(true)
+
+    // A later chat-slot beat merges, never erases, the work stamp.
+    await upsertWorker('danny-desktop', { version: 'abc', kinds: ['chat_turn'] })
+    expect(await workCapableWorkerFresh(45_000)).toBe(true)
+
+    // The work stamp itself goes stale on its own clock.
+    const sql = getSql()
+    await sql`UPDATE dispatch_workers SET meta = meta || jsonb_build_object('work_itemSeenAt', (now() - interval '2 minutes')::text)`
+    expect(await workCapableWorkerFresh(45_000)).toBe(false)
+    expect(await workerFresh(45_000)).toBe(true) // chat lane unaffected
   })
 
   it('SKIP LOCKED under real contention: a row locked by another transaction is skipped, not blocked on', async () => {

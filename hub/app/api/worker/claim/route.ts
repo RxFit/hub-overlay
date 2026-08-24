@@ -76,7 +76,10 @@ export async function POST(req: NextRequest) {
   const agyVersion = typeof body.agyVersion === 'string' ? body.agyVersion.slice(0, 64) : undefined
 
   try {
-    await upsertWorker(workerId, { version, agyVersion })
+    // kinds ride into the worker row as per-kind capability stamps — the
+    // deep lane's availability keys on a fresh work_item stamp, not on mere
+    // process liveness (lib/dispatch-store.ts workCapableWorkerFresh).
+    await upsertWorker(workerId, { version, agyVersion, kinds })
     const reaped = await reapExpired()
     if (reaped.leaseExpired > 0) {
       emit({ type: 'dispatch_expired', count: reaped.leaseExpired, reason: 'lease_expired' })

@@ -13,7 +13,7 @@ import { loadSkillContent } from '@/lib/skills-loader'
 import {
   enqueueJob,
   isMissingTableError,
-  workerFresh,
+  workCapableWorkerFresh,
 } from '@/lib/dispatch-store'
 import { dispatchFreshMs, isDispatchConfigured, isDispatchEnabled } from '@/lib/agy-dispatch'
 import {
@@ -90,10 +90,10 @@ export async function POST(req: NextRequest) {
     )
   }
   try {
-    const fresh = await workerFresh(dispatchFreshMs())
+    const fresh = await workCapableWorkerFresh(dispatchFreshMs())
     if (!fresh) {
       return NextResponse.json(
-        { error: 'The desktop worker is offline — deep runs execute on your desktop allotment', reason: 'no_worker' },
+        { error: 'The desktop worker is offline or running no work slot (WORKER_WORK_SLOTS) — deep runs execute there', reason: 'no_worker' },
         { status: 503 },
       )
     }

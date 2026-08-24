@@ -226,14 +226,49 @@ export interface ClaimedJob {
   heartbeatMs: number
 }
 
-export async function upsertWorker(id: string, info: { version?: string; agyVersion?: string }): Promise<void> {
+export async function upsertWorker(
+  id: string,
+  info: { version?: string; agyVersion?: string; kinds?: DispatchKind[] },
+): Promise<void> {
+  // Per-kind capability stamps (e.g. meta.work_itemSeenAt): each slot's claim
+  // records WHICH kinds this worker actually serves, merged via jsonb concat
+  // so a chat slot's beat can never erase the work slot's record. This is
+  // what lets the deep lane distinguish "worker process alive" from "a work
+  // slot exists" — WORKER_WORK_SLOTS=0 keeps chat heartbeats flowing while
+  // work_itemSeenAt goes stale (workCapableWorkerFresh below).
+  const stamps: Record<string, string> = {}
+  const nowIso = new Date().toISOString()
+  for (const kind of info.kinds ?? []) stamps[`${kind}SeenAt`] = nowIso
   await db
     .insert(dispatchWorkers)
-    .values({ id, version: info.version, agyVersion: info.agyVersion })
+    .values({ id, version: info.version, agyVersion: info.agyVersion, meta: stamps })
     .onConflictDoUpdate({
       target: dispatchWorkers.id,
-      set: { lastSeenAt: new Date(), version: info.version, agyVersion: info.agyVersion },
+      set: {
+        lastSeenAt: new Date(),
+        version: info.version,
+        agyVersion: info.agyVersion,
+        meta: sql`coalesce(${dispatchWorkers.meta}, '{}'::jsonb) || ${JSON.stringify(stamps)}::jsonb`,
+      },
     })
+}
+
+/**
+ * Is a WORK-capable worker fresh — one whose work_item slot has claimed
+ * recently? workerFresh() above answers "is the worker process alive", which
+ * chat heartbeats keep true even at WORKER_WORK_SLOTS=0; the deep lane's
+ * availability must not call that live (Codex review on PR D). Workers that
+ * predate the capability stamps simply read as not work-capable until their
+ * next work-slot claim, which long-polls every ~25s — self-healing within
+ * seconds of a deploy.
+ */
+export async function workCapableWorkerFresh(freshMs: number): Promise<boolean> {
+  const cutoff = new Date(Date.now() - freshMs).toISOString()
+  const rows = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(dispatchWorkers)
+    .where(sql`(${dispatchWorkers.meta}->>'work_itemSeenAt')::timestamptz > ${cutoff}::timestamptz`)
+  return (rows[0]?.n ?? 0) > 0
 }
 
 /**

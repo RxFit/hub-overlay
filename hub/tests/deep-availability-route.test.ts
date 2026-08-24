@@ -13,7 +13,7 @@ const { sessionMock, staffMock, storeMock, dispatchMock } = vi.hoisted(() => ({
   sessionMock: vi.fn(),
   staffMock: vi.fn(),
   storeMock: {
-    workerFresh: vi.fn(),
+    workCapableWorkerFresh: vi.fn(),
     isMissingTableError: (err: unknown) => (err as { code?: string } | null)?.code === '42P01',
   },
   dispatchMock: {
@@ -34,7 +34,7 @@ import { GET } from '@/app/api/deep-runs/availability/route'
 beforeEach(() => {
   sessionMock.mockReset().mockResolvedValue({ user: { email: 'staff@rxfitatx.com', role: 'staff' } })
   staffMock.mockReset().mockReturnValue(true)
-  storeMock.workerFresh.mockReset().mockResolvedValue(true)
+  storeMock.workCapableWorkerFresh.mockReset().mockResolvedValue(true)
   dispatchMock.isDispatchConfigured.mockReset().mockReturnValue(true)
   dispatchMock.isDispatchEnabled.mockReset().mockReturnValue(true)
 })
@@ -57,17 +57,17 @@ describe('GET /api/deep-runs/availability', () => {
     dispatchMock.isDispatchEnabled.mockReturnValue(false)
     const body = await (await GET()).json()
     expect(body).toEqual({ available: false, reason: 'dispatch_disabled', workerFresh: false })
-    expect(storeMock.workerFresh).not.toHaveBeenCalled()
+    expect(storeMock.workCapableWorkerFresh).not.toHaveBeenCalled()
   })
 
   it('reports no_worker when the heartbeat is stale', async () => {
-    storeMock.workerFresh.mockResolvedValue(false)
+    storeMock.workCapableWorkerFresh.mockResolvedValue(false)
     const body = await (await GET()).json()
     expect(body).toEqual({ available: false, reason: 'no_worker', workerFresh: false })
   })
 
   it('a store read failure degrades to offline — never a 500 into the chips', async () => {
-    storeMock.workerFresh.mockRejectedValue(Object.assign(new Error('no table'), { code: '42P01' }))
+    storeMock.workCapableWorkerFresh.mockRejectedValue(Object.assign(new Error('no table'), { code: '42P01' }))
     const res = await GET()
     expect(res.status).toBe(200)
     expect((await res.json()).available).toBe(false)

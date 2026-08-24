@@ -93,7 +93,8 @@ describe('POST /api/worker/claim', () => {
     const body = await res.json()
     expect(body.job.id).toBe('j1')
     expect(body.hubSha).toBe('deadbeef')
-    expect(store.upsertWorker).toHaveBeenCalledWith('w1', { version: 'abc', agyVersion: undefined })
+    // kinds ride into the worker row as capability stamps (deep lane §6.3).
+    expect(store.upsertWorker).toHaveBeenCalledWith('w1', { version: 'abc', agyVersion: undefined, kinds: ['chat_turn'] })
     expect(store.reapExpired).toHaveBeenCalled()
   })
 

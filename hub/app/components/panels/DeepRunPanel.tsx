@@ -63,7 +63,7 @@ function failureMessage(errorClass: string | null, error: string | null): string
 /** Friendly copy for the reasons POST /api/deep-runs refuses to start. */
 function startRefusalMessage(reason: string | undefined, fallback: string): string {
   switch (reason) {
-    case 'no_worker': return 'The engine is offline — deep runs execute on your desktop worker, and it has not checked in. Start it, then try again.'
+    case 'no_worker': return 'The engine is offline — deep runs execute on your desktop worker, and no work-capable slot has checked in. Start it with WORKER_WORK_SLOTS=1, then try again.'
     case 'dispatch_disabled': return 'The deep engine is not enabled on this deployment.'
     case 'queue_full': return 'The engine is at capacity right now — try again in a few minutes.'
     case 'active_run_exists': return 'You already have a deep run in flight. Wait for it to finish or cancel it first.'
