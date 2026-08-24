@@ -1,0 +1,70 @@
+# Claude responder for Codex code reviews
+#
+# Loop: Codex (chatgpt-codex-connector[bot]) submits a review on a PR, this
+# workflow fires once, and Claude remediates the findings and requests a fresh
+# Codex pass. Repository auto-merge is configured separately in GitHub.
+#
+# Security boundaries:
+# - Only the exact Codex connector bot may trigger automatic remediation.
+# - Manual @claude overrides require OWNER, MEMBER, or COLLABORATOR association.
+# - Authentication uses CLAUDE_CODE_OAUTH_TOKEN, not ANTHROPIC_API_KEY.
+# - Claude never invokes merge; GitHub auto-merge handles eligible PRs.
+
+name: Claude responds to Codex review
+
+on:
+  # A submitted review is the single batch-complete event. Do not also trigger
+  # on each inline review comment because one review may contain many comments.
+  pull_request_review:
+    types: [submitted]
+  # Authorized maintainers may use a top-level @claude comment as an override.
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+
+# Never run two Claude passes on the same PR at once.
+concurrency:
+  group: claude-codex-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  respond:
+    if: >-
+      (github.event_name == 'issue_comment'
+        && github.event.issue.pull_request
+        && contains(github.event.comment.body, '@claude')
+        && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+      ||
+      (github.event_name == 'pull_request_review'
+        && github.event.sender.login == 'chatgpt-codex-connector[bot]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          allowed_bots: "chatgpt-codex-connector[bot]"
+          prompt: >-
+            You are responding to a Codex (chatgpt-codex-connector) code review
+            on this pull request. Read every Codex finding (P0/P1/P2 inline
+            comments and the review summary). For each: if it is a valid
+            P0/P1/P2 issue, implement the fix on this PR's branch, run the
+            project's test suite, and commit; if it is a false positive or bad
+            advice, reply on that thread with your technical reasoning and
+            resolve it WITHOUT changing code. After processing ALL findings,
+            push your commits and post exactly ONE top-level comment containing
+            "@codex review" to request a fresh pass. HARD LIMITS: (1) never tag
+            @codex in individual thread replies, only the single top-level
+            re-review request; (2) if this is the 3rd review round and findings
+            remain unresolved, do NOT push more changes; instead label the PR
+            "needs-human-decision" and stop; (3) NEVER merge, close, or approve
+            the PR; merge is handled separately by GitHub auto-merge.
+          claude_args: '--max-turns 25'
