@@ -18,7 +18,7 @@ const { sessionMock, staffMock, storeMock, dispatchMock, toolRunsMock, skillsMoc
     enqueueJob: vi.fn(),
     cancelJob: vi.fn(),
     getJobDetail: vi.fn(),
-    workerFresh: vi.fn(),
+    workCapableWorkerFresh: vi.fn(),
     isMissingTableError: (err: unknown) => (err as { code?: string } | null)?.code === '42P01',
   },
   dispatchMock: {
@@ -72,7 +72,7 @@ beforeEach(() => {
   storeMock.enqueueJob.mockReset().mockResolvedValue({ id: 'j1' })
   storeMock.cancelJob.mockReset().mockResolvedValue(undefined)
   storeMock.getJobDetail.mockReset().mockResolvedValue(null)
-  storeMock.workerFresh.mockReset().mockResolvedValue(true)
+  storeMock.workCapableWorkerFresh.mockReset().mockResolvedValue(true)
   dispatchMock.isDispatchConfigured.mockReset().mockReturnValue(true)
   dispatchMock.isDispatchEnabled.mockReset().mockReturnValue(true)
   toolRunsMock.createToolRun.mockReset().mockResolvedValue(undefined)
@@ -102,7 +102,7 @@ describe('POST /api/deep-runs', () => {
   it('rejects unknown tools and bad briefs before touching the engine', async () => {
     expect((await createPost(post({ tool: 'issue-tree', brief: 'x'.repeat(10) }))).status).toBe(400)
     expect((await createPost(post({ tool: 'deep-research', brief: ' ' }))).status).toBe(400)
-    expect(storeMock.workerFresh).not.toHaveBeenCalled()
+    expect(storeMock.workCapableWorkerFresh).not.toHaveBeenCalled()
   })
 
   it('fails honest when dispatch is disabled — never a silent metered fallback', async () => {
@@ -113,7 +113,7 @@ describe('POST /api/deep-runs', () => {
   })
 
   it('fails honest when the desktop worker is stale', async () => {
-    storeMock.workerFresh.mockResolvedValue(false)
+    storeMock.workCapableWorkerFresh.mockResolvedValue(false)
     const res = await createPost(post({ tool: 'deep-research', brief: 'why is churn rising' }))
     expect(res.status).toBe(503)
     expect((await res.json()).reason).toBe('no_worker')

@@ -30,6 +30,7 @@ import { InfoPopover } from '@/app/components/InfoPopover'
 import { FounderLensWizard } from '@/app/components/FounderLensWizard'
 import { useTenant } from '@/app/components/TenantProvider'
 import { useKPIData } from '@/app/hooks/useKPIData'
+import { useDeepAvailability } from '@/app/hooks/useDeepAvailability'
 import { useSpaces, useUnreadCounts } from '@/app/hooks/useGoogleChat'
 import { useFocusNotifications } from '@/app/hooks/useFocusNotifications'
 import {
@@ -397,6 +398,11 @@ export default function HubPage() {
 
   // Skills popover (UI-only) state
   const [skillsPopoverOpen, setSkillsPopoverOpen] = useState(false)
+
+  // Deep engine availability — drives the featured Deep chips and the
+  // popover's pinned tier (deep lane design §6.3: the chips reflect the
+  // engine, never queue silently into a dead worker).
+  const deepAvail = useDeepAvailability(userRole !== 'onboarding' && !!session?.user)
 
   // Tool Panel state
   const [toolPanelOpen, setToolPanelOpen] = useState(false)
@@ -801,6 +807,7 @@ export default function HubPage() {
                   description: s.description,
                   plugin: s.plugin,
                 }))}
+                deepAvailable={deepAvail.available}
               />
             )}
 
@@ -1035,6 +1042,36 @@ export default function HubPage() {
                 <div className="voice-listening-banner" role="status">
                   <span className="voice-listening-banner__dot" aria-hidden="true" />
                   Listening… tap the mic again to stop
+                </div>
+              )}
+              {/* Featured Deep tools — always one tap away (deep lane §6.1).
+                  Hidden in EXA mode, whose banner promises other tools are
+                  paused. Offline state is honest, not hidden: the chips dim
+                  and say so, but still open the panel (past reports remain
+                  readable there; starting a run fails with the same truth). */}
+              {!isOnboarding && !exaMode && (
+                <div
+                  className={`deep-chips ${deepAvail.available === false ? 'deep-chips--offline' : ''}`}
+                  role="group"
+                  aria-label="Deep tools"
+                >
+                  <button
+                    className={`deep-chip ${activeSkill?.id === 'deep-research' ? 'deep-chip--active' : ''}`}
+                    onClick={() => { haptic(); handleSkillActivate('deep-research') }}
+                    title={deepAvail.available === false ? 'Engine offline — runs execute on your desktop worker' : 'Minutes-long web research on your desktop engine'}
+                  >
+                    <span aria-hidden="true">🔬</span> Deep Research
+                  </button>
+                  <button
+                    className={`deep-chip ${activeSkill?.id === 'deep-think' ? 'deep-chip--active' : ''}`}
+                    onClick={() => { haptic(); handleSkillActivate('deep-think') }}
+                    title={deepAvail.available === false ? 'Engine offline — runs execute on your desktop worker' : 'Minutes-long deliberation at high reasoning effort'}
+                  >
+                    <span aria-hidden="true">🧠</span> Deep Think
+                  </button>
+                  {deepAvail.available === false && (
+                    <span className="deep-chips__status" role="status">engine offline</span>
+                  )}
                 </div>
               )}
               <div className="chat-input-wrapper">

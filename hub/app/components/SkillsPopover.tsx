@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
+import { isDeepTool } from '@/lib/skills'
 import type { SkillPlugin } from '@/types'
 
 interface SkillSummary {
@@ -17,6 +18,14 @@ interface SkillsPopoverProps {
   suggestedTools: string[]
   activeSkillId: string | null
   skillCatalog: SkillSummary[]
+  /** Deep engine availability (useDeepAvailability): true live, false
+   *  offline, null unknown — rendered honestly on the pinned tier. */
+  deepAvailable?: boolean | null
+}
+
+const DEEP_TOOL_ICONS: Record<string, string> = {
+  'deep-research': '🔬',
+  'deep-think': '🧠',
 }
 
 export function SkillsPopover({
@@ -26,6 +35,7 @@ export function SkillsPopover({
   suggestedTools,
   activeSkillId,
   skillCatalog,
+  deepAvailable = null,
 }: SkillsPopoverProps) {
   const popoverRef = useRef<HTMLDivElement>(null)
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
@@ -67,10 +77,15 @@ export function SkillsPopover({
 
   if (!isOpen) return null
 
-  // Filter skills to only those suggested by the AI
+  // The pinned tier (deep lane design §6.2): the deep tools render
+  // UNCONDITIONALLY at the top — every other tool waits to be suggested.
+  const deepTools = skillCatalog.filter(s => isDeepTool(s.id))
+
+  // Filter the rest to only those suggested by the AI (deep ids excluded —
+  // they are already pinned above and must not render twice).
   const hasSuggestions = suggestedTools.length > 0
   const filteredCatalog = hasSuggestions
-    ? skillCatalog.filter(s => suggestedTools.includes(s.id))
+    ? skillCatalog.filter(s => suggestedTools.includes(s.id) && !isDeepTool(s.id))
     : []
 
   // Group by plugin
@@ -95,6 +110,40 @@ export function SkillsPopover({
       >
         ✕
       </button>
+
+      {deepTools.length > 0 && (
+        <div className="skills-popover__section skills-popover__section--deep">
+          <div className="skills-popover__section-header skills-popover__section-header--static">
+            <span className="skills-popover__section-label">Deep</span>
+            <span
+              className={`skills-popover__deep-status ${
+                deepAvailable === true
+                  ? 'skills-popover__deep-status--live'
+                  : deepAvailable === false
+                    ? 'skills-popover__deep-status--offline'
+                    : ''
+              }`}
+            >
+              {deepAvailable === true ? '● engine live' : deepAvailable === false ? '● engine offline' : ''}
+            </span>
+          </div>
+          <div className="skills-popover__skill-list">
+            {deepTools.map(skill => (
+              <button
+                key={skill.id}
+                className={`skills-popover__skill-row ${activeSkillId === skill.id ? 'skills-popover__skill-row--active' : ''}`}
+                onClick={() => onActivate(skill.id)}
+                role="menuitem"
+              >
+                <span className="skills-popover__skill-name">
+                  <span aria-hidden="true">{DEEP_TOOL_ICONS[skill.id] ?? '✦'}</span> {skill.name}
+                </span>
+                <span className="skills-popover__skill-desc">{skill.description}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {!hasSuggestions ? (
         /* Empty state hint */
