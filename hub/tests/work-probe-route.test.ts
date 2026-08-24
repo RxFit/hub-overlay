@@ -36,7 +36,8 @@ vi.mock('@/lib/dispatch-store', () => storeMock)
 vi.mock('@/lib/agy-dispatch', () => dispatchMock)
 vi.mock('@/lib/observability', () => ({ emit: vi.fn() }))
 
-import { POST, GET, containsFreshTimestamp } from '@/app/api/admin/work-probe/route'
+import { POST, GET } from '@/app/api/admin/work-probe/route'
+import { containsFreshTimestamp } from '@/lib/work-probe'
 
 function post(body: unknown = {}): NextRequest {
   return new NextRequest('http://localhost:3000/api/admin/work-probe', {
