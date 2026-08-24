@@ -10,6 +10,8 @@ import { TOOL_PANEL_MAP } from './index'
    ════════════════════════════════════════════════════════════════════════════ */
 
 const EXPECTED_TOOL_IDS = [
+  'deep-research',
+  'deep-think',
   'issue-tree',
   'decision-memo',
   'prioritization',

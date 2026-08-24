@@ -16,6 +16,24 @@ export interface SkillDefinition {
   plugin: SkillPlugin
 }
 
+/**
+ * The deep lane's tools (docs/architecture/DEEP_LANE_2026-08-23.md). These
+ * are PANEL tools, not chat lenses: activating one opens the brief panel and
+ * runs asynchronously on the desktop agy engine. They are therefore EXCLUDED
+ * from chat-turn skill injection (useChatEngine + /api/chat both check this
+ * list) — loading a minutes-long run protocol into a 90-second chat turn is
+ * exactly the failure mode the lane exists to avoid (design §1).
+ *
+ * Client-safe single source: lib/deep-runs.ts (server config) imports it
+ * from here.
+ */
+export const DEEP_TOOL_IDS = ['deep-research', 'deep-think'] as const
+export type DeepToolIdInCatalog = (typeof DEEP_TOOL_IDS)[number]
+
+export function isDeepTool(id: string | null | undefined): boolean {
+  return typeof id === 'string' && (DEEP_TOOL_IDS as readonly string[]).includes(id)
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    ENTERPRISE-AI SKILLS (12 entries including router)
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -26,6 +44,8 @@ const enterpriseAiSkills: SkillDefinition[] = [
   { id: 'data-insights', name: 'Data Insights', description: 'Analyze CSV or Excel data and produce plain-English insights on targets, trends, anomalies, and segments', plugin: 'enterprise-ai' },
   { id: 'decision-memo', name: 'Decision Memo', description: 'Draft a 1-page decision memo that forces a yes/no call: context, complication, options, recommendation, risks', plugin: 'enterprise-ai' },
   { id: 'deck-pipeline', name: 'Deck Pipeline', description: 'Four-step presentation workflow: strategist, builder, critic, fixer for high-stakes decks', plugin: 'enterprise-ai' },
+  { id: 'deep-research', name: 'Deep Research', description: 'Minutes-long web research run on your desktop agy engine — decomposed searches, triangulated sources, cited report', plugin: 'enterprise-ai' },
+  { id: 'deep-think', name: 'Deep Think', description: 'Minutes-long deliberation run at high reasoning effort — framings, steelmanned options, self-critique, confident conclusion', plugin: 'enterprise-ai' },
   { id: 'gamma-deck', name: 'Gamma Deck', description: 'Generate a Gamma presentation from a storyline or content file', plugin: 'enterprise-ai' },
   { id: 'issue-tree', name: 'Issue Tree', description: 'Break complex problems into MECE branches and testable hypotheses', plugin: 'enterprise-ai' },
   { id: 'mckinsey-critic', name: 'McKinsey Critic', description: 'Review decks, memos, and strategies like a consulting engagement manager', plugin: 'enterprise-ai' },

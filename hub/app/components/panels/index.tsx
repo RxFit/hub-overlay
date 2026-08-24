@@ -24,6 +24,10 @@ const PanelLoading = () => (
  * re-showing a panel does not re-fetch or re-flash the fallback.
  */
 export const TOOL_PANEL_MAP: Record<string, ToolPanel> = {
+  // Deep lane (DEEP_LANE_2026-08-23.md): both tools share one async-run
+  // panel — brief → watch → report — differing only in copy and protocol.
+  'deep-research':      dynamic(() => import('./DeepRunPanel'),         { ssr: false, loading: PanelLoading }),
+  'deep-think':         dynamic(() => import('./DeepRunPanel'),         { ssr: false, loading: PanelLoading }),
   'issue-tree':         dynamic(() => import('./IssueTreePanel'),       { ssr: false, loading: PanelLoading }),
   'decision-memo':      dynamic(() => import('./DecisionMemoPanel'),    { ssr: false, loading: PanelLoading }),
   'prioritization':     dynamic(() => import('./PrioritizationPanel'),  { ssr: false, loading: PanelLoading }),

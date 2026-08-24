@@ -13,7 +13,7 @@ import { searchSemanticBrain } from '@/lib/vertex'
 import { searchWeb, parseSubQueries, mergeExaResults, type ExaSearchResult } from '@/lib/exa'
 import { resolveAttachmentContext } from '@/lib/attachment-resolver'
 import { loadSkillContent } from '@/lib/skills-loader'
-import { SKILL_MAP } from '@/lib/skills'
+import { isDeepTool, SKILL_MAP } from '@/lib/skills'
 import { needsInternalSearch, needsExternalSearch, isTrivialMessage } from '@/lib/search-routing'
 import { ChatRequestSchema } from '@/lib/zod-schemas'
 import { boundHistory, MAX_HISTORY_MESSAGES } from '@/lib/history-window'
@@ -463,7 +463,13 @@ async function handleChat(req: NextRequest): Promise<Response> {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
-  const { messages, useCase = 'deep_dive', attachments, activeSkill, exaMode = false } = body
+  const { messages, useCase = 'deep_dive', attachments, activeSkill: rawActiveSkill, exaMode = false } = body
+  // Deep tools are panel tools, never chat lenses (deep lane design §1):
+  // their minutes-long run protocols execute via /api/deep-runs on the
+  // desktop engine. A deep id arriving here (older client, manual call) is
+  // dropped so it can neither inject its protocol nor flip the use case —
+  // the server-side half of the guard in useChatEngine.
+  const activeSkill = isDeepTool(rawActiveSkill) ? undefined : rawActiveSkill
 
   // Role is read here rather than at the context-assembly block below because
   // the EXA short-circuit needs it too — its capability manifest is role-gated

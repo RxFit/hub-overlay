@@ -44,4 +44,16 @@ describe('loadSkillContent', () => {
     const second = await loadSkillContent('enterprise-ai')
     expect(second).toBe(first)
   })
+
+  it('loads both deep-run protocols — the run-prompt source for /api/deep-runs', async () => {
+    const research = await loadSkillContent('deep-research')
+    expect(research).toBeTruthy()
+    expect(research!.startsWith('---')).toBe(false) // frontmatter stripped from the run prompt
+    expect(research).toContain('Triangulate')
+
+    const think = await loadSkillContent('deep-think')
+    expect(think).toBeTruthy()
+    expect(think).toContain('Steelman')
+    expect(think).toContain('Do NOT use web tools')
+  })
 })

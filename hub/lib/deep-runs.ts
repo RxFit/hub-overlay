@@ -17,8 +17,9 @@
 
 import type { JobDetail } from '@/lib/dispatch-store'
 import type { ToolRunRecord } from '@/lib/tool-runs'
+import { DEEP_TOOL_IDS } from '@/lib/skills'
 
-export const DEEP_TOOL_IDS = ['deep-research', 'deep-think'] as const
+export { DEEP_TOOL_IDS }
 export type DeepToolId = (typeof DEEP_TOOL_IDS)[number]
 
 export function isDeepToolId(v: unknown): v is DeepToolId {

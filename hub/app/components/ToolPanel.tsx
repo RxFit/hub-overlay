@@ -22,6 +22,9 @@ interface ToolPanelProps {
   onSaveArtifacts: (artifacts: ToolArtifactData) => Promise<void>
   isCollapsed: boolean
   onToggleCollapse: () => void
+  /** Live conversation id, threaded through to panels that attach work to
+   *  the chat (the deep-run panels). */
+  chatId?: string | null
 }
 
 /** Static fallback prompts per tool when no context is available */
@@ -47,6 +50,7 @@ export function ToolPanel({
   onSaveArtifacts,
   isCollapsed,
   onToggleCollapse,
+  chatId,
 }: ToolPanelProps) {
   const [contextCard, setContextCard] = useState<ToolContextCard | null>(null)
   const [contextLoading, setContextLoading] = useState(true)
@@ -221,6 +225,7 @@ export function ToolPanel({
               onInjectChat={onInjectChat}
               onArtifactUpdate={handleArtifactUpdate}
               artifacts={artifacts}
+              chatId={chatId}
             />
           </Suspense>
         ) : (
