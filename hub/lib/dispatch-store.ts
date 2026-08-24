@@ -2,6 +2,7 @@ import { and, asc, desc, eq, gt, inArray, lt, sql } from 'drizzle-orm'
 import { db, withTransaction } from '@/lib/db'
 import { dispatchJobs, dispatchWorkers } from '@/lib/schema'
 import { fingerprintPrompt, recordAiRun } from '@/lib/runs'
+import { finishToolRun, type LandedToolRun } from '@/lib/tool-runs'
 
 /**
  * lib/dispatch-store.ts — the Postgres data layer of desktop dispatch
@@ -51,6 +52,21 @@ export function isMissingTableError(err: unknown): boolean {
   return (err as { code?: string } | null)?.code === '42P01'
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * The ONE extraction point for a job's attached tool run. Validates uuid
+ * shape because tool_runs.id is a uuid column: malformed garbage in
+ * payload_meta must degrade to "no tool run attached", never into a
+ * PostgresError that aborts the result-posting transaction and strands a
+ * finished run (the worker would retry into the same error until its lease
+ * lapsed).
+ */
+export function toolRunIdFrom(meta: Record<string, unknown> | null | undefined): string | null {
+  const v = meta?.toolRunId
+  return typeof v === 'string' && UUID_RE.test(v) ? v : null
+}
+
 /**
  * Ledger `source` for a work_item job (the chat lane's rows stay 'chat').
  * Derived from payload_meta, which survives every content scrub: 'tool' when
@@ -60,7 +76,7 @@ export function isMissingTableError(err: unknown): boolean {
  * hardcoded source:'chat' for every kind.
  */
 export function workItemRunSource(meta: Record<string, unknown> | null | undefined): string {
-  if (meta && typeof meta.toolRunId === 'string') return 'tool'
+  if (toolRunIdFrom(meta)) return 'tool'
   if (meta && meta.probe === true) return 'work_probe'
   return 'work'
 }
@@ -274,6 +290,27 @@ async function ledgerReapedWorkItems(rows: ReapedRow[], errorClass: string, note
     userEmail: typeof r.payloadMeta?.userEmail === 'string' ? r.payloadMeta.userEmail : undefined,
     meta: { dispatch: true, reap: true, jobId: r.id },
   })))
+  // Deep-lane landing for reaped runs: a run whose job died must go terminal
+  // in tool_runs too — "a deep run must never simply vanish" (design §4).
+  // Best-effort per the migrations-non-fatal contract: a missing tool_runs
+  // table must not wedge the reaper for the chat lane. A failure here is NOT
+  // silent loss: the run's ai_runs row above already recorded the death, the
+  // owner's next GET presents the jobless row honestly by age, and
+  // expireStaleToolRuns retires it terminally on their next POST — the
+  // layered recovery for exactly this window.
+  for (const r of workItems) {
+    const toolRunId = toolRunIdFrom(r.payloadMeta)
+    if (!toolRunId) continue
+    try {
+      await finishToolRun(db, toolRunId, {
+        status: errorClass === 'abort' ? 'cancelled' : 'failed',
+        errorClass,
+        error: note,
+      })
+    } catch (err) {
+      console.warn(`[dispatch-store] reap could not finish tool_run ${toolRunId}:`, err instanceof Error ? err.message : err)
+    }
+  }
 }
 
 export async function reapExpired(): Promise<ReapCounts> {
@@ -437,8 +474,8 @@ export interface ResultPost {
 }
 
 export type ResultOutcome =
-  | { outcome: 'recorded'; prompt: string | null; requestId: string | null; kind: DispatchKind; payloadMeta: Record<string, unknown> | null }
-  | { outcome: 'discarded_cancelled'; prompt: string | null; requestId: string | null; kind: DispatchKind; payloadMeta: Record<string, unknown> | null }
+  | { outcome: 'recorded'; prompt: string | null; requestId: string | null; kind: DispatchKind; payloadMeta: Record<string, unknown> | null; toolRun: LandedToolRun | null }
+  | { outcome: 'discarded_cancelled'; prompt: string | null; requestId: string | null; kind: DispatchKind; payloadMeta: Record<string, unknown> | null; toolRun: LandedToolRun | null }
   | { outcome: 'discarded_lease_lost'; kind: DispatchKind; payloadMeta: Record<string, unknown> | null }
   | { outcome: 'duplicate' }
   | { outcome: 'not_found' }
@@ -486,6 +523,13 @@ export async function postResult(id: string, post: ResultPost): Promise<ResultOu
       workerId: post.workerId,
       latencyMs: post.latencyMs,
     }
+    // Deep-lane landing (DEEP_LANE_2026-08-23 §4): a job carrying a
+    // toolRunId lands its product into tool_runs INSIDE this transaction —
+    // the queue's terminal transition and the durable record move together
+    // or not at all. finishToolRun is a guarded CAS from 'queued', so a
+    // user cancel that already went terminal makes this a no-op (null).
+    const toolRunId = toolRunIdFrom(payloadMeta)
+
     if (row.cancelRequestedAt !== null) {
       // Hub already fell back; the answer has no reader. Record the terminal
       // state (and let the route ledger the spend) but never store the text.
@@ -504,21 +548,44 @@ export async function postResult(id: string, post: ResultPost): Promise<ResultOu
           updatedAt: now,
         })
         .where(eq(dispatchJobs.id, id))
-      return { outcome: 'discarded_cancelled', prompt: row.payloadText, requestId: row.requestId, kind, payloadMeta }
+      const toolRun = toolRunId
+        ? await finishToolRun(tx, toolRunId, {
+            status: 'cancelled',
+            errorClass: 'abort',
+            error: 'cancelled while the worker was running',
+            attempt: row.attempt,
+          })
+        : null
+      return { outcome: 'discarded_cancelled', prompt: row.payloadText, requestId: row.requestId, kind, payloadMeta, toolRun }
     }
+    let toolRun: LandedToolRun | null = null
     if (post.status === 'ok') {
       await tx
         .update(dispatchJobs)
         .set({
           state: 'succeeded',
-          resultText: post.text ?? '',
+          resultText: toolRunId ? null : (post.text ?? ''),
           resultMeta,
           latencyMs: post.latencyMs,
           finishedAt: now,
           payloadText: null, // prompt no longer needed once executed
+          // Tool runs are "delivered" the instant they land — the durable
+          // copy just went to tool_runs, so keeping result_text here would
+          // only feed the orphan sweep a false undelivered-spend row.
+          ...(toolRunId ? { deliveredAt: now, scrubbedAt: now } : {}),
           updatedAt: now,
         })
         .where(eq(dispatchJobs.id, id))
+      if (toolRunId) {
+        toolRun = await finishToolRun(tx, toolRunId, {
+          status: 'succeeded',
+          resultMd: post.text ?? '',
+          model: post.model,
+          latencyMs: post.latencyMs,
+          usage: post.usage as Record<string, number> | undefined,
+          attempt: row.attempt,
+        })
+      }
     } else {
       await tx
         .update(dispatchJobs)
@@ -535,8 +602,18 @@ export async function postResult(id: string, post: ResultPost): Promise<ResultOu
           updatedAt: now,
         })
         .where(eq(dispatchJobs.id, id))
+      if (toolRunId) {
+        toolRun = await finishToolRun(tx, toolRunId, {
+          status: 'failed',
+          errorClass: post.errorClass ?? 'unknown',
+          error: post.error,
+          model: post.model,
+          latencyMs: post.latencyMs,
+          attempt: row.attempt,
+        })
+      }
     }
-    return { outcome: 'recorded', prompt: row.payloadText, requestId: row.requestId, kind, payloadMeta }
+    return { outcome: 'recorded', prompt: row.payloadText, requestId: row.requestId, kind, payloadMeta, toolRun }
   })
 }
 

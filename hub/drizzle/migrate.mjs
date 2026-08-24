@@ -571,6 +571,50 @@ async function run() {
   `
   console.log('[migrate] ✓ dispatch_jobs + dispatch_workers tables')
 
+  // Tool runs — the deep lane's durable product record (Deep Research /
+  // Deep Think, docs/architecture/DEEP_LANE_2026-08-23.md). Briefs and
+  // finished reports live here because dispatch content is transient and
+  // ai_runs is provenance-only. status holds enqueue + terminal states;
+  // live "running" is derived from the dispatch job at read time.
+  await sql`
+    CREATE TABLE IF NOT EXISTS tool_runs (
+      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      created_at  TIMESTAMPTZ DEFAULT now() NOT NULL,
+      updated_at  TIMESTAMPTZ DEFAULT now() NOT NULL,
+      tool        TEXT NOT NULL,
+      status      TEXT DEFAULT 'queued' NOT NULL,
+      brief       TEXT NOT NULL,
+      result_md   TEXT,
+      error_class TEXT,
+      error       TEXT,
+      user_email  TEXT NOT NULL,
+      chat_id     TEXT,
+      job_id      UUID,
+      attempt     INTEGER DEFAULT 0 NOT NULL,
+      model       TEXT,
+      latency_ms  INTEGER,
+      usage       JSONB,
+      finished_at TIMESTAMPTZ
+    )
+  `
+  await sql`
+    CREATE INDEX IF NOT EXISTS tool_runs_user_created_idx
+    ON tool_runs (user_email, created_at DESC)
+  `
+  await sql`
+    CREATE INDEX IF NOT EXISTS tool_runs_job_idx
+    ON tool_runs (job_id)
+  `
+  // The one-active-run-per-user cap, enforced where it cannot race: two
+  // overlapping POSTs both pass a count check, but only one survives this
+  // partial unique index. expireStaleToolRuns retires zombie 'queued' rows
+  // so a crash can never deadlock a user on a corpse.
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS tool_runs_one_active_per_user
+    ON tool_runs (user_email) WHERE status = 'queued'
+  `
+  console.log('[migrate] ✓ tool_runs table')
+
   // Hub Secrets — operator-managed third-party credentials, moved off
   // Paperclip's Secrets API when Paperclip was retired. `ciphertext` is an
   // AES-256-GCM envelope (lib/secret-crypto.ts), never a plaintext value.

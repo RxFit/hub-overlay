@@ -13,6 +13,16 @@ import {
   upsertWorker,
   workerFresh,
 } from '@/lib/dispatch-store'
+import {
+  attachToolRunJob,
+  cancelToolRun,
+  countActiveToolRuns,
+  createToolRun,
+  expireStaleToolRuns,
+  getToolRunOwned,
+  isActiveRunConflict,
+  listToolRuns,
+} from '@/lib/tool-runs'
 
 /**
  * dispatch_jobs / dispatch_workers — the Phase 2.5 queue against REAL
@@ -248,7 +258,7 @@ describeDb('dispatch store (Postgres)', () => {
   }
 
   it('a work_item that exhausts its attempts is ledgered as lease_expired with fingerprint provenance', async () => {
-    const out = await enqueueJob({ kind: 'work_item', prompt: 'deep brief', deadlineMs: 600_000, meta: { toolRunId: 'tr-db-1' } })
+    const out = await enqueueJob({ kind: 'work_item', prompt: 'deep brief', deadlineMs: 600_000, meta: { toolRunId: crypto.randomUUID() } })
     const id = (out as { id: string }).id
     const sql = getSql()
     for (let attempt = 1; attempt <= 3; attempt++) {
@@ -303,14 +313,26 @@ describeDb('dispatch store (Postgres)', () => {
   })
 
   it('postResult surfaces kind and payload_meta so the route can label sources per job', async () => {
-    const out = await enqueueJob({ kind: 'work_item', prompt: 'p', deadlineMs: 600_000, meta: { toolRunId: 'tr-db-2' } })
+    const trId = crypto.randomUUID()
+    const out = await enqueueJob({ kind: 'work_item', prompt: 'p', deadlineMs: 600_000, meta: { toolRunId: trId } })
     const id = (out as { id: string }).id
     await claimNext('w1', ['work_item'])
     const posted = await postResult(id, { status: 'ok', text: 'report', workerId: 'w1', attempt: 1 })
     expect(posted.outcome).toBe('recorded')
     if (posted.outcome === 'recorded') {
       expect(posted.kind).toBe('work_item')
-      expect(posted.payloadMeta).toMatchObject({ toolRunId: 'tr-db-2' })
+      expect(posted.payloadMeta).toMatchObject({ toolRunId: trId })
+    }
+  })
+
+  it('a malformed toolRunId in payload_meta degrades to "no tool run" — result posting never breaks on it', async () => {
+    const out = await enqueueJob({ kind: 'work_item', prompt: 'p', deadlineMs: 600_000, meta: { toolRunId: 'not-a-uuid' } })
+    const id = (out as { id: string }).id
+    await claimNext('w1', ['work_item'])
+    const posted = await postResult(id, { status: 'ok', text: 'report', workerId: 'w1', attempt: 1 })
+    expect(posted.outcome).toBe('recorded')
+    if (posted.outcome === 'recorded') {
+      expect(posted.toolRun).toBeNull() // garbage id ⇒ nothing to land, no thrown transaction
     }
   })
 
@@ -322,5 +344,172 @@ describeDb('dispatch store (Postgres)', () => {
     expect(detail?.maxAttempts).toBe(3)
     expect(detail?.payloadMeta).toMatchObject({ probe: true })
     expect(JSON.stringify(detail)).not.toContain('secret brief')
+  })
+})
+
+/**
+ * Deep runs (PR B, DEEP_LANE_2026-08-23.md §4) — the tool_runs landing
+ * contract, in THIS file deliberately: vitest runs test files in parallel
+ * workers against the one shared CI Postgres, and these tests truncate the
+ * same dispatch tables as the suite above. Same file ⇒ same worker ⇒
+ * sequential ⇒ no cross-suite clobbering. Locks:
+ *  - a worker result lands the report into tool_runs IN THE SAME transaction
+ *    as the queue's terminal transition, with the queue row scrubbed +
+ *    delivered at once (no orphan-sweep double-ledger bait),
+ *  - failures and reaped runs go terminal in tool_runs — a deep run never
+ *    simply vanishes,
+ *  - user cancel wins its race exactly once (guarded CAS from 'queued'),
+ *  - reads are owner-scoped at the store layer.
+ */
+describeDb('deep runs — tool_runs landing (Postgres)', () => {
+  const OWNER = 'staff@rxfitatx.com'
+
+  beforeAll(() => {
+    migrateTestDb()
+  })
+
+  beforeEach(async () => {
+    const sql = getSql()
+    await sql`DELETE FROM dispatch_jobs`
+    await sql`DELETE FROM dispatch_workers`
+    await sql`DELETE FROM tool_runs`
+    await seedTenant()
+  })
+
+  /** Mirrors the POST route's row-first ordering: the product row exists
+   *  before any worker can possibly claim the job. */
+  async function startRun(tool = 'deep-research', brief = 'why is churn rising'): Promise<{ runId: string; jobId: string }> {
+    const runId = crypto.randomUUID()
+    await createToolRun({ id: runId, tool, brief, userEmail: OWNER })
+    const out = await enqueueJob({
+      kind: 'work_item',
+      prompt: `protocol…\n# The brief\n${brief}`,
+      deadlineMs: 600_000,
+      meta: { toolRunId: runId, tool, userEmail: OWNER },
+    })
+    const jobId = (out as { id: string }).id
+    await attachToolRunJob(runId, jobId)
+    return { runId, jobId }
+  }
+
+  it('a successful worker result lands the report durably and scrubs the queue row in one transaction', async () => {
+    const { runId, jobId } = await startRun()
+    await claimNext('w1', ['work_item'])
+    const posted = await postResult(jobId, {
+      status: 'ok',
+      text: '# Report\nAnswer.\n```json\n{"title":"t"}\n```',
+      model: 'gemini-3',
+      usage: { outputTokens: 1200 },
+      workerId: 'w1',
+      attempt: 1,
+      latencyMs: 65_000,
+    })
+    expect(posted.outcome).toBe('recorded')
+    if (posted.outcome === 'recorded') {
+      expect(posted.toolRun).toMatchObject({ id: runId, tool: 'deep-research', userEmail: OWNER })
+    }
+
+    const run = await getToolRunOwned(runId, OWNER)
+    expect(run?.status).toBe('succeeded')
+    expect(run?.resultMd).toContain('# Report')
+    expect(run?.model).toBe('gemini-3')
+    expect(run?.attempt).toBe(1)
+
+    // The queue row holds no content and cannot bait the orphan sweep:
+    // delivered+scrubbed the instant the durable copy landed.
+    const sql = getSql()
+    const [job] = await sql`SELECT result_text, payload_text, delivered_at, scrubbed_at, state FROM dispatch_jobs WHERE id = ${jobId}`
+    expect(job.state).toBe('succeeded')
+    expect(job.result_text).toBeNull()
+    expect(job.payload_text).toBeNull()
+    expect(job.delivered_at).not.toBeNull()
+    expect(job.scrubbed_at).not.toBeNull()
+  })
+
+  it('a worker error goes terminal failed with the typed class', async () => {
+    const { runId, jobId } = await startRun()
+    await claimNext('w1', ['work_item'])
+    await postResult(jobId, { status: 'error', errorClass: 'timeout', error: 'run exceeded budget', workerId: 'w1', attempt: 1 })
+    const run = await getToolRunOwned(runId, OWNER)
+    expect(run?.status).toBe('failed')
+    expect(run?.errorClass).toBe('timeout')
+    expect(run?.resultMd).toBeNull()
+  })
+
+  it('a run whose job exhausts all attempts is failed by the reaper — it never vanishes', async () => {
+    const { runId, jobId } = await startRun()
+    const sql = getSql()
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await claimNext('w1', ['work_item'])
+      await sql`UPDATE dispatch_jobs SET lease_expires_at = now() - interval '1 second' WHERE id = ${jobId}`
+      await reapExpired()
+    }
+    const run = await getToolRunOwned(runId, OWNER)
+    expect(run?.status).toBe('failed')
+    expect(run?.errorClass).toBe('lease_expired')
+  })
+
+  it('user cancel goes terminal immediately; the worker result that raced it is discarded and cannot overwrite', async () => {
+    const { runId, jobId } = await startRun()
+    await claimNext('w1', ['work_item'])
+    const cancelledJobId = await cancelToolRun(runId, OWNER)
+    expect(cancelledJobId).toBe(jobId)
+    await cancelJob(jobId)
+
+    // The worker finishes anyway and posts late.
+    const late = await postResult(jobId, { status: 'ok', text: 'too late', workerId: 'w1', attempt: 1 })
+    expect(late.outcome).toBe('discarded_cancelled')
+    if (late.outcome === 'discarded_cancelled') {
+      expect(late.toolRun).toBeNull() // CAS from 'queued' found 'cancelled' — no overwrite
+    }
+    const run = await getToolRunOwned(runId, OWNER)
+    expect(run?.status).toBe('cancelled')
+    expect(run?.resultMd).toBeNull()
+  })
+
+  it('cancel is owner-scoped and single-shot', async () => {
+    const { runId } = await startRun()
+    expect(await cancelToolRun(runId, 'other@rxfitatx.com')).toBeNull()
+    expect((await getToolRunOwned(runId, OWNER))?.status).toBe('queued')
+    expect(await cancelToolRun(runId, OWNER)).not.toBeNull()
+    expect(await cancelToolRun(runId, OWNER)).toBeNull() // already terminal
+  })
+
+  it('reads are owner-scoped and the active cap counts only live queued runs', async () => {
+    const { runId } = await startRun()
+    expect(await getToolRunOwned(runId, 'other@rxfitatx.com')).toBeNull()
+    expect(await listToolRuns('other@rxfitatx.com', { limit: 10 })).toHaveLength(0)
+    expect(await countActiveToolRuns(OWNER)).toBe(1)
+
+    // A stale queued row (zombie) ages out of the cap window.
+    const sql = getSql()
+    await sql`UPDATE tool_runs SET created_at = now() - interval '2 hours' WHERE id = ${runId}`
+    expect(await countActiveToolRuns(OWNER)).toBe(0)
+  })
+
+  it('the partial unique index makes the one-active-run cap atomic — a second queued row is refused', async () => {
+    await startRun()
+    let conflict: unknown = null
+    try {
+      await createToolRun({ id: crypto.randomUUID(), tool: 'deep-think', brief: 'b2', userEmail: OWNER })
+    } catch (err) {
+      conflict = err
+    }
+    expect(conflict).not.toBeNull()
+    expect(isActiveRunConflict(conflict)).toBe(true)
+    // A different user is unaffected.
+    await createToolRun({ id: crypto.randomUUID(), tool: 'deep-think', brief: 'b3', userEmail: 'other@rxfitatx.com' })
+  })
+
+  it('expireStaleToolRuns retires zombies terminally, freeing the unique cap', async () => {
+    const { runId } = await startRun()
+    const sql = getSql()
+    await sql`UPDATE tool_runs SET created_at = now() - interval '2 hours' WHERE id = ${runId}`
+    expect(await expireStaleToolRuns(OWNER)).toBe(1)
+    const run = await getToolRunOwned(runId, OWNER)
+    expect(run?.status).toBe('failed')
+    expect(run?.errorClass).toBe('orphaned')
+    // The cap is genuinely free again: a new queued row inserts cleanly.
+    await createToolRun({ id: crypto.randomUUID(), tool: 'deep-research', brief: 'b2', userEmail: OWNER })
   })
 })

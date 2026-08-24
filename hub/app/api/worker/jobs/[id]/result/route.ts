@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { verifyCronSecret } from '@/lib/cron-auth'
-import { isMissingTableError, postResult, workItemRunSource } from '@/lib/dispatch-store'
+import { isMissingTableError, postResult, toolRunIdFrom, workItemRunSource } from '@/lib/dispatch-store'
 import { emit } from '@/lib/observability'
 import { recordAiRun } from '@/lib/runs'
 
@@ -152,7 +152,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           jobId: params.id,
           workerId: body.workerId.slice(0, 100),
           outcome: outcome.outcome,
-          ...(typeof meta?.toolRunId === 'string' ? { toolRunId: meta.toolRunId } : {}),
+          ...(toolRunIdFrom(meta) ? { toolRunId: toolRunIdFrom(meta) } : {}),
           ...(meta?.probe === true ? { probe: true } : {}),
         },
       })
