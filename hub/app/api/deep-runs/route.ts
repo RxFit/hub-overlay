@@ -11,13 +11,21 @@ import {
 } from '@/lib/deep-runs'
 import { loadSkillContent } from '@/lib/skills-loader'
 import {
-  cancelJob,
   enqueueJob,
   isMissingTableError,
   workerFresh,
 } from '@/lib/dispatch-store'
 import { dispatchFreshMs, isDispatchConfigured, isDispatchEnabled } from '@/lib/agy-dispatch'
-import { countActiveToolRuns, createToolRun, listToolRuns } from '@/lib/tool-runs'
+import {
+  attachToolRunJob,
+  countActiveToolRuns,
+  createToolRun,
+  expireStaleToolRuns,
+  finishToolRun,
+  isActiveRunConflict,
+  listToolRuns,
+} from '@/lib/tool-runs'
+import { db } from '@/lib/db'
 import { emit } from '@/lib/observability'
 
 export const runtime = 'nodejs'
@@ -90,6 +98,9 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    // Retire zombie rows first so the unique cap below can never deadlock a
+    // user on a corpse, then a fast advisory check for the friendly 409.
+    await expireStaleToolRuns(auth.email)
     if ((await countActiveToolRuns(auth.email)) >= 1) {
       return NextResponse.json(
         { error: 'You already have a deep run in flight — wait for it or cancel it first', reason: 'active_run_exists' },
@@ -97,38 +108,56 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Mint the run id BEFORE the enqueue so the job's payload_meta and the
-    // tool_runs row agree even if the second write fails (lib/tool-runs.ts).
+    // ROW FIRST, job second: a fast worker could otherwise claim and post a
+    // result before the product row exists, and the landing CAS would no-op
+    // — losing the report. Creating the row first also makes the
+    // one-active-run cap atomic: the partial unique index refuses a second
+    // 'queued' row for this user, closing the count-check race between
+    // overlapping POSTs.
     const runId = crypto.randomUUID()
     const cfg = DEEP_TOOLS[tool]
+    try {
+      await createToolRun({ id: runId, tool, brief, userEmail: auth.email, chatId })
+    } catch (err) {
+      if (isActiveRunConflict(err)) {
+        return NextResponse.json(
+          { error: 'You already have a deep run in flight — wait for it or cancel it first', reason: 'active_run_exists' },
+          { status: 409 },
+        )
+      }
+      throw err
+    }
+
     const prompt = composeRunPrompt(tool, brief, await loadSkillContent(tool))
-    const outcome = await enqueueJob({
-      kind: 'work_item',
-      prompt,
-      deadlineMs: deepToolDeadlineMs(tool),
-      meta: {
-        toolRunId: runId,
-        tool,
-        userEmail: auth.email.toLowerCase().trim(),
-        ...(cfg.effort ? { effort: cfg.effort } : {}),
-      },
-    })
+    let outcome: Awaited<ReturnType<typeof enqueueJob>>
+    try {
+      outcome = await enqueueJob({
+        kind: 'work_item',
+        prompt,
+        deadlineMs: deepToolDeadlineMs(tool),
+        meta: {
+          toolRunId: runId,
+          tool,
+          userEmail: auth.email.toLowerCase().trim(),
+          ...(cfg.effort ? { effort: cfg.effort } : {}),
+        },
+      })
+    } catch (err) {
+      // No job ⇒ the row must not sit 'queued' (it would hold the cap).
+      await finishToolRun(db, runId, { status: 'failed', errorClass: 'no_worker', error: 'enqueue failed' }).catch(() => null)
+      throw err
+    }
     if ('refused' in outcome) {
+      await finishToolRun(db, runId, { status: 'failed', errorClass: 'queue_full', error: 'dispatch queue at work capacity' }).catch(() => null)
       return NextResponse.json(
         { error: 'The deep engine is at capacity — try again shortly', reason: 'queue_full' },
         { status: 503 },
       )
     }
     emit({ type: 'dispatch_enqueued', jobId: outcome.id, kind: 'work_item' })
-
-    try {
-      await createToolRun({ id: runId, tool, brief, userEmail: auth.email, chatId, jobId: outcome.id })
-    } catch (err) {
-      // The product record is the point — without it the run would be
-      // unwatchable. Stand the job down and fail the request honestly.
-      void cancelJob(outcome.id).catch(() => {})
-      throw err
-    }
+    // Best-effort: landing keys on toolRunId, not job_id; a lost attach only
+    // costs the live-state derivation, which then reports by age.
+    await attachToolRunJob(runId, outcome.id).catch(() => {})
 
     return NextResponse.json({
       run: {
@@ -158,8 +187,11 @@ export async function GET(req: NextRequest) {
   if (toolParam !== null && !isDeepToolId(toolParam)) {
     return NextResponse.json({ error: 'unknown tool' }, { status: 400 })
   }
-  const rawLimit = Number(req.nextUrl.searchParams.get('limit'))
-  const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(Math.round(rawLimit), 1), 20) : 10
+  // Read the raw param before converting: Number(null) is 0, which would
+  // silently turn "no limit given" into a limit of 1 after clamping.
+  const rawLimit = req.nextUrl.searchParams.get('limit')
+  const parsed = rawLimit === null ? NaN : Number(rawLimit)
+  const limit = Number.isFinite(parsed) ? Math.min(Math.max(Math.round(parsed), 1), 20) : 10
 
   try {
     const runs = await listToolRuns(auth.email, { tool: toolParam ?? undefined, limit })

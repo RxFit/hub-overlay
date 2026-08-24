@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, sql } from 'drizzle-orm'
+import { and, desc, eq, gt, lt, sql } from 'drizzle-orm'
 import { db, withTransaction } from '@/lib/db'
 import { toolRuns } from '@/lib/schema'
 
@@ -72,16 +72,25 @@ function toRecord(r: typeof toolRuns.$inferSelect): ToolRunRecord {
 }
 
 export interface CreateToolRunInput {
-  /** Minted by the caller BEFORE the dispatch enqueue, so the job's
-   *  payload_meta.toolRunId and this row agree even if the second write
-   *  fails (an orphaned job no-ops at landing; an orphaned row ages out of
-   *  the active window). */
+  /** Minted by the caller. The row is created BEFORE the dispatch enqueue
+   *  (row-first ordering): a fast worker can otherwise claim, run, and post
+   *  the result before the product row exists, and the landing CAS would
+   *  no-op — losing the report. Row-first means landing always finds its
+   *  row; a crash between the two writes leaves a jobless 'queued' row that
+   *  expireStaleToolRuns retires. */
   id: string
   tool: string
   brief: string
   userEmail: string
   chatId?: string | null
-  jobId: string
+  /** Attached after the enqueue via attachToolRunJob. */
+  jobId?: string | null
+}
+
+/** Postgres unique-violation on the one-active-run-per-user partial index
+ *  (tool_runs_one_active_per_user, drizzle/migrate.mjs). */
+export function isActiveRunConflict(err: unknown): boolean {
+  return (err as { code?: string } | null)?.code === '23505'
 }
 
 export async function createToolRun(input: CreateToolRunInput): Promise<void> {
@@ -91,8 +100,42 @@ export async function createToolRun(input: CreateToolRunInput): Promise<void> {
     brief: input.brief,
     userEmail: input.userEmail.toLowerCase().trim(),
     chatId: input.chatId ?? null,
-    jobId: input.jobId,
+    jobId: input.jobId ?? null,
   })
+}
+
+export async function attachToolRunJob(id: string, jobId: string): Promise<void> {
+  await db
+    .update(toolRuns)
+    .set({ jobId, updatedAt: new Date() })
+    .where(eq(toolRuns.id, id))
+}
+
+/**
+ * Retire this user's zombie rows — 'queued' long past any job's possible
+ * lifetime (crash between row insert and enqueue, or a reap whose
+ * tool_runs write failed). Terminal state instead of presentation-only
+ * aging, so the one-active-run unique index can never deadlock a user on a
+ * corpse. Called by the POST route before the cap check.
+ */
+export async function expireStaleToolRuns(userEmail: string): Promise<number> {
+  const cutoff = new Date(Date.now() - ACTIVE_WINDOW_MS)
+  const rows = await db
+    .update(toolRuns)
+    .set({
+      status: 'failed',
+      errorClass: 'orphaned',
+      error: 'run lost its engine job (expired while queued)',
+      finishedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(and(
+      eq(toolRuns.userEmail, userEmail.toLowerCase().trim()),
+      eq(toolRuns.status, 'queued'),
+      lt(toolRuns.createdAt, cutoff),
+    ))
+    .returning({ id: toolRuns.id })
+  return rows.length
 }
 
 export async function getToolRunOwned(id: string, userEmail: string): Promise<ToolRunRecord | null> {

@@ -293,7 +293,11 @@ async function ledgerReapedWorkItems(rows: ReapedRow[], errorClass: string, note
   // Deep-lane landing for reaped runs: a run whose job died must go terminal
   // in tool_runs too — "a deep run must never simply vanish" (design §4).
   // Best-effort per the migrations-non-fatal contract: a missing tool_runs
-  // table must not wedge the reaper for the chat lane.
+  // table must not wedge the reaper for the chat lane. A failure here is NOT
+  // silent loss: the run's ai_runs row above already recorded the death, the
+  // owner's next GET presents the jobless row honestly by age, and
+  // expireStaleToolRuns retires it terminally on their next POST — the
+  // layered recovery for exactly this window.
   for (const r of workItems) {
     const toolRunId = toolRunIdFrom(r.payloadMeta)
     if (!toolRunId) continue

@@ -28,6 +28,10 @@ const { sessionMock, staffMock, storeMock, dispatchMock, toolRunsMock, skillsMoc
   },
   toolRunsMock: {
     createToolRun: vi.fn(),
+    attachToolRunJob: vi.fn(),
+    expireStaleToolRuns: vi.fn(),
+    finishToolRun: vi.fn(),
+    isActiveRunConflict: (err: unknown) => (err as { code?: string } | null)?.code === '23505',
     listToolRuns: vi.fn(),
     countActiveToolRuns: vi.fn(),
     getToolRunOwned: vi.fn(),
@@ -44,6 +48,7 @@ vi.mock('@/lib/agy-dispatch', () => dispatchMock)
 vi.mock('@/lib/tool-runs', () => toolRunsMock)
 vi.mock('@/lib/skills-loader', () => skillsMock)
 vi.mock('@/lib/observability', () => ({ emit: vi.fn() }))
+vi.mock('@/lib/db', () => ({ db: {} }))
 
 import { POST as createPost, GET as listGet } from '@/app/api/deep-runs/route'
 import { GET as detailGet, POST as detailPost } from '@/app/api/deep-runs/[id]/route'
@@ -69,6 +74,9 @@ beforeEach(() => {
   dispatchMock.isDispatchConfigured.mockReset().mockReturnValue(true)
   dispatchMock.isDispatchEnabled.mockReset().mockReturnValue(true)
   toolRunsMock.createToolRun.mockReset().mockResolvedValue(undefined)
+  toolRunsMock.attachToolRunJob.mockReset().mockResolvedValue(undefined)
+  toolRunsMock.expireStaleToolRuns.mockReset().mockResolvedValue(0)
+  toolRunsMock.finishToolRun.mockReset().mockResolvedValue(null)
   toolRunsMock.listToolRuns.mockReset().mockResolvedValue([])
   toolRunsMock.countActiveToolRuns.mockReset().mockResolvedValue(0)
   toolRunsMock.getToolRunOwned.mockReset()
@@ -117,21 +125,35 @@ describe('POST /api/deep-runs', () => {
     expect((await res.json()).reason).toBe('active_run_exists')
   })
 
-  it('enqueues the work_item with toolRunId + userEmail (+ effort for deep-think) and creates the durable row', async () => {
+  it('creates the durable row FIRST, then enqueues with toolRunId + userEmail (+ effort for deep-think), then attaches the job', async () => {
     const res = await createPost(post({ tool: 'deep-think', brief: 'should we expand', chatId: 'chat-1' }))
     expect(res.status).toBe(200)
     const { run } = await res.json()
     expect(run.tool).toBe('deep-think')
     expect(run.status).toBe('queued')
 
+    // Row-first ordering: a fast worker must always find the row at landing.
+    expect(toolRunsMock.createToolRun.mock.invocationCallOrder[0])
+      .toBeLessThan(storeMock.enqueueJob.mock.invocationCallOrder[0])
+    expect(toolRunsMock.createToolRun).toHaveBeenCalledWith(
+      expect.objectContaining({ id: run.id, tool: 'deep-think', chatId: 'chat-1' }),
+    )
+
     const enq = storeMock.enqueueJob.mock.calls[0][0]
     expect(enq.kind).toBe('work_item')
     expect(enq.meta).toMatchObject({ toolRunId: run.id, tool: 'deep-think', userEmail: 'staff@rxfitatx.com', effort: 'high' })
     expect(enq.prompt).toContain('should we expand')
 
-    expect(toolRunsMock.createToolRun).toHaveBeenCalledWith(
-      expect.objectContaining({ id: run.id, tool: 'deep-think', jobId: 'j1', chatId: 'chat-1' }),
-    )
+    expect(toolRunsMock.attachToolRunJob).toHaveBeenCalledWith(run.id, 'j1')
+    expect(toolRunsMock.expireStaleToolRuns).toHaveBeenCalledWith('staff@rxfitatx.com')
+  })
+
+  it('the unique-index conflict is the atomic cap: 409 without enqueueing', async () => {
+    toolRunsMock.createToolRun.mockRejectedValue(Object.assign(new Error('dup'), { code: '23505' }))
+    const res = await createPost(post({ tool: 'deep-research', brief: 'why is churn rising' }))
+    expect(res.status).toBe(409)
+    expect((await res.json()).reason).toBe('active_run_exists')
+    expect(storeMock.enqueueJob).not.toHaveBeenCalled()
   })
 
   it('deep-research carries no effort pin (agy defaults, tools live)', async () => {
@@ -139,18 +161,39 @@ describe('POST /api/deep-runs', () => {
     expect(storeMock.enqueueJob.mock.calls[0][0].meta.effort).toBeUndefined()
   })
 
-  it('503s queue_full on backpressure refusal', async () => {
+  it('503s queue_full on backpressure refusal — and the row does not sit holding the cap', async () => {
     storeMock.enqueueJob.mockResolvedValue({ refused: 'queue_full' })
     const res = await createPost(post({ tool: 'deep-research', brief: 'why is churn rising' }))
     expect(res.status).toBe(503)
     expect((await res.json()).reason).toBe('queue_full')
+    expect(toolRunsMock.finishToolRun).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      expect.objectContaining({ status: 'failed', errorClass: 'queue_full' }),
+    )
   })
 
-  it('stands the job down when the durable row cannot be created — no unwatchable runs', async () => {
-    toolRunsMock.createToolRun.mockRejectedValue(new Error('insert failed'))
+  it('an enqueue failure fails the row too — no jobless run left holding the cap', async () => {
+    storeMock.enqueueJob.mockRejectedValue(new Error('db down'))
     const res = await createPost(post({ tool: 'deep-research', brief: 'why is churn rising' }))
     expect(res.status).toBe(500)
-    expect(storeMock.cancelJob).toHaveBeenCalledWith('j1')
+    expect(toolRunsMock.finishToolRun).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      expect.objectContaining({ status: 'failed', errorClass: 'no_worker' }),
+    )
+  })
+})
+
+describe('GET /api/deep-runs', () => {
+  it('defaults to 10 when no limit is given — Number(null) must not clamp to 1', async () => {
+    await listGet(new NextRequest('http://localhost:3000/api/deep-runs'))
+    expect(toolRunsMock.listToolRuns).toHaveBeenCalledWith('staff@rxfitatx.com', { tool: undefined, limit: 10 })
+  })
+
+  it('clamps an explicit limit into 1..20', async () => {
+    await listGet(new NextRequest('http://localhost:3000/api/deep-runs?limit=999'))
+    expect(toolRunsMock.listToolRuns).toHaveBeenCalledWith('staff@rxfitatx.com', { tool: undefined, limit: 20 })
   })
 })
 
@@ -199,6 +242,15 @@ describe('POST /api/deep-runs/[id] (cancel)', () => {
     expect(toolRunsMock.cancelToolRun).toHaveBeenCalledWith('r1', 'staff@rxfitatx.com')
     expect(storeMock.cancelJob).toHaveBeenCalledWith('j1')
     expect(body.run.liveStatus).toBe('cancelled')
+  })
+
+  it('a failed queue cancel is awaited, logged, and never breaks the response — the CAS discards the late result', async () => {
+    toolRunsMock.cancelToolRun.mockResolvedValue('j1')
+    storeMock.cancelJob.mockRejectedValue(new Error('db blip'))
+    toolRunsMock.getToolRunOwned.mockResolvedValue({ ...QUEUED_RUN, status: 'cancelled', errorClass: 'abort' })
+    const res = await detailPost(cancelReq(), { params: { id: 'r1' } })
+    expect(res.status).toBe(200)
+    expect((await res.json()).run.liveStatus).toBe('cancelled')
   })
 
   it('a cancel that lost the race (already terminal) still returns the current view', async () => {

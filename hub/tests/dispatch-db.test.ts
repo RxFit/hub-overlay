@@ -14,10 +14,13 @@ import {
   workerFresh,
 } from '@/lib/dispatch-store'
 import {
+  attachToolRunJob,
   cancelToolRun,
   countActiveToolRuns,
   createToolRun,
+  expireStaleToolRuns,
   getToolRunOwned,
+  isActiveRunConflict,
   listToolRuns,
 } from '@/lib/tool-runs'
 
@@ -373,8 +376,11 @@ describeDb('deep runs — tool_runs landing (Postgres)', () => {
     await seedTenant()
   })
 
+  /** Mirrors the POST route's row-first ordering: the product row exists
+   *  before any worker can possibly claim the job. */
   async function startRun(tool = 'deep-research', brief = 'why is churn rising'): Promise<{ runId: string; jobId: string }> {
     const runId = crypto.randomUUID()
+    await createToolRun({ id: runId, tool, brief, userEmail: OWNER })
     const out = await enqueueJob({
       kind: 'work_item',
       prompt: `protocol…\n# The brief\n${brief}`,
@@ -382,7 +388,7 @@ describeDb('deep runs — tool_runs landing (Postgres)', () => {
       meta: { toolRunId: runId, tool, userEmail: OWNER },
     })
     const jobId = (out as { id: string }).id
-    await createToolRun({ id: runId, tool, brief, userEmail: OWNER, jobId })
+    await attachToolRunJob(runId, jobId)
     return { runId, jobId }
   }
 
@@ -479,5 +485,31 @@ describeDb('deep runs — tool_runs landing (Postgres)', () => {
     const sql = getSql()
     await sql`UPDATE tool_runs SET created_at = now() - interval '2 hours' WHERE id = ${runId}`
     expect(await countActiveToolRuns(OWNER)).toBe(0)
+  })
+
+  it('the partial unique index makes the one-active-run cap atomic — a second queued row is refused', async () => {
+    await startRun()
+    let conflict: unknown = null
+    try {
+      await createToolRun({ id: crypto.randomUUID(), tool: 'deep-think', brief: 'b2', userEmail: OWNER })
+    } catch (err) {
+      conflict = err
+    }
+    expect(conflict).not.toBeNull()
+    expect(isActiveRunConflict(conflict)).toBe(true)
+    // A different user is unaffected.
+    await createToolRun({ id: crypto.randomUUID(), tool: 'deep-think', brief: 'b3', userEmail: 'other@rxfitatx.com' })
+  })
+
+  it('expireStaleToolRuns retires zombies terminally, freeing the unique cap', async () => {
+    const { runId } = await startRun()
+    const sql = getSql()
+    await sql`UPDATE tool_runs SET created_at = now() - interval '2 hours' WHERE id = ${runId}`
+    expect(await expireStaleToolRuns(OWNER)).toBe(1)
+    const run = await getToolRunOwned(runId, OWNER)
+    expect(run?.status).toBe('failed')
+    expect(run?.errorClass).toBe('orphaned')
+    // The cap is genuinely free again: a new queued row inserts cleanly.
+    await createToolRun({ id: crypto.randomUUID(), tool: 'deep-research', brief: 'b2', userEmail: OWNER })
   })
 })

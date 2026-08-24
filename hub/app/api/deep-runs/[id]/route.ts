@@ -77,7 +77,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const jobId = await cancelToolRun(params.id, auth.email)
     if (jobId) {
       // Stand the queue job down; the worker learns via its next heartbeat.
-      void cancelJob(jobId).catch(() => {})
+      // AWAITED: an unawaited failure would report "cancelled" while the
+      // worker burned allotment to the end. If it still fails, the run row
+      // is already terminal — the worker's eventual result is discarded by
+      // the landing CAS and its spend ledgered — so we log rather than
+      // unwind, but we never skip the attempt.
+      try {
+        await cancelJob(jobId)
+      } catch (err) {
+        console.warn('[deep-runs cancel] queue cancel failed — worker will run to completion, result will be discarded:', err instanceof Error ? err.message : err)
+      }
     }
     const run = await getToolRunOwned(params.id, auth.email)
     if (!run) return NextResponse.json({ error: 'run not found' }, { status: 404 })

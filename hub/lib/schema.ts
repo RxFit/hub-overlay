@@ -577,6 +577,10 @@ export const toolRuns = pgTable(
   (t) => ({
     userCreatedIdx: index('tool_runs_user_created_idx').on(t.userEmail, t.createdAt.desc()),
     jobIdx:         index('tool_runs_job_idx').on(t.jobId),
+    // Also in migrate.mjs (the deploy path): tool_runs_one_active_per_user,
+    // a partial UNIQUE index on (user_email) WHERE status = 'queued' — the
+    // race-proof form of the one-active-run cap. Declared there rather than
+    // here because drizzle's schema DSL is not the applied migration.
   }),
 )
 

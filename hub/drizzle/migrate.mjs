@@ -605,6 +605,14 @@ async function run() {
     CREATE INDEX IF NOT EXISTS tool_runs_job_idx
     ON tool_runs (job_id)
   `
+  // The one-active-run-per-user cap, enforced where it cannot race: two
+  // overlapping POSTs both pass a count check, but only one survives this
+  // partial unique index. expireStaleToolRuns retires zombie 'queued' rows
+  // so a crash can never deadlock a user on a corpse.
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS tool_runs_one_active_per_user
+    ON tool_runs (user_email) WHERE status = 'queued'
+  `
   console.log('[migrate] ✓ tool_runs table')
 
   // Hub Secrets — operator-managed third-party credentials, moved off
