@@ -5,6 +5,7 @@ import {
   claimNext,
   deliverResult,
   enqueueJob,
+  getJobDetail,
   getJobView,
   heartbeatJob,
   postResult,
@@ -233,5 +234,93 @@ describeDb('dispatch store (Postgres)', () => {
     const view = await getJobView(id)
     expect(view?.state).toBe('expired')
     expect(view?.errorClass).toBe('deadline')
+  })
+
+  /* ── Deep lane (PR A): reaped work_items leave a ledger row ──────────────
+     Phase 3 §7: "reapExpired() never writes a ledger row, so an expired work
+     item vanishes without a trace in ai_runs." These lock the fix. ai_runs
+     assertions filter by meta jobId (a uuid), so shared-table residue from
+     other suites can never collide. */
+
+  async function aiRunsForJob(id: string) {
+    const sql = getSql()
+    return sql`SELECT source, status, error_class, prompt_chars, prompt_sha256, meta FROM ai_runs WHERE meta->>'jobId' = ${id}`
+  }
+
+  it('a work_item that exhausts its attempts is ledgered as lease_expired with fingerprint provenance', async () => {
+    const out = await enqueueJob({ kind: 'work_item', prompt: 'deep brief', deadlineMs: 600_000, meta: { toolRunId: 'tr-db-1' } })
+    const id = (out as { id: string }).id
+    const sql = getSql()
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const job = await claimNext('w1', ['work_item'])
+      expect(job?.attempt).toBe(attempt)
+      await sql`UPDATE dispatch_jobs SET lease_expires_at = now() - interval '1 second' WHERE id = ${id}`
+      await reapExpired()
+    }
+    const view = await getJobView(id)
+    expect(view?.state).toBe('expired')
+    const rows = await aiRunsForJob(id)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].source).toBe('tool') // toolRunId in payload_meta drives the source
+    expect(rows[0].status).toBe('error')
+    expect(rows[0].error_class).toBe('lease_expired')
+    expect(rows[0].prompt_chars).toBe('deep brief'.length) // provenance survives the scrub
+    expect(rows[0].prompt_sha256).toHaveLength(16)
+    expect(rows[0].meta.reap).toBe(true)
+  })
+
+  it('an unclaimed work_item past its deadline is ledgered as deadline', async () => {
+    const out = await enqueueJob({ kind: 'work_item', prompt: 'p', deadlineMs: 600_000, meta: { probe: true, marker: 'm' } })
+    const id = (out as { id: string }).id
+    const sql = getSql()
+    await sql`UPDATE dispatch_jobs SET deadline_at = now() - interval '1 second' WHERE id = ${id}`
+    await reapExpired()
+    const rows = await aiRunsForJob(id)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].source).toBe('work_probe')
+    expect(rows[0].error_class).toBe('deadline')
+  })
+
+  it('reap ledgers NOTHING for chat_turn expiries — the waiting reader already did', async () => {
+    const out = await enqueueJob({ kind: 'chat_turn', prompt: 'p', deadlineMs: 45_000 })
+    const id = (out as { id: string }).id
+    await claimNext('w1', ['chat_turn'])
+    const sql = getSql()
+    await sql`UPDATE dispatch_jobs SET lease_expires_at = now() - interval '1 second' WHERE id = ${id}`
+    await reapExpired()
+    expect(await aiRunsForJob(id)).toHaveLength(0)
+  })
+
+  it('a requeued work_item (attempts left) is NOT ledgered — only terminal states are', async () => {
+    const out = await enqueueJob({ kind: 'work_item', prompt: 'p', deadlineMs: 600_000 })
+    const id = (out as { id: string }).id
+    await claimNext('w1', ['work_item'])
+    const sql = getSql()
+    await sql`UPDATE dispatch_jobs SET lease_expires_at = now() - interval '1 second' WHERE id = ${id}`
+    await reapExpired() // → back to queued, attempt 1 of 3 spent
+    expect((await getJobView(id))?.state).toBe('queued')
+    expect(await aiRunsForJob(id)).toHaveLength(0)
+  })
+
+  it('postResult surfaces kind and payload_meta so the route can label sources per job', async () => {
+    const out = await enqueueJob({ kind: 'work_item', prompt: 'p', deadlineMs: 600_000, meta: { toolRunId: 'tr-db-2' } })
+    const id = (out as { id: string }).id
+    await claimNext('w1', ['work_item'])
+    const posted = await postResult(id, { status: 'ok', text: 'report', workerId: 'w1', attempt: 1 })
+    expect(posted.outcome).toBe('recorded')
+    if (posted.outcome === 'recorded') {
+      expect(posted.kind).toBe('work_item')
+      expect(posted.payloadMeta).toMatchObject({ toolRunId: 'tr-db-2' })
+    }
+  })
+
+  it('getJobDetail exposes meta and timing but never payload or result text', async () => {
+    const out = await enqueueJob({ kind: 'work_item', prompt: 'secret brief', deadlineMs: 600_000, meta: { probe: true } })
+    const id = (out as { id: string }).id
+    const detail = await getJobDetail(id)
+    expect(detail?.kind).toBe('work_item')
+    expect(detail?.maxAttempts).toBe(3)
+    expect(detail?.payloadMeta).toMatchObject({ probe: true })
+    expect(JSON.stringify(detail)).not.toContain('secret brief')
   })
 })

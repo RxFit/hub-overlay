@@ -48,6 +48,10 @@ export interface AiRunInput {
   latencyMs: number
   /** The full prompt — fingerprinted by the mapper, NEVER stored. */
   prompt?: string | null
+  /** Pre-computed provenance for callers whose prompt text is already
+   *  scrubbed (reaped dispatch jobs carry only chars + sha256). Used only
+   *  when `prompt` is absent — a live prompt always wins. */
+  promptFingerprint?: { chars: number | null; sha256: string | null } | null
   usage?: {
     inputTokens?: number
     outputTokens?: number
@@ -137,8 +141,12 @@ export function toRunRow(input: AiRunInput): AiRunRow {
     outputTokens: intOrNull(input.usage?.outputTokens),
     cacheReadTokens: intOrNull(input.usage?.cacheReadTokens),
     totalTokens: intOrNull(input.usage?.totalTokens),
-    promptChars: input.prompt ? input.prompt.length : null,
-    promptSha256: fingerprintPrompt(input.prompt),
+    promptChars: input.prompt
+      ? input.prompt.length
+      : intOrNull(input.promptFingerprint?.chars ?? undefined),
+    promptSha256: input.prompt
+      ? fingerprintPrompt(input.prompt)
+      : (input.promptFingerprint?.sha256?.trim() || null),
     requestId: input.requestId ?? null,
     userEmail: input.userEmail?.toLowerCase().trim() || null,
     meta: scrubMeta(input.meta),
