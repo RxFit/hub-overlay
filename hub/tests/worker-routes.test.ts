@@ -29,9 +29,11 @@ const store = vi.hoisted(() => ({
       : meta && meta.probe === true ? 'work_probe' : 'work',
 }))
 const ledger = vi.hoisted(() => ({ recordAiRun: vi.fn().mockResolvedValue(undefined) }))
+const chatStore = vi.hoisted(() => ({ persistAssistantTurn: vi.fn().mockResolvedValue(undefined) }))
 
 vi.mock('@/lib/dispatch-store', () => store)
 vi.mock('@/lib/runs', () => ledger)
+vi.mock('@/lib/chat-store', () => chatStore)
 vi.mock('@/lib/observability', () => ({ emit: vi.fn() }))
 
 import { POST as claimPost } from '@/app/api/worker/claim/route'
@@ -57,6 +59,7 @@ beforeEach(() => {
   store.heartbeatJob.mockReset()
   store.postResult.mockReset()
   ledger.recordAiRun.mockClear()
+  chatStore.persistAssistantTurn.mockClear()
 })
 
 describe('machine auth (all three routes)', () => {
@@ -199,6 +202,49 @@ describe('POST /api/worker/jobs/[id]/result', () => {
         meta: expect.objectContaining({ dispatch: true, discarded: true, jobId: 'j1', workerId: 'w1' }),
       }),
     )
+  })
+
+  it('a landed deep run posts the completion pointer into its originating chat (PR D)', async () => {
+    const report = '# Report\nbody\n```json\n{"title":"Churn is price-driven","summary":"s"}\n```'
+    store.postResult.mockResolvedValue({
+      outcome: 'recorded', prompt: 'p', requestId: null, kind: 'work_item',
+      payloadMeta: { toolRunId: '11111111-1111-4111-8111-111111111111' },
+      toolRun: { id: 'r1', tool: 'deep-research', userEmail: 'staff@rxfitatx.com', chatId: 'chat-7' },
+    })
+    await resultPost(request('/api/worker/jobs/j1/result', { ...base, text: report, model: 'gemini-3' }), { params: { id: 'j1' } })
+    expect(chatStore.persistAssistantTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatId: 'chat-7',
+        userEmail: 'staff@rxfitatx.com',
+        content: expect.stringContaining('Deep Research finished: Churn is price-driven'),
+        model: 'gemini-3',
+      }),
+    )
+  })
+
+  it('no pointer without a chat, on failure, or for discarded results', async () => {
+    // Run started outside any conversation → nothing to point into.
+    store.postResult.mockResolvedValue({
+      outcome: 'recorded', prompt: 'p', requestId: null, kind: 'work_item',
+      payloadMeta: {}, toolRun: { id: 'r1', tool: 'deep-think', userEmail: 'staff@rxfitatx.com', chatId: null },
+    })
+    await resultPost(request('/api/worker/jobs/j1/result', base), { params: { id: 'j1' } })
+    // Worker error → the panel carries the failure; the chat gets no ghost note.
+    store.postResult.mockResolvedValue({
+      outcome: 'recorded', prompt: 'p', requestId: null, kind: 'work_item',
+      payloadMeta: {}, toolRun: { id: 'r2', tool: 'deep-think', userEmail: 'staff@rxfitatx.com', chatId: 'chat-1' },
+    })
+    await resultPost(
+      request('/api/worker/jobs/j2/result', { workerId: 'w1', attempt: 1, status: 'error', errorClass: 'timeout' }),
+      { params: { id: 'j2' } },
+    )
+    // Cancelled mid-run → the user already knows; nothing lands.
+    store.postResult.mockResolvedValue({
+      outcome: 'discarded_cancelled', prompt: 'p', requestId: null, kind: 'work_item',
+      payloadMeta: {}, toolRun: null,
+    })
+    await resultPost(request('/api/worker/jobs/j3/result', base), { params: { id: 'j3' } })
+    expect(chatStore.persistAssistantTurn).not.toHaveBeenCalled()
   })
 
   it('discarded work_item is ledgered under its own source, never chat — the §7 hardcode fix', async () => {

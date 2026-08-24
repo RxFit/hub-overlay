@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { verifyCronSecret } from '@/lib/cron-auth'
+import { persistAssistantTurn } from '@/lib/chat-store'
+import { parseDeepReport } from '@/lib/deep-report'
+import { DEEP_TOOLS, isDeepToolId } from '@/lib/deep-runs'
 import { isMissingTableError, postResult, toolRunIdFrom, workItemRunSource } from '@/lib/dispatch-store'
 import { emit } from '@/lib/observability'
 import { recordAiRun } from '@/lib/runs'
@@ -131,6 +134,22 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     // Work items have no waiting reader, so 'recorded' would otherwise leave
     // no ledger row at all — this route is their only accountant.
     const recordedWork = outcome.outcome === 'recorded' && outcome.kind === 'work_item'
+
+    // Deep-lane completion pointer (design §4.6, PR D): a landed report gets
+    // a short assistant message in its originating conversation, so the
+    // finished work is findable from the chat history it started in — chats
+    // are durable, and the message survives refresh with them. Best-effort:
+    // persistAssistantTurn is ownership-checked and never throws.
+    if (recordedWork && outcome.toolRun?.chatId && body.status === 'ok' && isDeepToolId(outcome.toolRun.tool)) {
+      const toolName = DEEP_TOOLS[outcome.toolRun.tool].name
+      const title = parseDeepReport(body.text)?.title
+      void persistAssistantTurn({
+        chatId: outcome.toolRun.chatId,
+        userEmail: outcome.toolRun.userEmail,
+        content: `📌 **${toolName} finished${title ? `: ${title}` : ''}.** Open the ${toolName} panel to read the report and save it to your artifacts.`,
+        model: typeof body.model === 'string' ? body.model.slice(0, 100) : undefined,
+      })
+    }
     if (discarded || recordedWork) {
       // The spend happened — the ledger's job is to say so, whether or not
       // anyone reads the answer. Best-effort by recordAiRun's own contract.

@@ -3156,6 +3156,84 @@ a:hover .rx-arrow {
   -webkit-overflow-scrolling: touch;
 }
 
+/* ── Featured Deep chips (composer) + popover pinned tier ── */
+.deep-chips {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px 8px;
+  flex-wrap: wrap;
+}
+
+.deep-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--accent-border);
+  color: var(--text-primary);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.deep-chip:hover {
+  background: var(--accent-glow);
+  border-color: var(--border-hover);
+}
+
+.deep-chip:active {
+  transform: scale(0.97);
+}
+
+.deep-chip--active {
+  background: var(--accent-glow);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.deep-chips--offline .deep-chip {
+  opacity: 0.55;
+  border-color: var(--border);
+}
+
+.deep-chips__status {
+  color: var(--warn);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.skills-popover__section--deep {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+  margin-bottom: 4px;
+}
+
+.skills-popover__section-header--static {
+  cursor: default;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.skills-popover__deep-status {
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+.skills-popover__deep-status--live {
+  color: var(--success);
+}
+
+.skills-popover__deep-status--offline {
+  color: var(--warn);
+}
+
 /* ── Deep Run panel (Deep Research / Deep Think — the async lane) ── */
 .deep-run {
   display: flex;
