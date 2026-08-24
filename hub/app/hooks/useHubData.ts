@@ -364,6 +364,32 @@ export function useFeed() {
 }
 
 /* ══════════════════════════════════════════
+   Runs Feed (ai_runs ledger — Phase 3 PR 2)
+   ══════════════════════════════════════════ */
+
+/**
+ * Fetch the execution feed from the Hub's own runs ledger (/api/runs).
+ * Admin-gated server-side; pass `enabled: false` for non-admin sessions so
+ * the panel renders its quiet admin-only state without ever calling.
+ */
+export function useRuns(enabled: boolean) {
+  const { data, error, isLoading, refetch } = useQuery<FeedResponse>({
+    queryKey: ['runs-feed'],
+    queryFn: () => fetcher<FeedResponse>('/api/runs'),
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: false,
+    enabled,
+  })
+
+  return {
+    items: data?.feed ?? [],
+    isLoading: enabled ? isLoading : false,
+    error: error ?? undefined,
+    refetch,
+  }
+}
+
+/* ══════════════════════════════════════════
    Execution Dashboard (Paperclip)
    ══════════════════════════════════════════ */
 

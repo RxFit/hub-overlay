@@ -15,6 +15,7 @@ import {
   useCalendar,
   useDrive,
   useFeed,
+  useRuns,
   useAuthErrorRecovery,
   shouldTriggerReauth,
   __resetAuthErrorRecovery,
@@ -103,6 +104,35 @@ describe('useHubData hooks (TanStack Query-backed)', () => {
 
     expect(fetchMock).not.toHaveBeenCalled()
     expect(result.current.files).toEqual([])
+    expect(result.current.isLoading).toBe(false)
+
+    unmount()
+  })
+
+  it('useRuns maps the runs-feed payload and polls /api/runs', async () => {
+    const item = { id: 'run-1', source: 'run', type: 'completed', title: 'Run abc — agy chat served', description: 'agy · allotment', timestamp: 'now' }
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ feed: [item] }))
+    global.fetch = fetchMock as unknown as typeof fetch
+
+    const { result, unmount } = renderQueryHook(() => useRuns(true))
+    await settle()
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/runs')
+    expect(result.current.items).toEqual([item])
+    expect(result.current.isLoading).toBe(false)
+
+    unmount()
+  })
+
+  it('useRuns with enabled=false never fetches (admin-only gating)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ feed: [] }))
+    global.fetch = fetchMock as unknown as typeof fetch
+
+    const { result, unmount } = renderQueryHook(() => useRuns(false))
+    await settle()
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(result.current.items).toEqual([])
     expect(result.current.isLoading).toBe(false)
 
     unmount()

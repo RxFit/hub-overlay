@@ -17,15 +17,15 @@ import {
    every attention chip resolves through a read-style chat injection.
    ══════════════════════════════════════════════════════════════════════════════ */
 
-export type RightPanelTab = 'pulse' | 'issues' | 'routines' | 'goals' | 'agents' | 'spaces'
+// Phase 3 PR 2 (docs/architecture/PHASE3_EXECUTION_PANEL_2026-08-22.md §4):
+// the five Paperclip workspace tabs are gone — every one rendered a permanent
+// "Select a workspace…" empty state against a retired engine. The panel is
+// Pulse + Runs now; the TabView component files are deleted in PR 5.
+export type RightPanelTab = 'pulse' | 'runs'
 
 export const RIGHT_PANEL_TABS: Array<{ id: RightPanelTab; label: string }> = [
+  { id: 'runs', label: 'Runs' },
   { id: 'pulse', label: 'Pulse' },
-  { id: 'issues', label: 'Issues' },
-  { id: 'routines', label: 'Routines' },
-  { id: 'goals', label: 'Goals' },
-  { id: 'agents', label: 'Agents' },
-  { id: 'spaces', label: 'Spaces' },
 ]
 
 /* ── Segmented tab nav (reuses feed-filter styling for visual continuity) ── */
