@@ -31,7 +31,9 @@ const { sessionMock, staffMock, storeMock, dispatchMock, toolRunsMock, skillsMoc
     attachToolRunJob: vi.fn(),
     expireStaleToolRuns: vi.fn(),
     finishToolRun: vi.fn(),
-    isActiveRunConflict: (err: unknown) => (err as { code?: string } | null)?.code === '23505',
+    isActiveRunConflict: (err: unknown) =>
+      (err as { code?: string } | null)?.code === '23505' ||
+      (err as { cause?: { code?: string } } | null)?.cause?.code === '23505',
     listToolRuns: vi.fn(),
     countActiveToolRuns: vi.fn(),
     getToolRunOwned: vi.fn(),

@@ -88,9 +88,13 @@ export interface CreateToolRunInput {
 }
 
 /** Postgres unique-violation on the one-active-run-per-user partial index
- *  (tool_runs_one_active_per_user, drizzle/migrate.mjs). */
+ *  (tool_runs_one_active_per_user, drizzle/migrate.mjs). Drizzle wraps the
+ *  PostgresError in a DrizzleQueryError, so the SQLSTATE may sit on the
+ *  error itself OR on its `cause` — check both. */
 export function isActiveRunConflict(err: unknown): boolean {
-  return (err as { code?: string } | null)?.code === '23505'
+  const direct = (err as { code?: string } | null)?.code
+  const caused = (err as { cause?: { code?: string } } | null)?.cause?.code
+  return direct === '23505' || caused === '23505'
 }
 
 export async function createToolRun(input: CreateToolRunInput): Promise<void> {
