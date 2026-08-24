@@ -190,7 +190,7 @@ Six capture surfaces, one same-origin transport.
 2. Bind a pino child via `createLogger(name, requestId)`.
 3. Run the handler.
 4. **Re-throw Next control-flow errors FIRST.** `redirect()` and `notFound()` work by throwing; a naive catch converts every intended navigation and 404 into a fake 500 and floods the tracker. Detect via the `NEXT_REDIRECT` / `NEXT_NOT_FOUND` digest string, **never** `instanceof`.
-5. Inspect its own 2xx responses **only when it is safe to do so**: `content-type` is `application/json` **and** `content-length` is present and ≤ 64 KB. Read via `res.clone()`, never the original. Skip entirely for `text/event-stream`, any streamed body, and any response with no `content-length` — `app/api/chat/route.ts:411` returns a `ReadableStream` and `app/api/paperclip/[...path]/route.ts:444` returns a proxied body; reading or cloning either consumes or buffers the whole stream in memory on Cloud Run. Within those limits, a 2xx JSON body carrying an `error`/`reason` key or `ok:false`/`success:false` throws in development and emits a `contract_violation` fault in production. This catches an entire class **structurally**, so nobody has to remember.
+5. Inspect its own 2xx responses **only when it is safe to do so**: `content-type` is `application/json` **and** `content-length` is present and ≤ 64 KB. Read via `res.clone()`, never the original. Skip entirely for `text/event-stream`, any streamed body, and any response with no `content-length` — `app/api/chat/route.ts:411` returns a `ReadableStream`, and any proxy route returns an upstream body it does not own; reading or cloning either consumes or buffers the whole stream in memory on Cloud Run. The gate is written against the *shape* of the response, never against a list of routes, so it stays correct as routes are added or removed. Within those limits, a 2xx JSON body carrying an `error`/`reason` key or `ok:false`/`success:false` throws in development and emits a `contract_violation` fault in production. This catches an entire class **structurally**, so nobody has to remember.
 6. `toFault(err, ctx)` → `reportFault()` → `faultResponse()`.
 7. Stamp a non-enumerable brand symbol on the returned function.
 
@@ -220,7 +220,7 @@ Six capture surfaces, one same-origin transport.
 
 1. An existing `FaultRecord` / `AppError` → pass through.
 2. `ZodError` → `validation_failed`, 422, `expected`. Keep `issues[].path` only, **never `issues[].input`**; leave Zod's `reportInput` at its default (off). With `lib/secret-crypto.ts` and Google OAuth tokens in play, enabling it would put credentials into error logs. **Do not import `zod/v4` in Phase 1.** A `ZodError` from `zod/v4` is not `instanceof` the `ZodError` from the `zod` root that 13 routes use, so an `instanceof` check would silently mis-classify half of them as `internal`. `toFault` therefore recognizes ZodError **structurally** — `err.name === 'ZodError' && Array.isArray(err.issues)` — never by `instanceof`, which also means it survives a later v4 migration untouched.
-3. The repo's five existing ad-hoc `extends Error` classes — `CircuitOpenError`, `LoopDetectedError`, `InvalidPageTokenError`, `SecretCryptoError`, `PaperclipSchemaError` — **structurally recognized in `toFault` in Phase 1**, and retrofitted onto one `AppError` base in **Phase 2 only, one class per PR, each shipping with its existing suite green**. The retrofit is not free: five live control-flow paths (`lib/circuit-breaker.ts`, `lib/dispatch-store.ts`, `lib/secret-crypto.ts`) match these today by `instanceof` **and** by message text, so a base-class swap is a behavior change, not a refactor. `Object.setPrototypeOf(this, new.target.prototype)` and `Error.captureStackTrace?.(this, new.target)` go in that ONE base constructor (`new.target`, never a hardcoded class, or `instanceof` breaks for subclasses), and the options object MUST be forwarded as `super(message, { cause })` or ES2022 silently never installs `cause`.
+3. The repo's five existing ad-hoc `extends Error` classes — `CircuitOpenError`, `LoopDetectedError`, `InvalidPageTokenError`, `SecretCryptoError`, and `PaperclipSchemaError` (transitional — Paperclip is retired and being removed per `AGENTS.md`; recognize it while it exists, never build on it, and drop it with the rip-out) — **structurally recognized in `toFault` in Phase 1**, and retrofitted onto one `AppError` base in **Phase 2 only, one class per PR, each shipping with its existing suite green**. The retrofit is not free: five live control-flow paths (`lib/circuit-breaker.ts`, `lib/dispatch-store.ts`, `lib/secret-crypto.ts`) match these today by `instanceof` **and** by message text, so a base-class swap is a behavior change, not a refactor. `Object.setPrototypeOf(this, new.target.prototype)` and `Error.captureStackTrace?.(this, new.target)` go in that ONE base constructor (`new.target`, never a hardcoded class, or `instanceof` breaks for subclasses), and the options object MUST be forwarded as `super(message, { cause })` or ES2022 silently never installs `cause`.
 4. Google errors via the existing `lib/google-session.ts` mappers.
 5. Postgres error codes (`err.code`), plus `isMissingTableError` from `lib/dispatch-store.ts:51` → `db_table_missing` at severity `fatal`, because `docker-entrypoint.sh` is deliberately **non-fatal** on migration failure (the 2026-07-10 outage) so a missing table is a live runtime possibility.
 6. AI provider shapes — and **never branch on `err.status` for a streamed call.** A mid-stream Anthropic `overloaded_error` arrives on a committed HTTP 200; a filed `anthropic-sdk-python` issue (#1258) documents a production fallback router silently no-op'ing because `status_code` was 200.
@@ -1063,7 +1063,7 @@ A tradeoff with no exit condition rots into folklore. A dated trigger does not.
 
 **Nobody validated this and it is load-bearing.** Verified: `grep -c '^export const \(GET\|POST\|PUT\|PATCH\|DELETE\)' app/api --include=route.ts` returns **0** — not one of the 111 handlers uses the `export const VERB =` form today. Meanwhile `npm run build` is `next build && node scripts/assert-dynamic-rendering.mjs`, which **fails hard** if any route outside `/_not-found`, `/404`, `/500` appears in `.next/prerender-manifest.json`.
 
-**Deliverable:** convert **two** routes to `export const GET = withFault(name, handler)` with an identity-function stub wrapper — one static (`app/api/admin/paperclip-health/route.ts`) and one with **dynamic params** (`app/api/deep-runs/[id]/route.ts`) — and prove `npx tsc --noEmit && npm run lint && npm run build && npx vitest run` is green on both. The dynamic one is the one that actually exercises the risk: `tsconfig.json` includes `.next/types/**/*.ts`, so Next 14 type-checks the handler's *second* argument (`{ params }`) against the export, and the generic `...args: A` form is exactly what could fail there. The likely outcome is benign (an opaque HOF pushes Next toward dynamic, which is what this repo wants) but "likely benign" is not a verified build gate, and CI auto-merges.
+**Deliverable:** convert **two** routes to `export const GET = withFault(name, handler)` with an identity-function stub wrapper — one static (`app/api/admin/agy-health/route.ts`) and one with **dynamic params** (`app/api/deep-runs/[id]/route.ts`) — and prove `npx tsc --noEmit && npm run lint && npm run build && npx vitest run` is green on both. The dynamic one is the one that actually exercises the risk: `tsconfig.json` includes `.next/types/**/*.ts`, so Next 14 type-checks the handler's *second* argument (`{ params }`) against the export, and the generic `...args: A` form is exactly what could fail there. The likely outcome is benign (an opaque HOF pushes Next toward dynamic, which is what this repo wants) but "likely benign" is not a verified build gate, and CI auto-merges.
 
 **Effort:** 30 minutes. May ride as the first commit of Phase 1's PR **if it passes**; if it fails, Phase 1 is blocked and the mechanism needs rethinking before 111 handlers are touched.
 
@@ -1307,7 +1307,13 @@ export function withFault<A extends unknown[]>(
   handler: Handler<A>,
 ): Handler<A> {
   const wrapped = async (req: NextRequest, ...args: A): Promise<Response> => {
-    const requestId = req.headers.get('x-hub-request-id') ?? crypto.randomUUID()
+    // Trust the header ONLY where middleware set it. The matcher excludes
+    // api/chat, api/worker, api/cron/, api/healthz, api/embeddings and
+    // api/webhooks, so on those paths an external caller supplies this value
+    // unvalidated — correlation poisoning, and unbounded cardinality in every
+    // log field it lands in. Validate the shape, or mint fresh. (Same posture
+    // as middleware deleting a client-supplied x-tenant-id.)
+    const requestId = safeRequestId(req.headers.get('x-hub-request-id'))
     const log = createLogger(name, requestId)
     const faultId = newFaultId()
 
@@ -1346,6 +1352,13 @@ export function withFault<A extends unknown[]>(
   Object.defineProperty(wrapped, FAULT_WRAPPED, { value: true, enumerable: false })
   Object.defineProperty(wrapped, 'name', { value: `withFault(${name})` })
   return wrapped
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** A header-supplied id is accepted only if it is EXACTLY a UUID; else mint. */
+function safeRequestId(header: string | null): string {
+  return header && UUID_RE.test(header) ? header.toLowerCase() : crypto.randomUUID()
 }
 
 /** redirect() and notFound() throw an Error carrying a NEXT_* digest. */
@@ -1515,10 +1528,25 @@ const ClientFault = z.object({
 })
 
 /** Explicit allowlist — never Host-derived. */
-const ALLOWED_ORIGINS = [
+const ALLOWED_ORIGINS = new Set([
   'https://hub.casatrejo.com',
   'https://hub-11747747730.us-central1.run.app',
-]
+])
+
+/**
+ * Exact, parsed origin match. `new URL()` normalizes scheme/host/port and
+ * discards path, so a Referer of https://hub.casatrejo.com/settings reduces to
+ * the origin — while https://hub.casatrejo.com.attacker.example reduces to
+ * itself and fails the Set lookup. A missing header is a rejection, not a pass.
+ */
+function isAllowedOrigin(header: string | null): boolean {
+  if (!header) return false
+  try {
+    return ALLOWED_ORIGINS.has(new URL(header).origin)
+  } catch {
+    return false // unparseable header — treat as hostile
+  }
+}
 
 export async function POST(req: NextRequest) {
   // Cheap, non-spoofable-from-another-origin guard. Not auth — a defense
@@ -1528,8 +1556,13 @@ export async function POST(req: NextRequest) {
   // hub.casatrejo.com behind Cloudflare — legitimate reports would fail on one
   // of the two. And a bare `origin && …` check passes every request with NO
   // Origin/Referer at all (i.e. every curl). Allowlist, and require one.
-  const origin = req.headers.get('origin') ?? req.headers.get('referer') ?? ''
-  if (!origin || !ALLOWED_ORIGINS.some((o) => origin.startsWith(o))) {
+  //
+  // PARSE, then compare EXACTLY. A startsWith() test against the allowlist
+  // also accepts https://hub.casatrejo.com.attacker.example — a prefix match on
+  // an origin string is a classic bypass, and here it would let any such page
+  // inject fault records from every one of its visitors, polluting fingerprints
+  // and firing false alerts.
+  if (!isAllowedOrigin(req.headers.get('origin') ?? req.headers.get('referer'))) {
     return new NextResponse(null, { status: 204 })
   }
 
