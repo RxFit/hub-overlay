@@ -109,13 +109,15 @@ const FeedCard = memo(function FeedCard({
    FEED FILTER BAR
    ══════════════════════════════════════════════════════════════════════════════ */
 
-type FilterTab = 'all' | 'needs_you' | 'completed' | 'in_progress'
+// No 'in_progress' tab: both sources behind /api/runs are terminal-only —
+// ai_runs rows are written on completion (status ok|error) and AI actions map
+// to completed/needs_you/info — so the tab could never light up again.
+type FilterTab = 'all' | 'needs_you' | 'completed'
 
 const FILTER_TABS: Array<{ id: FilterTab; label: string }> = [
   { id: 'all', label: 'All' },
   { id: 'needs_you', label: 'Needs You' },
   { id: 'completed', label: 'Completed' },
-  { id: 'in_progress', label: 'In Progress' },
 ]
 
 function FeedFilterBar({
@@ -209,12 +211,11 @@ export function ExecutionFeed({
 
   // Compute counts per filter tab
   const counts = useMemo(() => {
-    const c: Record<FilterTab, number> = { all: items.length, needs_you: 0, completed: 0, in_progress: 0 }
+    const c: Record<FilterTab, number> = { all: items.length, needs_you: 0, completed: 0 }
     for (const item of items) {
       const t = (item as any).type as FeedItemType | undefined
       if (t === 'needs_you') c.needs_you++
       else if (t === 'completed') c.completed++
-      else if (t === 'in_progress') c.in_progress++
     }
     return c
   }, [items])

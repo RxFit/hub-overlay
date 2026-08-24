@@ -26,6 +26,15 @@ export function engineLabel(engine: string): string {
   return ENGINE_LABELS[engine] ?? engine
 }
 
+/** Error classes are typed Hub-side but the union is open and worker-adjacent;
+ *  clamp before the value reaches a card title — which a tap sends into chat
+ *  verbatim ("Tell me more about: …") — or the metadata channel. Mirrors the
+ *  same clamp in lib/dispatch-alerts.ts. */
+function sanitizeClass(k: string | null): string {
+  const clean = (k ?? 'unknown').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 32)
+  return clean || 'unknown'
+}
+
 function formatLatency(ms: number): string {
   if (ms < 1000) return `${Math.round(ms)}ms`
   return `${(ms / 1000).toFixed(1)}s`
@@ -38,7 +47,7 @@ export function runToFeedItem(run: AiRunRecord): FeedItem {
   // so it must carry the run's identity and verdict on its own.
   const title = ok
     ? `Run ${shortId} — ${run.engine} ${run.source} served`
-    : `Run ${shortId} — ${run.engine} ${run.source} failed (${run.errorClass ?? 'unknown'})`
+    : `Run ${shortId} — ${run.engine} ${run.source} failed (${sanitizeClass(run.errorClass)})`
 
   const parts: string[] = [engineLabel(run.engine)]
   if (run.model) parts.push(run.model)
@@ -62,7 +71,7 @@ export function runToFeedItem(run: AiRunRecord): FeedItem {
       engine: run.engine,
       model: run.model,
       status: run.status,
-      errorClass: run.errorClass,
+      errorClass: run.errorClass === null ? null : sanitizeClass(run.errorClass),
       latencyMs: run.latencyMs,
       requestId: run.requestId,
     },

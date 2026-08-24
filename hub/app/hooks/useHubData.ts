@@ -341,28 +341,6 @@ interface FeedResponse {
   feed: FeedItem[]
 }
 
-/**
- * Fetch the aggregated activity feed from Paperclip.
- * Refreshes every 30 seconds.
- */
-export function useFeed() {
-  const { data, error, isLoading, refetch } = useQuery<FeedResponse>({
-    queryKey: ['feed'],
-    queryFn: () => fetcher<FeedResponse>('/api/feed'),
-    refetchInterval: 30_000,
-    refetchOnWindowFocus: false,
-  })
-
-  return {
-    items: data?.feed ?? [],
-    isLoading,
-    error: error ?? undefined,
-    // Exposed so the Retry affordance can revalidate this one query instead of
-    // reloading the whole app (which would discard chat/compose/thread state).
-    refetch,
-  }
-}
-
 /* ══════════════════════════════════════════
    Runs Feed (ai_runs ledger — Phase 3 PR 2)
    ══════════════════════════════════════════ */
@@ -384,39 +362,6 @@ export function useRuns(enabled: boolean) {
   return {
     items: data?.feed ?? [],
     isLoading: enabled ? isLoading : false,
-    error: error ?? undefined,
-    refetch,
-  }
-}
-
-/* ══════════════════════════════════════════
-   Execution Dashboard (Paperclip)
-   ══════════════════════════════════════════ */
-
-import type { ExecutionDashboard } from '@/lib/execution-dashboard'
-
-/**
- * Fetch the Paperclip company health snapshot behind the right panel's Pulse
- * header and Attention strip. Polls every 60s; keeps rendering stale data
- * through transient failures (retry: 2).
- */
-export function useExecutionDashboard(orgId?: string) {
-  const url = orgId
-    ? `/api/paperclip/dashboard?orgId=${encodeURIComponent(orgId)}`
-    : '/api/paperclip/dashboard'
-
-  const { data, error, isLoading, refetch } = useQuery<ExecutionDashboard>({
-    queryKey: ['execution-dashboard', orgId ?? 'default'],
-    queryFn: () => fetcher<ExecutionDashboard>(url),
-    refetchInterval: 60_000,
-    refetchOnWindowFocus: false,
-    staleTime: 30_000,
-    retry: 2,
-  })
-
-  return {
-    dashboard: data ?? null,
-    isLoading,
     error: error ?? undefined,
     refetch,
   }

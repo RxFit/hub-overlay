@@ -26,9 +26,11 @@ export const dynamic = 'force-dynamic'
  * without calling. Ledger attribution is the named follow-up that opens
  * this to staff as a filter.
  *
- * The rows are provenance-only by ledger contract (prompts are length +
- * sha256, never text), and the mapper additionally withholds `error`
- * message text — the feed shows typed error classes only.
+ * The run rows are provenance-only by ledger contract (prompts are length +
+ * sha256, never text), and the run mapper additionally withholds `error`
+ * message text — run cards show typed error classes only. The merged
+ * ai_action rows keep their existing aiActionToFeedItem shape unchanged
+ * (pre-existing contract; the caller sees only their own actions).
  */
 
 const DEFAULT_LIMIT = 40

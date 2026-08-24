@@ -10,11 +10,12 @@ import {
 /* ══════════════════════════════════════════════════════════════════════════════
    RIGHT PANEL WORKSPACE — Phase 1 scaffold
 
-   Tab scaffold + Pulse header + Attention strip for the Execution Layer
-   (docs/architecture/RIGHT_PANEL_ARCHITECTURE_2026-07-19.md §5.1). Phase 1 is
-   additive and read-only: Pulse hosts the existing feed, the other tabs are
-   placeholders that deep-link to Paperclip and offer an assistant query, and
-   every attention chip resolves through a read-style chat injection.
+   Originally the Phase 1 six-tab scaffold against Paperclip
+   (docs/architecture/RIGHT_PANEL_ARCHITECTURE_2026-07-19.md — archaeology).
+   As of Phase 3 PR 2 this file carries the Runs + Pulse tab nav; PulseStrip
+   and AttentionStrip below are currently unrendered, kept as the shells PR 3
+   rebuilds savings-led over live dispatch data
+   (docs/architecture/PHASE3_EXECUTION_PANEL_2026-08-22.md §4).
    ══════════════════════════════════════════════════════════════════════════════ */
 
 // Phase 3 PR 2 (docs/architecture/PHASE3_EXECUTION_PANEL_2026-08-22.md §4):
@@ -162,6 +163,6 @@ export const AttentionStrip = memo(function AttentionStrip({
   )
 })
 
-/* All six tabs are native as of Phase 4 — the interim TabPlaceholder
-   component (Phases 1–3) is gone. The header's "📎 Paperclip →" deep link
-   remains the escape hatch for long-tail screens. */
+/* Phase 3 PR 2: the six-tab workspace and the header's "📎 Paperclip →" deep
+   link are gone — the panel is Runs + Pulse (see RightPanelTab above). The
+   TabView component files are deleted in PR 5. */
