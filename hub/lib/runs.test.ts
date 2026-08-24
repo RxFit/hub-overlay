@@ -53,6 +53,20 @@ describe('toRunRow — redaction contract', () => {
     expect(JSON.stringify(row)).not.toContain('secret business context')
   })
 
+  it('accepts a pre-computed fingerprint when the prompt text is already scrubbed', () => {
+    const row = toRunRow({ ...baseInput, promptFingerprint: { chars: 42, sha256: 'abcd1234abcd1234' } })
+    expect(row.promptChars).toBe(42)
+    expect(row.promptSha256).toBe('abcd1234abcd1234')
+    // A live prompt always wins over the passthrough fields.
+    const live = toRunRow({ ...baseInput, prompt: 'live', promptFingerprint: { chars: 42, sha256: 'abcd1234abcd1234' } })
+    expect(live.promptChars).toBe(4)
+    expect(live.promptSha256).toBe(fingerprintPrompt('live'))
+    // Null-safe when the reaped row never had provenance either.
+    const empty = toRunRow({ ...baseInput, promptFingerprint: { chars: null, sha256: null } })
+    expect(empty.promptChars).toBeNull()
+    expect(empty.promptSha256).toBeNull()
+  })
+
   it('identical prompts fingerprint identically (cache-hit correlation)', () => {
     expect(fingerprintPrompt('same prompt')).toBe(fingerprintPrompt('same prompt'))
     expect(fingerprintPrompt('same prompt')).not.toBe(fingerprintPrompt('different prompt'))
