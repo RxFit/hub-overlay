@@ -3156,6 +3156,230 @@ a:hover .rx-arrow {
   -webkit-overflow-scrolling: touch;
 }
 
+/* ── Deep Run panel (Deep Research / Deep Think — the async lane) ── */
+.deep-run {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 0.85rem;
+}
+
+.deep-run__loading {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  padding: 12px 0;
+}
+
+.deep-run__label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.deep-run__brief {
+  width: 100%;
+  resize: vertical;
+  min-height: 96px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.deep-run__brief:focus {
+  outline: none;
+  border-color: var(--border-hover);
+}
+
+.deep-run__start-btn {
+  align-self: flex-start;
+  background: var(--accent);
+  color: hsl(224, 28%, 12%);
+  border: none;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-weight: 700;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.deep-run__start-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.deep-run__start-btn:not(:disabled):hover {
+  background: var(--accent-bright);
+}
+
+.deep-run__context-btn {
+  align-self: flex-start;
+  background: transparent;
+  border: 1px solid var(--border-accent);
+  color: var(--accent);
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.deep-run__context-btn:hover {
+  background: var(--accent-glow);
+}
+
+.deep-run__cancel-btn {
+  align-self: flex-start;
+  background: transparent;
+  border: 1px solid rgba(239, 83, 80, 0.35);
+  color: var(--danger);
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.deep-run__hint {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.deep-run__banner {
+  background: rgba(239, 83, 80, 0.08);
+  border: 1px solid rgba(239, 83, 80, 0.3);
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.deep-run__status-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+
+.deep-run__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.deep-run__dot--live {
+  background: var(--success);
+  animation: deep-run-pulse 1.6s ease-in-out infinite;
+}
+
+.deep-run__dot--wait {
+  background: var(--warn);
+}
+
+@keyframes deep-run-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .deep-run__dot--live { animation: none; }
+}
+
+.deep-run__status-title {
+  font-weight: 700;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+}
+
+.deep-run__status-sub {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.deep-run__brief-echo {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-style: italic;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.deep-run__report-head {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+
+.deep-run__report-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 800;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.deep-run__report-meta {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  margin-top: 2px;
+}
+
+.deep-run__summary {
+  background: var(--accent-glow);
+  border: 1px solid var(--accent-border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  line-height: 1.55;
+}
+
+.deep-run__section {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  background: var(--bg-card);
+  line-height: 1.55;
+}
+
+.deep-run__section-heading {
+  margin: 0 0 6px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.deep-run__sources {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+.deep-run__sources li {
+  margin: 4px 0;
+}
+
+.deep-run__raw {
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.deep-run__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .tool-panel__loading {
   display: flex;
   align-items: center;

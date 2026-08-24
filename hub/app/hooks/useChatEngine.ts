@@ -17,6 +17,7 @@ import {
   formatIntentLabel,
 } from '@/lib/interview'
 import { INTERVIEW_SCAFFOLD_KIND, isInterviewScaffold, type ChatMsgKind } from '@/lib/interview-scaffold'
+import { isDeepTool } from '@/lib/skills'
 import { deriveSolutionSuggestion, type SolutionSuggestion } from '@/lib/solution-suggest'
 import {
   loadMemory,
@@ -353,7 +354,10 @@ export function useChatEngine(options: UseChatEngineOptions) {
           useCase,
           attachments: msgAttachments && msgAttachments.length > 0 ? msgAttachments : undefined,
           // EXA mode ignores skills server-side; don't advertise one either.
-          activeSkill: exaMode ? undefined : (activeSkill?.id || undefined),
+          // Deep tools are panel tools, never chat lenses: while one is
+          // active the chat stays a plain conversation — its run protocol
+          // must not leak into 90-second chat turns (deep lane design §1).
+          activeSkill: exaMode || isDeepTool(activeSkill?.id) ? undefined : (activeSkill?.id || undefined),
           exaMode: exaMode || undefined,
         }),
       })

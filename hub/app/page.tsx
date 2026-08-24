@@ -1091,6 +1091,7 @@ export default function HubPage() {
             onSaveArtifacts={handleSaveToolArtifacts}
             isCollapsed={toolPanelCollapsed}
             onToggleCollapse={() => setToolPanelCollapsed(c => !c)}
+            chatId={chat.chatId}
           />
         )}
 
