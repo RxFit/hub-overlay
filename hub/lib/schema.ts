@@ -537,6 +537,49 @@ export const dispatchWorkers = pgTable('dispatch_workers', {
   meta:        jsonb('meta').$type<Record<string, unknown>>(),
 })
 
+/* ── Tool runs (the deep lane's product record) ──────────────────────────── */
+/**
+ * One row per deep tool run (Deep Research / Deep Think —
+ * docs/architecture/DEEP_LANE_2026-08-23.md §4). This is the DURABLE side of
+ * the split the dispatch queue enforces: dispatch_jobs content is transient
+ * (scrubbed on delivery) and ai_runs stores provenance-never-content, so the
+ * brief and the finished report live HERE, access-controlled like any other
+ * product table (owner-scoped by user_email).
+ *
+ * `status` holds only enqueue + terminal states (queued | succeeded | failed
+ * | cancelled). The live "running" presentation is DERIVED by joining the
+ * dispatch job via job_id at read time — single-writer per fact: the queue
+ * owns execution state, this table owns the product. Terminal transitions
+ * are a guarded CAS from 'queued' (lib/tool-runs.ts), written in the same
+ * transaction as the dispatch result landing.
+ */
+export const toolRuns = pgTable(
+  'tool_runs',
+  {
+    id:         uuid('id').primaryKey().defaultRandom(),
+    createdAt:  timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt:  timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+    tool:       text('tool').notNull(),                             // 'deep-research' | 'deep-think' (open union)
+    status:     text('status').default('queued').notNull(),         // queued | succeeded | failed | cancelled
+    brief:      text('brief').notNull(),                            // the user-confirmed run brief
+    resultMd:   text('result_md'),                                  // the finished report (markdown)
+    errorClass: text('error_class'),                                // typed class on failure, never stack text
+    error:      text('error'),                                      // single-line truncated message
+    userEmail:  text('user_email').notNull(),                       // session-attributed owner
+    chatId:     text('chat_id'),                                    // originating conversation, when any
+    jobId:      uuid('job_id'),                                     // dispatch_jobs.id (no FK — job rows are TTL-deleted)
+    attempt:    integer('attempt').default(0).notNull(),            // dispatch attempt that terminated the run
+    model:      text('model'),                                      // model that served, when known
+    latencyMs:  integer('latency_ms'),
+    usage:      jsonb('usage').$type<Record<string, number>>(),     // sanitized numeric counters only
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (t) => ({
+    userCreatedIdx: index('tool_runs_user_created_idx').on(t.userEmail, t.createdAt.desc()),
+    jobIdx:         index('tool_runs_job_idx').on(t.jobId),
+  }),
+)
+
 /* ── Hub Secrets (operator-managed third-party credentials) ── */
 /**
  * Credentials the operator enters in Settings → Connected Services.
