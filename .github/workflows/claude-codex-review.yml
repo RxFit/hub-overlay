@@ -1,7 +1,7 @@
 # Claude responder for Codex code reviews (2026-08-23)
 #
-# Loop: Codex (chatgpt-codex-connector[bot]) posts an inline review on a PR ->
-# this workflow fires -> Claude remediates the findings, commits, pushes, and
+# Loop: Codex (chatgpt-codex-connector[bot]) submits a review on a PR -> this
+# workflow fires once -> Claude remediates the findings, commits, pushes, and
 # posts ONE "@codex review" comment to request a fresh pass. Humans merge.
 #
 # SECURITY / GOVERNANCE
@@ -16,12 +16,11 @@
 name: Claude responds to Codex review
 
 on:
-  # Codex delivers review findings as a submitted PR review...
+  # A submitted review is the single batch-complete event. Do not also trigger
+  # on each inline review comment: one Codex review may contain many comments,
+  # which would launch duplicate Claude remediation runs.
   pull_request_review:
     types: [submitted]
-  # ...and as inline line-level comments on the diff.
-  pull_request_review_comment:
-    types: [created]
   # Fallback: any top-level PR comment that tags @claude (manual override).
   issue_comment:
     types: [created]
@@ -48,9 +47,8 @@ jobs:
         && contains(github.event.comment.body, '@claude')
         && github.event.comment.user.type != 'Bot')
       ||
-      ((github.event_name == 'pull_request_review'
-        || github.event_name == 'pull_request_review_comment')
-        && contains(github.event.sender.login, 'chatgpt-codex-connector'))
+      (github.event_name == 'pull_request_review'
+        && github.event.sender.login == 'chatgpt-codex-connector[bot]')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -66,7 +64,7 @@ jobs:
             You are responding to a Codex (chatgpt-codex-connector) code review
             on this pull request. Read every Codex finding (P0/P1/P2 inline
             comments and the review summary). For each: if it is a valid
-            P0/P1 issue, implement the fix on this PR's branch, run the
+            P0/P1/P2 issue, implement the fix on this PR's branch, run the
             project's test suite, and commit; if it is a false positive or bad
             advice, reply on that thread with your technical reasoning and
             resolve it WITHOUT changing code. After processing ALL findings,
