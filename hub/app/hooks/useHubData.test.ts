@@ -14,7 +14,7 @@ import {
   useTasks,
   useCalendar,
   useDrive,
-  useFeed,
+  useRuns,
   useAuthErrorRecovery,
   shouldTriggerReauth,
   __resetAuthErrorRecovery,
@@ -108,38 +108,31 @@ describe('useHubData hooks (TanStack Query-backed)', () => {
     unmount()
   })
 
-  it('useFeed maps the feed payload to items', async () => {
-    const item = { id: 'f1', source: 's', type: 'info', title: 't', description: 'd', timestamp: 'now' }
-    global.fetch = vi.fn().mockResolvedValue(
-      jsonResponse({ feed: [item] }),
-    ) as unknown as typeof fetch
+  it('useRuns maps the runs-feed payload and polls /api/runs', async () => {
+    const item = { id: 'run-1', source: 'run', type: 'completed', title: 'Run abc — agy chat served', description: 'agy · allotment', timestamp: 'now' }
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ feed: [item] }))
+    global.fetch = fetchMock as unknown as typeof fetch
 
-    const { result, unmount } = renderQueryHook(() => useFeed())
+    const { result, unmount } = renderQueryHook(() => useRuns(true))
     await settle()
 
+    expect(fetchMock).toHaveBeenCalledWith('/api/runs')
     expect(result.current.items).toEqual([item])
     expect(result.current.isLoading).toBe(false)
 
     unmount()
   })
 
-  it('useFeed exposes refetch and revalidates in place (no full-app reload on Retry)', async () => {
-    const i1 = { id: 'f1', source: 's', type: 'info', title: 't1', description: 'd', timestamp: 'now' }
-    const i2 = { id: 'f2', source: 's', type: 'info', title: 't2', description: 'd', timestamp: 'now' }
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ feed: [i1] }))
+  it('useRuns with enabled=false never fetches (admin-only gating)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ feed: [] }))
     global.fetch = fetchMock as unknown as typeof fetch
 
-    const { result, unmount } = renderQueryHook(() => useFeed())
+    const { result, unmount } = renderQueryHook(() => useRuns(false))
     await settle()
 
-    expect(result.current.items).toEqual([i1])
-    expect(typeof result.current.refetch).toBe('function')
-
-    // Retry path: refetch() lands new data WITHOUT a window reload.
-    fetchMock.mockResolvedValue(jsonResponse({ feed: [i1, i2] }))
-    await act(async () => { await result.current.refetch() })
-    await settle()
-    expect(result.current.items).toEqual([i1, i2])
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(result.current.items).toEqual([])
+    expect(result.current.isLoading).toBe(false)
 
     unmount()
   })

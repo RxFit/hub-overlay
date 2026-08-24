@@ -5,13 +5,8 @@ import { useSession, signIn } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { TasksSection, CalendarSection, DocumentsSection, KPISection, ProjectHealthSection, SectionErrorBoundary } from '@/app/components/LeftPanelSections'
 import { ExecutionFeed } from '@/app/components/RightPanelSections'
-import { RightPanelTabsNav, PulseStrip, AttentionStrip, type RightPanelTab } from '@/app/components/RightPanelWorkspace'
-import { IssuesTabView } from '@/app/components/IssuesTabView'
-import { AgentsTabView } from '@/app/components/AgentsTabView'
-import { RoutinesTabView } from '@/app/components/RoutinesTabView'
-import { GoalsTabView } from '@/app/components/GoalsTabView'
-import { SpacesTabView } from '@/app/components/SpacesTabView'
-import { useExecutionDashboard } from '@/app/hooks/useHubData'
+import { RightPanelTabsNav, type RightPanelTab } from '@/app/components/RightPanelWorkspace'
+import { canAccessAdminRoute } from '@/lib/roles'
 import { InterviewBadge, ActionConfirmCard, SkillBadge, SolutionCard } from '@/app/components/ChatEnhancements'
 import { ToolPanel } from '@/app/components/ToolPanel'
 import { ToolPanelCollapsedRail, MobileToolEdge } from '@/app/components/ToolPanelCollapsedRail'
@@ -27,7 +22,6 @@ import { OnboardingBanner } from '@/app/components/OnboardingBanner'
 import { GoogleChatPanel } from '@/app/components/GoogleChatPanel'
 import { RequestAccessLink } from '@/app/components/RequestAccessLink'
 import { InfoPopover } from '@/app/components/InfoPopover'
-import { FounderLensWizard } from '@/app/components/FounderLensWizard'
 import { useTenant } from '@/app/components/TenantProvider'
 import { useKPIData } from '@/app/hooks/useKPIData'
 import { useDeepAvailability } from '@/app/hooks/useDeepAvailability'
@@ -39,7 +33,6 @@ import {
   getTotalQuestions,
   isReadOnlyIntent,
 } from '@/lib/interview'
-import { PAPERCLIP_BASE_URL } from '@/lib/paperclipConfig'
 import { isInterviewScaffold } from '@/lib/interview-scaffold'
 import { useCompanies } from '@/app/hooks/useCompanies'
 import type { ChatAttachment } from '@/types'
@@ -127,44 +120,34 @@ function RightPanel({
   isOpen,
   onClose,
   onInjectChat,
-  onInjectAction,
   panelRef,
   style,
   projects,
-  activeProject,
   userRole,
   kpiLoading,
   kpiError,
   onKpiRetry,
-  onCustomizeCSuite,
 }: {
   isOpen?: boolean
   onClose?: () => void
-  // Read-style taps (health lookups, "tell me about" feed cards) — direct, intent-free path.
+  // Read-style taps (feed cards, health lookups) — direct, intent-free path.
   onInjectChat: (msg: string) => void
-  // Action-style affordances (create-task CTA) — routed through doSend for Interview Mode.
-  onInjectAction: (msg: string) => void
   panelRef?: React.Ref<HTMLElement>
   style?: React.CSSProperties
   projects?: import('@/types').ProjectKPI[]
-  activeProject?: string
   userRole?: string
   kpiLoading?: boolean
   kpiError?: unknown
   onKpiRetry?: () => void
-  onCustomizeCSuite: (orgId: string, orgName: string) => void
 }) {
-  // Build Paperclip workspace URL from the active project
-  const paperclipBaseUrl = process.env.NEXT_PUBLIC_PAPERCLIP_URL || 'https://rxfit-paperclip-11747747730.us-central1.run.app'
-  const activeCompany = projects?.find(p => p.identifier?.toLowerCase() === activeProject?.toLowerCase() || p.companyName?.toLowerCase().includes(activeProject?.toLowerCase() || ''))
-  const paperclipUrl = activeCompany?.companyId
-    ? `${paperclipBaseUrl}/companies/${activeCompany.companyId}`
-    : paperclipBaseUrl
-
-  // Phase 1 workspace scaffold: tab state + the dashboard snapshot behind the
-  // Pulse header and Attention strip (read-only; no new write paths).
-  const [activeTab, setActiveTab] = useState<RightPanelTab>('pulse')
-  const { dashboard, isLoading: dashboardLoading } = useExecutionDashboard(activeCompany?.companyId)
+  // Phase 3 PR 2 (docs/architecture/PHASE3_EXECUTION_PANEL_2026-08-22.md §4):
+  // the panel is Runs + Pulse now. Runs is the ai_runs ledger through the
+  // existing feed presentation; Pulse keeps the Hub-native project health
+  // section until PR 3 rebuilds it savings-led. The Paperclip workspace tabs,
+  // the 📎 header deep link, and the dead ceo-pulse dashboard poll are gone —
+  // each rendered against a retired engine (§2, §6.4).
+  const canViewRuns = canAccessAdminRoute(userRole)
+  const [activeTab, setActiveTab] = useState<RightPanelTab>(canViewRuns ? 'runs' : 'pulse')
 
   return (
     <aside ref={panelRef} className={`panel-right ${isOpen ? 'mobile-open' : ''}`} aria-label="Execution Layer" style={style}>
@@ -172,66 +155,22 @@ function RightPanel({
         <h2 className="panel-title">
           <span className="panel-title-display">Execution</span>
         </h2>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <a
-            href={paperclipUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '4px',
-              padding: '4px 10px',
-              fontSize: '0.7rem',
-              fontWeight: 600,
-              color: 'var(--accent-gold)',
-              border: '1px solid var(--accent-gold)',
-              borderRadius: 'var(--radius-md)',
-              textDecoration: 'none',
-              transition: 'all 0.15s ease',
-              opacity: 0.85,
-            }}
-            onMouseEnter={(e) => { (e.target as HTMLElement).style.opacity = '1'; (e.target as HTMLElement).style.background = 'rgba(197,160,89,0.1)' }}
-            onMouseLeave={(e) => { (e.target as HTMLElement).style.opacity = '0.85'; (e.target as HTMLElement).style.background = 'transparent' }}
-            aria-label="Open Paperclip workspace"
-          >
-            📎 Paperclip →
-          </a>
-          {onClose && (
-            <button className="panel-close-btn" onClick={onClose} aria-label="Close Execution Layer">
-              &times;
-            </button>
-          )}
-        </div>
+        {onClose && (
+          <button className="panel-close-btn" onClick={onClose} aria-label="Close Execution Layer">
+            &times;
+          </button>
+        )}
       </div>
 
       <RightPanelTabsNav active={activeTab} onChange={setActiveTab} />
 
       <div className="panel-content">
-        {activeTab === 'pulse' ? (
-          <>
-            <PulseStrip dashboard={dashboard} isLoading={dashboardLoading} />
-            <ProjectHealthSection projects={projects} onInjectChat={onInjectChat} userRole={userRole} isLoading={kpiLoading} error={kpiError} onRetry={onKpiRetry} />
-            {/* orgId derives from activeCompany (same projects.find the page used for the
-                now-removed activeOrgId prop — both resolved to this exact value). */}
-            <ExecutionFeed onInjectChat={onInjectChat} onInjectAction={onInjectAction} onCustomizeCSuite={onCustomizeCSuite} orgId={activeCompany?.companyId} />
-          </>
-        ) : activeTab === 'issues' ? (
-          <IssuesTabView orgId={activeCompany?.companyId} userRole={userRole} onInjectChat={onInjectChat} />
-        ) : activeTab === 'agents' ? (
-          <AgentsTabView orgId={activeCompany?.companyId} userRole={userRole} onInjectChat={onInjectChat} />
-        ) : activeTab === 'routines' ? (
-          <RoutinesTabView orgId={activeCompany?.companyId} userRole={userRole} onInjectChat={onInjectChat} onInjectAction={onInjectAction} />
-        ) : activeTab === 'goals' ? (
-          <GoalsTabView orgId={activeCompany?.companyId} userRole={userRole} onInjectChat={onInjectChat} onInjectAction={onInjectAction} />
+        {activeTab === 'runs' ? (
+          <ExecutionFeed onInjectChat={onInjectChat} canViewRuns={canViewRuns} />
         ) : (
-          <SpacesTabView orgId={activeCompany?.companyId} userRole={userRole} onInjectChat={onInjectChat} />
+          <ProjectHealthSection projects={projects} onInjectChat={onInjectChat} userRole={userRole} isLoading={kpiLoading} error={kpiError} onRetry={onKpiRetry} />
         )}
       </div>
-
-      {/* Persistent footer: blocked/error/approval/budget signals; every chip
-          resolves through a read-style assistant query. */}
-      <AttentionStrip dashboard={dashboard} onInjectChat={onInjectChat} />
     </aside>
   )
 }
@@ -341,8 +280,6 @@ export default function HubPage() {
   const [mobileTab, setMobileTab] = useState<MobileTab>('chat')
   const [showOnboardingCard, setShowOnboardingCard] = useState(false)
   const [chatPanelOpen, setChatPanelOpen] = useState(false)
-  const [showWizard, setShowWizard] = useState(false)
-  const [wizardOrg, setWizardOrg] = useState<{ id: string; name: string } | null>(null)
 
   // Google Chat unread badge — uses visible spaces from useSpaces hook
   const { visibleSpaces: chatVisibleSpaces } = useSpaces()
@@ -1143,23 +1080,15 @@ export default function HubPage() {
           <RightPanel
             isOpen={mobileRightOpen}
             onClose={handleClosePanels}
-            // Read-style right-panel taps (health lookups, "tell me about" feed
-            // cards) take the direct, intent-free recall path — acceptance #2.
+            // Read-style right-panel taps (run cards, health lookups) take the
+            // direct, intent-free recall path — acceptance #2.
             onInjectChat={injectRecall}
-            // Only the explicit create-task CTA is action-style: route it through
-            // doSend so detectIntent → role-gate → Interview Mode runs.
-            onInjectAction={injectExecute}
             panelRef={rightPanelRef}
             projects={projects}
-            activeProject={activeProject}
             userRole={userRole}
             kpiLoading={kpiLoading}
             kpiError={kpiError}
             onKpiRetry={kpiRefetch}
-            onCustomizeCSuite={(orgId, orgName) => {
-              setWizardOrg({ id: orgId, name: orgName })
-              setShowWizard(true)
-            }}
           />
         )}
 
@@ -1273,17 +1202,6 @@ export default function HubPage() {
         <OnboardingCard onDismiss={() => setShowOnboardingCard(false)} />
       )}
 
-      {/* C-Suite Customization Wizard Modal */}
-      {showWizard && wizardOrg && (
-        <FounderLensWizard
-          orgId={wizardOrg.id}
-          orgName={wizardOrg.name}
-          onClose={() => {
-            setShowWizard(false)
-            setWizardOrg(null)
-          }}
-        />
-      )}
     </div>
   )
 }
