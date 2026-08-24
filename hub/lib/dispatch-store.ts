@@ -51,6 +51,20 @@ export function isMissingTableError(err: unknown): boolean {
   return (err as { code?: string } | null)?.code === '42P01'
 }
 
+/**
+ * Ledger `source` for a work_item job (the chat lane's rows stay 'chat').
+ * Derived from payload_meta, which survives every content scrub: 'tool' when
+ * a tool_runs row is attached (the deep-lane product record), 'work_probe'
+ * for the admin lane probe, 'work' otherwise. Deriving here — one place —
+ * is the fix for the Phase 3 §7 finding that the worker result path
+ * hardcoded source:'chat' for every kind.
+ */
+export function workItemRunSource(meta: Record<string, unknown> | null | undefined): string {
+  if (meta && typeof meta.toolRunId === 'string') return 'tool'
+  if (meta && meta.probe === true) return 'work_probe'
+  return 'work'
+}
+
 /* ── Hub side: enqueue / watch / deliver / cancel ────────────────────────── */
 
 export interface EnqueueInput {
@@ -218,6 +232,50 @@ export interface ReapCounts {
   deadlineExpired: number
 }
 
+/** What the reaper needs back from a terminal UPDATE to ledger the row. */
+const REAP_RETURNING = {
+  id: dispatchJobs.id,
+  kind: dispatchJobs.kind,
+  payloadMeta: dispatchJobs.payloadMeta,
+  promptChars: dispatchJobs.promptChars,
+  promptSha256: dispatchJobs.promptSha256,
+  requestId: dispatchJobs.requestId,
+} as const
+
+interface ReapedRow {
+  id: string
+  kind: string
+  payloadMeta: Record<string, unknown> | null
+  promptChars: number | null
+  promptSha256: string | null
+  requestId: string | null
+}
+
+/**
+ * Phase 3 §7 fix: a reaped work_item must leave a ledger row — before this,
+ * an expired deep run vanished from ai_runs entirely. Work items ONLY: the
+ * chat lane's waiting reader already ledgered its own failure the moment it
+ * fail-fasted (lease check / budget), so ledgering chat rows here would
+ * double-count. Awaited (not fire-and-forget) so the reap's effects are
+ * complete when it returns; recordAiRun is internally best-effort and never
+ * throws into the claim path that invokes the reaper lazily.
+ */
+async function ledgerReapedWorkItems(rows: ReapedRow[], errorClass: string, note: string): Promise<void> {
+  const workItems = rows.filter((r) => r.kind === 'work_item')
+  await Promise.all(workItems.map((r) => recordAiRun({
+    engine: 'agy',
+    source: workItemRunSource(r.payloadMeta),
+    status: 'error',
+    errorClass,
+    error: note,
+    latencyMs: 0,
+    promptFingerprint: { chars: r.promptChars, sha256: r.promptSha256 },
+    requestId: r.requestId,
+    userEmail: typeof r.payloadMeta?.userEmail === 'string' ? r.payloadMeta.userEmail : undefined,
+    meta: { dispatch: true, reap: true, jobId: r.id },
+  })))
+}
+
 export async function reapExpired(): Promise<ReapCounts> {
   const now = new Date()
   // A cancelled-then-lapsed lease goes terminal, never back into the queue:
@@ -239,7 +297,7 @@ export async function reapExpired(): Promise<ReapCounts> {
       lt(dispatchJobs.leaseExpiresAt, now),
       sql`cancel_requested_at IS NOT NULL`,
     ))
-    .returning({ id: dispatchJobs.id })
+    .returning(REAP_RETURNING)
   // Lapsed work_item leases with attempts left → back to queued.
   const requeued = await db
     .update(dispatchJobs)
@@ -264,7 +322,7 @@ export async function reapExpired(): Promise<ReapCounts> {
       updatedAt: now,
     })
     .where(and(eq(dispatchJobs.state, 'leased'), lt(dispatchJobs.leaseExpiresAt, now)))
-    .returning({ id: dispatchJobs.id })
+    .returning(REAP_RETURNING)
   // Unclaimed jobs past their deadline: executing them is pointless.
   const deadlineExpired = await db
     .update(dispatchJobs)
@@ -278,7 +336,10 @@ export async function reapExpired(): Promise<ReapCounts> {
       updatedAt: now,
     })
     .where(and(eq(dispatchJobs.state, 'queued'), lt(dispatchJobs.deadlineAt, now)))
-    .returning({ id: dispatchJobs.id })
+    .returning(REAP_RETURNING)
+  await ledgerReapedWorkItems(cancelled, 'abort', 'reaped: worker went silent after a cancel request')
+  await ledgerReapedWorkItems(leaseExpired, 'lease_expired', 'reaped: lease lapsed with no attempts left')
+  await ledgerReapedWorkItems(deadlineExpired, 'deadline', 'reaped: unclaimed past its deadline')
   return {
     cancelled: cancelled.length,
     requeued: requeued.length,
@@ -376,9 +437,9 @@ export interface ResultPost {
 }
 
 export type ResultOutcome =
-  | { outcome: 'recorded'; prompt: string | null; requestId: string | null }
-  | { outcome: 'discarded_cancelled'; prompt: string | null; requestId: string | null }
-  | { outcome: 'discarded_lease_lost' }
+  | { outcome: 'recorded'; prompt: string | null; requestId: string | null; kind: DispatchKind; payloadMeta: Record<string, unknown> | null }
+  | { outcome: 'discarded_cancelled'; prompt: string | null; requestId: string | null; kind: DispatchKind; payloadMeta: Record<string, unknown> | null }
+  | { outcome: 'discarded_lease_lost'; kind: DispatchKind; payloadMeta: Record<string, unknown> | null }
   | { outcome: 'duplicate' }
   | { outcome: 'not_found' }
 
@@ -398,6 +459,8 @@ export async function postResult(id: string, post: ResultPost): Promise<ResultOu
         cancelRequestedAt: dispatchJobs.cancelRequestedAt,
         payloadText: dispatchJobs.payloadText,
         requestId: dispatchJobs.requestId,
+        kind: dispatchJobs.kind,
+        payloadMeta: dispatchJobs.payloadMeta,
       })
       .from(dispatchJobs)
       .where(eq(dispatchJobs.id, id))
@@ -405,14 +468,16 @@ export async function postResult(id: string, post: ResultPost): Promise<ResultOu
       .for('update')
     const row = rows[0]
     if (!row) return { outcome: 'not_found' }
+    const kind = row.kind as DispatchKind
+    const payloadMeta = row.payloadMeta ?? null
 
     const mine = row.leasedBy === post.workerId && row.attempt === post.attempt
     if (row.state !== 'leased') {
       return mine && ['succeeded', 'failed', 'cancelled'].includes(row.state)
         ? { outcome: 'duplicate' }
-        : { outcome: 'discarded_lease_lost' }
+        : { outcome: 'discarded_lease_lost', kind, payloadMeta }
     }
-    if (!mine) return { outcome: 'discarded_lease_lost' }
+    if (!mine) return { outcome: 'discarded_lease_lost', kind, payloadMeta }
 
     const now = new Date()
     const resultMeta = {
@@ -439,7 +504,7 @@ export async function postResult(id: string, post: ResultPost): Promise<ResultOu
           updatedAt: now,
         })
         .where(eq(dispatchJobs.id, id))
-      return { outcome: 'discarded_cancelled', prompt: row.payloadText, requestId: row.requestId }
+      return { outcome: 'discarded_cancelled', prompt: row.payloadText, requestId: row.requestId, kind, payloadMeta }
     }
     if (post.status === 'ok') {
       await tx
@@ -471,8 +536,67 @@ export async function postResult(id: string, post: ResultPost): Promise<ResultOu
         })
         .where(eq(dispatchJobs.id, id))
     }
-    return { outcome: 'recorded', prompt: row.payloadText, requestId: row.requestId }
+    return { outcome: 'recorded', prompt: row.payloadText, requestId: row.requestId, kind, payloadMeta }
   })
+}
+
+/**
+ * One job, fully described for an owner/admin reader (the work-probe route
+ * and the deep-runs status derivation). Unlike getJobView this exposes
+ * payload_meta and result_meta — both survive the content scrub by contract
+ * and carry no content — plus attempt/timing. Never the payload or result
+ * text; text moves only through deliverResult's read-once CAS.
+ */
+export interface JobDetail {
+  state: string
+  kind: DispatchKind
+  attempt: number
+  maxAttempts: number
+  errorClass: string | null
+  error: string | null
+  latencyMs: number | null
+  leaseExpiresAt: Date | null
+  deadlineAt: Date
+  finishedAt: Date | null
+  payloadMeta: Record<string, unknown> | null
+  resultMeta: Record<string, unknown> | null
+}
+
+export async function getJobDetail(id: string): Promise<JobDetail | null> {
+  const rows = await db
+    .select({
+      state: dispatchJobs.state,
+      kind: dispatchJobs.kind,
+      attempt: dispatchJobs.attempt,
+      maxAttempts: dispatchJobs.maxAttempts,
+      errorClass: dispatchJobs.errorClass,
+      error: dispatchJobs.error,
+      latencyMs: dispatchJobs.latencyMs,
+      leaseExpiresAt: dispatchJobs.leaseExpiresAt,
+      deadlineAt: dispatchJobs.deadlineAt,
+      finishedAt: dispatchJobs.finishedAt,
+      payloadMeta: dispatchJobs.payloadMeta,
+      resultMeta: dispatchJobs.resultMeta,
+    })
+    .from(dispatchJobs)
+    .where(eq(dispatchJobs.id, id))
+    .limit(1)
+  const row = rows[0]
+  if (!row) return null
+  return {
+    state: row.state,
+    kind: row.kind as DispatchKind,
+    attempt: row.attempt,
+    maxAttempts: row.maxAttempts,
+    errorClass: row.errorClass,
+    error: row.error,
+    latencyMs: row.latencyMs,
+    leaseExpiresAt: row.leaseExpiresAt,
+    deadlineAt: row.deadlineAt,
+    finishedAt: row.finishedAt,
+    payloadMeta: row.payloadMeta ?? null,
+    resultMeta: row.resultMeta ?? null,
+  }
 }
 
 /* ── Hygiene + admin visibility ──────────────────────────────────────────── */

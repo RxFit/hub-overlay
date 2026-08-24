@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { verifyCronSecret } from '@/lib/cron-auth'
-import { isMissingTableError, postResult } from '@/lib/dispatch-store'
+import { isMissingTableError, postResult, workItemRunSource } from '@/lib/dispatch-store'
 import { emit } from '@/lib/observability'
 import { recordAiRun } from '@/lib/runs'
 
@@ -14,15 +14,22 @@ export const dynamic = 'force-dynamic'
  * ambiguity because every outcome is HTTP 200 with an explicit name (except
  * not_found → 404). Ledger policy:
  *
- *  - recorded            → the waiting tryAgyChat writes the ai_runs row (it
+ *  - recorded, chat_turn → the waiting tryAgyChat writes the ai_runs row (it
  *                          owns end-to-end latency). Residual: if the waiting
  *                          Hub instance died, that row is lost — bounded,
  *                          rare, and accepted by the design (§2.4/§6).
+ *  - recorded, work_item → THIS route writes the row: work items have no
+ *                          waiting reader, so nobody else ever would (the
+ *                          deep-lane design, DEEP_LANE_2026-08-23 §4).
  *  - discarded_*         → THIS route writes the row with meta.discarded:true,
  *                          because the allotment was spent and nobody else
  *                          will say so. Same philosophy as Phase 2's
  *                          record-even-on-abort.
  *  - duplicate           → no second row, byte-identical ack.
+ *
+ * `source` follows the job, not the transport: 'chat' for chat_turn rows,
+ * workItemRunSource(payload_meta) for work items — the Phase 3 §7 hardcode
+ * fix.
  */
 
 interface ResultBody {
@@ -120,25 +127,33 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       status: body.status,
       requestId: 'requestId' in outcome ? (outcome.requestId ?? undefined) : undefined,
     })
-    if (outcome.outcome === 'discarded_cancelled' || outcome.outcome === 'discarded_lease_lost') {
-      // The spend happened even though nobody will read the answer — the
-      // ledger's job is to say so. Best-effort by recordAiRun's own contract.
+    const discarded = outcome.outcome === 'discarded_cancelled' || outcome.outcome === 'discarded_lease_lost'
+    // Work items have no waiting reader, so 'recorded' would otherwise leave
+    // no ledger row at all — this route is their only accountant.
+    const recordedWork = outcome.outcome === 'recorded' && outcome.kind === 'work_item'
+    if (discarded || recordedWork) {
+      // The spend happened — the ledger's job is to say so, whether or not
+      // anyone reads the answer. Best-effort by recordAiRun's own contract.
+      const meta = 'payloadMeta' in outcome ? outcome.payloadMeta : null
       void recordAiRun({
         engine: 'agy',
         model: typeof body.model === 'string' ? body.model.slice(0, 100) : undefined,
-        source: 'chat',
+        source: outcome.kind === 'work_item' ? workItemRunSource(meta) : 'chat',
         status: body.status === 'ok' ? 'ok' : 'error',
         errorClass: body.status === 'error' ? (body.errorClass ?? 'unknown').slice(0, 60) : undefined,
         latencyMs: body.latencyMs && Number.isFinite(body.latencyMs) ? Math.round(body.latencyMs) : 0,
         prompt: 'prompt' in outcome ? outcome.prompt : undefined,
         usage,
         requestId: 'requestId' in outcome ? outcome.requestId : undefined,
+        userEmail: typeof meta?.userEmail === 'string' ? meta.userEmail : undefined,
         meta: {
           dispatch: true,
-          discarded: true,
+          ...(discarded ? { discarded: true } : {}),
           jobId: params.id,
           workerId: body.workerId.slice(0, 100),
           outcome: outcome.outcome,
+          ...(typeof meta?.toolRunId === 'string' ? { toolRunId: meta.toolRunId } : {}),
+          ...(meta?.probe === true ? { probe: true } : {}),
         },
       })
     }
