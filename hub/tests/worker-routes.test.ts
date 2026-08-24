@@ -19,10 +19,14 @@ const store = vi.hoisted(() => ({
   heartbeatJob: vi.fn(),
   postResult: vi.fn(),
   isMissingTableError: (err: unknown) => (err as { code?: string } | null)?.code === '42P01',
-  // Real derivation logic, inlined: the route's source labels are asserted
-  // against it below, so drift between mock and module would fail loudly.
+  // Real derivation logic, inlined (incl. the uuid-shape guard): the route's
+  // source labels are asserted against it below, so drift would fail loudly.
+  toolRunIdFrom: (meta: Record<string, unknown> | null | undefined) =>
+    meta && typeof meta.toolRunId === 'string' && /^[0-9a-f-]{36}$/i.test(meta.toolRunId) ? meta.toolRunId : null,
   workItemRunSource: (meta: Record<string, unknown> | null | undefined) =>
-    meta && typeof meta.toolRunId === 'string' ? 'tool' : meta && meta.probe === true ? 'work_probe' : 'work',
+    meta && typeof meta.toolRunId === 'string' && /^[0-9a-f-]{36}$/i.test(meta.toolRunId)
+      ? 'tool'
+      : meta && meta.probe === true ? 'work_probe' : 'work',
 }))
 const ledger = vi.hoisted(() => ({ recordAiRun: vi.fn().mockResolvedValue(undefined) }))
 
@@ -162,14 +166,14 @@ describe('POST /api/worker/jobs/[id]/result', () => {
     ledger.recordAiRun.mockClear()
     store.postResult.mockResolvedValue({
       outcome: 'recorded', prompt: 'p', requestId: null, kind: 'work_item',
-      payloadMeta: { toolRunId: 'tr-1', userEmail: 'staff@rxfitatx.com' },
+      payloadMeta: { toolRunId: '11111111-1111-4111-8111-111111111111', userEmail: 'staff@rxfitatx.com' },
     })
     await resultPost(request('/api/worker/jobs/j2/result', base), { params: { id: 'j2' } })
     expect(ledger.recordAiRun).toHaveBeenCalledWith(
       expect.objectContaining({
         source: 'tool',
         userEmail: 'staff@rxfitatx.com',
-        meta: expect.objectContaining({ toolRunId: 'tr-1' }),
+        meta: expect.objectContaining({ toolRunId: '11111111-1111-4111-8111-111111111111' }),
       }),
     )
   })
@@ -198,10 +202,10 @@ describe('POST /api/worker/jobs/[id]/result', () => {
   })
 
   it('discarded work_item is ledgered under its own source, never chat — the §7 hardcode fix', async () => {
-    store.postResult.mockResolvedValue({ outcome: 'discarded_cancelled', prompt: 'p', requestId: null, kind: 'work_item', payloadMeta: { toolRunId: 'tr-9' } })
+    store.postResult.mockResolvedValue({ outcome: 'discarded_cancelled', prompt: 'p', requestId: null, kind: 'work_item', payloadMeta: { toolRunId: '99999999-9999-4999-8999-999999999999' } })
     await resultPost(request('/api/worker/jobs/j1/result', base), { params: { id: 'j1' } })
     expect(ledger.recordAiRun).toHaveBeenCalledWith(
-      expect.objectContaining({ source: 'tool', meta: expect.objectContaining({ discarded: true, toolRunId: 'tr-9' }) }),
+      expect.objectContaining({ source: 'tool', meta: expect.objectContaining({ discarded: true, toolRunId: '99999999-9999-4999-8999-999999999999' }) }),
     )
   })
 

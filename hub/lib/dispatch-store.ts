@@ -52,6 +52,21 @@ export function isMissingTableError(err: unknown): boolean {
   return (err as { code?: string } | null)?.code === '42P01'
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * The ONE extraction point for a job's attached tool run. Validates uuid
+ * shape because tool_runs.id is a uuid column: malformed garbage in
+ * payload_meta must degrade to "no tool run attached", never into a
+ * PostgresError that aborts the result-posting transaction and strands a
+ * finished run (the worker would retry into the same error until its lease
+ * lapsed).
+ */
+export function toolRunIdFrom(meta: Record<string, unknown> | null | undefined): string | null {
+  const v = meta?.toolRunId
+  return typeof v === 'string' && UUID_RE.test(v) ? v : null
+}
+
 /**
  * Ledger `source` for a work_item job (the chat lane's rows stay 'chat').
  * Derived from payload_meta, which survives every content scrub: 'tool' when
@@ -61,7 +76,7 @@ export function isMissingTableError(err: unknown): boolean {
  * hardcoded source:'chat' for every kind.
  */
 export function workItemRunSource(meta: Record<string, unknown> | null | undefined): string {
-  if (meta && typeof meta.toolRunId === 'string') return 'tool'
+  if (toolRunIdFrom(meta)) return 'tool'
   if (meta && meta.probe === true) return 'work_probe'
   return 'work'
 }
@@ -280,7 +295,7 @@ async function ledgerReapedWorkItems(rows: ReapedRow[], errorClass: string, note
   // Best-effort per the migrations-non-fatal contract: a missing tool_runs
   // table must not wedge the reaper for the chat lane.
   for (const r of workItems) {
-    const toolRunId = typeof r.payloadMeta?.toolRunId === 'string' ? r.payloadMeta.toolRunId : null
+    const toolRunId = toolRunIdFrom(r.payloadMeta)
     if (!toolRunId) continue
     try {
       await finishToolRun(db, toolRunId, {
@@ -509,7 +524,7 @@ export async function postResult(id: string, post: ResultPost): Promise<ResultOu
     // the queue's terminal transition and the durable record move together
     // or not at all. finishToolRun is a guarded CAS from 'queued', so a
     // user cancel that already went terminal makes this a no-op (null).
-    const toolRunId = typeof payloadMeta?.toolRunId === 'string' ? payloadMeta.toolRunId : null
+    const toolRunId = toolRunIdFrom(payloadMeta)
 
     if (row.cancelRequestedAt !== null) {
       // Hub already fell back; the answer has no reader. Record the terminal

@@ -255,7 +255,7 @@ describeDb('dispatch store (Postgres)', () => {
   }
 
   it('a work_item that exhausts its attempts is ledgered as lease_expired with fingerprint provenance', async () => {
-    const out = await enqueueJob({ kind: 'work_item', prompt: 'deep brief', deadlineMs: 600_000, meta: { toolRunId: 'tr-db-1' } })
+    const out = await enqueueJob({ kind: 'work_item', prompt: 'deep brief', deadlineMs: 600_000, meta: { toolRunId: crypto.randomUUID() } })
     const id = (out as { id: string }).id
     const sql = getSql()
     for (let attempt = 1; attempt <= 3; attempt++) {
@@ -310,14 +310,26 @@ describeDb('dispatch store (Postgres)', () => {
   })
 
   it('postResult surfaces kind and payload_meta so the route can label sources per job', async () => {
-    const out = await enqueueJob({ kind: 'work_item', prompt: 'p', deadlineMs: 600_000, meta: { toolRunId: 'tr-db-2' } })
+    const trId = crypto.randomUUID()
+    const out = await enqueueJob({ kind: 'work_item', prompt: 'p', deadlineMs: 600_000, meta: { toolRunId: trId } })
     const id = (out as { id: string }).id
     await claimNext('w1', ['work_item'])
     const posted = await postResult(id, { status: 'ok', text: 'report', workerId: 'w1', attempt: 1 })
     expect(posted.outcome).toBe('recorded')
     if (posted.outcome === 'recorded') {
       expect(posted.kind).toBe('work_item')
-      expect(posted.payloadMeta).toMatchObject({ toolRunId: 'tr-db-2' })
+      expect(posted.payloadMeta).toMatchObject({ toolRunId: trId })
+    }
+  })
+
+  it('a malformed toolRunId in payload_meta degrades to "no tool run" — result posting never breaks on it', async () => {
+    const out = await enqueueJob({ kind: 'work_item', prompt: 'p', deadlineMs: 600_000, meta: { toolRunId: 'not-a-uuid' } })
+    const id = (out as { id: string }).id
+    await claimNext('w1', ['work_item'])
+    const posted = await postResult(id, { status: 'ok', text: 'report', workerId: 'w1', attempt: 1 })
+    expect(posted.outcome).toBe('recorded')
+    if (posted.outcome === 'recorded') {
+      expect(posted.toolRun).toBeNull() // garbage id ⇒ nothing to land, no thrown transaction
     }
   })
 
