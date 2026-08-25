@@ -213,8 +213,10 @@ export function useChatEngine(options: UseChatEngineOptions) {
    * semantics at every executeAction callsite.
    */
   const invalidateByUrl = useCallback((url: string) => {
+    // '/api/feed' → ['feed'] was removed with the useFeed hook (Phase 3 PR 2):
+    // its only mutate callers are the dead Paperclip executeAction cases, and
+    // no mounted query observes ['feed'] anymore.
     const urlToQueryKey: Record<string, readonly unknown[]> = {
-      '/api/feed': ['feed'],
       '/api/companies': ['companies'],
     }
     return queryClient.invalidateQueries({ queryKey: urlToQueryKey[url] ?? [url] })

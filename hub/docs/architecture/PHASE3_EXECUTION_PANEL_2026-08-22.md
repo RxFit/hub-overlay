@@ -171,6 +171,33 @@ Delete the tab bar's dead workspace tabs; the panel becomes Pulse + Runs.
 Preserve the inject affordances: tapping a run injects a read-style question about
 it ("why did run X fail with `empty`?").
 
+> **✅ Shipped 2026-08-24.** As specified, with four recorded deltas:
+> `/api/runs` also merges the caller's own recent AI actions (the one live
+> source the old feed had — §2's keep-list — so it survives the source swap);
+> `ExecutionFeed` no longer renders `BusinessManagerPanel` (dead ceo-pulse
+> source, §6.4's rule — the file itself still dies in PR 5, along with the
+> now-unreachable `FounderLensWizard` wiring it triggered); the `📎 Paperclip`
+> header link and the dead `/api/paperclip/dashboard` 60s poll are gone; the
+> panel defaults to the Runs tab for admins, and non-admins get a quiet
+> admin-only state with no fetch. The mapper (`lib/run-feed.ts`) surfaces
+> typed error classes only (sanitized, mirroring `lib/dispatch-alerts.ts`) —
+> `ai_runs.error` message text never reaches a card or a chat injection (the
+> hardening review's content rule applied at the presentation layer).
+>
+> Further recorded deltas from the post-ship adversarial review:
+> `PulseStrip`/`AttentionStrip` are unmounted until PR 3 rebuilds them (their
+> only data source was the dead ceo-pulse poll); the panel's one action-style
+> inject (the create-task CTA inside `BusinessManagerPanel`) is gone with it —
+> the left panel's "+ Task" remains; the orphaned `useFeed` and
+> `useExecutionDashboard` hooks and the dead `'/api/feed'` invalidation
+> bridge were deleted here rather than left for PR 5 (which inventories
+> files, not hooks); the feed filter bar drops its never-again-reachable
+> "In Progress" tab (both new sources are terminal-only);
+> `scripts/audit-csuite-scoping.ts` is suspended until the c-suite flow is
+> re-wired. Known gap, deliberate: no e2e spec exercises the runs panel yet —
+> the nine existing specs stub the old `/api/feed`; runs-panel e2e lands with
+> the PR 3 rail so it asserts the finished panel once, not twice.
+
 ### PR 3 — The dispatch rail
 
 New exported reader for alert/recovery history from `event_log` (the one genuinely

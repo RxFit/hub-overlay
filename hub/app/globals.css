@@ -9669,7 +9669,6 @@ details[open] > .settings-collapsible__trigger .settings-collapsible__arrow {
 .bm-cta--primary:disabled { opacity: .5; cursor: not-allowed; }
 .bm-cta--secondary { background: rgba(255,255,255,.05); border-color: var(--border); color: var(--text-secondary); }
 .bm-cta--secondary:hover { border-color: var(--border-hover); background: rgba(255,255,255,.08); color: var(--text-primary); }
-.bm-feed-divider { height: 1px; background: linear-gradient(90deg,transparent 0%,var(--border) 30%,var(--border) 70%,transparent 100%); margin: 0 var(--space-4); }
 
 /* Interview Mode Context Score */
 .interview-badge--scoring { border-color: var(--bm-amber)!important; box-shadow: 0 0 12px rgba(245,158,11,.2)!important; }

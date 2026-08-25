@@ -1,9 +1,7 @@
 'use client'
 
 import { useState, useMemo, useCallback, memo } from 'react'
-import { useFeed } from '@/app/hooks/useHubData'
-import { useStallDetector } from '@/app/hooks/useStallDetector'
-import { BusinessManagerPanel } from '@/app/components/BusinessManagerPanel'
+import { useRuns } from '@/app/hooks/useHubData'
 import type { FeedItem } from '@/app/hooks/useHubData'
 
 /* ══════════════════════════════════════════════════════════════════════════════
@@ -111,13 +109,15 @@ const FeedCard = memo(function FeedCard({
    FEED FILTER BAR
    ══════════════════════════════════════════════════════════════════════════════ */
 
-type FilterTab = 'all' | 'needs_you' | 'completed' | 'in_progress'
+// No 'in_progress' tab: both sources behind /api/runs are terminal-only —
+// ai_runs rows are written on completion (status ok|error) and AI actions map
+// to completed/needs_you/info — so the tab could never light up again.
+type FilterTab = 'all' | 'needs_you' | 'completed'
 
 const FILTER_TABS: Array<{ id: FilterTab; label: string }> = [
   { id: 'all', label: 'All' },
   { id: 'needs_you', label: 'Needs You' },
   { id: 'completed', label: 'Completed' },
-  { id: 'in_progress', label: 'In Progress' },
 ]
 
 function FeedFilterBar({
@@ -184,43 +184,38 @@ function DateGroupLabel({ label }: { label: string }) {
 
 /* ══════════════════════════════════════════════════════════════════════════════
    EXECUTION FEED (main export)
+
+   Phase 3 PR 2 (docs/architecture/PHASE3_EXECUTION_PANEL_2026-08-22.md §4):
+   same presentation layer, new engine — the source is now the Hub's own
+   ai_runs ledger via /api/runs (runs + the caller's AI actions), replacing
+   the Paperclip activity feed. The BusinessManagerPanel header is no longer
+   rendered: its data source (Paperclip ceo-pulse) is retired, so it opened
+   every panel visit with a red failure card (§6.4's rule — do not render
+   components whose data source is gone; the file itself dies in PR 5).
    ══════════════════════════════════════════════════════════════════════════════ */
 
 export function ExecutionFeed({
   onInjectChat,
-  onInjectAction,
-  orgId,
-  onCustomizeCSuite,
+  canViewRuns,
 }: {
-  // Read-style feed-card taps ("tell me about: …") — direct, intent-free path.
+  // Read-style feed-card taps ("tell me more about: …") — direct, intent-free path.
   onInjectChat: (msg: string) => void
-  // Action-style create-task CTA — routed through doSend for Interview Mode.
-  onInjectAction: (msg: string) => void
-  orgId?: string
-  onCustomizeCSuite: (orgId: string, orgName: string) => void
+  // Runs data is admin-gated (§3.4 — chat ledger rows have no attribution yet,
+  // so a staff view cannot be scoped). False renders a quiet admin-only state
+  // and never fetches.
+  canViewRuns: boolean
 }) {
-  const { items, isLoading, error, refetch } = useFeed()
+  const { items, isLoading, error, refetch } = useRuns(canViewRuns)
   const [activeFilter, setActiveFilter] = useState<FilterTab>('all')
   const [retrying, setRetrying] = useState(false)
 
-  // Stall detection — monitors in_progress items
-  const { stalledItems } = useStallDetector(items)
-
-  // Handler: Create Task CTA → action-style inject so Interview Mode activates
-  // (parity with the left-panel "+ Task" affordance). Read-style feed-card taps
-  // continue to use onInjectChat (recall) below.
-  const handleCreateTask = useCallback(() => {
-    onInjectAction('I want to create a new automated task, guide me')
-  }, [onInjectAction])
-
   // Compute counts per filter tab
   const counts = useMemo(() => {
-    const c: Record<FilterTab, number> = { all: items.length, needs_you: 0, completed: 0, in_progress: 0 }
+    const c: Record<FilterTab, number> = { all: items.length, needs_you: 0, completed: 0 }
     for (const item of items) {
       const t = (item as any).type as FeedItemType | undefined
       if (t === 'needs_you') c.needs_you++
       else if (t === 'completed') c.completed++
-      else if (t === 'in_progress') c.in_progress++
     }
     return c
   }, [items])
@@ -251,9 +246,9 @@ export function ExecutionFeed({
     return groups
   }, [filteredItems])
 
-  // Retry handler — revalidate ONLY the feed query. A full window.location.reload()
+  // Retry handler — revalidate ONLY the runs query. A full window.location.reload()
   // would discard in-progress chat/compose/thread state (#28 / NS6), so refetch
-  // the feed in place instead.
+  // in place instead.
   const handleRetry = useCallback(async () => {
     setRetrying(true)
     try {
@@ -263,71 +258,70 @@ export function ExecutionFeed({
     }
   }, [refetch])
 
-  return (
-    <>
-      {/* ── Business Manager Panel (CEO-lens header) ── */}
-      <BusinessManagerPanel
-        orgId={orgId}
-        onCreateTask={handleCreateTask}
-        stalledCount={stalledItems.length}
-        onCustomizeCSuite={onCustomizeCSuite}
-      />
-
-      {/* ── Divider ── */}
-      <div className="bm-feed-divider" aria-hidden="true" />
-
-      {/* ── Activity Feed ── */}
+  if (!canViewRuns) {
+    return (
       <div style={{ padding: 'var(--space-4, 16px)' }}>
-
-        {/* Filter bar — rendered once; counts are all-zero while loading (items is empty) */}
-        <FeedFilterBar active={activeFilter} onChange={setActiveFilter} counts={counts} />
-
-        {isLoading ? (
-          <FeedSkeleton />
-        ) : error ? (
-          <div className="feed-empty" role="alert">
-            <div className="feed-empty__icon">⚠️</div>
-            <div className="feed-empty__text">Unable to load activity feed — try refreshing</div>
-            <button
-              className="feed-filter-btn"
-              onClick={handleRetry}
-              disabled={retrying}
-              style={{ marginTop: 'var(--space-3)' }}
-            >
-              {retrying ? 'Retrying…' : 'Retry'}
-            </button>
+        <div className="feed-empty" role="status">
+          <div className="feed-empty__icon">🔒</div>
+          <div className="feed-empty__text">
+            Run history is admin-only for now — ask an admin if you need a run looked up
           </div>
-        ) : filteredItems.length === 0 ? (
-          <div className="feed-empty" role="status">
-            <div className="feed-empty__icon">💤</div>
-            <div className="feed-empty__text">
-              {activeFilter === 'all'
-                ? 'No activity yet — your agents are idle'
-                : `No ${activeFilter.replace('_', ' ')} items`}
-            </div>
-          </div>
-        ) : (
-          <div role="list" aria-label="Activity feed">
-            {grouped.map((group) => (
-              <div key={group.label}>
-                <DateGroupLabel label={group.label} />
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2, 8px)' }}>
-                  {group.items.map(({ item, globalIndex }) => (
-                    <FeedCard
-                      key={item.id}
-                      item={item}
-                      index={globalIndex}
-                      onInjectChat={onInjectChat}
-                    />
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
+        </div>
       </div>
-    </>
+    )
+  }
+
+  return (
+    <div style={{ padding: 'var(--space-4, 16px)' }}>
+
+      {/* Filter bar — rendered once; counts are all-zero while loading (items is empty) */}
+      <FeedFilterBar active={activeFilter} onChange={setActiveFilter} counts={counts} />
+
+      {isLoading ? (
+        <FeedSkeleton />
+      ) : error ? (
+        <div className="feed-empty" role="alert">
+          <div className="feed-empty__icon">⚠️</div>
+          <div className="feed-empty__text">Unable to load the runs feed — try refreshing</div>
+          <button
+            className="feed-filter-btn"
+            onClick={handleRetry}
+            disabled={retrying}
+            style={{ marginTop: 'var(--space-3)' }}
+          >
+            {retrying ? 'Retrying…' : 'Retry'}
+          </button>
+        </div>
+      ) : filteredItems.length === 0 ? (
+        <div className="feed-empty" role="status">
+          <div className="feed-empty__icon">💤</div>
+          <div className="feed-empty__text">
+            {activeFilter === 'all'
+              ? 'No runs yet — the engine is idle'
+              : `No ${activeFilter.replace('_', ' ')} items`}
+          </div>
+        </div>
+      ) : (
+        <div role="list" aria-label="Runs feed">
+          {grouped.map((group) => (
+            <div key={group.label}>
+              <DateGroupLabel label={group.label} />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2, 8px)' }}>
+                {group.items.map(({ item, globalIndex }) => (
+                  <FeedCard
+                    key={item.id}
+                    item={item}
+                    index={globalIndex}
+                    onInjectChat={onInjectChat}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+    </div>
   )
 }
 
