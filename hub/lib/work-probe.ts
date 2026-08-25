@@ -7,7 +7,11 @@
  * and these two functions need direct unit tests.
  */
 
-export const DEFAULT_PROBE_URL = 'https://worldtimeapi.org/api/ip'
+// worldtimeapi.org intermittently fails TLS/returns an empty body from the
+// desktop worker. Postman Echo's current-time endpoint is deliberately simple
+// (a short RFC-1123 body) and avoids putting the worker's public IP in the
+// probe payload.
+export const DEFAULT_PROBE_URL = 'https://postman-echo.com/time/now'
 
 export function buildProbePrompt(url: string, marker: string): string {
   return [
@@ -27,8 +31,18 @@ export function buildProbePrompt(url: string, marker: string): string {
  *  of a live fetch (and unlike echoed content, it cannot be pre-trained). */
 export function containsFreshTimestamp(text: string, now: number, windowMs: number): boolean {
   const iso = /\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?/g
-  for (const match of text.match(iso) ?? []) {
-    const t = Date.parse(match)
+  const rfc1123 = /\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{1,2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT\b/g
+  const candidates = [...(text.match(iso) ?? []), ...(text.match(rfc1123) ?? [])]
+  for (const candidate of candidates) {
+    // JavaScript Date accepts milliseconds but some time APIs emit six or
+    // seven fractional digits. Truncate, never round: the freshness window is
+    // minutes wide. A timezone-less ISO value from a UTC time endpoint is
+    // interpreted explicitly as UTC instead of inheriting the server locale.
+    let parseable = candidate.replace(/(\.\d{3})\d+/, '$1')
+    if (/^\d{4}-\d{2}-\d{2}[T ]/.test(parseable) && !/(?:Z|[+-]\d{2}:?\d{2})$/.test(parseable)) {
+      parseable += 'Z'
+    }
+    const t = Date.parse(parseable)
     if (Number.isFinite(t) && Math.abs(now - t) <= windowMs) return true
   }
   return false
