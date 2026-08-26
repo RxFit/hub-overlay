@@ -12,6 +12,7 @@ import {
   truncateAgyError,
 } from '@/lib/agy'
 import { recordAiRun } from '@/lib/runs'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -41,7 +42,7 @@ export const maxDuration = 300
 
 const PROBE_MARKER = 'AGY_GATEWAY_OK'
 
-export async function GET(req: NextRequest) {
+export const GET = withFault('admin/agy-health', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   const user = session?.user as { email?: string | null; role?: string | null } | undefined
   if (!user?.email) {
@@ -152,4 +153,4 @@ export async function GET(req: NextRequest) {
     binary,
     probe,
   })
-}
+})

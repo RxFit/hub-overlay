@@ -5,6 +5,7 @@ import { canAccessStaffRoute } from '@/lib/roles'
 import { cancelJob, getJobDetail, isMissingTableError } from '@/lib/dispatch-store'
 import { deriveRunView } from '@/lib/deep-runs'
 import { cancelToolRun, getToolRunOwned, type ToolRunRecord } from '@/lib/tool-runs'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -45,7 +46,7 @@ async function viewOf(run: ToolRunRecord) {
   return deriveRunView(run, job, Date.now())
 }
 
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+export const GET = withFault('deep-runs/[id]', async (_req: NextRequest, { params }: { params: { id: string } }) => {
   const auth = await requireStaff()
   if (auth instanceof NextResponse) return auth
   try {
@@ -59,9 +60,9 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     console.error('[deep-runs GET id]', err instanceof Error ? err.message : err)
     return NextResponse.json({ error: 'Failed to read the deep run' }, { status: 500 })
   }
-}
+})
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export const POST = withFault('deep-runs/[id]', async (req: NextRequest, { params }: { params: { id: string } }) => {
   const auth = await requireStaff()
   if (auth instanceof NextResponse) return auth
   let body: { action?: unknown }
@@ -98,4 +99,4 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     console.error('[deep-runs cancel]', err instanceof Error ? err.message : err)
     return NextResponse.json({ error: 'Failed to cancel the deep run' }, { status: 500 })
   }
-}
+})
