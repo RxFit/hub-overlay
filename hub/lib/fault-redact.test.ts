@@ -37,6 +37,24 @@ describe('scrubFreeText — the spec §7.1 property cases', () => {
     expect(out).toContain('<token>')
   })
 
+  it('quoted-JSON secret pairs redact — the failed-token-exchange shape', () => {
+    const out = scrubFreeText(
+      'token exchange failed: {"access_token":"ya29.a0AfB_byC-secret-value","refresh_token":"1//0eXyZsecretsecret","expires_in":3599}',
+    )
+    expect(out).not.toContain('ya29')
+    expect(out).not.toContain('1//0e')
+    expect(out).not.toContain('secret-value')
+    expect(out).toContain('"access_token":"<redacted>"')
+    expect(out).toContain('"refresh_token":"<redacted>"')
+    expect(out).toContain('expires_in') // non-secret structure survives
+  })
+
+  it('bare opaque OAuth tokens redact even with no key nearby', () => {
+    const out = scrubFreeText('replay failed for ya29.a0AfB_byDEF123 and 1//0eAbCdEfGhIjKl')
+    expect(out).not.toContain('ya29')
+    expect(out).not.toContain('1//0e')
+  })
+
   it('a stack frame with a query-string token loses the query string', () => {
     const out = scrubFreeText('at load (/app/.next/static/chunk.js?token=abc123def456)')
     expect(out).not.toContain('token=abc123def456')

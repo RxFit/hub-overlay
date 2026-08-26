@@ -82,8 +82,11 @@ export async function detectErrorIn2xx(res: Response): Promise<string | null> {
     const body: unknown = await res.clone().json()
     if (!body || typeof body !== 'object' || Array.isArray(body)) return null
     const record = body as Record<string, unknown>
-    if (record.error) return 'error'
-    if (record.reason) return 'reason'
+    // Key PRESENCE, not truthiness: { error: "" } and { reason: null } are
+    // still the contract violation — no repo route legitimately returns
+    // either key on success (verified before adopting strictness).
+    if ('error' in record) return 'error'
+    if ('reason' in record) return 'reason'
     if (record.ok === false) return 'ok:false'
     if (record.success === false) return 'success:false'
     return null

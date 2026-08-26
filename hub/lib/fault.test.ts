@@ -95,6 +95,12 @@ describe('toFault — recognition order', () => {
 
     const pageToken = Object.assign(new Error('bad token'), { name: 'InvalidPageTokenError' })
     expect(toFault(pageToken, CTX).code).toBe('validation_failed')
+
+    const secretCrypto = Object.assign(new Error('bad auth tag'), { name: 'SecretCryptoError' })
+    expect(toFault(secretCrypto, CTX).code).toBe('invariant_violation')
+
+    const paperclip = Object.assign(new Error('schema drift'), { name: 'PaperclipSchemaError' })
+    expect(toFault(paperclip, CTX).code).toBe('upstream_4xx')
   })
 
   it('Postgres SQLSTATEs map by class: 42P01 → db_table_missing (fatal), 23505 → db_constraint', () => {

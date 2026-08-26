@@ -149,6 +149,16 @@ describe('the 2xx contract check (gated, per the P0-3 correction)', () => {
     expect(reportMock).not.toHaveBeenCalled()
   })
 
+  it('FALSY error keys still flag — key presence is the contract, not truthiness', async () => {
+    for (const body of [{ error: '' }, { reason: null }]) {
+      reportMock.mockClear()
+      const handler = withFault('probe', async () => jsonWithLength(body))
+      const res = await handler(req())
+      expect(res.status).toBe(500)
+      expect(reportMock).toHaveBeenCalledTimes(1)
+    }
+  })
+
   it('a clean sized 2xx passes; a sized 4xx with `error` passes (only 2xx is a contradiction)', async () => {
     const ok = withFault('probe', async () => jsonWithLength({ companies: [1] }))
     expect((await ok(req())).status).toBe(200)

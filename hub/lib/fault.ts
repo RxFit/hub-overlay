@@ -144,8 +144,18 @@ export function newFaultId(): string {
 const SCRUBBERS: Array<[RegExp, string]> = [
   // scheme://user:pass@host — remove the credential AND the '@'
   [/(\w+:\/\/)[^\s/@]+@/g, '$1<credentials>'],
-  // key=value / key: value secret shapes (Sentry's denylist family)
-  [/\b(password|passwd|secret|credentials?|api[_-]?key|apikey|auth|token|bearer)\s*[=:]\s*[^\s"',;]+/gi, '$1=<redacted>'],
+  // Quoted-JSON secret pairs FIRST: {"access_token":"ya29..."} puts a quote
+  // between the key and the colon, so the bare key=value rule below cannot
+  // see it — and a failed OAuth token exchange embeds exactly this shape in
+  // its error message (Codex P1 on #218).
+  [/"([\w-]*(?:token|secret|passw|credential|key|auth)[\w-]*)"\s*:\s*"(?:[^"\\]|\\.)*"/gi, '"$1":"<redacted>"'],
+  // key=value / key: value secret shapes (Sentry's denylist family); the
+  // value may itself be quoted.
+  [/\b(password|passwd|secret|credentials?|api[_-]?key|apikey|auth|token|bearer)\s*[=:]\s*(?:"[^"]*"|[^\s"',;]+)/gi, '$1=<redacted>'],
+  // Opaque Google OAuth token formats (access ya29., refresh 1//) — these
+  // carry no recognizable key when interpolated bare into a message.
+  [/\bya29\.[\w.-]+/g, '<token>'],
+  [/\b1\/\/[\w-]{10,}/g, '<token>'],
   [/\bBearer\s+[^\s"']+/gi, '<token>'],
   [/\beyJ[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]+){0,2}/g, '<token>'],
   [/\bsk-[A-Za-z0-9_-]{8,}/g, '<token>'],
@@ -313,6 +323,13 @@ function recognize(err: unknown): Recognized {
     if (err.name === 'CircuitOpenError') return { code: 'upstream_breaker_open' }
     if (err.name === 'InvalidPageTokenError') return { code: 'validation_failed' }
     if (err.name === 'LoopDetectedError') return { code: 'invariant_violation' }
+    // Missing/malformed crypto config or a failed decrypt auth tag disables
+    // every managed-secret operation — an integrity failure, not a generic
+    // internal.
+    if (err.name === 'SecretCryptoError') return { code: 'invariant_violation' }
+    // Transitional: Paperclip is retired (AGENTS.md); recognize while the
+    // class exists, drop with the rip-out.
+    if (err.name === 'PaperclipSchemaError') return { code: 'upstream_4xx' }
   }
   // 5. Postgres SQLSTATEs (the postgres.js driver sets err.code).
   const code = errCode(err) ?? errCode((err as Error | undefined)?.cause)
