@@ -15,10 +15,11 @@ import { parseTraceparent, gcpTraceFields } from '@/lib/trace-context'
  * Duty order is FIXED and each step exists for a reason:
  *   1. requestId — the correlation spine. The header is trusted ONLY when it
  *      is exactly a UUID: on middleware-excluded paths (api/chat, api/worker,
- *      api/cron/, api/healthz, api/embeddings, api/webhooks) an external
- *      caller supplies it unvalidated — correlation poisoning plus unbounded
- *      log cardinality. Same posture as middleware deleting a
- *      client-supplied x-tenant-id.
+ *      api/cron/, api/reports/run, api/healthz, api/embeddings, api/webhooks —
+ *      the matcher in middleware.ts is the authority) an external caller
+ *      supplies it unvalidated — correlation poisoning plus unbounded log
+ *      cardinality. Same posture as middleware deleting a client-supplied
+ *      x-tenant-id.
  *   2. run the handler
  *   3. RE-THROW Next control flow FIRST — redirect() and notFound() are
  *      implemented as throws; a naive catch turns every intended navigation

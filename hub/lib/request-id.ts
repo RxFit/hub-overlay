@@ -5,8 +5,9 @@
  * Crypto `randomUUID()` that both runtimes ship.
  *
  * An inbound `x-hub-request-id` is trusted ONLY when it is exactly a UUID.
- * On middleware-excluded paths (api/chat, api/worker, api/cron/, api/healthz,
- * api/embeddings, api/webhooks) an external caller supplies the header
+ * On middleware-excluded paths (api/chat, api/worker, api/cron/,
+ * api/reports/run, api/healthz, api/embeddings, api/webhooks — see the matcher
+ * in middleware.ts, which is the authority) an external caller supplies the header
  * unvalidated — correlation poisoning plus unbounded log cardinality — the
  * same injection class middleware already defends against by deleting a
  * client-supplied x-tenant-id.
