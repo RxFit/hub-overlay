@@ -1,5 +1,6 @@
 import { type FaultDraft, type FaultRecord, scrubFreeText } from '@/lib/fault'
 import { telemetryDbSinkEnabled } from '@/lib/observability'
+import { gcpTraceFields, type TraceContext } from '@/lib/trace-context'
 
 /**
  * The fault reporter (ERROR_REPORTING_2026-08-24.md §8, §9 Tier 1–2).
@@ -97,6 +98,10 @@ export interface ReportFaultOptions {
    *  derivation from FaultRecord.stack (frames, line numbers stripped);
    *  same source, two purposes. */
   rawStack?: string | null
+  /** Parsed traceparent, when the boundary has one — emitted as the
+   *  `logging.googleapis.com/trace` field so the fault line nests under the
+   *  Cloud Run request log (Layer 0). */
+  trace?: TraceContext | null
   /** Injectable clock, matching lib/rate-limit.ts's convention. */
   now?: number
 }
@@ -143,6 +148,7 @@ export function reportFault(draft: FaultDraft, opts: ReportFaultOptions = {}): v
     const line = {
       severity: GCP_SEVERITY[fault.severity],
       message: gcpMessage,
+      ...gcpTraceFields(opts.trace ?? null),
       serviceContext: { service: 'hub', version: fault.release },
       context: fault.route
         ? {

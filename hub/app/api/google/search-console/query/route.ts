@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { resolveGoogleAuth, googleWriteErrorResponse } from '@/lib/google-session'
+import { resolveGoogleAuth, googleWriteErrorResponse, googleRouteCtx } from '@/lib/google-session'
 import { querySearchConsole, GSC_DIMENSIONS, type GSCDimension } from '@/lib/google/search-console'
 import { getEffectivePrefs } from '@/lib/google/prefs-db'
 
@@ -70,6 +70,6 @@ export async function POST(req: NextRequest) {
     })
     return NextResponse.json({ result })
   } catch (err) {
-    return googleWriteErrorResponse(err, 'Google Search Console')
+    return googleWriteErrorResponse(err, 'Google Search Console', googleRouteCtx(req, '/api/google/search-console/query'))
   }
 }

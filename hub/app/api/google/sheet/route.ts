@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { resolveGoogleAuth, googleWriteErrorResponse } from '@/lib/google-session'
+import { resolveGoogleAuth, googleWriteErrorResponse, googleRouteCtx } from '@/lib/google-session'
 import { createFormattedSheet } from '@/lib/google/sheets'
 import { resolveArtifactFolder } from '@/lib/google/artifact-folder'
 import { AI_INTENT_HEADER } from '@/lib/requireGate'
@@ -90,6 +90,6 @@ export async function POST(req: NextRequest) {
         error: err instanceof Error ? err.message : 'unknown error',
       })
     }
-    return googleWriteErrorResponse(err, 'Google Sheets')
+    return googleWriteErrorResponse(err, 'Google Sheets', googleRouteCtx(req, '/api/google/sheet'))
   }
 }

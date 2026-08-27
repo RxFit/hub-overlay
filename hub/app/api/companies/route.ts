@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { getCompanies } from '@/lib/paperclip'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
@@ -17,7 +18,12 @@ export const runtime = 'nodejs'
  *  - onboarding         → [] (empty — no access yet)
  *  - unauthenticated    → 401
  */
-export async function GET() {
+// withFault, and NO swallowing catch (spec Layer 9 #1): this route used to
+// answer a live backend failure with 200 { companies: [], error } — React
+// Query treated it as success and the UI rendered a confident empty state
+// over an outage. A getCompanies() throw is now a logged, reported fault and
+// a real error status; useCompanies already degrades to [] on !res.ok.
+export const GET = withFault('companies', async () => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -32,33 +38,27 @@ export async function GET() {
     return NextResponse.json({ companies: [] })
   }
 
-  try {
-    const allCompanies = await getCompanies()
+  const allCompanies = await getCompanies()
 
-    // superadmin and admin see everything
-    if (role === 'superadmin' || role === 'admin') {
-      return NextResponse.json(
-        { companies: allCompanies },
-        { headers: { 'Cache-Control': 'private, max-age=60' } }
-      )
-    }
-
-    // staff: filter to assigned project IDs
-    if (assignedProjects.includes('*')) {
-      return NextResponse.json(
-        { companies: allCompanies },
-        { headers: { 'Cache-Control': 'private, max-age=60' } }
-      )
-    }
-
-    const scoped = allCompanies.filter(c => assignedProjects.includes(c.id))
+  // superadmin and admin see everything
+  if (role === 'superadmin' || role === 'admin') {
     return NextResponse.json(
-      { companies: scoped },
+      { companies: allCompanies },
       { headers: { 'Cache-Control': 'private, max-age=60' } }
     )
-  } catch (error) {
-    console.error('[/api/companies] Failed to fetch companies:', error)
-    // Fail gracefully — return empty rather than 500 so the UI degrades
-    return NextResponse.json({ companies: [], error: 'Failed to load companies' })
   }
-}
+
+  // staff: filter to assigned project IDs
+  if (assignedProjects.includes('*')) {
+    return NextResponse.json(
+      { companies: allCompanies },
+      { headers: { 'Cache-Control': 'private, max-age=60' } }
+    )
+  }
+
+  const scoped = allCompanies.filter(c => assignedProjects.includes(c.id))
+  return NextResponse.json(
+    { companies: scoped },
+    { headers: { 'Cache-Control': 'private, max-age=60' } }
+  )
+})

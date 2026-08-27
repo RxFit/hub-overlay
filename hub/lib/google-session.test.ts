@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { NextRequest } from 'next/server'
+import { NextRequest } from 'next/server'
 import {
   mapGoogleErrorToStatus,
   googleApiErrorResponse,
   googleWriteErrorResponse,
+  googleRouteCtx,
   isApiNotEnabledError,
   extractApiActivationUrl,
   resolveGoogleAuth,
@@ -12,6 +13,13 @@ import {
 
 const { getTokenMock } = vi.hoisted(() => ({ getTokenMock: vi.fn() }))
 vi.mock('next-auth/jwt', () => ({ getToken: getTokenMock }))
+// Mocked file-wide so the fault-wiring suite can assert every branch reports.
+vi.mock('./fault-report', () => ({ reportFault: vi.fn() }))
+import { reportFault } from './fault-report'
+const reportMock = vi.mocked(reportFault)
+
+/** The ctx every route call site now supplies (built via googleRouteCtx). */
+const CTX = { requestId: '123e4567-e89b-42d3-a456-426614174000', route: '/api/google/test', method: 'GET' }
 
 /* P1-2: an expired/revoked Google session must surface as 401 (so the client
    re-auths), transient upstream failures as 502, never an opaque 500. */
@@ -52,6 +60,7 @@ describe('googleWriteErrorResponse', () => {
     const res = googleWriteErrorResponse(
       new Error('Google API error 403: Request had insufficient authentication scopes.'),
       'Google Docs',
+      CTX,
     )
     expect(res.status).toBe(403)
     const body = await res.json()
@@ -61,19 +70,23 @@ describe('googleWriteErrorResponse', () => {
 
   it('does NOT tag a 403 that lacks a scope/permission reason (falls through to generic mapping)', async () => {
     // A bare 403 with no insufficient/permission/scope wording is not a scope
-    // denial — it must not become MISSING_SCOPE. (Generic mapper folds Google
-    // 403 → 401 reauth; the key assertion is that it's not MISSING_SCOPE.)
-    const res = googleWriteErrorResponse(new Error('Google API error 403: rateLimitExceeded'), 'Google Sheets')
+    // denial — it must not become MISSING_SCOPE. (Generic mapper classifies
+    // the quota 403 as a retryable 502; the key assertion is that it's not
+    // MISSING_SCOPE.)
+    const res = googleWriteErrorResponse(new Error('Google API error 403: rateLimitExceeded'), 'Google Sheets', CTX)
+    expect(res.status).toBe(502)
     const body = await res.json()
-    expect(body.code).toBeUndefined()
+    expect(body.code).not.toBe('MISSING_SCOPE')
+    expect(body.code).toBe('rate_limited')
   })
 
-  it('passes non-403 failures straight through to the generic mapper', async () => {
-    const res = googleWriteErrorResponse(new Error('Google API error 404: not found'), 'Google Docs')
+  it('passes non-403 failures straight through to the generic mapper — status kept, raw message not', async () => {
+    const res = googleWriteErrorResponse(new Error('Google API error 404: not found'), 'Google Docs', CTX)
     expect(res.status).toBe(404)
     const body = await res.json()
-    expect(body.code).toBeUndefined()
-    expect(body.error).toBe('Google API error 404: not found')
+    expect(body.code).toBe('upstream_4xx')
+    // The former leak: the raw upstream message shipped to the browser.
+    expect(body.error).toBe('An upstream service rejected the request.')
   })
 })
 
@@ -94,7 +107,7 @@ describe('API_NOT_ENABLED classification', () => {
   )
 
   it('write mapper returns 403 API_NOT_ENABLED (never MISSING_SCOPE) with the activation link', async () => {
-    const res = googleWriteErrorResponse(serviceDisabled, 'Google Analytics')
+    const res = googleWriteErrorResponse(serviceDisabled, 'Google Analytics', CTX)
     expect(res.status).toBe(403)
     const body = await res.json()
     expect(body.code).toBe('API_NOT_ENABLED')
@@ -107,7 +120,7 @@ describe('API_NOT_ENABLED classification', () => {
   })
 
   it('write mapper classifies the legacy accessNotConfigured reason the same way', async () => {
-    const res = googleWriteErrorResponse(accessNotConfigured, 'Google Search Console')
+    const res = googleWriteErrorResponse(accessNotConfigured, 'Google Search Console', CTX)
     const body = await res.json()
     expect(res.status).toBe(403)
     expect(body.code).toBe('API_NOT_ENABLED')
@@ -116,7 +129,7 @@ describe('API_NOT_ENABLED classification', () => {
   it('generic mapper returns 403 API_NOT_ENABLED instead of a reauth 401', async () => {
     // Every consumer hook answers a reauth 401 with an automatic
     // signIn('google') — for a disabled API that would loop the login screen.
-    const res = googleApiErrorResponse(serviceDisabled)
+    const res = googleApiErrorResponse(serviceDisabled, CTX)
     expect(res.status).toBe(403)
     const body = await res.json()
     expect(body.code).toBe('API_NOT_ENABLED')
@@ -127,6 +140,7 @@ describe('API_NOT_ENABLED classification', () => {
     const res = googleWriteErrorResponse(
       new Error('Google API error 403: Request had insufficient authentication scopes.'),
       'Google Docs',
+      CTX,
     )
     const body = await res.json()
     expect(body.code).toBe('MISSING_SCOPE')
@@ -151,26 +165,102 @@ describe('API_NOT_ENABLED classification', () => {
 
 describe('googleApiErrorResponse', () => {
   it('returns a 401 { reauth: true } envelope for auth failures', async () => {
-    const res = googleApiErrorResponse(new Error('Token refresh failed: invalid_grant'))
+    const res = googleApiErrorResponse(new Error('Token refresh failed: invalid_grant'), CTX)
     expect(res.status).toBe(401)
     const body = await res.json()
     expect(body.reauth).toBe(true)
     expect(body.error).toMatch(/sign in again/i)
   })
 
-  it('propagates the thrown message for non-auth failures at the mapped status', async () => {
-    const res = googleApiErrorResponse(new Error('Google API error 404: event not found'))
+  it('keeps the mapped status for non-auth failures but never ships the raw message', async () => {
+    const res = googleApiErrorResponse(new Error('Google API error 404: event not found'), CTX)
     expect(res.status).toBe(404)
     const body = await res.json()
-    expect(body.error).toBe('Google API error 404: event not found')
+    // The former `{ error: message }` fallback leaked upstream text (which can
+    // embed emails and tokens). The client now gets the fixed per-code text;
+    // the detail lives in the reported fault.
+    expect(body.error).toBe('An upstream service rejected the request.')
+    expect(body.code).toBe('upstream_4xx')
+    expect(body.instance).toMatch(/^HUB-/)
+    expect(res.headers.get('x-hub-fault-id')).toMatch(/^HUB-/)
+    expect(res.headers.get('x-hub-request-id')).toBe(CTX.requestId)
     expect(body.reauth).toBeUndefined()
   })
 
   it('handles non-Error throwables with a generic 500', async () => {
-    const res = googleApiErrorResponse('something odd')
+    const res = googleApiErrorResponse('something odd', CTX)
     expect(res.status).toBe(500)
     const body = await res.json()
-    expect(body.error).toBe('Google API error')
+    expect(body.error).toBe('Something went wrong. Please try again.')
+  })
+})
+
+/* Every branch of the mapper family now logs and reports a fault — this one
+   function was the repo's largest silent-failure cluster (31 call sites, zero
+   log lines). The RESPONSE bodies for the classified branches are asserted
+   unchanged above; here we assert the reporting itself. */
+describe('fault wiring (ERROR_REPORTING §3 Layer 3)', () => {
+  beforeEach(() => {
+    reportMock.mockClear()
+  })
+
+  it('googleRouteCtx honors a middleware-validated header and mints otherwise', () => {
+    const withHeader = new NextRequest('http://localhost/api/google/test', {
+      headers: { 'x-hub-request-id': CTX.requestId },
+      method: 'POST',
+    })
+    expect(googleRouteCtx(withHeader, '/api/google/test')).toEqual({
+      requestId: CTX.requestId,
+      route: '/api/google/test',
+      method: 'POST',
+    })
+    const hostile = new NextRequest('http://localhost/api/google/test', {
+      headers: { 'x-hub-request-id': 'DROP TABLE users;--' },
+    })
+    expect(googleRouteCtx(hostile, '/api/google/test').requestId).toMatch(/^[0-9a-f-]{36}$/)
+  })
+
+  it.each([
+    ['Token refresh failed: invalid_grant', 'auth_reauth_required', 401],
+    ['Google API error 403: Quota exceeded for quota metric', 'rate_limited', 502],
+    ['Google API error 500: backend error', 'upstream_5xx', 502],
+    ['request timed out', 'timeout_connect', 502],
+    ['fetch failed', 'upstream_unavailable', 502],
+    ['Google API error 404: event not found', 'upstream_4xx', 404],
+  ] as const)('%s reports %s at status %i', (message, code, httpStatus) => {
+    googleApiErrorResponse(new Error(message), CTX)
+    expect(reportMock).toHaveBeenCalledTimes(1)
+    expect(reportMock.mock.calls[0][0]).toMatchObject({
+      code,
+      httpStatus,
+      requestId: CTX.requestId,
+      route: CTX.route,
+      module: 'google-session',
+      context: { provider: 'google' },
+    })
+  })
+
+  it('API_NOT_ENABLED and MISSING_SCOPE report their dedicated codes with the legacy bodies intact', async () => {
+    const disabled = new Error(
+      'Google API error 403: Analytics API has not been used in project 5738 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/x?project=5738',
+    )
+    const resA = googleApiErrorResponse(disabled, CTX)
+    expect(reportMock.mock.calls[0][0]).toMatchObject({ code: 'google_api_not_enabled', httpStatus: 403 })
+    expect((await resA.json()).code).toBe('API_NOT_ENABLED')
+
+    reportMock.mockClear()
+    const resB = googleWriteErrorResponse(
+      new Error('Google API error 403: Request had insufficient authentication scopes.'),
+      'Google Docs',
+      CTX,
+    )
+    expect(reportMock.mock.calls[0][0]).toMatchObject({ code: 'google_scope_missing', httpStatus: 403 })
+    expect((await resB.json()).code).toBe('MISSING_SCOPE')
+  })
+
+  it('reports exactly once per call on the fallback path (no double count via the write mapper)', () => {
+    googleWriteErrorResponse(new Error('Google API error 500: backend error'), 'Google Docs', CTX)
+    expect(reportMock).toHaveBeenCalledTimes(1)
   })
 })
 

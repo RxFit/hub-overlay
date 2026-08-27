@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
+import { resolveGoogleAuth, googleApiErrorResponse, googleRouteCtx } from '@/lib/google-session'
 import { clampInt } from '@/lib/num'
 import { listRecentFiles } from '@/lib/google'
 import { getTenantConfig } from '@/lib/tenant'
@@ -48,6 +48,6 @@ export async function GET(req: NextRequest) {
     const ranked = plan.rankByMyEdits ? rankByOwnActivity(files).slice(0, limit) : files
     return NextResponse.json({ files: ranked })
   } catch (error) {
-    return googleApiErrorResponse(error)
+    return googleApiErrorResponse(error, googleRouteCtx(req, '/api/google/drive'))
   }
 }

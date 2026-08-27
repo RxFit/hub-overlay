@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
+import { resolveGoogleAuth, googleApiErrorResponse, googleRouteCtx } from '@/lib/google-session'
 import { createTask, parseGmailThreadMeta, GMAIL_TRIAGE_HEADER_QS, type GmailThread } from '@/lib/google'
 import { GoogleGmailActionSchema } from '@/lib/zod-schemas'
 import { buildTaskNotes, GMAIL_THREAD_ID_RE } from '@/lib/gmail-actions'
@@ -140,6 +140,6 @@ export async function POST(req: NextRequest) {
         error: err instanceof Error ? err.message : 'unknown error',
       })
     }
-    return googleApiErrorResponse(err)
+    return googleApiErrorResponse(err, googleRouteCtx(req, '/api/google/gmail/actions'))
   }
 }

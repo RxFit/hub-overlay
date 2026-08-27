@@ -1,9 +1,10 @@
 /** @type {import('next').NextConfig} */ // v2 deploy 2026-05-29
 
 // Baseline security headers applied to every response.
-// NOTE: a strict Content-Security-Policy is intentionally omitted here — the app
-// relies on Next's inline bootstrap scripts, so CSP needs nonce wiring + runtime
-// testing before it can be enabled without breaking the page. Tracked separately.
+// NOTE: the strict Content-Security-Policy lives in middleware.ts (nonce-based,
+// per-request), NOT here — a static headers() entry cannot mint nonces. This
+// block only covers what is safe to state once for every response, including
+// the middleware-excluded paths (api/chat, api/worker, api/cron/, …).
 const securityHeaders = [
   { key: 'Strict-Transport-Security', value: 'max-age=63072000; includeSubDomains; preload' },
   { key: 'X-Frame-Options', value: 'DENY' },
@@ -16,6 +17,16 @@ const securityHeaders = [
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  experimental: {
+    // Server-only source maps (ERROR_REPORTING_2026-08-24.md §5): they live in
+    // the server bundle and are never served to browsers. Paired with
+    // NODE_OPTIONS=--enable-source-maps in the Dockerfile so production stack
+    // frames resolve to real source files — without both, the fingerprint
+    // cascade's `frames` rung degrades to message grouping. Do NOT add
+    // productionBrowserSourceMaps: Next auto-serves those .map files to anyone
+    // who appends the extension.
+    serverSourceMaps: true,
+  },
   async headers() {
     return [
       {

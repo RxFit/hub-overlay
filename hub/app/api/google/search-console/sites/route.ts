@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { resolveGoogleAuth, googleWriteErrorResponse } from '@/lib/google-session'
+import { resolveGoogleAuth, googleWriteErrorResponse, googleRouteCtx } from '@/lib/google-session'
 import { listGSCSites } from '@/lib/google/search-console'
 
 export const runtime = 'nodejs'
@@ -31,6 +31,6 @@ export async function GET(req: NextRequest) {
     const sites = await listGSCSites(auth.accessToken)
     return NextResponse.json({ sites })
   } catch (err) {
-    return googleWriteErrorResponse(err, 'Google Search Console')
+    return googleWriteErrorResponse(err, 'Google Search Console', googleRouteCtx(req, '/api/google/search-console/sites'))
   }
 }

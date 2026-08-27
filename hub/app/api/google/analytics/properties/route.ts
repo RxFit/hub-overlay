@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { resolveGoogleAuth, googleWriteErrorResponse } from '@/lib/google-session'
+import { resolveGoogleAuth, googleWriteErrorResponse, googleRouteCtx } from '@/lib/google-session'
 import { listGA4Properties } from '@/lib/google/analytics'
 
 export const runtime = 'nodejs'
@@ -35,6 +35,6 @@ export async function GET(req: NextRequest) {
     const properties = await listGA4Properties(auth.accessToken)
     return NextResponse.json({ properties })
   } catch (err) {
-    return googleWriteErrorResponse(err, 'Google Analytics')
+    return googleWriteErrorResponse(err, 'Google Analytics', googleRouteCtx(req, '/api/google/analytics/properties'))
   }
 }

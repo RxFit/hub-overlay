@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
+import { resolveGoogleAuth, googleApiErrorResponse, googleRouteCtx } from '@/lib/google-session'
 import { listChatSpaces, hydrateBotDmDisplayNames } from '@/lib/google'
 import { classifyChatSpace, isDefaultVisibleSpace, EMPTY_CHAT_SPACE_PREFERENCES } from '@/lib/chat-spaces'
 import { getChatSpacePreferences } from '@/lib/chat-space-preferences-db'
@@ -59,6 +59,6 @@ export async function GET(req: NextRequest) {
       )
     }
 
-    return googleApiErrorResponse(err)
+    return googleApiErrorResponse(err, googleRouteCtx(req, '/api/google/chat/spaces'))
   }
 }

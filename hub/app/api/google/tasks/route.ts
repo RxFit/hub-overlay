@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
+import { resolveGoogleAuth, googleApiErrorResponse, googleRouteCtx } from '@/lib/google-session'
 import { clampInt } from '@/lib/num'
 import { GoogleTaskCreateSchema } from '@/lib/zod-schemas'
 import { listTaskLists, listTasks, createTask, completeTask, uncompleteTask, updateTask, deleteTask } from '@/lib/google'
@@ -41,7 +41,7 @@ export async function GET(req: NextRequest) {
     const taskLists = await listTaskLists(accessToken)
     return NextResponse.json({ taskLists })
   } catch (error) {
-    return googleApiErrorResponse(error)
+    return googleApiErrorResponse(error, googleRouteCtx(req, '/api/google/tasks'))
   }
 }
 
@@ -170,6 +170,6 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 })
   } catch (error) {
-    return googleApiErrorResponse(error)
+    return googleApiErrorResponse(error, googleRouteCtx(req, '/api/google/tasks'))
   }
 }

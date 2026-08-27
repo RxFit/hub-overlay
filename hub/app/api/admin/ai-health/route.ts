@@ -25,9 +25,9 @@ export const runtime = 'nodejs'
  * computed in JS — single-tenant volumes are small and the sink caps writes at
  * ~2 rows/request, so fetching the window is cheap.
  *
- * NOTE: `event_log` has no index on (event_type, created_at); at current
- * volumes a seq scan over ≤30 days of rows (see pruneOldEventLogs' retention)
- * is fine. If volumes grow, add an index in a future migration.
+ * NOTE: the (event_type, created_at) index this read wants EXISTS —
+ * `event_log_type_created_idx`, lib/schema.ts — so the window query is
+ * index-served. (An earlier version of this comment claimed it was missing.)
  */
 
 const WINDOW_MS: Record<string, number> = {
