@@ -24,6 +24,7 @@ import type { FaultCode } from './fault-codes'
 import { reportFault } from './fault-report'
 import { createLogger } from './logger'
 import { safeRequestId } from './request-id'
+import { parseTraceparent, gcpTraceFields, type TraceContext } from './trace-context'
 
 /**
  * Map a thrown Google REST error message to the HTTP status the Hub should
@@ -127,6 +128,9 @@ export interface GoogleFaultCtx {
   /** Route PATTERN ('/api/google/gmail'), never a concrete path. */
   route: string
   method: string
+  /** Cloud Run's traceparent, parsed — carried so the fault line and its log
+   *  line nest under the request log like withFault's do. */
+  trace?: TraceContext | null
 }
 
 /** The one-line ctx builder for route call sites. On middleware-matched paths
@@ -137,6 +141,7 @@ export function googleRouteCtx(req: NextRequest | Request, route: string): Googl
     requestId: safeRequestId(req.headers.get('x-hub-request-id')),
     route,
     method: req.method,
+    trace: parseTraceparent(req.headers.get('traceparent')),
   }
 }
 
@@ -164,7 +169,7 @@ function faultCodeForGoogleError(status: number, message: string): FaultCode | u
 }
 
 /** Severity decides the log level — an expected reauth is not an ERROR line. */
-function logGoogleFault(fault: ReturnType<typeof toFault>): void {
+function logGoogleFault(fault: ReturnType<typeof toFault>, trace: TraceContext | null): void {
   const fields = {
     requestId: fault.requestId,
     route: fault.route,
@@ -172,6 +177,7 @@ function logGoogleFault(fault: ReturnType<typeof toFault>): void {
     code: fault.code,
     faultId: fault.faultId,
     httpStatus: fault.httpStatus,
+    ...gcpTraceFields(trace),
   }
   if (fault.severity === 'expected') log.info(fields, 'google api fault (expected)')
   else if (fault.severity === 'degraded') log.warn(fields, 'google api fault (degraded)')
@@ -190,8 +196,9 @@ function reportGoogleFault(err: unknown, ctx: GoogleFaultCtx, code: FaultCode | 
     httpStatus,
     context: { provider: 'google' },
   })
-  logGoogleFault(fault)
-  reportFault(fault, { rawStack: err instanceof Error ? err.stack : null })
+  const trace = ctx.trace ?? null
+  logGoogleFault(fault, trace)
+  reportFault(fault, { rawStack: err instanceof Error ? err.stack : null, trace })
   return fault
 }
 

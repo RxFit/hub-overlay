@@ -49,7 +49,11 @@ export default async function middleware(req: NextRequest) {
   // inline check).
   if (pathname.startsWith('/admin')) {
     if (!canAccessAdminRoute(role)) {
-      return NextResponse.redirect(new URL('/', req.url))
+      // Carries the request id like every other matched response — a
+      // client-reported forbidden redirect must tie back to its server logs.
+      const forbidden = NextResponse.redirect(new URL('/', req.url))
+      forbidden.headers.set('x-hub-request-id', requestId)
+      return forbidden
     }
   }
 

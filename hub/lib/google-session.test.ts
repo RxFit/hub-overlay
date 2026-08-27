@@ -213,11 +213,24 @@ describe('fault wiring (ERROR_REPORTING §3 Layer 3)', () => {
       requestId: CTX.requestId,
       route: '/api/google/test',
       method: 'POST',
+      trace: null,
     })
     const hostile = new NextRequest('http://localhost/api/google/test', {
       headers: { 'x-hub-request-id': 'DROP TABLE users;--' },
     })
     expect(googleRouteCtx(hostile, '/api/google/test').requestId).toMatch(/^[0-9a-f-]{36}$/)
+  })
+
+  it('googleRouteCtx carries the parsed traceparent through to reportFault', () => {
+    const traced = new NextRequest('http://localhost/api/google/test', {
+      headers: { traceparent: '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01' },
+    })
+    const ctx = googleRouteCtx(traced, '/api/google/test')
+    expect(ctx.trace).toEqual({ traceId: '0af7651916cd43dd8448eb211c80319c', spanId: 'b7ad6b7169203331' })
+    googleApiErrorResponse(new Error('Google API error 500: boom'), ctx)
+    // The fault line must nest under the Cloud Run request log like
+    // withFault's do — the reporter receives the trace, not just the stack.
+    expect(reportMock.mock.calls[0][1]).toMatchObject({ trace: ctx.trace })
   })
 
   it.each([
