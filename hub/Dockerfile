@@ -25,6 +25,13 @@ RUN chmod +x docker-entrypoint.sh
 # itself mid-request.
 ENV AGY_CLI_DISABLE_AUTO_UPDATE=true
 
+# Server source maps resolve at RUNTIME (ERROR_REPORTING_2026-08-24.md §5):
+# next.config.js emits them (experimental.serverSourceMaps) and this flag makes
+# Node apply them, so production stack frames point at real source files
+# instead of .next/server/chunks/*.js. Set after the build stage — build time
+# needs no map resolution.
+ENV NODE_OPTIONS="--enable-source-maps"
+
 EXPOSE 3000
 
 # Run DB migrations before serving (see docker-entrypoint.sh); CMD is exec'd by

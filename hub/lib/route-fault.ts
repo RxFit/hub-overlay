@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
-import crypto from 'crypto'
 import { toFault, faultResponse, newFaultId, type FaultDraft } from '@/lib/fault'
 import { reportFault } from '@/lib/fault-report'
 import { createLogger } from '@/lib/logger'
+import { safeRequestId } from '@/lib/request-id'
+import { parseTraceparent, gcpTraceFields } from '@/lib/trace-context'
 
 /**
  * withFault — the route wrapper (ERROR_REPORTING_2026-08-24.md §3 Layer 3,
@@ -14,10 +15,11 @@ import { createLogger } from '@/lib/logger'
  * Duty order is FIXED and each step exists for a reason:
  *   1. requestId — the correlation spine. The header is trusted ONLY when it
  *      is exactly a UUID: on middleware-excluded paths (api/chat, api/worker,
- *      api/cron/, api/healthz, api/embeddings, api/webhooks) an external
- *      caller supplies it unvalidated — correlation poisoning plus unbounded
- *      log cardinality. Same posture as middleware deleting a
- *      client-supplied x-tenant-id.
+ *      api/cron/, api/reports/run, api/healthz, api/embeddings, api/webhooks —
+ *      the matcher in middleware.ts is the authority) an external caller
+ *      supplies it unvalidated — correlation poisoning plus unbounded log
+ *      cardinality. Same posture as middleware deleting a client-supplied
+ *      x-tenant-id.
  *   2. run the handler
  *   3. RE-THROW Next control flow FIRST — redirect() and notFound() are
  *      implemented as throws; a naive catch turns every intended navigation
@@ -50,12 +52,10 @@ import { createLogger } from '@/lib/logger'
  *  commented-out import. */
 export const FAULT_WRAPPED = Symbol.for('hub.faultWrapped')
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
-/** A header-supplied id is accepted only if it is EXACTLY a UUID; else mint. */
-export function safeRequestId(header: string | null): string {
-  return header && UUID_RE.test(header) ? header.toLowerCase() : crypto.randomUUID()
-}
+// The id contract lives in lib/request-id.ts (pure, Edge-safe) so middleware
+// applies the identical validation; re-exported because this is the seam the
+// tests and route callers know.
+export { safeRequestId }
 
 /** redirect() and notFound() throw an Error carrying a NEXT_* digest. */
 export function isNextControlFlow(err: unknown): boolean {
@@ -95,25 +95,37 @@ export async function detectErrorIn2xx(res: Response): Promise<string | null> {
   }
 }
 
-// Module-scope logger, deliberately NOT per-request: createLogger() builds a
-// fresh pino instance per call (lib/logger.ts — the Phase 2 refactor makes it
-// a child of one root). requestId/route travel as log fields instead.
+// Module-scope logger — createLogger() is a cheap child() of the one root
+// pino instance (lib/logger.ts). requestId/route/trace travel as log fields.
 const log = createLogger('route-fault')
 
 type Handler<A extends unknown[]> = (req: NextRequest, ...args: A) => Promise<Response> | Response
 
+export interface WithFaultOptions {
+  /** Opt OUT of the 2xx contract check for a handler whose PROTOCOL pairs a
+   *  2xx with an `error`/`reason`/`ok:false` body — e.g. the worker heartbeat,
+   *  where 200 + `ok:false` IS the cancellation channel. Every opt-out needs
+   *  a why-comment at the call site. Default: inspect. */
+  inspect2xx?: boolean
+}
+
 export function withFault<A extends unknown[]>(
   name: string,
   handler: Handler<A>,
+  options: WithFaultOptions = {},
 ): (req: NextRequest, ...args: A) => Promise<Response> {
+  const inspect2xx = options.inspect2xx !== false
   const wrapped = async (req: NextRequest, ...args: A): Promise<Response> => {
     const requestId = safeRequestId(req.headers.get('x-hub-request-id'))
+    // Cloud Run injects traceparent; the field this becomes is what nests the
+    // app's own lines under the request log in Logs Explorer (Layer 0).
+    const trace = parseTraceparent(req.headers.get('traceparent'))
     const isProd = process.env.NODE_ENV === 'production'
 
     try {
       const res = await handler(req, ...args)
 
-      const violation = await detectErrorIn2xx(res)
+      const violation = inspect2xx ? await detectErrorIn2xx(res) : null
       if (violation) {
         const fault = toFault(new Error(`2xx body carries ${violation}`), {
           layer: 'route',
@@ -124,8 +136,11 @@ export function withFault<A extends unknown[]>(
           requestId,
           httpStatus: res.status,
         })
-        log.error({ requestId, route: name, violation, faultId: fault.faultId }, `${name} returned a 2xx carrying a failure body`)
-        reportFault(fault)
+        log.error(
+          { requestId, route: name, violation, faultId: fault.faultId, ...gcpTraceFields(trace) },
+          `${name} returned a 2xx carrying a failure body`,
+        )
+        reportFault(fault, { trace })
         // Fail loud where a developer is watching; never break production on
         // our own assertion. The RECORD keeps httpStatus 200 (the truth — the
         // mid-contract-violation signature); only the dev response is a 500.
@@ -150,8 +165,11 @@ export function withFault<A extends unknown[]>(
           module: name,
           requestId,
         })
-        log.error({ err, requestId, route: name, faultId: fault.faultId, code: fault.code }, `${name} failed`)
-        reportFault(fault, { rawStack: err instanceof Error ? err.stack : null })
+        log.error(
+          { err, requestId, route: name, faultId: fault.faultId, code: fault.code, ...gcpTraceFields(trace) },
+          `${name} failed`,
+        )
+        reportFault(fault, { rawStack: err instanceof Error ? err.stack : null, trace })
         return faultResponse(fault, isProd)
       } catch (reporterErr) {
         // The reporter can never break a request: even with toFault or

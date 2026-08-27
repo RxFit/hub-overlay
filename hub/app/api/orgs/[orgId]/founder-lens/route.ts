@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { and, eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
+import { withFault } from '@/lib/route-fault'
 import { founderLensSections, tenants } from '@/lib/schema'
 import type { FounderLensConfig, FounderLensCustomSection } from '@/types'
 import { getTenantId } from '@/lib/tenant-context'
@@ -46,10 +47,12 @@ function buildCustomSection(section: FounderLensCustomSection): string {
   return lines.join('\n\n')
 }
 
-export async function GET(
+// withFault (spec §3 Layer 3 priority list): getServerSession/getTenantId
+// throws used to escape both handlers unrecorded.
+export const GET = withFault('orgs/[orgId]/founder-lens', async (
   req: Request,
   { params }: { params: { orgId: string } }
-) {
+) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -89,12 +92,15 @@ export async function GET(
     console.error('[founder-lens GET]', err)
     return NextResponse.json({ error: 'Failed to load Founder Lens config' }, { status: 500 })
   }
-}
+})
 
-export async function POST(
+// inspect2xx OFF: the partial-success protocol below answers 207 with an
+// `error` summary plus per-role details — a designed 2xx-with-error shape the
+// contract check would misread as a violation.
+export const POST = withFault('orgs/[orgId]/founder-lens', async (
   req: Request,
   { params }: { params: { orgId: string } }
-) {
+) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -188,4 +194,4 @@ export async function POST(
     rolesUpdated,
     updatedAt: new Date().toISOString(),
   })
-}
+}, { inspect2xx: false })

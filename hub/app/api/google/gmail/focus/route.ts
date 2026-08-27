@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
+import { resolveGoogleAuth, googleApiErrorResponse, googleRouteCtx } from '@/lib/google-session'
 import { listRecentGmailThreads } from '@/lib/google'
 import { clampInt } from '@/lib/num'
 import {
@@ -115,7 +115,7 @@ export async function GET(req: NextRequest) {
   try {
     threads = await listRecentGmailThreads(auth.accessToken, { maxResults, userEmail })
   } catch (err) {
-    return googleApiErrorResponse(err)
+    return googleApiErrorResponse(err, googleRouteCtx(req, '/api/google/gmail/focus'))
   }
 
   if (threads.length === 0) {

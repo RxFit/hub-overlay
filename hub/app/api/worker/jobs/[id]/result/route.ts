@@ -5,6 +5,7 @@ import { parseDeepReport } from '@/lib/deep-report'
 import { DEEP_TOOLS, isDeepToolId } from '@/lib/deep-runs'
 import { isMissingTableError, postResult, toolRunIdFrom, workItemRunSource } from '@/lib/dispatch-store'
 import { emit } from '@/lib/observability'
+import { withFault } from '@/lib/route-fault'
 import { recordAiRun } from '@/lib/runs'
 
 export const runtime = 'nodejs'
@@ -73,7 +74,11 @@ function sanitizeUsage(usage: unknown): Record<string, number> | undefined {
   return Object.keys(out).length > 0 ? out : undefined
 }
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+// withFault (spec §3 Layer 3 priority list): a throw past the inner catch
+// used to lose a completed desktop job's result with only a bare
+// console.error. /api/worker is middleware-excluded, so the wrapper is the
+// only spine here — it mints the request id itself.
+export const POST = withFault('worker/jobs/[id]/result', async (req: NextRequest, { params }: { params: { id: string } }) => {
   const secret = process.env.AGY_WORKER_SECRET
   if (!secret) {
     return NextResponse.json({ error: 'dispatch disabled (no worker secret configured)' }, { status: 503 })
@@ -179,9 +184,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ outcome: outcome.outcome })
   } catch (err) {
     if (isMissingTableError(err)) {
+      // Contract with the worker: 503 dispatch_unavailable is retryable-later,
+      // distinct from a 5xx defect — keep it out of the fault path.
       return NextResponse.json({ error: 'dispatch_unavailable' }, { status: 503 })
     }
-    console.error('[worker/result] failed:', err instanceof Error ? err.message : err)
-    return NextResponse.json({ error: 'result post failed' }, { status: 500 })
+    // Everything else is the wrapper's job now: log + report + problem+json,
+    // instead of the old console.error that lost the completed job's result
+    // with no record.
+    throw err
   }
-}
+})
