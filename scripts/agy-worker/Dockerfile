@@ -24,13 +24,20 @@ USER agyuser
 WORKDIR /home/agyuser
 ENV HOME=/home/agyuser
 
+# agy 1.1.17 creates per-project state below ~/.gemini/config at runtime.
+# Pre-create the parent as the non-root worker user: if Docker has to create
+# only the deeper antigravity-cli bind-mount target, it owns ~/.gemini as root
+# and every headless run fails before a conversation can start.
+RUN mkdir -p /home/agyuser/.gemini/config/projects
+
 # PINNED agy install (hardening move 2): exact artifact + IN-REPO sha512 from
 # scripts/agy/agy-version.lock, replacing curl|bash "latest" whose version was
 # Docker-cache-controlled (how 1.1.16 arrived untested and produced the first
 # dispatch `parse` failure). Changing the lock busts this layer — an upgrade
 # is now a deliberate PR (scripts/agy/update-agy-pin.sh + Phase 0 replay).
 COPY --chown=agyuser:agyuser scripts/agy/agy-version.lock /tmp/agy-version.lock
-RUN . /tmp/agy-version.lock \
+RUN sed -i 's/\r$//' /tmp/agy-version.lock \
+ && . /tmp/agy-version.lock \
  && echo "installing pinned agy ${AGY_VERSION}" \
  && mkdir -p /home/agyuser/.local/bin \
  && curl -fsSL -o /tmp/agy.tar.gz "${AGY_URL}" \
@@ -39,7 +46,7 @@ RUN . /tmp/agy-version.lock \
  && mv /tmp/antigravity /home/agyuser/.local/bin/agy \
  && chmod +x /home/agyuser/.local/bin/agy \
  && rm -f /tmp/agy.tar.gz /tmp/agy-version.lock \
- && /home/agyuser/.local/bin/agy --version || true
+ && (/home/agyuser/.local/bin/agy --version || true)
 ENV PATH="/home/agyuser/.local/bin:${PATH}"
 
 WORKDIR /home/agyuser/hub
