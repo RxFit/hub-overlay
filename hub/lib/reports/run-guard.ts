@@ -1,4 +1,4 @@
-import { and, eq, lt, sql } from 'drizzle-orm'
+import { and, eq, inArray, lt, sql } from 'drizzle-orm'
 import { db } from '../db'
 import { reportRuns } from '../schema'
 
@@ -62,6 +62,53 @@ export async function claimReportWindow(claim: ReportWindowClaim): Promise<boole
     .returning({ id: reportRuns.id })
 
   return rows.length > 0
+}
+
+/** Key for the already-claimed set. NUL-joined so no report id or date can
+ *  forge a collision with another pair. */
+export function windowKey(reportId: string, windowStart: string): string {
+  return `${reportId}\u0000${windowStart}`
+}
+
+/**
+ * Which of these (report, window) pairs are ALREADY claimed or completed.
+ *
+ * A read-only pre-check, and deliberately NOT the safety mechanism: the
+ * atomic claim above is what prevents duplicates. This exists so the runner
+ * can answer "is there anything to do this tick?" BEFORE minting a Google
+ * access token. Catch-up makes the do-nothing tick the common case — a report
+ * generated at 07:00 is re-offered every hour for the rest of the day — and
+ * without this the route would refresh OAuth on every one of them, turning a
+ * transient token-refresh failure into a 409 and a false alert about a report
+ * that was already delivered.
+ *
+ * A read failure is the caller's to interpret: proceeding is safe, because the
+ * claim still decides.
+ */
+export async function findClaimedWindows(
+  tenantId: string,
+  candidates: Array<{ reportId: string; windowStart: string }>,
+): Promise<Set<string>> {
+  if (!candidates.length) return new Set()
+
+  const rows = await db
+    .select({ reportId: reportRuns.reportId, windowStart: reportRuns.windowStart })
+    .from(reportRuns)
+    .where(and(
+      eq(reportRuns.tenantId, tenantId),
+      inArray(reportRuns.reportId, candidates.map(c => c.reportId)),
+      inArray(reportRuns.windowStart, candidates.map(c => c.windowStart)),
+    ))
+
+  // The two IN lists can cross-match (report A's window paired with report B's),
+  // so intersect against the requested pairs rather than trusting the rows.
+  const requested = new Set(candidates.map(c => windowKey(c.reportId, c.windowStart)))
+  const claimed = new Set<string>()
+  for (const row of rows) {
+    const key = windowKey(row.reportId, row.windowStart)
+    if (requested.has(key)) claimed.add(key)
+  }
+  return claimed
 }
 
 /**

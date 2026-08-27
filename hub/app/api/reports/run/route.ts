@@ -6,7 +6,14 @@ import { hubUsers, googlePrefs } from '@/lib/schema'
 import { getTenantId } from '@/lib/tenant-context'
 import { getEffectivePrefs } from '@/lib/google/prefs-db'
 import { normalizeReports, dueOrMissedReports, reportWindow, DEFAULT_REPORTS } from '@/lib/reports/config'
-import { claimReportWindow, releaseReportWindow, completeReportWindow, pruneReportRuns } from '@/lib/reports/run-guard'
+import {
+  claimReportWindow,
+  releaseReportWindow,
+  completeReportWindow,
+  pruneReportRuns,
+  findClaimedWindows,
+  windowKey,
+} from '@/lib/reports/run-guard'
 import { buildDigestMarkdown, buildReviewDeckSpec } from '@/lib/reports/digest'
 import { resolveTenantToken } from '@/lib/reports/access-token'
 import { deliverDigest } from '@/lib/reports/deliver'
@@ -112,7 +119,50 @@ export async function POST(req: NextRequest) {
     const due = dueOrMissedReports(reports, now, prefsRow?.timezone ?? undefined)
 
     if (!due.length) {
-      return NextResponse.json({ ok: true, ran: 0, results })
+      return NextResponse.json({ ok: true, ran: 0, skipped: 0, results })
+    }
+
+    // Windows are computed once here and reused for both the pre-check and the
+    // claim, so the two can never disagree about which window a report means.
+    const candidates = due.map(report => ({
+      report,
+      window: reportWindow(report.cadence, now, prefsRow?.timezone ?? undefined),
+    }))
+
+    // Skip work that is already done BEFORE minting a Google token. Catch-up
+    // makes the do-nothing tick the common case — a digest generated at 07:00
+    // is re-offered every remaining hour of the day — and resolving credentials
+    // for those would refresh OAuth needlessly and, worse, turn a transient
+    // refresh failure into a 409 that fails the workflow and alerts about a
+    // report that was already delivered. This read is an optimization only:
+    // the atomic claim below still decides, so a stale or failed read is safe.
+    let alreadyClaimed = new Set<string>()
+    try {
+      alreadyClaimed = await findClaimedWindows(
+        tenantId,
+        candidates.map(c => ({ reportId: c.report.id, windowStart: c.window.startDate })),
+      )
+    } catch (err) {
+      // Read failure → fall through and let the claim decide, rather than
+      // stalling reports on a transient query error.
+      console.warn('[reports] claimed-window pre-check failed:', err instanceof Error ? err.message : err)
+    }
+
+    const pending = candidates.filter(
+      c => !alreadyClaimed.has(windowKey(c.report.id, c.window.startDate)),
+    )
+    for (const done of candidates.filter(c => alreadyClaimed.has(windowKey(c.report.id, c.window.startDate)))) {
+      results.push({
+        reportId: done.report.id,
+        status: 'skipped',
+        reason: `already generated for window ${done.window.startDate} – ${done.window.endDate}`,
+      })
+    }
+
+    // Every due report is already done: nothing to generate, and no credential
+    // was needed to establish that.
+    if (!pending.length) {
+      return NextResponse.json({ ok: true, ran: 0, skipped: results.length, results })
     }
 
     // Admins are both the likeliest holders of the analytics scopes and the
@@ -137,9 +187,8 @@ export async function POST(req: NextRequest) {
 
     const prefs = await getEffectivePrefs(tenantId)
 
-    for (const report of due) {
+    for (const { report, window } of pending) {
       const requestId = newRequestId()
-      const window = reportWindow(report.cadence, now, prefsRow?.timezone ?? undefined)
       const notes: string[] = []
       const claim = {
         tenantId,
@@ -156,11 +205,15 @@ export async function POST(req: NextRequest) {
       try {
         claimed = await claimReportWindow(claim)
       } catch (err) {
-        // Fail CLOSED: generating without a claim is exactly the duplicate
-        // this guard exists to prevent, so a claim error skips the report.
+        // Fail CLOSED on generating (never generate unclaimed), but report it
+        // as FAILED, not skipped. 'skipped' means "already generated"; a claim
+        // that errors means the database is unreachable and NO report was
+        // produced. Labelling that as skipped would leave `ran` at 0, keep the
+        // response 200, and let the workflow stay green through an outage —
+        // precisely the silent failure this whole arc exists to remove.
         const reason = `could not claim reporting window: ${err instanceof Error ? err.message : 'error'}`
         console.error(`[reports] ${report.id} ${reason}`)
-        results.push({ reportId: report.id, status: 'skipped', reason })
+        results.push({ reportId: report.id, status: 'failed', reason })
         continue
       }
       if (!claimed) {

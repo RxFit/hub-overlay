@@ -5,6 +5,8 @@ import {
   releaseReportWindow,
   completeReportWindow,
   pruneReportRuns,
+  findClaimedWindows,
+  windowKey,
 } from '@/lib/reports/run-guard'
 
 /**
@@ -117,5 +119,36 @@ describeDb('report_runs (Postgres)', () => {
     await pruneReportRuns(365)
     const rows = await getSql()`SELECT report_id FROM report_runs`
     expect(rows.map(r => r.report_id)).toEqual(['weekly-digest'])
+  })
+
+  it('findClaimedWindows reports only genuinely claimed pairs', async () => {
+    await claimReportWindow(CLAIM)
+    await claimReportWindow({ ...CLAIM, reportId: 'monthly-review', windowStart: '2026-08-01' })
+
+    const claimed = await findClaimedWindows('rxfit', [
+      { reportId: 'weekly-digest', windowStart: '2026-08-17' },   // claimed
+      { reportId: 'monthly-review', windowStart: '2026-08-01' },  // claimed
+      { reportId: 'weekly-digest', windowStart: '2026-08-24' },   // not yet
+      // The cross-match trap: both halves exist in the table, but never as
+      // this pair. A row-trusting implementation would wrongly skip it.
+      { reportId: 'monthly-review', windowStart: '2026-08-17' },
+    ])
+
+    expect(claimed.has(windowKey('weekly-digest', '2026-08-17'))).toBe(true)
+    expect(claimed.has(windowKey('monthly-review', '2026-08-01'))).toBe(true)
+    expect(claimed.has(windowKey('weekly-digest', '2026-08-24'))).toBe(false)
+    expect(claimed.has(windowKey('monthly-review', '2026-08-17'))).toBe(false)
+  })
+
+  it('is scoped by tenant — another tenant\'s claim never masks ours', async () => {
+    await getSql()`INSERT INTO tenants (id, name, domain) VALUES ('other', 'Other', 'other.test') ON CONFLICT (id) DO NOTHING`
+    await claimReportWindow({ ...CLAIM, tenantId: 'other' })
+
+    const claimed = await findClaimedWindows('rxfit', [
+      { reportId: CLAIM.reportId, windowStart: CLAIM.windowStart },
+    ])
+    expect(claimed.size).toBe(0)
+    // …and rxfit can still claim its own.
+    expect(await claimReportWindow(CLAIM)).toBe(true)
   })
 })

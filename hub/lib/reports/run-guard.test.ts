@@ -12,8 +12,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  * Postgres; this one pins the mechanism so a refactor cannot quietly swap it.
  */
 
-const { insertMock, deleteMock, updateMock, state } = vi.hoisted(() => {
+const { insertMock, deleteMock, updateMock, selectMock, state } = vi.hoisted(() => {
   const state = {
+    selectRows: [] as Array<{ reportId: string; windowStart: string }>,
     returned: [{ id: 'row-1' }] as Array<{ id: string }>,
     onConflictTarget: null as unknown,
     inserted: null as unknown,
@@ -50,17 +51,22 @@ const { insertMock, deleteMock, updateMock, state } = vi.hoisted(() => {
         return { where: async () => {} }
       },
     })),
+    selectMock: vi.fn(() => ({
+      from: () => ({ where: async () => state.selectRows }),
+    })),
   }
 })
 
 vi.mock('../db', () => ({
-  db: { insert: insertMock, delete: deleteMock, update: updateMock },
+  db: { insert: insertMock, delete: deleteMock, update: updateMock, select: selectMock },
 }))
 
 import {
   claimReportWindow,
   releaseReportWindow,
   completeReportWindow,
+  findClaimedWindows,
+  windowKey,
 } from './run-guard'
 
 const claim = {
@@ -77,6 +83,8 @@ beforeEach(() => {
   state.deleteWhereCalled = false
   state.updateSet = null
   state.throwOnInsert = false
+  state.selectRows = []
+  selectMock.mockClear()
   insertMock.mockClear()
   deleteMock.mockClear()
   updateMock.mockClear()
@@ -104,8 +112,9 @@ describe('claimReportWindow', () => {
   })
 
   it('propagates a database failure rather than reporting a false claim', async () => {
-    // The route treats a throw as "skip": generating without a claim is the
-    // duplicate this guard prevents, so failing closed is the correct posture.
+    // The route fails CLOSED on a throw (never generates unclaimed) but records
+    // it as FAILED, not skipped — a claim error means the database is down and
+    // no report was produced, which must reach the workflow's failure alert.
     state.throwOnInsert = true
     await expect(claimReportWindow(claim)).rejects.toThrow('db down')
   })
@@ -143,5 +152,34 @@ describe('completeReportWindow', () => {
       throw new Error('db down')
     })
     await expect(completeReportWindow(claim, 'doc-123')).resolves.toBeUndefined()
+  })
+})
+
+describe('findClaimedWindows', () => {
+  it('returns the pairs that are already claimed', async () => {
+    state.selectRows = [{ reportId: 'weekly-digest', windowStart: '2026-08-17' }]
+    const claimed = await findClaimedWindows('rxfit', [
+      { reportId: 'weekly-digest', windowStart: '2026-08-17' },
+      { reportId: 'monthly-review', windowStart: '2026-08-01' },
+    ])
+    expect(claimed.has(windowKey('weekly-digest', '2026-08-17'))).toBe(true)
+    expect(claimed.has(windowKey('monthly-review', '2026-08-01'))).toBe(false)
+  })
+
+  it('does not query at all for an empty candidate list', async () => {
+    expect((await findClaimedWindows('rxfit', [])).size).toBe(0)
+    expect(selectMock).not.toHaveBeenCalled()
+  })
+
+  it('ignores a CROSS-MATCHED row the two IN lists can return', async () => {
+    // The query filters report_id IN (…) AND window_start IN (…), so it can
+    // return report A paired with report B's window. Treating that as claimed
+    // would silently skip a report that was never generated.
+    state.selectRows = [{ reportId: 'weekly-digest', windowStart: '2026-08-01' }]
+    const claimed = await findClaimedWindows('rxfit', [
+      { reportId: 'weekly-digest', windowStart: '2026-08-17' },
+      { reportId: 'monthly-review', windowStart: '2026-08-01' },
+    ])
+    expect(claimed.size).toBe(0)
   })
 })
