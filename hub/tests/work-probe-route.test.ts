@@ -37,7 +37,7 @@ vi.mock('@/lib/agy-dispatch', () => dispatchMock)
 vi.mock('@/lib/observability', () => ({ emit: vi.fn() }))
 
 import { POST, GET } from '@/app/api/admin/work-probe/route'
-import { containsFreshTimestamp } from '@/lib/work-probe'
+import { containsFreshTimestamp, DEFAULT_PROBE_URL } from '@/lib/work-probe'
 
 function post(body: unknown = {}): NextRequest {
   return new NextRequest('http://localhost:3000/api/admin/work-probe', {
@@ -89,6 +89,7 @@ describe('POST /api/admin/work-probe', () => {
     const input = storeMock.enqueueJob.mock.calls[0][0]
     expect(input.prompt).toContain(body.marker)
     expect(input.prompt).toContain('fetch')
+    expect(input.meta.url).toBe(DEFAULT_PROBE_URL)
   })
 
   it('reports worker freshness as advisory context, never as a gate', async () => {
@@ -210,6 +211,10 @@ describe('containsFreshTimestamp', () => {
     expect(containsFreshTimestamp('at 2026-08-23T17:55:00Z ok', now, 20 * 60_000)).toBe(true)
     // worldtimeapi's own shape: fractional seconds + numeric offset.
     expect(containsFreshTimestamp('"datetime":"2026-08-23T12:59:30.123456-05:00"', now, 20 * 60_000)).toBe(true)
+    // timeapi.io emits seven fractional digits and no suffix for its UTC zone.
+    expect(containsFreshTimestamp('2026-08-23T18:00:00.1234567', now, 20 * 60_000)).toBe(true)
+    // The default Postman Echo endpoint returns a short RFC-1123 body.
+    expect(containsFreshTimestamp('Sun, 23 Aug 2026 18:00:00 GMT', now, 20 * 60_000)).toBe(true)
   })
 
   it('rejects stale, future-far, and absent timestamps', () => {
