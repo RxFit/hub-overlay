@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
-import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
+import { resolveGoogleAuth, googleApiErrorResponse, googleRouteCtx } from '@/lib/google-session'
 import { clampInt } from '@/lib/num'
 import { GoogleCalendarCreateSchema } from '@/lib/zod-schemas'
 import { authOptions } from '@/lib/auth'
@@ -62,7 +62,7 @@ export async function GET(req: NextRequest) {
     }
     return NextResponse.json({ events })
   } catch (error) {
-    return googleApiErrorResponse(error)
+    return googleApiErrorResponse(error, googleRouteCtx(req, '/api/google/calendar'))
   }
 }
 
@@ -96,7 +96,7 @@ export async function POST(req: NextRequest) {
     const event = await createCalendarEvent(accessToken, body)
     return NextResponse.json({ event })
   } catch (error) {
-    return googleApiErrorResponse(error)
+    return googleApiErrorResponse(error, googleRouteCtx(req, '/api/google/calendar'))
   }
 }
 
@@ -157,7 +157,7 @@ export async function PATCH(req: NextRequest) {
     })
     return NextResponse.json({ event })
   } catch (error) {
-    return googleApiErrorResponse(error)
+    return googleApiErrorResponse(error, googleRouteCtx(req, '/api/google/calendar'))
   }
 }
 
@@ -186,6 +186,6 @@ export async function DELETE(req: NextRequest) {
     await deleteCalendarEvent(accessToken, body.eventId, body.calendarId)
     return NextResponse.json({ success: true })
   } catch (error) {
-    return googleApiErrorResponse(error)
+    return googleApiErrorResponse(error, googleRouteCtx(req, '/api/google/calendar'))
   }
 }

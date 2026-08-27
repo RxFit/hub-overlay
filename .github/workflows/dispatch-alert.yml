@@ -1,6 +1,11 @@
-name: Dispatch alert tick
+name: Hourly cron tick
 
-# Hourly push path for the agy dispatch system (hardening move 1,
+# The Hub's hourly cron carrier. Two independent ticks, one schedule.
+# (Filename stays dispatch-alert.yml so the Actions run history is continuous;
+# the workflow grew a second job rather than being replaced.)
+#
+# ── Tick 1: dispatch alerting ──
+# Push path for the agy dispatch system (hardening move 1,
 # hub/docs/architecture/HARDENING_REVIEW_2026-08-20.md): calls
 # POST /api/cron/dispatch-alert, which evaluates worker liveness, agy failure
 # streaks, and allotment collapse from the Hub's own ledgers, and posts to
@@ -13,9 +18,27 @@ name: Dispatch alert tick
 # GitHub notifies the repo owner about a failed scheduled run, so a completely
 # dark Hub still reaches the operator without any extra alerting infra.
 #
+# ── Tick 2: scheduled reports ──
+# Calls POST /api/reports/run, which asks every configured report "are you due
+# now, or were you due earlier today and not yet generated?" and builds only
+# those (hub/docs/runbooks/scheduled-reports.md). The catch-up half matters
+# because THIS trigger is unreliable: GitHub dropped hourly firings for 2–10
+# hours on 2026-08-27, and the runner's old strict "is this the due hour?"
+# question lost the digest entirely whenever its hour was skipped. A per-window
+# claim (lib/reports/run-guard.ts) keeps a caught-up report generating exactly
+# once. It runs here rather than from a
+# Cloud Scheduler job because this workflow already fires hourly and already
+# holds CRON_SECRET — no new GCP infrastructure, and the same loud-by-default
+# failure posture.
+#
+# Both ticks target the .run.app service URL directly, never the
+# Cloudflare-fronted custom domain (deploy.yml documents that domain's CI-curl
+# challenge as a false-failure class), and both fail the run on any non-2xx so
+# GitHub's failure email carries the signal.
+#
 # One-time setup: add repository secret CRON_SECRET with the SAME value the
 # Cloud Run service holds (Settings → Secrets and variables → Actions). The
-# probe deliberately does NOT hit ?probe=1 — the tick stays free of allotment
+# alert tick deliberately does NOT hit ?probe=1 — it stays free of allotment
 # spend.
 
 on:
@@ -24,6 +47,11 @@ on:
     # the most delayed. GitHub crons are best-effort (minutes of slop), which
     # is fine for an hourly alerting cadence.
     - cron: '7 * * * *'
+  # Manual runs are safe to dispatch at any hour: the runner claims each
+  # (tenant, report, window) in report_runs before generating, so a dispatch
+  # inside a due hour skips an already-generated report instead of building a
+  # duplicate Doc and sending a duplicate email. Claim losers report
+  # status:"skipped" in the response.
   workflow_dispatch: {}
 
 concurrency:
@@ -79,4 +107,72 @@ jobs:
             SUMMARY=$(jq -r '[.alerts[].kind] | join(", ")' /tmp/alert.json)
             echo "::error::Dispatch alert conditions active ($SUMMARY) and Chat delivery was not possible (delivery=$DELIVERY). This failure email is the alert — see the JSON above for details."
             exit 1
+          fi
+
+      # Runs even when the alert step failed (if: always()): the two ticks are
+      # independent, and a dispatch alert must never suppress report
+      # generation — nor the reverse. Each fails the job on its own terms.
+      - name: Call the scheduled-reports runner
+        if: always()
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::CRON_SECRET repository secret is not set — scheduled reports cannot run."
+            exit 1
+          fi
+
+          # --max-time 300 matches the Cloud Run platform ceiling
+          # (deploy.yml --timeout=300): ONE firing may build several reports,
+          # each making multiple Google API calls, and a monthly review deck is
+          # the slowest artifact the Hub produces. A shorter bound would cut a
+          # deck off mid-generation and report a false failure.
+          CODE=$(curl -s -o /tmp/reports.json -w '%{http_code}' --max-time 300 \
+            -X POST -H "x-cron-secret: $CRON_SECRET" \
+            "https://hub-11747747730.us-central1.run.app/api/reports/run" || echo 000)
+          echo "POST /api/reports/run -> HTTP $CODE"
+          cat /tmp/reports.json 2>/dev/null || true
+          echo
+
+          # Fail loudly on anything outside 2xx. Each code names a real,
+          # actionable condition: 000 unreachable, 401 secret mismatch, 403
+          # the middleware exclusion regressed (a cron caller holds no session
+          # cookie), 503 CRON_SECRET unset on the service, 409 no admin has a
+          # stored Google refresh token covering the analytics scopes, 500 the
+          # run itself threw. Most firings are a quiet {"ok":true,"ran":0}.
+          case "$CODE" in
+            2??) ;;
+            *)
+              echo "::error::reports runner returned HTTP $CODE — no scheduled digest ran this hour. 401=CRON_SECRET mismatch, 403=middleware exclusion regressed, 503=CRON_SECRET unset on the service, 409=no usable Google credential, 000=unreachable. This failure email is the alert."
+              exit 1
+              ;;
+          esac
+
+          # `ran` counts reports ATTEMPTED this tick; `skipped` counts windows a
+          # previous tick already generated (the common case now that the runner
+          # catches up on missed hours — see lib/reports/run-guard.ts).
+          RAN=$(jq -r '.ran // 0' /tmp/reports.json)
+          SKIPPED=$(jq -r '.skipped // 0' /tmp/reports.json)
+          echo "reports attempted: $RAN (already-generated windows skipped: $SKIPPED)"
+
+          # A per-report failure returns HTTP 200 with the reason inside, so it
+          # would otherwise be invisible. Two tiers:
+          #
+          #   ALL due reports failed  -> fail the run. Nothing was generated or
+          #     delivered this window, which IS "reports are broken" — and with
+          #     the seeded schedules (one weekly digest, one monthly deck) a
+          #     single due report is the NORMAL shape, so treating this as a
+          #     warning would recreate exactly the silent-report failure this
+          #     change exists to eliminate.
+          #   SOME failed -> warning. A digest that did generate should not
+          #     paint the run red, and the failure is still on the record.
+          FAILED=$(jq -r '[.results[]? | select(.status=="failed")] | length' /tmp/reports.json)
+          if [ "$FAILED" != "0" ]; then
+            DETAIL=$(jq -r '[.results[]? | select(.status=="failed") | "\(.reportId): \(.reason // "unknown")"] | join("; ")' /tmp/reports.json)
+            if [ "$RAN" != "0" ] && [ "$FAILED" = "$RAN" ]; then
+              echo "::error::all $RAN due scheduled report(s) failed to generate — $DETAIL. No digest was produced or delivered this window; this failure email is the alert."
+              exit 1
+            fi
+            echo "::warning::$FAILED of $RAN scheduled report(s) failed to generate — $DETAIL"
           fi

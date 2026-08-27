@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
+import { resolveGoogleAuth, googleApiErrorResponse, googleRouteCtx } from '@/lib/google-session'
 import { listSpaceMembers } from '@/lib/google'
 
 export const runtime = 'nodejs'
@@ -45,6 +45,6 @@ export async function GET(req: NextRequest) {
       )
     }
 
-    return googleApiErrorResponse(err)
+    return googleApiErrorResponse(err, googleRouteCtx(req, '/api/google/chat/members'))
   }
 }

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { resolveGoogleAuth, googleWriteErrorResponse } from '@/lib/google-session'
+import { resolveGoogleAuth, googleWriteErrorResponse, googleRouteCtx } from '@/lib/google-session'
 import { runGA4Report, type GA4ReportRequest } from '@/lib/google/analytics'
 import { getEffectivePrefs } from '@/lib/google/prefs-db'
 
@@ -80,6 +80,6 @@ export async function POST(req: NextRequest) {
     if (message.startsWith('GA4 report rejected before sending')) {
       return NextResponse.json({ error: message, code: 'INVALID_FIELDS' }, { status: 400 })
     }
-    return googleWriteErrorResponse(err, 'Google Analytics')
+    return googleWriteErrorResponse(err, 'Google Analytics', googleRouteCtx(req, '/api/google/analytics/report'))
   }
 }

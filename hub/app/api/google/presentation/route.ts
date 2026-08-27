@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { resolveGoogleAuth, googleWriteErrorResponse } from '@/lib/google-session'
+import { resolveGoogleAuth, googleWriteErrorResponse, googleRouteCtx } from '@/lib/google-session'
 import { createDeckFromSpec } from '@/lib/google/slides'
 import { deckSpecFromMarkdown, normalizeDeckSpec } from '@/lib/google/deck-spec'
 import { resolveArtifactFolder } from '@/lib/google/artifact-folder'
@@ -98,6 +98,6 @@ export async function POST(req: NextRequest) {
         error: err instanceof Error ? err.message : 'unknown error',
       })
     }
-    return googleWriteErrorResponse(err, 'Google Slides')
+    return googleWriteErrorResponse(err, 'Google Slides', googleRouteCtx(req, '/api/google/presentation'))
   }
 }

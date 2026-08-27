@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
+import { resolveGoogleAuth, googleApiErrorResponse, googleRouteCtx } from '@/lib/google-session'
 import {
   getGmailHeader as getHeader,
   parseGmailThreadMeta as parseThreadMeta,
@@ -113,7 +113,7 @@ export async function GET(req: NextRequest) {
       nextPageToken: list.nextPageToken ?? null,
     })
   } catch (err) {
-    return googleApiErrorResponse(err)
+    return googleApiErrorResponse(err, googleRouteCtx(req, '/api/google/gmail'))
   }
 }
 
@@ -168,7 +168,7 @@ async function sendExistingDraft(
   } catch (err) {
     const message = err instanceof Error ? err.message : 'unknown error'
     if (isAiAction) await recordAiAction({ ...auditBase, status: 'failed', error: message })
-    if (message.includes('401') || message.includes('403')) return googleApiErrorResponse(err)
+    if (message.includes('401') || message.includes('403')) return googleApiErrorResponse(err, googleRouteCtx(req, '/api/google/gmail'))
     return NextResponse.json(
       {
         error: `Could not send the email. It is saved in your Gmail drafts — nothing was lost. (${message})`,
@@ -321,7 +321,7 @@ export async function POST(req: NextRequest) {
         error: err instanceof Error ? err.message : 'unknown error',
       })
     }
-    return googleApiErrorResponse(err)
+    return googleApiErrorResponse(err, googleRouteCtx(req, '/api/google/gmail'))
   }
 }
 

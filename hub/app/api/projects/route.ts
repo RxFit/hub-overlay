@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { getCompanies, getProjects } from '@/lib/paperclip'
+import { withFault } from '@/lib/route-fault'
 import type { Project } from '@/types'
 
 export const runtime = 'nodejs'
@@ -17,7 +18,12 @@ export const runtime = 'nodejs'
  *  - staff              → projects from assignedProjects companies only
  *  - onboarding         → [] (empty)
  */
-export async function GET() {
+// withFault, and NO swallowing catch (spec Layer 9 #1): the 200 { projects:
+// [], error } shape read as success to React Query, so an outage rendered as
+// an empty project list. A throw is now a reported fault and a real error
+// status; useProjects already degrades to [] on !res.ok. The PER-COMPANY
+// skip below stays — one failing company should not empty the whole list.
+export const GET = withFault('projects', async () => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -32,43 +38,38 @@ export async function GET() {
     return NextResponse.json({ projects: [] })
   }
 
-  try {
-    let companies = await getCompanies()
+  let companies = await getCompanies()
 
-    // Staff: scope to assigned company IDs
-    if (role === 'staff' && !assignedProjects.includes('*')) {
-      companies = companies.filter(c => assignedProjects.includes(c.id))
-    }
-
-    // Fetch projects from all accessible companies in parallel
-    const results = await Promise.all(
-      companies.map(async (company) => {
-        try {
-          const projects = await getProjects(company.id)
-          // Enrich each project with its parent company name
-          return projects.map(p => ({
-            ...p,
-            companyName: company.name,
-          }))
-        } catch {
-          // If a company's projects endpoint fails, skip it gracefully
-          console.warn(`[/api/projects] Failed to fetch projects for ${company.name}`)
-          return []
-        }
-      })
-    )
-
-    // Flatten and sort by updatedAt descending (most recent first)
-    const allProjects: Project[] = results
-      .flat()
-      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-
-    return NextResponse.json(
-      { projects: allProjects },
-      { headers: { 'Cache-Control': 'private, max-age=30' } }
-    )
-  } catch (error) {
-    console.error('[/api/projects] Failed to fetch projects:', error)
-    return NextResponse.json({ projects: [], error: 'Failed to load projects' })
+  // Staff: scope to assigned company IDs
+  if (role === 'staff' && !assignedProjects.includes('*')) {
+    companies = companies.filter(c => assignedProjects.includes(c.id))
   }
-}
+
+  // Fetch projects from all accessible companies in parallel
+  const results = await Promise.all(
+    companies.map(async (company) => {
+      try {
+        const projects = await getProjects(company.id)
+        // Enrich each project with its parent company name
+        return projects.map(p => ({
+          ...p,
+          companyName: company.name,
+        }))
+      } catch {
+        // If a company's projects endpoint fails, skip it gracefully
+        console.warn(`[/api/projects] Failed to fetch projects for ${company.name}`)
+        return []
+      }
+    })
+  )
+
+  // Flatten and sort by updatedAt descending (most recent first)
+  const allProjects: Project[] = results
+    .flat()
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+
+  return NextResponse.json(
+    { projects: allProjects },
+    { headers: { 'Cache-Control': 'private, max-age=30' } }
+  )
+})

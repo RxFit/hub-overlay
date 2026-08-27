@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { resolveGoogleAuth, googleApiErrorResponse } from '@/lib/google-session'
+import { resolveGoogleAuth, googleApiErrorResponse, googleRouteCtx } from '@/lib/google-session'
 import { listChatMessagesPage, sendChatMessage, updateChatMessage, deleteChatMessage } from '@/lib/google'
 import { GoogleChatSendSchema, GoogleChatEditSchema, GoogleChatDeleteSchema } from '@/lib/zod-schemas'
 import { requireAiGate, AI_INTENT_HEADER, GATE_TOKEN_HEADER } from '@/lib/requireGate'
@@ -52,7 +52,7 @@ export async function GET(req: NextRequest) {
       )
     }
 
-    return googleApiErrorResponse(err)
+    return googleApiErrorResponse(err, googleRouteCtx(req, '/api/google/chat/messages'))
   }
 }
 
@@ -134,7 +134,7 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error'
     console.error('[api/google/chat/messages POST]', msg)
-    return googleApiErrorResponse(err)
+    return googleApiErrorResponse(err, googleRouteCtx(req, '/api/google/chat/messages'))
   }
 }
 
@@ -144,7 +144,7 @@ export async function POST(req: NextRequest) {
  * chat scopes, so "not your message" is the case a signed-in user actually
  * hits. All other failures go through the generic mapper.
  */
-function mapModifyError(err: unknown, verb: 'edit' | 'delete') {
+function mapModifyError(req: NextRequest, err: unknown, verb: 'edit' | 'delete') {
   const msg = err instanceof Error ? err.message : 'Unknown error'
   console.error(`[api/google/chat/messages ${verb.toUpperCase()}]`, msg)
   if (msg.includes('403') || msg.includes('PERMISSION_DENIED')) {
@@ -153,7 +153,7 @@ function mapModifyError(err: unknown, verb: 'edit' | 'delete') {
       { status: 403 }
     )
   }
-  return googleApiErrorResponse(err)
+  return googleApiErrorResponse(err, googleRouteCtx(req, '/api/google/chat/messages'))
 }
 
 /** True when the request carries the AI marker — edit/delete are MANUAL-only
@@ -188,7 +188,7 @@ export async function PATCH(req: NextRequest) {
     )
     return NextResponse.json({ message })
   } catch (err) {
-    return mapModifyError(err, 'edit')
+    return mapModifyError(req, err, 'edit')
   }
 }
 
@@ -217,6 +217,6 @@ export async function DELETE(req: NextRequest) {
     await deleteChatMessage(auth.accessToken, parsed.data.messageName)
     return NextResponse.json({ ok: true })
   } catch (err) {
-    return mapModifyError(err, 'delete')
+    return mapModifyError(req, err, 'delete')
   }
 }

@@ -2,6 +2,7 @@ import { getToken } from 'next-auth/jwt'
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { canAccessAdminRoute } from '@/lib/roles'
+import { safeRequestId } from '@/lib/request-id'
 
 /**
  * Auth middleware (manual token check instead of withAuth).
@@ -15,15 +16,30 @@ export default async function middleware(req: NextRequest) {
   const pathname = req.nextUrl.pathname
   const isApi = pathname.startsWith('/api')
 
+  // The correlation spine (ERROR_REPORTING_2026-08-24.md Layer 0): one id per
+  // request, minted here where middleware runs. An inbound header is honored
+  // only when it is exactly a UUID — same posture as the x-tenant-id strip
+  // below — so downstream handlers on matched paths can trust it verbatim.
+  // Excluded paths (api/chat, api/worker, api/cron/, …) never pass through
+  // here; withFault mints its own id there.
+  const requestId = safeRequestId(req.headers.get('x-hub-request-id'))
+
   const token = await getToken({ req })
 
-  // Unauthenticated → 401 for API, redirect to /login for pages
+  // Unauthenticated → 401 for API, redirect to /login for pages. These early
+  // returns still carry the request id: the dead-session scenario is exactly
+  // the one most worth correlating from a client report.
   if (!token) {
     if (isApi) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401, headers: { 'x-hub-request-id': requestId } },
+      )
     }
     const loginUrl = new URL('/login', req.url)
-    return NextResponse.redirect(loginUrl)
+    const redirect = NextResponse.redirect(loginUrl)
+    redirect.headers.set('x-hub-request-id', requestId)
+    return redirect
   }
 
   const role = token.role as string | undefined
@@ -33,7 +49,11 @@ export default async function middleware(req: NextRequest) {
   // inline check).
   if (pathname.startsWith('/admin')) {
     if (!canAccessAdminRoute(role)) {
-      return NextResponse.redirect(new URL('/', req.url))
+      // Carries the request id like every other matched response — a
+      // client-reported forbidden redirect must tie back to its server logs.
+      const forbidden = NextResponse.redirect(new URL('/', req.url))
+      forbidden.headers.set('x-hub-request-id', requestId)
+      return forbidden
     }
   }
 
@@ -66,6 +86,10 @@ export default async function middleware(req: NextRequest) {
   // set tenant identity from the authenticated session / hostname here — never
   // from an inbound client header.
   requestHeaders.delete('x-tenant-id')
+  // Overwrites any inbound value: after this line the header is trustworthy
+  // on every middleware-matched path (safeRequestId above already rejected
+  // anything that is not exactly a UUID).
+  requestHeaders.set('x-hub-request-id', requestId)
   requestHeaders.set('x-nonce', nonce)
   requestHeaders.set('Content-Security-Policy', cspHeader)
 
@@ -76,6 +100,7 @@ export default async function middleware(req: NextRequest) {
     },
   })
 
+  response.headers.set('x-hub-request-id', requestId)
   response.headers.set('Content-Security-Policy', cspHeader)
   response.headers.set('X-Frame-Options', 'DENY')
   response.headers.set('X-Content-Type-Options', 'nosniff')
@@ -110,6 +135,15 @@ export const config = {
     //   /api/worker; each handler enforces its own constant-time x-cron-secret
     //   auth and 503s when CRON_SECRET is unconfigured. Trailing slash keeps
     //   the exclusion segment-anchored: /api/cronx stays middlewared)
-    '/((?!login|api/auth|api/chat|api/embeddings|api/webhooks|api/healthz|api/worker|api/cron/|_next|static|.*\\.(?:png|ico|svg|webmanifest)$).*)',
+    // - /api/reports/run (the hourly scheduled-reports runner — a cron caller
+    //   holds no NextAuth cookie, so this middleware 401'd it before its own
+    //   constant-time x-cron-secret check could run, and scheduled digests
+    //   never published. Same class as /api/kpis/sync's non-exclusion, which
+    //   this repo treats as a live landmine. Deliberately the single route,
+    //   NOT the /api/reports prefix: everything else under /api/reports stays
+    //   session-protected. NOTE it is a prefix match, so a future route whose
+    //   path starts with /api/reports/run (e.g. .../runner) would silently
+    //   inherit this exclusion — name it something else, or anchor this.)
+    '/((?!login|api/auth|api/chat|api/embeddings|api/webhooks|api/healthz|api/worker|api/reports/run|api/cron/|_next|static|.*\\.(?:png|ico|svg|webmanifest)$).*)',
   ],
 }

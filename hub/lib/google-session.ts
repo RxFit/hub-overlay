@@ -19,6 +19,12 @@ import { NextResponse } from 'next/server'
 import { getToken } from 'next-auth/jwt'
 import type { NextRequest } from 'next/server'
 import { REFRESH_FATAL_ERROR, REFRESH_TRANSIENT_ERROR } from './auth-refresh'
+import { toFault, faultResponse } from './fault'
+import type { FaultCode } from './fault-codes'
+import { reportFault } from './fault-report'
+import { createLogger } from './logger'
+import { safeRequestId } from './request-id'
+import { parseTraceparent, gcpTraceFields, type TraceContext } from './trace-context'
 
 /**
  * Map a thrown Google REST error message to the HTTP status the Hub should
@@ -102,21 +108,124 @@ function apiNotEnabledResponse(err: unknown, featureLabel?: string): NextRespons
   )
 }
 
+/* ── Fault wiring (ERROR_REPORTING_2026-08-24.md §3 Layer 3) ──────────────────
+ *
+ * This one function was simultaneously the repo's largest silent-failure
+ * cluster (31 call sites, zero log lines) and its largest raw-message leak
+ * (the `{ error: message }` fallback shipped the raw upstream text to the
+ * browser). Every branch now logs and reports a fault; the CLASSIFICATION
+ * BODIES ARE UNCHANGED — API_NOT_ENABLED, MISSING_SCOPE, and `reauth: true`
+ * encode real documented incidents (the infinite "Authorize → consent → same
+ * error" loop) that client hooks key on verbatim. Only the fallback body
+ * changes: a normalized problem+json instead of the raw upstream message,
+ * with the mapped status preserved exactly.
+ */
+
+/** Context every call site now supplies, so a Google fault joins the pino
+ *  seam and event_log.correlation_id instead of landing requestId: null. */
+export interface GoogleFaultCtx {
+  requestId: string
+  /** Route PATTERN ('/api/google/gmail'), never a concrete path. */
+  route: string
+  method: string
+  /** Cloud Run's traceparent, parsed — carried so the fault line and its log
+   *  line nest under the request log like withFault's do. */
+  trace?: TraceContext | null
+}
+
+/** The one-line ctx builder for route call sites. On middleware-matched paths
+ *  the header was validated and set there; when absent, mint — an orphan id
+ *  still joins this fault to its own pino line. */
+export function googleRouteCtx(req: NextRequest | Request, route: string): GoogleFaultCtx {
+  return {
+    requestId: safeRequestId(req.headers.get('x-hub-request-id')),
+    route,
+    method: req.method,
+    trace: parseTraceparent(req.headers.get('traceparent')),
+  }
+}
+
+const log = createLogger('google-session')
+
+/**
+ * Map the classified status onto the fault taxonomy WITHOUT flattening the
+ * classifier: the discriminators mirror mapGoogleErrorToStatus's own regexes,
+ * so code and status can never disagree about what happened. `undefined`
+ * lets toFault's structural recognition decide (SQLSTATEs, syscalls, …).
+ */
+function faultCodeForGoogleError(status: number, message: string): FaultCode | undefined {
+  if (status === 502) {
+    const m = message.match(/\b(\d{3})\b/)
+    const upstream = m ? parseInt(m[1], 10) : 0
+    if (upstream === 429 || /rate ?limit|quota|userratelimit|backenderror|resource has been exhausted/i.test(message)) {
+      return 'rate_limited'
+    }
+    if (upstream >= 500) return 'upstream_5xx'
+    if (/\b(timeout|timed out)\b/i.test(message)) return 'timeout_connect'
+    return 'upstream_unavailable'
+  }
+  if (status >= 400 && status <= 499) return 'upstream_4xx'
+  return undefined
+}
+
+/** Severity decides the log level — an expected reauth is not an ERROR line. */
+function logGoogleFault(fault: ReturnType<typeof toFault>, trace: TraceContext | null): void {
+  const fields = {
+    requestId: fault.requestId,
+    route: fault.route,
+    method: fault.method,
+    code: fault.code,
+    faultId: fault.faultId,
+    httpStatus: fault.httpStatus,
+    ...gcpTraceFields(trace),
+  }
+  if (fault.severity === 'expected') log.info(fields, 'google api fault (expected)')
+  else if (fault.severity === 'degraded') log.warn(fields, 'google api fault (degraded)')
+  else log.error(fields, 'google api fault')
+}
+
+/** Normalize + log + report, KEEPING the caller's legacy response body. */
+function reportGoogleFault(err: unknown, ctx: GoogleFaultCtx, code: FaultCode | undefined, httpStatus: number) {
+  const fault = toFault(err, {
+    layer: 'route',
+    ...(code ? { code } : {}),
+    route: ctx.route,
+    method: ctx.method,
+    module: 'google-session',
+    requestId: ctx.requestId,
+    httpStatus,
+    context: { provider: 'google' },
+  })
+  const trace = ctx.trace ?? null
+  logGoogleFault(fault, trace)
+  reportFault(fault, { rawStack: err instanceof Error ? err.stack : null, trace })
+  return fault
+}
+
 /** Build the Next response for a thrown Google REST error. */
-export function googleApiErrorResponse(err: unknown): NextResponse {
+export function googleApiErrorResponse(err: unknown, ctx: GoogleFaultCtx): NextResponse {
   const message = err instanceof Error ? err.message : 'Google API error'
   // Checked before the status mapping: the generic mapper folds 403 into a
   // reauth 401, and every consumer hook answers a reauth 401 with an automatic
   // signIn('google') — which cannot fix a disabled API and would loop.
-  if (isApiNotEnabledError(message)) return apiNotEnabledResponse(err)
+  if (isApiNotEnabledError(message)) {
+    reportGoogleFault(err, ctx, 'google_api_not_enabled', 403)
+    return apiNotEnabledResponse(err)
+  }
   const status = mapGoogleErrorToStatus(message)
   if (status === 401) {
+    reportGoogleFault(err, ctx, 'auth_reauth_required', 401)
     return NextResponse.json(
       { error: 'Google session expired — please sign in again', reauth: true },
       { status: 401 },
     )
   }
-  return NextResponse.json({ error: message }, { status })
+  // The former raw-message leak: `{ error: message }` shipped upstream text
+  // (which can embed emails, ids, even tokens) to the browser. The record
+  // keeps the scrubbed detail; the client gets the fixed per-code message.
+  // The mapped status is preserved exactly via httpStatus.
+  const fault = reportGoogleFault(err, ctx, faultCodeForGoogleError(status, message), status)
+  return faultResponse(fault, process.env.NODE_ENV === 'production')
 }
 
 /**
@@ -134,15 +243,19 @@ export function googleApiErrorResponse(err: unknown): NextResponse {
  * API-not-enabled 403s are classified first for the same reason: Google labels
  * them PERMISSION_DENIED, but only the Cloud Console fixes them.
  */
-export function googleWriteErrorResponse(err: unknown, scopeLabel: string): NextResponse {
+export function googleWriteErrorResponse(err: unknown, scopeLabel: string, ctx: GoogleFaultCtx): NextResponse {
   const message = (err instanceof Error ? err.message : '').toLowerCase()
-  if (isApiNotEnabledError(message)) return apiNotEnabledResponse(err, scopeLabel)
+  if (isApiNotEnabledError(message)) {
+    reportGoogleFault(err, ctx, 'google_api_not_enabled', 403)
+    return apiNotEnabledResponse(err, scopeLabel)
+  }
   const isScopeDenial =
     /\b403\b/.test(message) &&
     (message.includes('insufficient') ||
       message.includes('permission') ||
       message.includes('scope'))
   if (isScopeDenial) {
+    reportGoogleFault(err, ctx, 'google_scope_missing', 403)
     return NextResponse.json(
       {
         error: `${scopeLabel} access hasn't been granted yet. Please re-authenticate to allow it.`,
@@ -151,7 +264,7 @@ export function googleWriteErrorResponse(err: unknown, scopeLabel: string): Next
       { status: 403 },
     )
   }
-  return googleApiErrorResponse(err)
+  return googleApiErrorResponse(err, ctx)
 }
 
 export type GoogleAuth =

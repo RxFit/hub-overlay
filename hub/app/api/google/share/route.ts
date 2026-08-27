@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { resolveGoogleAuth, googleWriteErrorResponse, googleApiErrorResponse } from '@/lib/google-session'
+import { resolveGoogleAuth, googleWriteErrorResponse, googleApiErrorResponse, googleRouteCtx } from '@/lib/google-session'
 import {
   findShareableFiles,
   listFileAccess,
@@ -73,7 +73,7 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ error: 'Provide either q or fileId' }, { status: 400 })
   } catch (err) {
-    return googleApiErrorResponse(err)
+    return googleApiErrorResponse(err, googleRouteCtx(req, '/api/google/share'))
   }
 }
 
@@ -178,7 +178,7 @@ export async function POST(req: NextRequest) {
         error: err instanceof Error ? err.message : 'unknown error',
       })
     }
-    return googleWriteErrorResponse(err, 'Google Drive sharing')
+    return googleWriteErrorResponse(err, 'Google Drive sharing', googleRouteCtx(req, '/api/google/share'))
   }
 }
 
@@ -233,6 +233,6 @@ export async function DELETE(req: NextRequest) {
         error: err instanceof Error ? err.message : 'unknown error',
       })
     }
-    return googleWriteErrorResponse(err, 'Google Drive sharing')
+    return googleWriteErrorResponse(err, 'Google Drive sharing', googleRouteCtx(req, '/api/google/share'))
   }
 }
