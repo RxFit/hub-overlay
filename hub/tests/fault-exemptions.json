@@ -1,0 +1,3 @@
+{
+  "app/api/auth/[...nextauth]/route.ts": "Re-exports NextAuth(authOptions) directly — no handler of ours to wrap. Instrumentation lands in authOptions.callbacks/events (Phase 2)."
+}
