@@ -5,12 +5,23 @@ tags: [runbook, reports, cron, cloud-scheduler]
 related: ["[[../architecture/GOOGLE_WORKSPACE_LEVERAGE_DESIGN_2026-07-28]]"]
 ---
 
-# Runbook — Turning on scheduled reports
+# Runbook — Scheduled reports
 
-Scheduled digests are **fully implemented and completely inert** until a Cloud
-Scheduler job calls them. Everything else is done: the schedule engine, the
-digest and deck builders, email/Chat delivery, and the Settings editor. This
-runbook is the one manual step.
+> **Status change (2026-08-26): reports now fire automatically.** They were
+> dormant from the day they shipped, for two stacked reasons found together:
+> the Cloud Scheduler job this runbook described was never created, **and**
+> `/api/reports/run` was not in the middleware matcher's exclusion list — so a
+> scheduler POST (which carries a secret header, never a NextAuth cookie)
+> would have been 401'd by the middleware before the route's own constant-time
+> check ever ran. Both are fixed: the route is excluded (with a matcher
+> regression test at `hub/tests/middleware-matcher.test.ts`), and the hourly
+> invocation now comes from `.github/workflows/dispatch-alert.yml`, the
+> workflow that already fires hourly and already holds `CRON_SECRET`. No Cloud
+> Scheduler job is required. The sections below are kept because the Cloud
+> Scheduler path remains a valid alternative.
+
+Everything else was already done: the schedule engine, the digest and deck
+builders, email/Chat delivery, and the Settings editor.
 
 ## What you are wiring
 
@@ -43,7 +54,21 @@ a plain env var — check `--set-secrets` on the service too. Whatever value
 `/api/kpis/sync` already uses is the value to reuse; the two routes read the
 same variable.
 
-## Create the job
+## How it fires today (GitHub Actions)
+
+The **Hourly cron tick** workflow (`.github/workflows/dispatch-alert.yml`)
+POSTs `/api/reports/run` every hour at :07 as its second step, against the
+Cloud Run `.run.app` URL — never `hub.casatrejo.com`, whose Cloudflare front
+challenges CI curls (`deploy.yml` documents that false-failure class). The
+step fails the workflow run on any non-2xx, so GitHub's failure email is the
+alert; a per-report failure inside a 200 surfaces as a warning annotation.
+
+The only setup is the `CRON_SECRET` **repository** secret (Settings → Secrets
+and variables → Actions), which must byte-match the value on the Cloud Run
+service. It is already set — the dispatch alert tick in the same workflow uses
+it. Run it on demand from Actions → **Hourly cron tick** → Run workflow.
+
+## Alternative: create a Cloud Scheduler job
 
 ```bash
 gcloud scheduler jobs create http hub-reports-run \
@@ -89,6 +114,7 @@ A successful call returns `{"ok":true,"ran":N,"results":[…]}`.
 |---|---|---|
 | `{"ok":true,"ran":0}` | Nothing was due in this hour | Normal. Most firings look like this. |
 | `503 CRON_SECRET is not configured` | Env var missing on the service | See the prerequisite above. |
+| `401 Unauthorized` with a correct secret, from a machine caller | The middleware exclusion for `/api/reports/run` regressed | `hub/middleware.ts` matcher; `hub/tests/middleware-matcher.test.ts` pins it. |
 | `401 Unauthorized` | Header value does not match `CRON_SECRET` | Re-check the value; it is compared in constant time, so there is no partial-match hint. |
 | `409 No usable Google credential for this tenant` | No admin has a stored refresh token that mints | An admin must sign in through the deliberate sign-in button at least once. |
 | `results[].status: "created"` with a `reason` | Report generated, delivery partly failed | The Doc/deck exists in Drive; the reason names the delivery problem. |
