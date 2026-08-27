@@ -135,6 +135,15 @@ export const config = {
     //   /api/worker; each handler enforces its own constant-time x-cron-secret
     //   auth and 503s when CRON_SECRET is unconfigured. Trailing slash keeps
     //   the exclusion segment-anchored: /api/cronx stays middlewared)
-    '/((?!login|api/auth|api/chat|api/embeddings|api/webhooks|api/healthz|api/worker|api/cron/|_next|static|.*\\.(?:png|ico|svg|webmanifest)$).*)',
+    // - /api/reports/run (the hourly scheduled-reports runner — a cron caller
+    //   holds no NextAuth cookie, so this middleware 401'd it before its own
+    //   constant-time x-cron-secret check could run, and scheduled digests
+    //   never published. Same class as /api/kpis/sync's non-exclusion, which
+    //   this repo treats as a live landmine. Deliberately the single route,
+    //   NOT the /api/reports prefix: everything else under /api/reports stays
+    //   session-protected. NOTE it is a prefix match, so a future route whose
+    //   path starts with /api/reports/run (e.g. .../runner) would silently
+    //   inherit this exclusion — name it something else, or anchor this.)
+    '/((?!login|api/auth|api/chat|api/embeddings|api/webhooks|api/healthz|api/worker|api/reports/run|api/cron/|_next|static|.*\\.(?:png|ico|svg|webmanifest)$).*)',
   ],
 }
