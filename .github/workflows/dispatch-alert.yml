@@ -42,6 +42,13 @@ on:
     # the most delayed. GitHub crons are best-effort (minutes of slop), which
     # is fine for an hourly alerting cadence.
     - cron: '7 * * * *'
+  # NOTE on manual runs: the reports tick is NOT idempotent within a report's
+  # due hour — the runner decides due-ness from the current local day/hour and
+  # records nothing about a window already having run, so dispatching during a
+  # due hour (or re-running a failed job then) builds a duplicate Doc/deck and
+  # sends a duplicate email. Scheduled firings are one per hour, so the normal
+  # path never doubles. Follow-up: idempotency guard keyed by tenant + report
+  # id + window (hub/docs/runbooks/scheduled-reports.md).
   workflow_dispatch: {}
 
 concurrency:
@@ -143,13 +150,22 @@ jobs:
           echo "reports due this hour: $RAN"
 
           # A per-report failure returns HTTP 200 with the reason inside, so it
-          # would otherwise be invisible. Surfaced as a warning rather than a
-          # job failure: one report failing is not "reports are broken", and
-          # the digest that DID generate should not be reported as a red run.
-          # Deliberate for now — if a report starts failing persistently this
-          # should graduate to an error.
+          # would otherwise be invisible. Two tiers:
+          #
+          #   ALL due reports failed  -> fail the run. Nothing was generated or
+          #     delivered this window, which IS "reports are broken" — and with
+          #     the seeded schedules (one weekly digest, one monthly deck) a
+          #     single due report is the NORMAL shape, so treating this as a
+          #     warning would recreate exactly the silent-report failure this
+          #     change exists to eliminate.
+          #   SOME failed -> warning. A digest that did generate should not
+          #     paint the run red, and the failure is still on the record.
           FAILED=$(jq -r '[.results[]? | select(.status=="failed")] | length' /tmp/reports.json)
           if [ "$FAILED" != "0" ]; then
             DETAIL=$(jq -r '[.results[]? | select(.status=="failed") | "\(.reportId): \(.reason // "unknown")"] | join("; ")' /tmp/reports.json)
-            echo "::warning::$FAILED scheduled report(s) failed to generate — $DETAIL"
+            if [ "$RAN" != "0" ] && [ "$FAILED" = "$RAN" ]; then
+              echo "::error::all $RAN due scheduled report(s) failed to generate — $DETAIL. No digest was produced or delivered this window; this failure email is the alert."
+              exit 1
+            fi
+            echo "::warning::$FAILED of $RAN scheduled report(s) failed to generate — $DETAIL"
           fi

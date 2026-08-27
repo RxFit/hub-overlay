@@ -68,6 +68,15 @@ and variables → Actions), which must byte-match the value on the Cloud Run
 service. It is already set — the dispatch alert tick in the same workflow uses
 it. Run it on demand from Actions → **Hourly cron tick** → Run workflow.
 
+> **⚠️ An on-demand run DURING a report's due hour duplicates it.** The runner
+> decides due-ness purely from the current local day/hour (`dueReports`) and
+> records nothing about a window already having run, so a second invocation in
+> the same hour builds a second Doc/deck and sends a second email/Chat post.
+> Safe any other hour — the scheduled tick fires once per hour, so the normal
+> path never doubles. Verify off-hours (expect `"ran":0`), or accept the
+> duplicate. Closing this properly needs an idempotency guard keyed by tenant +
+> report id + reporting window; tracked as a follow-up, not shipped here.
+
 ## Alternative: create a Cloud Scheduler job
 
 ```bash
