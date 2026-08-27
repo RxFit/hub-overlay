@@ -81,7 +81,10 @@ vi.mock('@/lib/reports/config', async importOriginal => {
   const actual = await importOriginal<typeof import('@/lib/reports/config')>()
   return {
     ...actual,
+    // The route selects with dueOrMissedReports (catch-up); dueReports is kept
+    // overridden too so this stub survives either call site.
     dueReports: () => [actual.DEFAULT_REPORTS[0]],
+    dueOrMissedReports: () => [actual.DEFAULT_REPORTS[0]],
     reportWindow: () => ({ startDate: '2026-08-03', endDate: '2026-08-09' }),
   }
 })
@@ -104,6 +107,17 @@ vi.mock('@/lib/google/slides', () => ({
 vi.mock('@/lib/reports/deliver', () => ({
   deliverDigest: vi.fn(async () => ({ emailed: true, chatPosted: false, problems: [] })),
 }))
+// The per-window claim guard has its own suites (lib/reports/run-guard.test.ts
+// for the contract, tests/report-runs-db.test.ts against real Postgres). Here
+// it is stubbed to "claim won" so these cases stay about GA4 metric names —
+// the db mock above only implements select().
+vi.mock('@/lib/reports/run-guard', () => ({
+  claimReportWindow: vi.fn(async () => true),
+  releaseReportWindow: vi.fn(async () => {}),
+  completeReportWindow: vi.fn(async () => {}),
+  pruneReportRuns: vi.fn(async () => {}),
+}))
+
 vi.mock('@/lib/ai-audit', () => ({ recordAiAction: vi.fn(async () => {}) }))
 
 import { POST } from '@/app/api/reports/run/route'

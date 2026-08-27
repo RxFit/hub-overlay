@@ -211,6 +211,55 @@ export function dueReports(reports: ReportConfig[], now: Date, timeZone?: string
 }
 
 /**
+ * Is this report due at, or EARLIER THAN, the current local hour today?
+ *
+ * The weaker sibling of `isDue`, and the reason the runner survives a trigger
+ * that skips hours. `isDue` asks "is this the due hour?", which is only safe
+ * when something reliably fires every hour. GitHub's scheduled workflows are
+ * best-effort and were observed dropping firings for 2–10 hours at a stretch
+ * (2026-08-27), so a 07:00 weekly digest could simply never be generated: by
+ * the time a tick landed, the hour had passed and the report was no longer due.
+ *
+ * Widening to `hour >= hourLocal` turns a missed hour into a late digest. It is
+ * only sound BECAUSE the caller claims the window in `report_runs` first — on
+ * its own this predicate is true for every remaining hour of the day and would
+ * regenerate the report each tick.
+ *
+ * Deliberately bounded to the SAME LOCAL DAY (the weekday / day-of-month checks
+ * are unchanged). `reportWindow` derives its window from the local calendar
+ * date of the moment it runs, so catching up on the following day would
+ * silently produce a DIFFERENT window than the one that was due — a wrong
+ * report rather than a late one. A miss that outlives the local day stays a
+ * miss, and stays visible as a gap in `report_runs`.
+ */
+export function isDueOrMissedToday(report: ReportConfig, now: Date, timeZone?: string): boolean {
+  if (!report.enabled) return false
+
+  const { hour, weekday, dayOfMonth } = localParts(now, timeZone)
+  if (hour < report.hourLocal) return false
+
+  switch (report.cadence) {
+    case 'daily':
+      return true
+    case 'weekly':
+      return weekday === report.day
+    case 'monthly':
+      return dayOfMonth === report.day
+  }
+}
+
+/** Reports due now or missed earlier today, in config order. The runner uses
+ *  this instead of `dueReports`; the `report_runs` claim is what keeps a
+ *  caught-up report from regenerating on every later tick. */
+export function dueOrMissedReports(
+  reports: ReportConfig[],
+  now: Date,
+  timeZone?: string,
+): ReportConfig[] {
+  return reports.filter(r => isDueOrMissedToday(r, now, timeZone))
+}
+
+/**
  * The tenant-local calendar date for an instant, as YYYY-MM-DD.
  *
  * `en-CA` formats as YYYY-MM-DD natively, so no reassembly is needed. Falls

@@ -3,6 +3,8 @@ import {
   normalizeReports,
   isDue,
   dueReports,
+  isDueOrMissedToday,
+  dueOrMissedReports,
   localParts,
   reportWindow,
   DEFAULT_REPORTS,
@@ -293,5 +295,78 @@ describe('normalizeReports — settings-editor round trip', () => {
 
   it('preserves both seeded defaults through a reset-then-save', () => {
     expect(normalizeReports(DEFAULT_REPORTS)).toEqual(DEFAULT_REPORTS)
+  })
+})
+
+/* ══════════════════════════════════════════════════════════════════════════
+   CATCH-UP: isDueOrMissedToday / dueOrMissedReports
+
+   The runner's trigger cannot be trusted to fire every hour (GitHub dropped
+   hourly firings for 2–10 hours on 2026-08-27), so the selector widened from
+   "is this the due hour?" to "was this due at or before now, today?". These
+   cases pin both halves of that: it must catch up WITHIN the local day, and
+   it must NOT leak across the day boundary — `reportWindow` derives its dates
+   from the local calendar day, so a next-day catch-up would silently generate
+   a DIFFERENT window than the one that was due.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+describe('isDueOrMissedToday', () => {
+  const weekly: ReportConfig = {
+    id: 'weekly-digest',
+    kind: 'ga4_gsc_digest',
+    cadence: 'weekly',
+    day: 'mon',
+    hourLocal: 7,
+    delivery: { email: ['admins'] },
+    enabled: true,
+  }
+  // 2026-08-17 is a Monday. Chicago is UTC-5 in August, so 12:00Z = 07:00 local.
+  const TZ = 'America/Chicago'
+  const at = (iso: string) => new Date(iso)
+
+  it('is true during the due hour, exactly like isDue', () => {
+    expect(isDueOrMissedToday(weekly, at('2026-08-17T12:30:00Z'), TZ)).toBe(true)
+    expect(isDue(weekly, at('2026-08-17T12:30:00Z'), TZ)).toBe(true)
+  })
+
+  it('stays true LATER the same local day — the missed-hour case isDue loses', () => {
+    // 20:00Z = 15:00 Chicago, eight hours after the digest was due.
+    expect(isDueOrMissedToday(weekly, at('2026-08-17T20:00:00Z'), TZ)).toBe(true)
+    expect(isDue(weekly, at('2026-08-17T20:00:00Z'), TZ)).toBe(false)
+  })
+
+  it('is false BEFORE the due hour', () => {
+    // 10:00Z = 05:00 Chicago, two hours early.
+    expect(isDueOrMissedToday(weekly, at('2026-08-17T10:00:00Z'), TZ)).toBe(false)
+  })
+
+  it('does not leak into the next local day — a stale window is worse than a miss', () => {
+    // 2026-08-18T12:00Z is Tuesday 07:00 Chicago: the weekday no longer matches.
+    expect(isDueOrMissedToday(weekly, at('2026-08-18T12:00:00Z'), TZ)).toBe(false)
+  })
+
+  it('honors the enabled flag', () => {
+    expect(isDueOrMissedToday({ ...weekly, enabled: false }, at('2026-08-17T20:00:00Z'), TZ)).toBe(false)
+  })
+
+  it('monthly catches up within the 1st, and not on the 2nd', () => {
+    const monthly: ReportConfig = { ...weekly, id: 'monthly-review', cadence: 'monthly', day: 1 }
+    expect(isDueOrMissedToday(monthly, at('2026-09-01T23:00:00Z'), TZ)).toBe(true)   // 18:00 local, 1st
+    expect(isDueOrMissedToday(monthly, at('2026-09-02T12:00:00Z'), TZ)).toBe(false)  // 07:00 local, 2nd
+  })
+
+  it('daily catches up for the rest of its own day', () => {
+    const daily: ReportConfig = { ...weekly, id: 'daily', cadence: 'daily', day: undefined }
+    expect(isDueOrMissedToday(daily, at('2026-08-19T23:00:00Z'), TZ)).toBe(true)   // 18:00 local
+    expect(isDueOrMissedToday(daily, at('2026-08-19T10:00:00Z'), TZ)).toBe(false)  // 05:00 local
+  })
+})
+
+describe('dueOrMissedReports', () => {
+  it('returns the missed report the strict selector would have dropped', () => {
+    const now = new Date('2026-08-17T20:00:00Z') // Mon 15:00 Chicago
+    const tz = 'America/Chicago'
+    expect(dueReports(DEFAULT_REPORTS, now, tz).map(r => r.id)).toEqual([])
+    expect(dueOrMissedReports(DEFAULT_REPORTS, now, tz).map(r => r.id)).toEqual(['weekly-digest'])
   })
 })

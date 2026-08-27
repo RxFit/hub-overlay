@@ -5,7 +5,8 @@ import { db } from '@/lib/db'
 import { hubUsers, googlePrefs } from '@/lib/schema'
 import { getTenantId } from '@/lib/tenant-context'
 import { getEffectivePrefs } from '@/lib/google/prefs-db'
-import { normalizeReports, dueReports, reportWindow, DEFAULT_REPORTS } from '@/lib/reports/config'
+import { normalizeReports, dueOrMissedReports, reportWindow, DEFAULT_REPORTS } from '@/lib/reports/config'
+import { claimReportWindow, releaseReportWindow, completeReportWindow, pruneReportRuns } from '@/lib/reports/run-guard'
 import { buildDigestMarkdown, buildReviewDeckSpec } from '@/lib/reports/digest'
 import { resolveTenantToken } from '@/lib/reports/access-token'
 import { deliverDigest } from '@/lib/reports/deliver'
@@ -23,11 +24,22 @@ export const runtime = 'nodejs'
 /**
  * POST /api/reports/run — generate the scheduled reports that are due now.
  *
- * Fired HOURLY by Cloud Scheduler. Each firing asks every configured report
- * "are you due in this hour, in your tenant's timezone?" — so cadence lives in
- * the database as data an admin can edit, rather than in per-report cron
- * entries the app would have to provision and tear down whenever someone
- * changed a setting. See lib/reports/config.ts.
+ * Fired HOURLY (.github/workflows/dispatch-alert.yml, and/or a Cloud Scheduler
+ * job — see docs/runbooks/scheduled-reports.md). Cadence lives in the database
+ * as data an admin can edit, rather than in per-report cron entries the app
+ * would have to provision and tear down whenever someone changed a setting.
+ * See lib/reports/config.ts.
+ *
+ * Each firing asks every configured report "are you due now, or were you due
+ * earlier TODAY and not yet generated?" — deliberately weaker than "is this
+ * the due hour?", because the trigger cannot be trusted to fire every hour:
+ * GitHub's scheduled workflows are best-effort and were observed dropping
+ * firings for 2–10 hours (2026-08-27), which against the strict question meant
+ * a 07:00 digest was simply never produced. What makes the weaker question
+ * safe is the per-window claim in lib/reports/run-guard.ts: the first tick to
+ * claim a window generates it, every later tick skips it, and concurrent ticks
+ * cannot both win. That same claim is what stops a manual dispatch inside a due
+ * hour from producing a duplicate Doc and a duplicate email.
  *
  * Guarded by the same constant-time `x-cron-secret` check as /api/kpis/sync.
  *
@@ -91,7 +103,13 @@ export async function POST(req: NextRequest) {
     // opens a form they may not know exists.
     const configured = normalizeReports(prefsRow?.reports)
     const reports = configured.length ? configured : DEFAULT_REPORTS
-    const due = dueReports(reports, now, prefsRow?.timezone ?? undefined)
+    // Due NOW or missed earlier today. The runner used to ask only "is this
+    // the due hour?", which silently loses a report whenever the trigger skips
+    // that hour — and GitHub's scheduled workflows were observed dropping
+    // firings for 2–10 hours at a stretch (2026-08-27). The per-window claim
+    // below is what makes the wider question safe: a caught-up report is
+    // generated exactly once, not on every remaining tick of the day.
+    const due = dueOrMissedReports(reports, now, prefsRow?.timezone ?? undefined)
 
     if (!due.length) {
       return NextResponse.json({ ok: true, ran: 0, results })
@@ -123,6 +141,36 @@ export async function POST(req: NextRequest) {
       const requestId = newRequestId()
       const window = reportWindow(report.cadence, now, prefsRow?.timezone ?? undefined)
       const notes: string[] = []
+      const claim = {
+        tenantId,
+        reportId: report.id,
+        windowStart: window.startDate,
+        windowEnd: window.endDate,
+      }
+
+      // Claim the window BEFORE generating. Winning the claim is what grants
+      // the right to build and deliver: an already-claimed window means an
+      // earlier tick (or a concurrent one) owns this report, so skip rather
+      // than produce a duplicate Doc and a duplicate email.
+      let claimed = false
+      try {
+        claimed = await claimReportWindow(claim)
+      } catch (err) {
+        // Fail CLOSED: generating without a claim is exactly the duplicate
+        // this guard exists to prevent, so a claim error skips the report.
+        const reason = `could not claim reporting window: ${err instanceof Error ? err.message : 'error'}`
+        console.error(`[reports] ${report.id} ${reason}`)
+        results.push({ reportId: report.id, status: 'skipped', reason })
+        continue
+      }
+      if (!claimed) {
+        results.push({
+          reportId: report.id,
+          status: 'skipped',
+          reason: `already generated for window ${window.startDate} – ${window.endDate}`,
+        })
+        continue
+      }
 
       try {
         // Sources are fetched independently: a Search Console outage should
@@ -271,6 +319,10 @@ export async function POST(req: NextRequest) {
           status: 'success',
         }).catch(() => {})
 
+        // The claim row becomes the run's durable record once the artifact
+        // exists; best-effort, since the claim already prevents regeneration.
+        await completeReportWindow(claim, artifact.id)
+
         results.push({
           reportId: report.id,
           status: 'created',
@@ -291,12 +343,29 @@ export async function POST(req: NextRequest) {
           status: 'failed',
           error: reason,
         }).catch(() => {})
+        // Release the window so the next tick retries it, rather than letting
+        // one transient Google error burn the report for the whole day.
+        await releaseReportWindow(claim)
         // One failing report must not abandon the others due this hour.
         results.push({ reportId: report.id, status: 'failed', reason })
       }
     }
 
-    return NextResponse.json({ ok: true, ran: results.length, results })
+    // Ledger housekeeping, best-effort and never fatal.
+    await pruneReportRuns()
+
+    // `ran` counts reports this tick ATTEMPTED (created + failed), not rows in
+    // `results`. Catch-up makes 'skipped' the common case — an already-generated
+    // report skips on every later tick of the day — and counting those would
+    // both overstate activity and break the workflow's all-failed error tier,
+    // which compares the failed count against `ran`.
+    const attempted = results.filter(r => r.status !== 'skipped')
+    return NextResponse.json({
+      ok: true,
+      ran: attempted.length,
+      skipped: results.length - attempted.length,
+      results,
+    })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'unknown error'
     console.error('[reports] run failed:', message)
