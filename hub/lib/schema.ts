@@ -603,6 +603,44 @@ export const toolRuns = pgTable(
  * were Paperclip's concept and no Hub table owns them yet, so a reference
  * would be unenforceable. Scoping is enforced in lib/secrets-store.ts.
  */
+/* ── Scheduled report runs (idempotency + catch-up ledger) ─────────────────
+ *
+ * One row per (tenant, report, reporting window) that has been CLAIMED for
+ * generation. It exists for two jobs the hourly runner cannot do on its own:
+ *
+ *  1. IDEMPOTENCY. `dueReports` decides from the wall clock alone, so a manual
+ *     workflow dispatch or a job re-run inside a due hour used to build a
+ *     second Doc/deck and send a second email. The unique index makes the
+ *     claim atomic, so concurrent invocations cannot both generate.
+ *  2. CATCH-UP. GitHub's scheduled workflows are best-effort and were observed
+ *     dropping hourly firings for 2–10 hours at a stretch, which for an
+ *     "is it due in THIS hour?" runner means the digest is never produced at
+ *     all. With this ledger the runner can safely ask the weaker question
+ *     "is it due at or before now, today, and not yet run?" — a missed hour
+ *     becomes a late digest instead of a lost one.
+ *
+ * The row is written BEFORE generation and deleted if generation fails, so a
+ * failure retries on the next tick rather than burning the window.
+ */
+export const reportRuns = pgTable(
+  'report_runs',
+  {
+    id:          text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+    tenantId:    text('tenant_id').notNull().references(() => tenants.id),
+    reportId:    text('report_id').notNull(),          // ReportConfig.id
+    windowStart: text('window_start').notNull(),       // YYYY-MM-DD, from reportWindow()
+    windowEnd:   text('window_end'),                   // provenance for reading the ledger
+    documentId:  text('document_id'),                  // set on success; null while claimed
+    createdAt:   timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    // The atomic claim: ON CONFLICT DO NOTHING against this index is what makes
+    // "exactly one generation per window" true across concurrent callers.
+    windowUniq:  uniqueIndex('report_runs_window_uniq').on(t.tenantId, t.reportId, t.windowStart),
+    createdIdx:  index('report_runs_created_idx').on(t.createdAt),
+  }),
+)
+
 export const hubSecrets = pgTable(
   'hub_secrets',
   {

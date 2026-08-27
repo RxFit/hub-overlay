@@ -647,6 +647,33 @@ async function run() {
   `
   console.log('[migrate] \u2713 hub_secrets table')
 
+  // report_runs — one row per (tenant, report, window) claimed for generation.
+  // The unique index is the load-bearing part: the runner claims a window with
+  // INSERT ... ON CONFLICT DO NOTHING before generating, which makes "exactly
+  // one digest per window" true even across concurrent invocations, and lets a
+  // dropped hourly firing be caught up later the same local day instead of
+  // losing the digest entirely. See lib/reports/run-guard.ts.
+  await sql`
+    CREATE TABLE IF NOT EXISTS report_runs (
+      id           TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id    TEXT NOT NULL REFERENCES tenants(id),
+      report_id    TEXT NOT NULL,
+      window_start TEXT NOT NULL,
+      window_end   TEXT,
+      document_id  TEXT,
+      created_at   TIMESTAMPTZ DEFAULT now() NOT NULL
+    )
+  `
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS report_runs_window_uniq
+    ON report_runs(tenant_id, report_id, window_start)
+  `
+  await sql`
+    CREATE INDEX IF NOT EXISTS report_runs_created_idx
+    ON report_runs(created_at)
+  `
+  console.log('[migrate] \u2713 report_runs table')
+
   await sql`
     INSERT INTO tenants (id, name, domain)
     VALUES ('rxfit', 'RxFit Athletics', 'rxfitatx.com')

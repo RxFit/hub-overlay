@@ -81,7 +81,10 @@ vi.mock('@/lib/reports/config', async importOriginal => {
   const actual = await importOriginal<typeof import('@/lib/reports/config')>()
   return {
     ...actual,
+    // The route selects with dueOrMissedReports (catch-up); dueReports is kept
+    // overridden too so this stub survives either call site.
     dueReports: () => [actual.DEFAULT_REPORTS[0]],
+    dueOrMissedReports: () => [actual.DEFAULT_REPORTS[0]],
     reportWindow: () => ({ startDate: '2026-08-03', endDate: '2026-08-09' }),
   }
 })
@@ -104,9 +107,30 @@ vi.mock('@/lib/google/slides', () => ({
 vi.mock('@/lib/reports/deliver', () => ({
   deliverDigest: vi.fn(async () => ({ emailed: true, chatPosted: false, problems: [] })),
 }))
+// The per-window claim guard has its own suites (lib/reports/run-guard.test.ts
+// for the contract, tests/report-runs-db.test.ts against real Postgres). Here
+// it is stubbed to "claim won" so these cases stay about GA4 metric names —
+// the db mock above only implements select().
+const guardState = vi.hoisted(() => ({ claimThrows: false, alreadyClaimed: [] as string[] }))
+vi.mock('@/lib/reports/run-guard', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/lib/reports/run-guard')>()
+  return {
+    windowKey: actual.windowKey,
+    claimReportWindow: vi.fn(async () => {
+      if (guardState.claimThrows) throw new Error('connection terminated')
+      return true
+    }),
+    releaseReportWindow: vi.fn(async () => {}),
+    completeReportWindow: vi.fn(async () => {}),
+    pruneReportRuns: vi.fn(async () => {}),
+    findClaimedWindows: vi.fn(async () => new Set(guardState.alreadyClaimed)),
+  }
+})
+
 vi.mock('@/lib/ai-audit', () => ({ recordAiAction: vi.fn(async () => {}) }))
 
 import { POST } from '@/app/api/reports/run/route'
+import { resolveTenantToken } from '@/lib/reports/access-token'
 import { __clearGA4MetadataCache } from '@/lib/google/analytics'
 
 function req() {
@@ -131,6 +155,11 @@ beforeEach(() => {
   // Metadata is cached per property for 24h — a stale entry would leak the
   // previous test's metric list into the next one.
   __clearGA4MetadataCache()
+  guardState.claimThrows = false
+  guardState.alreadyClaimed = []
+  // Call counts are asserted below (the no-token path), and mocks persist
+  // across cases in this file.
+  vi.mocked(resolveTenantToken).mockClear()
 })
 
 describe('POST /api/reports/run — GA4 metric names (T-69)', () => {
@@ -173,5 +202,51 @@ describe('POST /api/reports/run — GA4 metric names (T-69)', () => {
     expect(requestedMetrics()).not.toContain('keyEvents')
     expect(state.markdown).toContain('| sessions |')
     expect(state.markdown).toContain('unavailable on this property and omitted: keyEvents')
+  })
+})
+
+/* ══════════════════════════════════════════════════════════════════════════
+   The per-window claim's failure contract (Codex review on #221).
+
+   Two states that look identical in a 200 response but are opposites:
+   "already generated" (fine) and "the database is unreachable so nothing was
+   generated" (an outage). The workflow only alerts on non-2xx or results whose
+   status is 'failed', so mislabelling the outage as 'skipped' would keep the
+   scheduled run green straight through it — the silent failure this arc exists
+   to remove.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+describe('POST /api/reports/run — claim failure contract', () => {
+  it('a claim ERROR is reported as failed, so the workflow alerts', async () => {
+    guardState.claimThrows = true
+    const res = await POST(req())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+
+    expect(body.results[0]).toMatchObject({ reportId: 'weekly-digest', status: 'failed' })
+    expect(body.results[0].reason).toContain('could not claim')
+    // `ran` must count it: the workflow's all-failed error tier compares the
+    // failed count against `ran`, so a 0 here would silently pass.
+    expect(body.ran).toBe(1)
+    expect(body.skipped).toBe(0)
+    // Fail CLOSED: nothing may be generated without a claim.
+    expect(state.reportBodies).toHaveLength(0)
+  })
+
+  it('an already-claimed window is skipped WITHOUT minting a Google token', async () => {
+    // The catch-up no-op tick: the report ran at 07:00 and is re-offered every
+    // hour after. Resolving credentials for it would refresh OAuth needlessly
+    // and turn a transient refresh failure into a 409 false alarm.
+    const { windowKey } = await import('@/lib/reports/run-guard')
+    guardState.alreadyClaimed = [windowKey('weekly-digest', '2026-08-03')]
+    const res = await POST(req())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+
+    expect(body.results[0]).toMatchObject({ reportId: 'weekly-digest', status: 'skipped' })
+    expect(body.ran).toBe(0)
+    expect(body.skipped).toBe(1)
+    expect(state.reportBodies).toHaveLength(0)
+    expect(resolveTenantToken).not.toHaveBeenCalled()
   })
 })

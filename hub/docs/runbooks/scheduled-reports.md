@@ -68,14 +68,36 @@ and variables → Actions), which must byte-match the value on the Cloud Run
 service. It is already set — the dispatch alert tick in the same workflow uses
 it. Run it on demand from Actions → **Hourly cron tick** → Run workflow.
 
-> **⚠️ An on-demand run DURING a report's due hour duplicates it.** The runner
-> decides due-ness purely from the current local day/hour (`dueReports`) and
-> records nothing about a window already having run, so a second invocation in
-> the same hour builds a second Doc/deck and sends a second email/Chat post.
-> Safe any other hour — the scheduled tick fires once per hour, so the normal
-> path never doubles. Verify off-hours (expect `"ran":0`), or accept the
-> duplicate. Closing this properly needs an idempotency guard keyed by tenant +
-> report id + reporting window; tracked as a follow-up, not shipped here.
+On-demand runs are safe at any hour: the runner claims each (tenant, report,
+reporting window) in `report_runs` before generating, so a dispatch inside a
+due hour skips an already-generated report rather than building a duplicate
+Doc and sending a duplicate email. Skipped reports appear as
+`status:"skipped"` in the response, and `skipped` is counted separately from
+`ran`.
+
+## Missed hours are caught up the same day
+
+The trigger cannot be trusted to fire every hour. On 2026-08-27 the GitHub
+schedule was observed dropping firings for **2–10 hours** at a stretch — and
+the runner originally asked only *"is this the due hour?"*, so a 07:00 weekly
+digest whose hour was skipped was never produced at all.
+
+The runner now asks *"is this due now, or was it due earlier **today** and not
+yet generated?"* (`isDueOrMissedToday`). A dropped hour becomes a late digest
+instead of a lost one, and the `report_runs` claim keeps a caught-up report
+generating exactly once rather than on every remaining tick of the day.
+
+**The catch-up is deliberately bounded to the same local day.** `reportWindow`
+derives its dates from the local calendar day of the run, so catching up the
+next day would silently produce a *different* window than the one that was due
+— a wrong report rather than a late one. A miss that outlives the local day
+stays a miss, and stays visible as a gap in `report_runs`.
+
+Because the trigger's reliability is the weak link, **run both trigger paths**:
+the GitHub workflow AND a Cloud Scheduler job (below). They are idempotent with
+respect to each other — whichever fires first claims the window, the other
+skips — so two independent triggers strictly reduce the chance of a missed
+report.
 
 ## Alternative: create a Cloud Scheduler job
 

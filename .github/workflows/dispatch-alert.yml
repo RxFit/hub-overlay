@@ -20,8 +20,13 @@ name: Hourly cron tick
 #
 # ── Tick 2: scheduled reports ──
 # Calls POST /api/reports/run, which asks every configured report "are you due
-# in this hour, in the tenant's timezone?" and generates only those
-# (hub/docs/runbooks/scheduled-reports.md). It runs here rather than from a
+# now, or were you due earlier today and not yet generated?" and builds only
+# those (hub/docs/runbooks/scheduled-reports.md). The catch-up half matters
+# because THIS trigger is unreliable: GitHub dropped hourly firings for 2–10
+# hours on 2026-08-27, and the runner's old strict "is this the due hour?"
+# question lost the digest entirely whenever its hour was skipped. A per-window
+# claim (lib/reports/run-guard.ts) keeps a caught-up report generating exactly
+# once. It runs here rather than from a
 # Cloud Scheduler job because this workflow already fires hourly and already
 # holds CRON_SECRET — no new GCP infrastructure, and the same loud-by-default
 # failure posture.
@@ -42,13 +47,11 @@ on:
     # the most delayed. GitHub crons are best-effort (minutes of slop), which
     # is fine for an hourly alerting cadence.
     - cron: '7 * * * *'
-  # NOTE on manual runs: the reports tick is NOT idempotent within a report's
-  # due hour — the runner decides due-ness from the current local day/hour and
-  # records nothing about a window already having run, so dispatching during a
-  # due hour (or re-running a failed job then) builds a duplicate Doc/deck and
-  # sends a duplicate email. Scheduled firings are one per hour, so the normal
-  # path never doubles. Follow-up: idempotency guard keyed by tenant + report
-  # id + window (hub/docs/runbooks/scheduled-reports.md).
+  # Manual runs are safe to dispatch at any hour: the runner claims each
+  # (tenant, report, window) in report_runs before generating, so a dispatch
+  # inside a due hour skips an already-generated report instead of building a
+  # duplicate Doc and sending a duplicate email. Claim losers report
+  # status:"skipped" in the response.
   workflow_dispatch: {}
 
 concurrency:
@@ -146,8 +149,12 @@ jobs:
               ;;
           esac
 
+          # `ran` counts reports ATTEMPTED this tick; `skipped` counts windows a
+          # previous tick already generated (the common case now that the runner
+          # catches up on missed hours — see lib/reports/run-guard.ts).
           RAN=$(jq -r '.ran // 0' /tmp/reports.json)
-          echo "reports due this hour: $RAN"
+          SKIPPED=$(jq -r '.skipped // 0' /tmp/reports.json)
+          echo "reports attempted: $RAN (already-generated windows skipped: $SKIPPED)"
 
           # A per-report failure returns HTTP 200 with the reason inside, so it
           # would otherwise be invisible. Two tiers:
