@@ -37,32 +37,42 @@ import { getFaultReportCounters } from '@/lib/fault-report'
  *     log-only listener would hang the container until SIGKILL.
  *
  * ─────────────────────────────────────────────────────────────────────────
- * DELIBERATE DEVIATION from the spec's Layer 8, with evidence.
+ * `unhandledRejection`: the correct answer is SURFACE-DEPENDENT, which is why
+ * the listener is gated rather than global. Verified empirically on node 22.
  *
- * The spec says to install NO `unhandledRejection` listener, reasoning that
- * "Node >=15 already defaults to throw, so a log-only listener would silently
- * downgrade a crash to a swallow." That reasoning does not hold for the
- * PINNED Next version. next@14.2.35's `dist/server/lib/start-server.js`
- * already registers, unconditionally and in production:
+ * WITHOUT a listener (plain Node, the worker):
+ *     uncaughtExceptionMonitor fires with origin='unhandledRejection',
+ *     THEN the process dies (exit 1).
+ * WITH a listener:
+ *     the listener fires, the monitor does NOT, and the process survives
+ *     (exit 0) — because ANY listener suppresses Node's default throw.
+ *
+ * So on the WORKER we register nothing, exactly as the spec's Layer 8 says.
+ * Its reasoning holds there in full: a log-only listener would downgrade a
+ * crash to a swallow and leave the worker claiming and executing dispatch
+ * jobs after a programmer error, in the corrupted state Joyent's doctrine is
+ * about. Registering nothing costs no observability — the monitor above still
+ * reports it, correctly labelled — and keeps the crash.
+ *
+ * On NEXT-SERVER the spec's premise does not hold, because the framework got
+ * there first. next@14.2.35's dist/server/lib/start-server.js registers,
+ * unconditionally and in production:
  *
  *     process.on("uncaughtException", exception)
  *     process.on("unhandledRejection", exception)
+ *     // const exception = (err) => { console.error(err) }
+ *     // comment in Next's source: "we keep the process alive"
  *
- * where `exception` is `(err) => { console.error(err) }` with the comment
- * "This is the render worker, we keep the process alive". So on this version
- * Node's default-throw is ALREADY overridden by the framework: an unhandled
- * rejection neither crashes the process nor is ever promoted to an uncaught
- * exception — which means `uncaughtExceptionMonitor` above never sees one.
- * Omitting our listener therefore does not preserve a crash; it just leaves
- * the class invisible except as Next's own unstructured, UNSCRUBBED
- * console.error.
+ * There, Node's default-throw is ALREADY suppressed by Next: the rejection is
+ * never promoted, so the monitor never sees it, and the class would be
+ * visible only as Next's unstructured, UNSCRUBBED console.error. Our listener
+ * cannot downgrade a crash the framework already prevented, so it is purely
+ * additive: one scrubbed, fingerprinted record.
  *
- * Our listener cannot downgrade anything (Next's swallow already happened)
- * and is purely additive: one scrubbed, fingerprinted record. Residual we
- * cannot fix from here: Next's raw console.error still prints first, so an
- * unhandled rejection whose message embeds a secret is logged unscrubbed by
- * the framework. Removing Next's listener to prevent that would change crash
- * semantics and is deliberately out of scope.
+ * Residual, stated rather than hidden: on next-server Next's raw console.error
+ * still prints first, so a rejection whose message embeds a secret is logged
+ * unscrubbed by the framework. Removing Next's own listener to prevent that
+ * would change crash semantics and is deliberately out of scope.
  * ─────────────────────────────────────────────────────────────────────────
  */
 
@@ -141,9 +151,13 @@ export function installProcessFaultHandlers(opts: { surface: FaultSurface }): bo
     }
   })
 
-  // 2. Unhandled rejections — additive observability; see the deviation note
-  //    in the module header for why this exists despite the spec.
-  process.on('unhandledRejection', (reason: unknown) => {
+  // 2. Unhandled rejections — NEXT-SERVER ONLY. Registering this on the plain
+  //    Node worker would suppress Node's default throw and leave a corrupted
+  //    worker claiming and running jobs (see the module header). On the worker
+  //    we deliberately register nothing: the default promotes the rejection to
+  //    an uncaught exception, so handler 1 above reports it with
+  //    `origin: 'unhandledRejection'` AND the process still dies.
+  if (surface === 'next-server') process.on('unhandledRejection', (reason: unknown) => {
     try {
       const fault = toFault(reason, {
         layer: 'process',

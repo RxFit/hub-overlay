@@ -81,6 +81,34 @@ describe('what it registers — and what it deliberately does NOT', () => {
     expect(added.uncaughtException ?? []).toHaveLength(0)
   })
 
+  it('registers the unhandledRejection listener ONLY on next-server', () => {
+    install('next-server')
+    expect(added.unhandledRejection).toHaveLength(1)
+  })
+
+  it('registers NO unhandledRejection listener on the worker — a listener would suppress the crash', () => {
+    // Verified on node 22: ANY unhandledRejection listener suppresses Node's
+    // default throw. On the plain-Node worker that would swallow a programmer
+    // error and leave it claiming and executing dispatch jobs in a corrupted
+    // state. Registering nothing costs no observability — the rejection is
+    // promoted to an uncaught exception, so uncaughtExceptionMonitor reports
+    // it with origin 'unhandledRejection' AND the process still dies.
+    install('dispatch-worker')
+    expect(added.unhandledRejection ?? []).toHaveLength(0)
+    // ...and the monitor is still installed, so the class stays observable.
+    expect(added.uncaughtExceptionMonitor).toHaveLength(1)
+  })
+
+  it('the worker still reports a promoted rejection through the monitor', () => {
+    install('dispatch-worker')
+    // What Node actually delivers when the default throw promotes it.
+    fire('uncaughtExceptionMonitor', new Error('nobody awaited me'), 'unhandledRejection')
+    const [line] = lines()
+    expect(line.origin).toBe('unhandledRejection')
+    expect(line.surface).toBe('dispatch-worker')
+    expect(line.severity).toBe('CRITICAL')
+  })
+
   it('registers shutdown listeners for both signals', () => {
     install()
     expect(added.SIGTERM).toHaveLength(1)
@@ -138,8 +166,8 @@ describe('the crash line', () => {
     expect(line.serviceContext.service).toBe('hub-worker')
   })
 
-  it('reports an unhandled rejection — invisible to uncaughtExceptionMonitor on this Next version', () => {
-    install()
+  it('reports an unhandled rejection on next-server — where Next already suppressed the crash', () => {
+    install('next-server')
     fire('unhandledRejection', new Error('nobody awaited me'), Promise.resolve())
     const [line] = lines()
     expect(line.origin).toBe('unhandledRejection')
@@ -148,7 +176,7 @@ describe('the crash line', () => {
   })
 
   it('normalizes a non-Error throw rather than dropping it', () => {
-    install()
+    install('next-server')
     fire('unhandledRejection', 'a bare string rejection', Promise.resolve())
     expect(lines()[0].message).toContain('a bare string rejection')
   })
