@@ -18,6 +18,11 @@ const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   experimental: {
+    // MANDATORY on 14.2.x for instrumentation.ts to load at all (Layer 8).
+    // Without it the file is parsed and never imported — no warning, no
+    // error, and every process-level handler silently no-ops. Asserted
+    // alongside the file itself by scripts/assert-instrumentation.mjs.
+    instrumentationHook: true,
     // Server-only source maps (ERROR_REPORTING_2026-08-24.md §5): they live in
     // the server bundle and are never served to browsers. Paired with
     // NODE_OPTIONS=--enable-source-maps in the Dockerfile so production stack

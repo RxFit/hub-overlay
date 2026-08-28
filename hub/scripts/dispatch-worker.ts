@@ -7,6 +7,14 @@
  * this file only reads config, wires shutdown, and starts the slots.
  */
 import { startWorker, workerConfigFromEnv } from '@/lib/dispatch-worker'
+import { installProcessFaultHandlers } from '@/lib/fault-process'
+
+// The worker is a plain Node process, so instrumentation.ts NEVER loads for
+// it: before this, its crashes, unhandled rejections and startup failures
+// produced nothing at all, and server-side lease expiry could only report
+// that the worker "went quiet" — never why (ERROR_REPORTING §3 Layer 8/10).
+// Installed FIRST so a throw in config parsing below is already covered.
+installProcessFaultHandlers({ surface: 'dispatch-worker' })
 
 const cfg = workerConfigFromEnv()
 if ('error' in cfg) {
