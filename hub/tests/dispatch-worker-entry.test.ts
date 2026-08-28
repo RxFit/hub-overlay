@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { spawnSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 import { join } from 'node:path'
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -17,13 +18,15 @@ import { join } from 'node:path'
    ════════════════════════════════════════════════════════════════════════════ */
 
 const hubRoot = join(__dirname, '..')
+const require = createRequire(import.meta.url)
+const tsxCli = require.resolve('tsx/cli')
 
 /** A token-shaped bad level, so the SAME run also proves the crash path is
  *  scrubbed: the value is interpolated into pino's error message verbatim. */
 const SECRET_LEVEL = 'sk-supersecrettoken1234'
 
 function runEntrypoint() {
-  return spawnSync('npx', ['tsx', 'scripts/dispatch-worker.ts'], {
+  return spawnSync(process.execPath, [tsxCli, 'scripts/dispatch-worker.ts'], {
     cwd: hubRoot,
     encoding: 'utf8',
     timeout: 60_000,
@@ -35,8 +38,12 @@ describe('an import-time failure in the worker graph is still captured', () => {
   it('emits exactly one structured dispatch-worker record and exits nonzero', () => {
     const res = runEntrypoint()
 
-    // 1. The crash is preserved — never swallowed into a clean exit.
-    expect(res.status, `expected nonzero exit, got ${res.status}`).not.toBe(0)
+    // 1. The child actually launched and the crash is preserved. A bare
+    // `spawnSync('npx', ...)` cannot resolve npx.cmd on Windows; without these
+    // assertions that ENOENT produced status=null, which looked nonzero while
+    // the test never exercised the worker at all.
+    expect(res.error).toBeUndefined()
+    expect(res.status, `expected crash exit 1, got ${res.status}`).toBe(1)
 
     // 2. Exactly one structured fault record, and it is OURS (the worker's).
     const records = (res.stderr ?? '')
@@ -58,7 +65,7 @@ describe('an import-time failure in the worker graph is still captured', () => {
     expect(rec.fault.layer).toBe('process')
     expect(rec.fault.severity).toBe('fatal')
     // The diagnosis actually points at the module that failed to initialize.
-    expect(rec.fault.stack).toContain('lib/logger.ts')
+    expect(rec.fault.stack.replaceAll('\\', '/')).toContain('lib/logger.ts')
 
     // 3. The record is scrubbed. NOTE what is deliberately NOT asserted:
     //    Node's own raw crash output also prints to stderr and is outside our
