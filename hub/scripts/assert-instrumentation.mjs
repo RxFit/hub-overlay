@@ -18,6 +18,7 @@
  * Runs as part of `npm run build` (locally, in CI, and in the Docker image).
  */
 import { readFileSync, existsSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -60,19 +61,28 @@ if (!existsSync(instrumentationPath)) {
 }
 
 // ── half 2: the flag ───────────────────────────────────────────────────────
-// Read the config as text rather than importing it: this must hold for the
-// source a reviewer reads, and a require() would also execute it.
+// EVALUATE the config rather than pattern-matching its text. A regex over the
+// source is fooled by the most likely way this ever gets disabled — someone
+// commenting the line out — and `// instrumentationHook: true` would still
+// match, so the gate would report success while Next silently never loads
+// instrumentation.ts. That is the exact failure this script exists to prevent,
+// so the check has to read the value Next will actually receive.
 const configPath = join(hubRoot, 'next.config.js')
-let config = ''
 try {
-  config = readFileSync(configPath, 'utf8')
+  const require = createRequire(import.meta.url)
+  // Evaluating is safe here: next.config.js is a plain object literal export;
+  // its headers() is a function definition, never invoked by this read.
+  const config = require(configPath)
+  const resolved = typeof config === 'function' ? config('phase-production-build', {}) : config
+  if (resolved?.experimental?.instrumentationHook !== true) {
+    failures.push(
+      'next.config.js does not set `experimental.instrumentationHook: true` (evaluated value: ' +
+        JSON.stringify(resolved?.experimental?.instrumentationHook) +
+        '). On 14.2.x, instrumentation.ts is then parsed and NEVER imported — silently, with every handler inside dead.',
+    )
+  }
 } catch (err) {
-  failures.push(`Cannot read ${configPath} (${err.message})`)
-}
-if (config && !/instrumentationHook\s*:\s*true/.test(config)) {
-  failures.push(
-    'next.config.js does not set `experimental.instrumentationHook: true`. On 14.2.x, instrumentation.ts is then parsed and NEVER imported — silently, with every handler inside dead.',
-  )
+  failures.push(`Cannot evaluate ${configPath} to verify the flag (${err.message})`)
 }
 
 if (failures.length > 0) {

@@ -80,6 +80,24 @@ import { getFaultReportCounters } from '@/lib/fault-report'
  *  "which process died" is the first question an operator asks. */
 export type FaultSurface = 'next-server' | 'dispatch-worker'
 
+/**
+ * KNOWN LIMITATION on the 'dispatch-worker' surface, stated so this is never
+ * mistaken for more than it is. The worker runs in Docker on the operator's
+ * desktop and NEVER on Cloud Run (scripts/agy-worker/Dockerfile); it reaches
+ * the Hub only over HTTPS, and app/api/worker exposes exactly three routes —
+ * claim, heartbeat and result. So a record written here reaches that
+ * container's local stderr (`docker logs`) and nothing else: it does not land
+ * in Cloud Logging, and the Hub still sees only a lease expiring.
+ *
+ * What this DOES buy: the crash is now structured, scrubbed and attributable
+ * locally, where previously it was a raw stack or nothing at all. What it does
+ * NOT buy: remote diagnosis. Closing that needs a worker fault sink — spool
+ * the record and upload it on the next claim, or add a dedicated endpoint —
+ * which is its own change (endpoint, shared-secret auth, spool file, size
+ * caps, retry) and is tracked in the spec's Layer 10. Deliberately not widened
+ * into this PR.
+ */
+
 /** GCP LogEntry severities (Error Reporting ingests ERROR and above). */
 const CRITICAL = 'CRITICAL'
 const INFO = 'INFO'
