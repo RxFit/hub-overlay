@@ -6,10 +6,11 @@ import { clampInt } from '@/lib/num'
 import { listRecentFiles } from '@/lib/google'
 import { getTenantConfig } from '@/lib/tenant'
 import { buildDriveQuery, rankByOwnActivity, RANK_FETCH_SIZE } from '@/lib/google/drive-query'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
-export async function GET(req: NextRequest) {
+export const GET = withFault('google/drive', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -50,4 +51,4 @@ export async function GET(req: NextRequest) {
   } catch (error) {
     return googleApiErrorResponse(error, googleRouteCtx(req, '/api/google/drive'))
   }
-}
+})

@@ -9,6 +9,7 @@ import { AI_INTENT_HEADER } from '@/lib/requireGate'
 import { recordAiAction } from '@/lib/ai-audit'
 import { checkActionLimit } from '@/lib/rate-limit'
 import { newRequestId } from '@/lib/observability'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
@@ -28,7 +29,7 @@ export const runtime = 'nodejs'
  *
  * The deck is filed into the Hub workspace's `Presentations/` folder.
  */
-export async function POST(req: NextRequest) {
+export const POST = withFault('google/presentation', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -100,4 +101,4 @@ export async function POST(req: NextRequest) {
     }
     return googleWriteErrorResponse(err, 'Google Slides', googleRouteCtx(req, '/api/google/presentation'))
   }
-}
+})

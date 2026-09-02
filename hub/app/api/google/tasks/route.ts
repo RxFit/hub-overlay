@@ -9,10 +9,11 @@ import { AI_INTENT_HEADER, GATE_TOKEN_HEADER } from '@/lib/requireGate'
 import { recordAiAction } from '@/lib/ai-audit'
 import { checkActionLimit } from '@/lib/rate-limit'
 import { newRequestId } from '@/lib/observability'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
-export async function GET(req: NextRequest) {
+export const GET = withFault('google/tasks', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -43,9 +44,9 @@ export async function GET(req: NextRequest) {
   } catch (error) {
     return googleApiErrorResponse(error, googleRouteCtx(req, '/api/google/tasks'))
   }
-}
+})
 
-export async function POST(req: NextRequest) {
+export const POST = withFault('google/tasks', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -172,4 +173,4 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     return googleApiErrorResponse(error, googleRouteCtx(req, '/api/google/tasks'))
   }
-}
+})

@@ -8,6 +8,7 @@ import { AI_INTENT_HEADER } from '@/lib/requireGate'
 import { recordAiAction } from '@/lib/ai-audit'
 import { checkActionLimit } from '@/lib/rate-limit'
 import { newRequestId } from '@/lib/observability'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
@@ -22,7 +23,7 @@ export const runtime = 'nodejs'
  * workspace's `Spreadsheets/` folder, falling back to Drive root if that
  * folder can't be provisioned.
  */
-export async function POST(req: NextRequest) {
+export const POST = withFault('google/sheet', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -92,4 +93,4 @@ export async function POST(req: NextRequest) {
     }
     return googleWriteErrorResponse(err, 'Google Sheets', googleRouteCtx(req, '/api/google/sheet'))
   }
-}
+})

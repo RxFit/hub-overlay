@@ -23,6 +23,7 @@ import { newRequestId } from '@/lib/observability'
 import { geminiGenerateText } from '@/lib/gemini'
 import { focusPreferencesSignature, EMPTY_FOCUS_PREFERENCES } from '@/lib/focus-preferences'
 import { getFocusPreferences } from '@/lib/focus-preferences-db'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 export const maxDuration = 30
@@ -101,7 +102,7 @@ async function rankWithFallback(prompt: string): Promise<{ text: string; model: 
 }
 
 
-export async function GET(req: NextRequest) {
+export const GET = withFault('google/gmail/focus', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
@@ -255,5 +256,5 @@ export async function GET(req: NextRequest) {
     degraded: !aiRanked,
     ...(aiFailure ? { aiFailure } : {}),
   })
-}
+})
 

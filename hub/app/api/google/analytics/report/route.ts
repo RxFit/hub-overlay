@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth'
 import { resolveGoogleAuth, googleWriteErrorResponse, googleRouteCtx } from '@/lib/google-session'
 import { runGA4Report, type GA4ReportRequest } from '@/lib/google/analytics'
 import { getEffectivePrefs } from '@/lib/google/prefs-db'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
@@ -22,7 +23,7 @@ export const runtime = 'nodejs'
  * (including custom definitions), so a mistyped metric returns a message naming
  * the offending field instead of an opaque Google 400.
  */
-export async function POST(req: NextRequest) {
+export const POST = withFault('google/analytics/report', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   const role = (session?.user as Record<string, unknown>)?.role as string
 
@@ -82,4 +83,4 @@ export async function POST(req: NextRequest) {
     }
     return googleWriteErrorResponse(err, 'Google Analytics', googleRouteCtx(req, '/api/google/analytics/report'))
   }
-}
+})

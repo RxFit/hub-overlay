@@ -9,6 +9,7 @@ import { requireAiGate, AI_INTENT_HEADER, GATE_TOKEN_HEADER } from '@/lib/requir
 import { recordAiAction } from '@/lib/ai-audit'
 import { checkActionLimit } from '@/lib/rate-limit'
 import { newRequestId } from '@/lib/observability'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
@@ -32,7 +33,7 @@ const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me'
    exactly like AI sends.
    ══════════════════════════════════════════════════════════════════════════════ */
 
-export async function POST(req: NextRequest) {
+export const POST = withFault('google/gmail/actions', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
@@ -142,4 +143,4 @@ export async function POST(req: NextRequest) {
     }
     return googleApiErrorResponse(err, googleRouteCtx(req, '/api/google/gmail/actions'))
   }
-}
+})

@@ -8,6 +8,7 @@ import { AI_INTENT_HEADER } from '@/lib/requireGate'
 import { recordAiAction } from '@/lib/ai-audit'
 import { checkActionLimit } from '@/lib/rate-limit'
 import { newRequestId } from '@/lib/observability'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
@@ -26,7 +27,7 @@ export const runtime = 'nodejs'
  * `Documents/` folder; if that folder can't be provisioned the doc is still
  * created, just at Drive root.
  */
-export async function POST(req: NextRequest) {
+export const POST = withFault('google/doc', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -93,4 +94,4 @@ export async function POST(req: NextRequest) {
     }
     return googleWriteErrorResponse(err, 'Google Docs', googleRouteCtx(req, '/api/google/doc'))
   }
-}
+})

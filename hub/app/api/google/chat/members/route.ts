@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { resolveGoogleAuth, googleApiErrorResponse, googleRouteCtx } from '@/lib/google-session'
 import { listSpaceMembers } from '@/lib/google'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
@@ -8,7 +9,7 @@ export const runtime = 'nodejs'
  * GET /api/google/chat/members?spaceId=spaces/XXXX
  * Returns human members of a Google Chat space (for @mention picker).
  */
-export async function GET(req: NextRequest) {
+export const GET = withFault('google/chat/members', async (req: NextRequest) => {
   const auth = await resolveGoogleAuth(req)
   if (!auth.ok) return auth.response
 
@@ -47,4 +48,4 @@ export async function GET(req: NextRequest) {
 
     return googleApiErrorResponse(err, googleRouteCtx(req, '/api/google/chat/members'))
   }
-}
+})

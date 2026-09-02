@@ -17,6 +17,7 @@ import { recordAiAction } from '@/lib/ai-audit'
 import { checkActionLimit } from '@/lib/rate-limit'
 import { newRequestId } from '@/lib/observability'
 import { resolveSubject } from '@/lib/gmail-subject'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
@@ -52,7 +53,7 @@ async function gmailPost<T>(path: string, accessToken: string, body: unknown): P
 }
 
 /* ── GET /api/google/gmail ── */
-export async function GET(req: NextRequest) {
+export const GET = withFault('google/gmail', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
@@ -115,7 +116,7 @@ export async function GET(req: NextRequest) {
   } catch (err) {
     return googleApiErrorResponse(err, googleRouteCtx(req, '/api/google/gmail'))
   }
-}
+})
 
 /**
  * Deliver a draft created by an earlier `mode: 'draft'` call.
@@ -180,7 +181,7 @@ async function sendExistingDraft(
 }
 
 /* ── POST /api/google/gmail — send or reply ── */
-export async function POST(req: NextRequest) {
+export const POST = withFault('google/gmail', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
@@ -323,7 +324,7 @@ export async function POST(req: NextRequest) {
     }
     return googleApiErrorResponse(err, googleRouteCtx(req, '/api/google/gmail'))
   }
-}
+})
 
 /* ── Parsers ──
    GmailThread/GmailMessage types plus the getHeader/parseThreadMeta helpers

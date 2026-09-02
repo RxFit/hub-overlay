@@ -9,8 +9,9 @@ import { requireAiGate, AI_INTENT_HEADER, GATE_TOKEN_HEADER } from '@/lib/requir
 import { recordAiAction } from '@/lib/ai-audit'
 import { checkActionLimit } from '@/lib/rate-limit'
 import { newRequestId } from '@/lib/observability'
+import { withFault } from '@/lib/route-fault'
 
-export async function GET(req: NextRequest) {
+export const GET = withFault('google/chat/messages', async (req: NextRequest) => {
   const auth = await resolveGoogleAuth(req)
   if (!auth.ok) return auth.response
 
@@ -54,9 +55,9 @@ export async function GET(req: NextRequest) {
 
     return googleApiErrorResponse(err, googleRouteCtx(req, '/api/google/chat/messages'))
   }
-}
+})
 
-export async function POST(req: NextRequest) {
+export const POST = withFault('google/chat/messages', async (req: NextRequest) => {
   const auth = await resolveGoogleAuth(req)
   if (!auth.ok) return auth.response
 
@@ -136,7 +137,7 @@ export async function POST(req: NextRequest) {
     console.error('[api/google/chat/messages POST]', msg)
     return googleApiErrorResponse(err, googleRouteCtx(req, '/api/google/chat/messages'))
   }
-}
+})
 
 /**
  * Ownership 403s from Google get a user-actionable message. Genuine
@@ -163,7 +164,7 @@ function isAiMarked(req: NextRequest): boolean {
 }
 
 /** PATCH — edit the text of one of the caller's own messages. */
-export async function PATCH(req: NextRequest) {
+export const PATCH = withFault('google/chat/messages', async (req: NextRequest) => {
   const auth = await resolveGoogleAuth(req)
   if (!auth.ok) return auth.response
   if (isAiMarked(req)) {
@@ -190,10 +191,10 @@ export async function PATCH(req: NextRequest) {
   } catch (err) {
     return mapModifyError(req, err, 'edit')
   }
-}
+})
 
 /** DELETE — remove one of the caller's own messages (?messageName=...). */
-export async function DELETE(req: NextRequest) {
+export const DELETE = withFault('google/chat/messages', async (req: NextRequest) => {
   const auth = await resolveGoogleAuth(req)
   if (!auth.ok) return auth.response
   if (isAiMarked(req)) {
@@ -219,4 +220,4 @@ export async function DELETE(req: NextRequest) {
   } catch (err) {
     return mapModifyError(req, err, 'delete')
   }
-}
+})

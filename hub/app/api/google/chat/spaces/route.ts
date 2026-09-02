@@ -6,6 +6,7 @@ import { resolveGoogleAuth, googleApiErrorResponse, googleRouteCtx } from '@/lib
 import { listChatSpaces, hydrateBotDmDisplayNames } from '@/lib/google'
 import { classifyChatSpace, isDefaultVisibleSpace, EMPTY_CHAT_SPACE_PREFERENCES } from '@/lib/chat-spaces'
 import { getChatSpacePreferences } from '@/lib/chat-space-preferences-db'
+import { withFault } from '@/lib/route-fault'
 
 /**
  * GET /api/google/chat/spaces
@@ -19,7 +20,7 @@ import { getChatSpacePreferences } from '@/lib/chat-space-preferences-db'
  * set on first paint, so the user never sees a flash of every Meet chat before
  * their preferences load.
  */
-export async function GET(req: NextRequest) {
+export const GET = withFault('google/chat/spaces', async (req: NextRequest) => {
   const auth = await resolveGoogleAuth(req)
   if (!auth.ok) return auth.response
 
@@ -61,4 +62,4 @@ export async function GET(req: NextRequest) {
 
     return googleApiErrorResponse(err, googleRouteCtx(req, '/api/google/chat/spaces'))
   }
-}
+})

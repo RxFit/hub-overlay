@@ -17,6 +17,7 @@ import { recordAiAction } from '@/lib/ai-audit'
 import { checkActionLimit } from '@/lib/rate-limit'
 import { newRequestId } from '@/lib/observability'
 import { getTenantId } from '@/lib/tenant-context'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
@@ -45,7 +46,7 @@ const ALLOWED_INTENTS = ['share_google_file'] as const
  * ?q=<name>     → candidate files ({ managed, unmanaged })
  * ?fileId=<id>  → who currently has access
  */
-export async function GET(req: NextRequest) {
+export const GET = withFault('google/share', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -75,10 +76,10 @@ export async function GET(req: NextRequest) {
   } catch (err) {
     return googleApiErrorResponse(err, googleRouteCtx(req, '/api/google/share'))
   }
-}
+})
 
 /* ── POST — grant access ── */
-export async function POST(req: NextRequest) {
+export const POST = withFault('google/share', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -180,10 +181,10 @@ export async function POST(req: NextRequest) {
     }
     return googleWriteErrorResponse(err, 'Google Drive sharing', googleRouteCtx(req, '/api/google/share'))
   }
-}
+})
 
 /* ── DELETE — revoke one grant ── */
-export async function DELETE(req: NextRequest) {
+export const DELETE = withFault('google/share', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -235,4 +236,4 @@ export async function DELETE(req: NextRequest) {
     }
     return googleWriteErrorResponse(err, 'Google Drive sharing', googleRouteCtx(req, '/api/google/share'))
   }
-}
+})

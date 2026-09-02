@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { normalizeFocusPreferences } from '@/lib/focus-preferences'
 import { getFocusPreferences, upsertFocusPreferences } from '@/lib/focus-preferences-db'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
@@ -17,16 +18,16 @@ export const runtime = 'nodejs'
    the DB or the ranker.
    ══════════════════════════════════════════════════════════════════════════════ */
 
-export async function GET(_req: NextRequest) {
+export const GET = withFault('google/gmail/focus/preferences', async (_req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user?.email) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   // getFocusPreferences is fail-open — a DB outage returns empty prefs, never an error.
   const prefs = await getFocusPreferences(session.user.email)
   return NextResponse.json(prefs)
-}
+})
 
-export async function PUT(req: NextRequest) {
+export const PUT = withFault('google/gmail/focus/preferences', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user?.email) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
@@ -50,4 +51,4 @@ export async function PUT(req: NextRequest) {
     console.error('[focus/preferences] save failed:', err)
     return NextResponse.json({ error: 'Could not save preferences — please try again.' }, { status: 502 })
   }
-}
+})
