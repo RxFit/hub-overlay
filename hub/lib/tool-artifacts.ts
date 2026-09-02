@@ -1,6 +1,6 @@
 import { db } from './db'
 import { toolArtifacts, documentChunks } from './schema'
-import { eq, and, desc } from 'drizzle-orm'
+import { eq, and, desc, sql } from 'drizzle-orm'
 import { generateEmbedding, EMBEDDING_MODEL } from './vector-store'
 import { createLogger } from './logger'
 
@@ -94,6 +94,24 @@ export async function saveToolArtifact(data: {
 }
 
 /**
+ * Owner identity for artifacts is an email, and emails are compared
+ * case-insensitively everywhere in the Hub (tool_runs stores them lowercased;
+ * a Google session may carry mixed case). Every createdBy comparison goes
+ * through here so a report auto-saved at landing under the run's lowercased
+ * owner is still THAT user's artifact when their session email says
+ * "Danny@…".
+ */
+export function normalizeArtifactOwner(email: string | null | undefined): string {
+  return (email ?? '').trim().toLowerCase()
+}
+
+/** True when `createdBy` (as stored) belongs to the caller identified by `email`. */
+export function isArtifactOwner(createdBy: string | null | undefined, email: string | null | undefined): boolean {
+  const owner = normalizeArtifactOwner(createdBy)
+  return owner !== '' && owner === normalizeArtifactOwner(email)
+}
+
+/**
  * Fetch tool artifacts for a tenant, optionally filtered by toolId.
  * Results are ordered newest-first.
  */
@@ -109,8 +127,9 @@ export async function getToolArtifacts(
       eq(toolArtifacts.status, 'active'),
     ]
     if (toolId) filters.push(eq(toolArtifacts.toolId, toolId))
-    // When createdBy is provided, scope results to that author (non-admin callers).
-    if (createdBy) filters.push(eq(toolArtifacts.createdBy, createdBy))
+    // When createdBy is provided, scope results to that author (non-admin
+    // callers) — case-insensitively, see normalizeArtifactOwner.
+    if (createdBy) filters.push(sql`lower(${toolArtifacts.createdBy}) = ${normalizeArtifactOwner(createdBy)}`)
     const conditions = and(...filters)
 
     const rows = await db

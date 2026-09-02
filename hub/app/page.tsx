@@ -547,12 +547,15 @@ export default function HubPage() {
     return () => { document.body.style.overflow = prev }
   }, [mobileLeftOpen, mobileRightOpen, chatPanelOpen])
 
-  // Escape closes any open panel
+  // Escape closes any open panel — unless a dialog layered above the drawers
+  // (the artifact viewer, via useModalA11y on `document`) already consumed
+  // it: document listeners run before this window one, and the viewer marks
+  // the event, so one Escape closes one layer.
   useEffect(() => {
     const anyOpen = mobileLeftOpen || mobileRightOpen || chatPanelOpen
     if (!anyOpen) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') handleClosePanels()
+      if (e.key === 'Escape' && !e.defaultPrevented) handleClosePanels()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -1150,8 +1153,11 @@ export default function HubPage() {
           />
         )}
 
-        {/* Mobile: Champagne gold edge indicator when tool is active but panel not visible */}
-        {activeSkill && mobileTab !== 'tool_panel' && (
+        {/* Mobile: Champagne gold edge handle whenever the tool is active but
+            its panel is not on screen — the phone "tab" is elsewhere, OR the
+            panel was collapsed on a wider viewport that then narrowed (the
+            rail is display:none on phones, so this is the only way back). */}
+        {activeSkill && (mobileTab !== 'tool_panel' || toolPanelCollapsed) && (
           <MobileToolEdge
             activeSkill={activeSkill}
             onTap={openToolPanel}

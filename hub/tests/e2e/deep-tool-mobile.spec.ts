@@ -63,7 +63,21 @@ async function mockBackend(page: Page, saveCalls: unknown[]) {
   await page.route('**/api/google/calendar**', route => route.fulfill({ json: { events: [] } }))
   await page.route('**/api/google/drive**', route => route.fulfill({ json: { files: [] } }))
   await page.route('**/api/google/chat/**', route => route.fulfill({ json: { spaces: [], messages: [] } }))
-  await page.route('**/api/tool-artifacts**', route => route.fulfill({ json: { artifacts: [] } }))
+  await page.route('**/api/tool-artifacts**', route =>
+    route.fulfill({
+      json: {
+        artifacts: [{
+          id: 'art-1', toolId: 'deep-think', title: 'Deep Think: Pricing call',
+          content: {
+            toolId: 'deep-think', title: 'Pricing call',
+            sections: [{ id: 's1', type: 'recommendation', title: 'Summary', content: 'Hold the price through Q4.' }],
+          },
+          contextSummary: null, status: 'active', createdBy: 'danny@rxfitatx.com',
+          createdAt: nowIso, updatedAt: nowIso,
+        }],
+      },
+    }),
+  )
   await page.route('**/api/tool-context', route => route.fulfill({ json: { contextCard: null } }))
   await page.route('**/api/deep-runs**', route => {
     const url = new URL(route.request().url())
@@ -163,6 +177,22 @@ test('a landed report is reachable again from the edge handle, by swipe, and fro
   await expect(edge(page)).toBeVisible()
   await expect(edge(page)).toContainText('Deep Research')
 
+  // The handle must never sit over the composer: Send stays hittable at its
+  // centre, and the two boxes do not intersect (a full-height handle covered
+  // the right half of Send on a 390px phone).
+  const sendBox = (await page.getByRole('button', { name: 'Send message' }).boundingBox())!
+  const edgeBox = (await edge(page).boundingBox())!
+  const intersects = !(
+    edgeBox.y + edgeBox.height <= sendBox.y || edgeBox.y >= sendBox.y + sendBox.height ||
+    edgeBox.x + edgeBox.width <= sendBox.x || edgeBox.x >= sendBox.x + sendBox.width
+  )
+  expect(intersects).toBe(false)
+  const hitAtSendCentre = await page.evaluate(({ x, y }) =>
+    document.elementFromPoint(x, y)?.closest('button')?.getAttribute('aria-label') ?? null,
+    { x: sendBox.x + sendBox.width / 2, y: sendBox.y + sendBox.height / 2 },
+  )
+  expect(hitAtSendCentre).toBe('Send message')
+
   // 1) tap the edge → the SAME landed report, no refetch needed.
   await edge(page).tap()
   await expect(panel(page)).toBeVisible()
@@ -215,4 +245,41 @@ test('"Discuss in chat" from the report lands the user in the chat with the edge
   await expect(panel(page)).toBeHidden()
   await expect(edge(page)).toBeVisible()
   await expect(page.getByText(/Let's discuss the research report/)).toBeVisible()
+})
+
+test('a panel collapsed on a wide viewport is still reachable after narrowing to a phone', async ({ page }) => {
+  // Desktop-width first: the tool panel is a column with a real collapse-to-rail.
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await researchChip(page).click()
+  await expect(panel(page)).toBeVisible()
+  await panel(page).getByRole('button', { name: 'Collapse tool panel' }).click()
+  await expect(panel(page)).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Expand Deep Research tool panel' })).toBeVisible()
+
+  // Narrow to a phone: the rail is display:none there, so the edge handle
+  // must take over — otherwise the report is unreachable again.
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(edge(page)).toBeVisible()
+  await edge(page).tap()
+  await expect(panel(page)).toBeVisible()
+  await expect(panel(page).getByRole('heading', { name: 'Churn drivers' })).toBeVisible({ timeout: 20_000 })
+})
+
+test('Escape in the artifact viewer closes only the viewer — the drawer it was opened from stays', async ({ page }) => {
+  await page.getByRole('tab', { name: 'Tasks' }).tap()
+  const drawer = page.locator('aside.panel-left.mobile-open')
+  await expect(drawer).toBeVisible()
+  await drawer.getByRole('tab', { name: 'Artifacts' }).tap()
+  await drawer.getByRole('listitem', { name: 'Artifact: Deep Think: Pricing call' }).tap()
+  const dialog = page.getByRole('dialog', { name: 'Deep Think: Pricing call' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog).toContainText('Hold the price through Q4.')
+
+  await page.keyboard.press('Escape')
+  await expect(dialog).toBeHidden()
+  await expect(drawer).toBeVisible()
+
+  // A second Escape now closes the drawer, as before.
+  await page.keyboard.press('Escape')
+  await expect(page.locator('aside.panel-left.mobile-open')).toHaveCount(0)
 })

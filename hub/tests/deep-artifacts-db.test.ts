@@ -3,6 +3,7 @@ import { describeDb, migrateTestDb, getSql, closeDb, seedTenant } from '../test/
 import { db } from '@/lib/db'
 import { createToolRun, finishToolRun } from '@/lib/tool-runs'
 import { ensureDeepRunArtifact, ensureDeepRunArtifactForRun } from '@/lib/deep-artifacts'
+import { getToolArtifacts } from '@/lib/tool-artifacts'
 
 /**
  * lib/deep-artifacts against REAL Postgres (skipped without DATABASE_URL; CI
@@ -127,6 +128,23 @@ describeDb('deep-run artifacts (Postgres)', () => {
 
     const [{ n }] = await getSql()<{ n: number }[]>`SELECT count(*)::int AS n FROM tool_artifacts`
     expect(n).toBe(1)
+  })
+
+  it('a landing-side save is listed for its owner however the session spells the email', async () => {
+    const id = crypto.randomUUID()
+    await createToolRun({ id, tool: 'deep-research', brief: 'Why churn?', userEmail: 'Staff@RxFitATX.com' })
+    await finishToolRun(db, id, { status: 'succeeded', resultMd: REPORT })
+    const saved = await ensureDeepRunArtifactForRun(id, 'Staff@RxFitATX.com', 'rxfit')
+    expect(saved?.created).toBe(true)
+
+    // tool_runs lowercases the owner; the Artifacts tab scopes staff by their
+    // session email, which Google may spell with capitals.
+    const mixed = await getToolArtifacts('rxfit', undefined, 20, 'Staff@RxFitATX.com')
+    expect(mixed.map(a => a.id)).toEqual([saved!.id])
+    const lower = await getToolArtifacts('rxfit', undefined, 20, 'staff@rxfitatx.com')
+    expect(lower.map(a => a.id)).toEqual([saved!.id])
+    const other = await getToolArtifacts('rxfit', undefined, 20, 'someone-else@rxfitatx.com')
+    expect(other).toEqual([])
   })
 
   it('a failed run is never saved as an artifact', async () => {

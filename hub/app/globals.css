@@ -3649,33 +3649,33 @@ a:hover .rx-arrow {
    MOBILE EDGE INDICATOR — Champagne gold pulsing bar on right edge
    ══════════════════════════════════════════════════════════════════════════════ */
 
+/* A mid-height drawer handle, not a full-height strip: a 44px hit zone that
+   ran top-to-bottom sat over the right half of the composer's Send button —
+   exactly the screen "Back to chat" now lands on. Vertically centred and
+   bounded, it never reaches the header or the composer on any phone. */
 .tool-edge-indicator {
   display: none;
   position: fixed;
   right: 0;
-  top: 0;
-  bottom: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: clamp(140px, 28vh, 220px);
   width: 44px; /* Meet 44px min touch target */
   z-index: 100;
   background: transparent;
   border: none;
   cursor: pointer;
   padding: 0;
-}
-
-.tool-edge-indicator::after {
-  content: '';
-  position: absolute;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  width: 3px; /* Visual indicator stays thin */
+  -webkit-tap-highlight-color: transparent;
 }
 
 .tool-edge-indicator__glow {
   position: absolute;
-  inset: 0;
+  inset: 0 0 0 14px; /* the visible tab is 30px; the rest is hit area */
+  border-radius: 10px 0 0 10px;
   background: rgba(197, 160, 89, 0.4);
+  border: 1px solid rgba(197, 160, 89, 0.55);
+  border-right: none;
   animation: edgePulse 2s ease-in-out infinite;
 }
 
@@ -3684,7 +3684,7 @@ a:hover .rx-arrow {
 .tool-edge-indicator__label {
   position: absolute;
   top: 50%;
-  left: 50%;
+  left: 29px; /* centre of the 30px visible tab (14px inset + 15px) */
   transform: translate(-50%, -50%) rotate(180deg);
   writing-mode: vertical-rl;
   font-family: var(--font-mono);

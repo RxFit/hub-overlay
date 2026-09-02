@@ -93,7 +93,10 @@ export const POST = withFault('deep-runs/[id]', async (req: NextRequest, { param
           { status: 409 },
         )
       }
-      const artifact = await ensureDeepRunArtifact(run, { tenantId: getTenantId(), createdBy: auth.email })
+      // Owner recorded the way tool_runs records it (lowercased) so the
+      // landing-side and panel-side saves are indistinguishable; reads and
+      // ownership checks compare case-insensitively (lib/tool-artifacts.ts).
+      const artifact = await ensureDeepRunArtifact(run, { tenantId: getTenantId(), createdBy: run.userEmail })
       return NextResponse.json({ artifact })
     } catch (err) {
       if (isMissingTableError(err)) {
