@@ -104,6 +104,21 @@ export interface ReportFaultOptions {
   trace?: TraceContext | null
   /** Injectable clock, matching lib/rate-limit.ts's convention. */
   now?: number
+  /**
+   * The ISO time the fault ACTUALLY occurred, when that differs from now —
+   * a worker fault spooled across a crash and uploaded on the next boot may
+   * be minutes or hours old, and stamping it with ingest time would silently
+   * misdate the incident. Volume control still uses `now`, because bucketing
+   * is about the rate we are emitting at, not when the fault happened.
+   */
+  occurredAt?: string
+  /**
+   * serviceContext.service override. GCP Error Reporting groups by service,
+   * so a worker fault re-reported by the Hub must NOT be labelled 'hub' —
+   * that would merge desktop-worker crashes into the server's groups and make
+   * both harder to read. Defaults to 'hub'.
+   */
+  service?: string
 }
 
 /** Report one fault. Synchronous for the caller; never throws. */
@@ -136,7 +151,7 @@ export function reportFault(draft: FaultDraft, opts: ReportFaultOptions = {}): v
     ceilingWindow.push(now)
     if (buckets.size > 2_000) sweepBuckets(now)
 
-    const fault: FaultRecord = { ts: new Date(now).toISOString(), ...draft }
+    const fault: FaultRecord = { ts: opts.occurredAt ?? new Date(now).toISOString(), ...draft }
 
     // Error Reporting wants exactly one of message/exception/stack_trace and
     // evaluates stack_trace → exception → message; we emit `message` only,
@@ -149,7 +164,7 @@ export function reportFault(draft: FaultDraft, opts: ReportFaultOptions = {}): v
       severity: GCP_SEVERITY[fault.severity],
       message: gcpMessage,
       ...gcpTraceFields(opts.trace ?? null),
-      serviceContext: { service: 'hub', version: fault.release },
+      serviceContext: { service: opts.service ?? 'hub', version: fault.release },
       context: fault.route
         ? {
             httpRequest: {

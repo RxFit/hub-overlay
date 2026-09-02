@@ -1,5 +1,6 @@
 import { agyErrorType, agyGenerateText, agyVersion, truncateAgyError, type AgyOptions, type AgyResult } from '@/lib/agy'
 import { createLogger } from '@/lib/logger'
+import { drainSpool, commitSpool, restoreSpool } from '@/lib/fault-spool'
 
 /**
  * lib/dispatch-worker.ts — the desktop worker's core loop (Phase 2.5 PR 2).
@@ -297,6 +298,96 @@ export async function runSlot(ctx: SlotContext): Promise<void> {
   }
 }
 
+/**
+ * The only statuses that mean "this batch is invalid and always will be":
+ * a malformed body, an oversized body, or a schema rejection. Everything else
+ * — including 401/403 (secret rotation), 404 (route not deployed yet), 408,
+ * 429 and every 5xx — is transient from the worker's point of view and must
+ * leave the spool intact for the next boot.
+ */
+const PERMANENTLY_REJECTED = new Set([400, 413, 422])
+
+/**
+ * Upload any crash records this worker spooled before it died
+ * (ERROR_REPORTING §3 Layer 10). Boot is the FIRST moment an HTTP call is
+ * safe — during the crash the process is going away and an async request
+ * loses the race — so the spool is drained here, before slots start claiming.
+ *
+ * Best-effort by construction: this must never delay or prevent real work.
+ * On any failure the batch is restored so the next boot retries it, and the
+ * spool is bounded on the write side so a crash loop cannot grow it forever.
+ */
+/** Ceiling on batches per boot: enough to clear a realistic crash loop
+ *  without letting a pathological spool delay slot startup. */
+const MAX_UPLOAD_BATCHES = 10
+
+export async function uploadSpooledFaults(
+  cfg: WorkerConfig,
+  fetchFn: typeof fetch,
+  timeoutMs = 10_000,
+): Promise<{ uploaded: number; failed: boolean }> {
+  // Keep draining while batches remain. A single call would upload only the
+  // first MAX_DRAIN_RECORDS and write the rest back — and since this runs
+  // ONLY at boot, a worker that then stays healthy would never send them,
+  // leaving records invisible until the nightly container rebuild discarded
+  // them. Bounded so a pathological spool cannot stall startup.
+  let uploaded = 0
+  for (let i = 0; i < MAX_UPLOAD_BATCHES; i++) {
+    const batch = await uploadOneSpooledBatch(cfg, fetchFn, timeoutMs)
+    uploaded += batch.uploaded
+    if (batch.failed) return { uploaded, failed: true }
+    if (!batch.more) break
+  }
+  return { uploaded, failed: false }
+}
+
+async function uploadOneSpooledBatch(
+  cfg: WorkerConfig,
+  fetchFn: typeof fetch,
+  timeoutMs: number,
+): Promise<{ uploaded: number; failed: boolean; more: boolean }> {
+  const { records, claimed, leftover } = drainSpool()
+  if (!claimed || records.length === 0) {
+    if (claimed) commitSpool(process.env, leftover) // empty/unparsable: discard
+    return { uploaded: 0, failed: false, more: false }
+  }
+  try {
+    const res = await fetchFn(`${cfg.hubUrl}/api/worker/faults`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-worker-secret': cfg.secret },
+      body: JSON.stringify({ workerId: cfg.workerId, faults: records }),
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+    if (res.status >= 200 && res.status < 300) {
+      commitSpool(process.env, leftover)
+      log.info({ uploaded: records.length }, 'uploaded spooled worker crash records')
+      // `leftover` is non-empty exactly when the batch cap held records back.
+      return { uploaded: records.length, failed: false, more: leftover !== '' }
+    }
+    // Drop ONLY on statuses that conclusively mean this payload will never be
+    // accepted. The earlier blanket 4xx rule was too broad and destroyed good
+    // records in two ordinary situations: a 401 while an AGY_WORKER_SECRET
+    // rotation is briefly out of sync, and a 404 from a worker that updated
+    // before the Hub deployment carrying this route finished. Both recover on
+    // their own, so both must RESTORE and retry.
+    if (PERMANENTLY_REJECTED.has(res.status)) {
+      commitSpool(process.env, leftover)
+      log.warn({ status: res.status, dropped: records.length }, 'hub rejected spooled crash records as invalid; dropping batch')
+      return { uploaded: 0, failed: true, more: false }
+    }
+    restoreSpool()
+    log.warn({ status: res.status }, 'spooled crash record upload failed; will retry next boot')
+    return { uploaded: 0, failed: true, more: false }
+  } catch (err) {
+    restoreSpool()
+    log.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'spooled crash record upload errored; will retry next boot',
+    )
+    return { uploaded: 0, failed: true, more: false }
+  }
+}
+
 /** Boot every configured slot; resolves only when `stop` aborts. */
 export async function startWorker(cfg: WorkerConfig, deps: WorkerDeps = {}, stop?: AbortSignal): Promise<void> {
   const fetchFn = deps.fetchFn ?? fetch
@@ -309,6 +400,11 @@ export async function startWorker(cfg: WorkerConfig, deps: WorkerDeps = {}, stop
     { hubUrl: cfg.hubUrl, workerId: cfg.workerId, chatSlots: cfg.chatSlots, workSlots: cfg.workSlots, agyVersion: agyVersionValue },
     'dispatch worker starting (PARALLEL_OK slot policy)',
   )
+
+  // Ship whatever the previous life spooled before doing anything else, so a
+  // crash-restart loop still reports every iteration rather than only the
+  // one that happens to survive.
+  await uploadSpooledFaults(cfg, fetchFn)
 
   // Envelope-drift gate: no claims until one marker prompt round-trips.
   if (cfg.canary === true) {
