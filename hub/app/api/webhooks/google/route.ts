@@ -19,7 +19,7 @@ export const POST = withFault('webhooks/google', async (req: Request) => {
   // 1. Verify Google Webhook headers (X-Goog-Channel-Token, X-Goog-Resource-State)
   const channelToken = req.headers.get('x-goog-channel-token');
   const resourceState = req.headers.get('x-goog-resource-state');
-  
+
   // Check channel token validity
   const expectedToken = process.env.GOOGLE_WEBHOOK_CHANNEL_TOKEN;
   if (!expectedToken) {

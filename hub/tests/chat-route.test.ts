@@ -28,11 +28,13 @@ describe('POST /api/chat — pre-stream error handling (F1)', () => {
 
     const res = await POST(req)          // must resolve, never reject
     expect(res.status).toBe(500)
+    expect(res.headers.get('x-hub-fault-id')).toMatch(/^HUB-[A-Z2-7]{8}$/)
 
     const json = await res.json()
     expect(json.error).toBe('Chat request failed')
     expect(typeof json.details).toBe('string')
     expect(json.details).toContain('JWTDecodeError')
+    expect(json.instance).toBe(res.headers.get('x-hub-fault-id'))
 
     expect(errorSpy).toHaveBeenCalled()  // structured log emitted
   })

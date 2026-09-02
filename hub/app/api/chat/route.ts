@@ -883,20 +883,21 @@ export const POST = withFault('chat', async (req: NextRequest) => {
     // failure before the stream opened left nothing in Error Reporting and no
     // fault id for the user to quote. reportFault closes that without touching
     // the body.
+    const fault = toFault(err, {
+      layer: 'route',
+      route: 'chat',
+      method: req.method,
+      module: 'chat',
+      requestId: safeRequestId(req.headers.get('x-hub-request-id')),
+    })
     reportFault(
-      toFault(err, {
-        layer: 'route',
-        route: 'chat',
-        method: req.method,
-        module: 'chat',
-        requestId: safeRequestId(req.headers.get('x-hub-request-id')),
-      }),
+      fault,
       { rawStack: err instanceof Error ? err.stack : null, trace: parseTraceparent(req.headers.get('traceparent')) },
     )
     // Raw error text is dev-only diagnostics — production bodies must stay generic.
     return NextResponse.json(
-      chatErrorBody(err, process.env.NODE_ENV === 'production'),
-      { status: 500 },
+      { ...chatErrorBody(err, process.env.NODE_ENV === 'production'), instance: fault.faultId },
+      { status: 500, headers: { 'x-hub-fault-id': fault.faultId } },
     )
   }
 })
