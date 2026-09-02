@@ -1,14 +1,57 @@
 import { db } from './db'
 import { toolArtifacts, documentChunks } from './schema'
-import { eq, and, desc } from 'drizzle-orm'
+import { eq, and, desc, sql } from 'drizzle-orm'
 import { generateEmbedding, EMBEDDING_MODEL } from './vector-store'
 import { createLogger } from './logger'
 
 const log = createLogger('tool-artifacts')
 
+/** The embedding-friendly text representation of an artifact. */
+function artifactChunkText(toolId: string, title: string, content: unknown): string {
+  return `Tool Artifact (${toolId}): ${title}\n\n${JSON.stringify(content)}`
+}
+
+/**
+ * Embed an already-saved artifact into document_chunks for semantic
+ * retrieval. BEST-EFFORT BY CONTRACT: never throws. An artifact that can't
+ * be embedded right now (no Gemini key, model outage, vector extension
+ * missing) is still an artifact the user can open from the Artifacts tab —
+ * it just isn't semantically searchable until re-embedded. Returns whether
+ * the chunk was written so callers can log the truth.
+ */
+export async function embedToolArtifact(artifact: {
+  id: string
+  tenantId: string
+  toolId: string
+  title: string
+  content: unknown
+}): Promise<boolean> {
+  try {
+    const chunkContent = artifactChunkText(artifact.toolId, artifact.title, artifact.content)
+    const embedding = await generateEmbedding(chunkContent)
+    await db.insert(documentChunks).values({
+      tenantId: artifact.tenantId,
+      sourceUrl: `tool-artifact:${artifact.id}`,
+      content: chunkContent,
+      embedding,
+      embeddingModel: EMBEDDING_MODEL,
+    })
+    return true
+  } catch (err) {
+    log.warn({ err, artifactId: artifact.id }, 'Tool artifact saved without an embedding — not semantically searchable until re-embedded')
+    return false
+  }
+}
+
 /**
  * Insert a new tool artifact and generate a companion document_chunk
  * with a vector embedding for semantic retrieval.
+ *
+ * The row insert is the operation that can fail this call. The embedding
+ * used to be in the same try — so a Gemini hiccup AFTER the insert reported
+ * failure to the caller while the row silently existed (the panel showed
+ * nothing saved; the Artifacts tab showed the row). Now the row is the
+ * result and the embedding is best-effort (embedToolArtifact).
  */
 export async function saveToolArtifact(data: {
   tenantId: string
@@ -19,9 +62,9 @@ export async function saveToolArtifact(data: {
   contextSummary?: string
   createdBy?: string
 }) {
+  let artifact: typeof toolArtifacts.$inferSelect
   try {
-    /* 1. Insert the artifact row */
-    const [artifact] = await db
+    ;[artifact] = await db
       .insert(toolArtifacts)
       .values({
         tenantId: data.tenantId,
@@ -34,26 +77,38 @@ export async function saveToolArtifact(data: {
         status: 'active',
       })
       .returning()
-
-    /* 2. Generate an embedding-friendly text representation */
-    const chunkContent = `Tool Artifact (${data.toolId}): ${data.title}\n\n${JSON.stringify(data.content)}`
-
-    /* 3. Embed and store in document_chunks for semantic search */
-    const embedding = await generateEmbedding(chunkContent)
-    await db.insert(documentChunks).values({
-      tenantId: data.tenantId,
-      sourceUrl: `tool-artifact:${artifact.id}`,
-      content: chunkContent,
-      embedding,
-      embeddingModel: EMBEDDING_MODEL,
-    })
-
-    log.info({ artifactId: artifact.id, toolId: data.toolId }, 'Tool artifact saved with embedding')
-    return artifact
   } catch (err) {
     log.error({ err, toolId: data.toolId }, 'Failed to save tool artifact')
     throw err
   }
+
+  const embedded = await embedToolArtifact({
+    id: artifact.id,
+    tenantId: data.tenantId,
+    toolId: data.toolId,
+    title: data.title,
+    content: data.content,
+  })
+  log.info({ artifactId: artifact.id, toolId: data.toolId, embedded }, 'Tool artifact saved')
+  return artifact
+}
+
+/**
+ * Owner identity for artifacts is an email, and emails are compared
+ * case-insensitively everywhere in the Hub (tool_runs stores them lowercased;
+ * a Google session may carry mixed case). Every createdBy comparison goes
+ * through here so a report auto-saved at landing under the run's lowercased
+ * owner is still THAT user's artifact when their session email says
+ * "Danny@…".
+ */
+export function normalizeArtifactOwner(email: string | null | undefined): string {
+  return (email ?? '').trim().toLowerCase()
+}
+
+/** True when `createdBy` (as stored) belongs to the caller identified by `email`. */
+export function isArtifactOwner(createdBy: string | null | undefined, email: string | null | undefined): boolean {
+  const owner = normalizeArtifactOwner(createdBy)
+  return owner !== '' && owner === normalizeArtifactOwner(email)
 }
 
 /**
@@ -72,8 +127,9 @@ export async function getToolArtifacts(
       eq(toolArtifacts.status, 'active'),
     ]
     if (toolId) filters.push(eq(toolArtifacts.toolId, toolId))
-    // When createdBy is provided, scope results to that author (non-admin callers).
-    if (createdBy) filters.push(eq(toolArtifacts.createdBy, createdBy))
+    // When createdBy is provided, scope results to that author (non-admin
+    // callers) — case-insensitively, see normalizeArtifactOwner.
+    if (createdBy) filters.push(sql`lower(${toolArtifacts.createdBy}) = ${normalizeArtifactOwner(createdBy)}`)
     const conditions = and(...filters)
 
     const rows = await db
@@ -136,7 +192,7 @@ export async function updateToolArtifact(
 
     /* Re-embed the document chunk tied to this artifact */
     const displayTitle = title ?? updated.title
-    const chunkContent = `Tool Artifact (${updated.toolId}): ${displayTitle}\n\n${JSON.stringify(content)}`
+    const chunkContent = artifactChunkText(updated.toolId, displayTitle, content)
     const embedding = await generateEmbedding(chunkContent)
 
     await db

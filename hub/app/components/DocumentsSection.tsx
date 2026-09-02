@@ -8,7 +8,8 @@ import type { ToolArtifactRecord, ChatAttachment } from '@/types'
 import styles from './LeftPanelSections.module.css'
 import { CollapsibleSection, SkeletonBlock, SectionMessage, AuthExpiredMessage } from './LeftPanelShared'
 import { formatRelativeDate, getDriveIcon, artifactsFetcher } from './LeftPanelUtils'
-import { buildDocumentInject, buildArtifactInject } from '@/lib/panel-inject'
+import { buildDocumentInject } from '@/lib/panel-inject'
+import { artifactToolName } from './ArtifactViewer'
 
 /* ══════════════════════════════════════════════════════════════════════════════
    DOCUMENTS SECTION
@@ -22,7 +23,15 @@ const DOC_FILTERS: { key: DocFilter; label: string }[] = [
   { key: 'transcripts', label: 'Transcripts' },
 ]
 
-export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void }) {
+export function DocumentsSection({
+  onInjectChat,
+  onOpenArtifact,
+}: {
+  onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void
+  /** Artifact rows OPEN the saved artifact in the viewer (the viewer's
+   *  "Discuss in chat" is the inject path — see ArtifactViewer.tsx). */
+  onOpenArtifact: (artifact: ToolArtifactRecord) => void
+}) {
   const [activeFilter, setActiveFilter] = useState<DocFilter>('recent')
   const isArtifactsTab = activeFilter === 'artifacts'
   // Disable the Drive fetch entirely while the Artifacts tab is active — no
@@ -44,13 +53,14 @@ export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string,
   const emptyMessages: Record<DocFilter, string> = {
     recent: 'No recent files',
     shared: 'No shared files',
-    artifacts: 'No saved artifacts — complete a tool session to create one',
+    artifacts: 'No saved artifacts yet — a finished Deep Research or Deep Think run saves here automatically',
     transcripts: 'No transcripts found',
   }
 
   /* Tool icon mapping for artifact cards */
   const getToolIcon = (toolId: string): string => {
     const icons: Record<string, string> = {
+      'deep-research': '📚', 'deep-think': '💡',
       'issue-tree': '🌳', 'decision-memo': '📋', 'prioritization': '📊',
       'data-insights': '📈', 'meeting-prep': '🤝', 'storyline': '📖',
       'scpr': '🔄', 'mckinsey-critic': '🔍', 'ai-use-case-scorer': '🤖',
@@ -92,12 +102,9 @@ export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string,
               <button
                 key={artifact.id}
                 role="listitem"
-                onClick={() => {
-                  // Attach the real artifact id so the chat resolves THIS
-                  // artifact even when two share a toolId + title.
-                  const { message, attachment } = buildArtifactInject(artifact)
-                  onInjectChat(message, [attachment])
-                }}
+                // Open the saved artifact itself — the whole record is already
+                // here, so the viewer needs no second fetch.
+                onClick={() => onOpenArtifact(artifact)}
                 aria-label={`Artifact: ${artifact.title}`}
                 className={styles.sectionRow}
               >
@@ -107,7 +114,7 @@ export function DocumentsSection({ onInjectChat }: { onInjectChat: (msg: string,
                 <div className={styles.documentInfo}>
                   <div className={styles.documentName}>{artifact.title}</div>
                   <div className={styles.documentModified}>
-                    {artifact.toolId} · {new Date(artifact.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                    {artifactToolName(artifact.toolId)} · {formatRelativeDate(artifact.createdAt)}
                   </div>
                 </div>
               </button>

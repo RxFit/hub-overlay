@@ -25,6 +25,13 @@ interface ToolPanelProps {
   /** Live conversation id, threaded through to panels that attach work to
    *  the chat (the deep-run panels). */
   chatId?: string | null
+  /** Phone layout: the panel is a full-screen overlay "tab". When hidden it
+   *  stays MOUNTED (state, polling, and a landed report survive) and only
+   *  disappears via CSS, so returning to it is instant and lossless. */
+  mobileHidden?: boolean
+  /** Phone layout: the collapse control reads as "back to chat" — there is
+   *  no rail to collapse into on a phone, and the tool stays active. */
+  mobileLayout?: boolean
 }
 
 /** Static fallback prompts per tool when no context is available */
@@ -51,6 +58,8 @@ export function ToolPanel({
   isCollapsed,
   onToggleCollapse,
   chatId,
+  mobileHidden = false,
+  mobileLayout = false,
 }: ToolPanelProps) {
   const [contextCard, setContextCard] = useState<ToolContextCard | null>(null)
   const [contextLoading, setContextLoading] = useState(true)
@@ -129,9 +138,10 @@ export function ToolPanel({
 
   return (
     <aside
-      className="tool-panel"
+      className={`tool-panel${mobileHidden ? ' tool-panel--mobile-hidden' : ''}`}
       aria-label={`${activeSkill.name} Tool Panel`}
       role="complementary"
+      data-mobile-hidden={mobileHidden ? 'true' : undefined}
     >
       {/* ── Header ── */}
       <div className="tool-panel__header">
@@ -148,10 +158,10 @@ export function ToolPanel({
           <button
             className="tool-panel__collapse-btn"
             onClick={onToggleCollapse}
-            aria-label="Collapse tool panel"
-            title="Collapse"
+            aria-label={mobileLayout ? 'Back to chat (the tool stays active)' : 'Collapse tool panel'}
+            title={mobileLayout ? 'Back to chat — the tool stays active' : 'Collapse'}
           >
-            ⟫
+            {mobileLayout ? '⌄' : '⟫'}
           </button>
           <button
             className="tool-panel__close-btn"
