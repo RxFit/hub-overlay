@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest'
-import { describeDb, migrateTestDb, getSql, closeDb, seedTenant } from '../test/db-harness'
+import { describeDb, migrateTestDb, getSql, closeDb, seedTenant, lockSuite } from '../test/db-harness'
 import { db } from '@/lib/db'
 import { createToolRun, finishToolRun } from '@/lib/tool-runs'
 import { ensureDeepRunArtifact, ensureDeepRunArtifactForRun } from '@/lib/deep-artifacts'
@@ -22,7 +22,9 @@ import { getToolArtifacts } from '@/lib/tool-artifacts'
  * (`deep-artifacts-*`) and only ever deletes/counts its own rows — a shared
  * owner email would trip the tool_runs_one_active_per_user index across
  * suites, and a whole-table DELETE would erase the other suite's rows
- * mid-test.
+ * mid-test. Namespacing closes this suite's side; the harness suite lock
+ * (lockSuite in beforeAll, held until closeDb) closes the other direction —
+ * dispatch-db's own unscoped DELETE can no longer land mid-test here.
  */
 
 const NS = 'deep-artifacts-'
@@ -49,8 +51,10 @@ async function ownRows() {
 }
 
 describeDb('deep-run artifacts (Postgres)', () => {
-  beforeAll(() => {
+  beforeAll(async () => {
     migrateTestDb()
+    // Serialize with tests/dispatch-db.test.ts (see ISOLATION above).
+    await lockSuite()
   })
 
   beforeEach(async () => {
