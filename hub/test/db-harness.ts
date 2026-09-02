@@ -207,6 +207,18 @@ async function acquireSuiteLock(): Promise<void> {
 }
 
 /**
+ * Take the session-level suite lock WITHOUT touching any table — for suites
+ * that manage their own rows (the tool_runs suites in dispatch-db and
+ * deep-artifacts-db) but must still never overlap another DB-backed file's
+ * writes: vitest runs files in parallel forks against the one database, and
+ * an unscoped DELETE in one file can erase a row the other is mid-way through
+ * landing. Released by closeDb(), like the lock resetDb() takes.
+ */
+export async function lockSuite(): Promise<void> {
+  await acquireSuiteLock()
+}
+
+/**
  * Truncate the harness-owned tables and restore the base seed so each test
  * starts from a deterministic, empty-but-seeded state (no flakiness).
  */

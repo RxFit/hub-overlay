@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest'
-import { describeDb, migrateTestDb, getSql, closeDb, seedTenant } from '../test/db-harness'
+import { describeDb, migrateTestDb, getSql, closeDb, seedTenant, lockSuite } from '../test/db-harness'
 import {
   cancelJob,
   claimNext,
@@ -37,8 +37,11 @@ import {
  */
 
 describeDb('dispatch store (Postgres)', () => {
-  beforeAll(() => {
+  beforeAll(async () => {
     migrateTestDb()
+    // Suite lock: tests/deep-artifacts-db.test.ts also writes tool_runs from a
+    // parallel fork; the unscoped DELETEs below must not overlap it.
+    await lockSuite()
   })
 
   beforeEach(async () => {
@@ -387,8 +390,11 @@ describeDb('dispatch store (Postgres)', () => {
 describeDb('deep runs — tool_runs landing (Postgres)', () => {
   const OWNER = 'staff@rxfitatx.com'
 
-  beforeAll(() => {
+  beforeAll(async () => {
     migrateTestDb()
+    // Suite lock: tests/deep-artifacts-db.test.ts also writes tool_runs from a
+    // parallel fork; the unscoped DELETEs below must not overlap it.
+    await lockSuite()
   })
 
   beforeEach(async () => {
