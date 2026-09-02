@@ -30,6 +30,7 @@ import {
   storageConfigured,
   type SessionLike,
 } from '@/lib/secrets-store'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
@@ -46,7 +47,7 @@ function sessionUser(session: unknown): SessionLike & { email?: string } {
  * GET /api/settings/keys?companyId=xxx
  * Lists a workspace's credentials. Names + metadata only — never values.
  */
-export async function GET(req: NextRequest) {
+export const GET = withFault('settings/keys', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -57,30 +58,25 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Complete onboarding first' }, { status: 403 })
   }
 
-  try {
-    const requested = req.nextUrl.searchParams.get('companyId') ?? undefined
-    const companyId = resolveWorkspaceId(user, requested)
-    if (!companyId) {
-      return NextResponse.json({ error: 'No workspace assigned' }, { status: 400 })
-    }
-
-    const secrets = await listSecrets(companyId)
-    // `configured: false` distinguishes "no keys yet" from "this deployment
-    // cannot store keys at all". Without it an unconfigured Hub looks like an
-    // empty workspace right up until the operator's first save 503s.
-    return NextResponse.json({ secrets, companyId, configured: storageConfigured() })
-  } catch (err) {
-    console.error('[settings/keys GET]', err)
-    return NextResponse.json({ error: 'Failed to load keys' }, { status: 500 })
+  const requested = req.nextUrl.searchParams.get('companyId') ?? undefined
+  const companyId = resolveWorkspaceId(user, requested)
+  if (!companyId) {
+    return NextResponse.json({ error: 'No workspace assigned' }, { status: 400 })
   }
-}
+
+  const secrets = await listSecrets(companyId)
+  // `configured: false` distinguishes "no keys yet" from "this deployment
+  // cannot store keys at all". Without it an unconfigured Hub looks like an
+  // empty workspace right up until the operator's first save 503s.
+  return NextResponse.json({ secrets, companyId, configured: storageConfigured() })
+})
 
 /**
  * POST /api/settings/keys
  * Stores a credential. Body: { name, value, companyId?, provider? }
  * Re-posting an existing name rotates it in place.
  */
-export async function POST(req: NextRequest) {
+export const POST = withFault('settings/keys', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -91,75 +87,70 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Admin access required' }, { status: 403 })
   }
 
-  try {
-    const body = await req.json()
-    const { name, value, companyId: requested, provider } = body ?? {}
+  const body = await req.json()
+  const { name, value, companyId: requested, provider } = body ?? {}
 
-    if (!name || typeof name !== 'string') {
-      return NextResponse.json({ error: 'name is required' }, { status: 400 })
-    }
-    if (!value || typeof value !== 'string') {
-      return NextResponse.json({ error: 'value is required' }, { status: 400 })
-    }
-
-    const companyId = resolveWorkspaceId(user, requested)
-    if (!companyId) {
-      return NextResponse.json({ error: 'No workspace assigned' }, { status: 400 })
-    }
-
-    const result = await putSecret({
-      companyId,
-      name,
-      value,
-      provider: typeof provider === 'string' ? provider : null,
-      createdBy: user.email ?? null,
-    })
-
-    if (!result.ok) {
-      switch (result.reason) {
-        case 'invalid_name':
-          return NextResponse.json(
-            { error: 'Key name must be uppercase with underscores (e.g. MY_API_KEY)' },
-            { status: 400 },
-          )
-        case 'blocked':
-          return NextResponse.json(
-            { error: `${name} cannot be managed through this interface` },
-            { status: 403 },
-          )
-        case 'not_configured':
-          // Fail closed and say so plainly. Storing the value unencrypted
-          // would be undetectable: nothing ever reads it back.
-          return NextResponse.json(
-            {
-              error:
-                'Credential storage is not configured on this deployment (SECRET_ENCRYPTION_KEY is unset). Refusing to store the key unencrypted.',
-            },
-            { status: 503 },
-          )
-        default:
-          return NextResponse.json({ error: 'Failed to save key' }, { status: 409 })
-      }
-    }
-
-    return NextResponse.json({
-      created: true,
-      id: result.secret.id,
-      name: result.secret.name,
-      provider: result.secret.provider,
-    })
-  } catch (err) {
-    console.error('[settings/keys POST]', err)
-    return NextResponse.json({ error: 'Failed to save key' }, { status: 500 })
+  if (!name || typeof name !== 'string') {
+    return NextResponse.json({ error: 'name is required' }, { status: 400 })
   }
-}
+  if (!value || typeof value !== 'string') {
+    return NextResponse.json({ error: 'value is required' }, { status: 400 })
+  }
+
+  const companyId = resolveWorkspaceId(user, requested)
+  if (!companyId) {
+    return NextResponse.json({ error: 'No workspace assigned' }, { status: 400 })
+  }
+
+  const result = await putSecret({
+    companyId,
+    name,
+    value,
+    provider: typeof provider === 'string' ? provider : null,
+    createdBy: user.email ?? null,
+  })
+
+  if (!result.ok) {
+    switch (result.reason) {
+      case 'invalid_name':
+        return NextResponse.json(
+          { error: 'Key name must be uppercase with underscores (e.g. MY_API_KEY)' },
+          { status: 400 },
+        )
+      case 'blocked':
+        return NextResponse.json(
+          { error: `${name} cannot be managed through this interface` },
+          { status: 403 },
+        )
+      case 'not_configured':
+        // Fail closed and say so plainly. Storing the value unencrypted
+        // would be undetectable: nothing ever reads it back.
+        return NextResponse.json(
+          {
+            error:
+              'Credential storage is not configured on this deployment (SECRET_ENCRYPTION_KEY is unset). Refusing to store the key unencrypted.',
+          },
+          { status: 503 },
+        )
+      default:
+        return NextResponse.json({ error: 'Failed to save key' }, { status: 409 })
+    }
+  }
+
+  return NextResponse.json({
+    created: true,
+    id: result.secret.id,
+    name: result.secret.name,
+    provider: result.secret.provider,
+  })
+})
 
 /**
  * DELETE /api/settings/keys?id=xxx
  * Removes a credential. The delete is workspace-scoped in the statement
  * itself, so an id from another workspace simply matches nothing.
  */
-export async function DELETE(req: NextRequest) {
+export const DELETE = withFault('settings/keys', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -170,31 +161,26 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ error: 'Admin access required' }, { status: 403 })
   }
 
-  try {
-    const secretId = req.nextUrl.searchParams.get('id')
-    if (!secretId) {
-      return NextResponse.json({ error: 'id is required' }, { status: 400 })
-    }
-
-    const requested = req.nextUrl.searchParams.get('companyId') ?? undefined
-    const companyId = resolveWorkspaceId(user, requested)
-    if (!companyId) {
-      return NextResponse.json({ error: 'No workspace assigned' }, { status: 400 })
-    }
-
-    const removed = await deleteSecret(secretId, companyId)
-    if (!removed) {
-      // Same response whether the id is unknown or belongs to another
-      // workspace — ids stay non-enumerable.
-      return NextResponse.json(
-        { error: 'Access denied: secret does not belong to your workspace' },
-        { status: 403 },
-      )
-    }
-
-    return NextResponse.json({ deleted: true })
-  } catch (err) {
-    console.error('[settings/keys DELETE]', err)
-    return NextResponse.json({ error: 'Failed to delete key' }, { status: 500 })
+  const secretId = req.nextUrl.searchParams.get('id')
+  if (!secretId) {
+    return NextResponse.json({ error: 'id is required' }, { status: 400 })
   }
-}
+
+  const requested = req.nextUrl.searchParams.get('companyId') ?? undefined
+  const companyId = resolveWorkspaceId(user, requested)
+  if (!companyId) {
+    return NextResponse.json({ error: 'No workspace assigned' }, { status: 400 })
+  }
+
+  const removed = await deleteSecret(secretId, companyId)
+  if (!removed) {
+    // Same response whether the id is unknown or belongs to another
+    // workspace — ids stay non-enumerable.
+    return NextResponse.json(
+      { error: 'Access denied: secret does not belong to your workspace' },
+      { status: 403 },
+    )
+  }
+
+  return NextResponse.json({ deleted: true })
+})

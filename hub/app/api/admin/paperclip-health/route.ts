@@ -6,6 +6,7 @@ import { getCompanies } from '@/lib/paperclip'
 import { getPaperclipAuthHeaders } from '@/lib/paperclipSession'
 import { PAPERCLIP_BASE_URL } from '@/lib/paperclipConfig'
 import { classifyPaperclipError, truncatePaperclipError as truncate } from '@/lib/paperclip-health'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
@@ -23,7 +24,7 @@ export const runtime = 'nodejs'
  * values. Error text is truncated and only visible to admins.
  */
 
-export async function GET() {
+export const GET = withFault('admin/paperclip-health', async () => {
   const session = await getServerSession(authOptions)
   const user = session?.user as { email?: string | null; role?: string | null } | undefined
   if (!user?.email) {
@@ -88,4 +89,4 @@ export async function GET() {
     auth,
     companies,
   })
-}
+})

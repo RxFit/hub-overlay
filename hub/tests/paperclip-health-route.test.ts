@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { NextRequest } from 'next/server'
 
 /* ════════════════════════════════════════════════════════════════════════════
    /api/admin/paperclip-health — live Paperclip connectivity probe.
@@ -34,6 +35,12 @@ vi.mock('@/lib/paperclipConfig', () => ({
 import { GET } from '@/app/api/admin/paperclip-health/route'
 import { classifyPaperclipError } from '@/lib/paperclip-health'
 
+// The handler is withFault-wrapped now, so it takes a request even though the
+// route's own body ignores it — the wrapper reads x-hub-request-id off it.
+function req() {
+  return new NextRequest('http://localhost/api/admin/paperclip-health')
+}
+
 function sess(role?: string) {
   return role ? { user: { email: 'u@example.com', role } } : null
 }
@@ -47,19 +54,19 @@ beforeEach(() => {
 describe('GET /api/admin/paperclip-health — guards', () => {
   it('401s when unauthenticated', async () => {
     state.session = null
-    expect((await GET()).status).toBe(401)
+    expect((await GET(req())).status).toBe(401)
   })
 
   it('403s for non-admin roles', async () => {
     state.session = sess('staff')
-    expect((await GET()).status).toBe(403)
+    expect((await GET(req())).status).toBe(403)
   })
 })
 
 describe('GET /api/admin/paperclip-health — probes', () => {
   it('reports healthy with session-cookie auth mode and companies count only', async () => {
     state.session = sess('superadmin')
-    const body = await (await GET()).json()
+    const body = await (await GET(req())).json()
     expect(body.healthy).toBe(true)
     expect(body.auth).toMatchObject({ ok: true, mode: 'session-cookie' })
     expect(body.companies).toMatchObject({ ok: true, count: 2 })
@@ -70,7 +77,7 @@ describe('GET /api/admin/paperclip-health — probes', () => {
   it('reports api-key mode when session auth fell back to a Bearer key', async () => {
     state.session = sess('admin')
     state.authHeaders = async () => ({ Authorization: 'Bearer k' })
-    const body = await (await GET()).json()
+    const body = await (await GET(req())).json()
     expect(body.auth).toMatchObject({ ok: true, mode: 'api-key' })
   })
 
@@ -78,7 +85,7 @@ describe('GET /api/admin/paperclip-health — probes', () => {
     state.session = sess('superadmin')
     state.authHeaders = async () => { throw new Error('Paperclip sign-in failed (401): bad password') }
     state.companies = async () => { throw new Error('Paperclip API error 401: unauthorized') }
-    const res = await GET()
+    const res = await GET(req())
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.healthy).toBe(false)
@@ -89,7 +96,7 @@ describe('GET /api/admin/paperclip-health — probes', () => {
   it('classifies a network failure on the data probe', async () => {
     state.session = sess('superadmin')
     state.companies = async () => { throw new Error('fetch failed: ECONNREFUSED 10.0.0.1:443') }
-    const body = await (await GET()).json()
+    const body = await (await GET(req())).json()
     expect(body.companies).toMatchObject({ ok: false, errorClass: 'network' })
   })
 })

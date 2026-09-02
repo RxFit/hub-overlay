@@ -8,6 +8,7 @@ import { and, gte, like } from 'drizzle-orm'
 import { computeAiHealth, type TelemetryRow, type ActionRow, type ProviderConfig } from '@/lib/ai-health'
 import { isGeminiConfigured } from '@/lib/gemini'
 import { isClaudeConfigured } from '@/lib/claude'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
@@ -36,7 +37,7 @@ const WINDOW_MS: Record<string, number> = {
   '7d': 7 * 24 * 60 * 60 * 1000,
 }
 
-export async function GET(req: NextRequest) {
+export const GET = withFault('admin/ai-health', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   const user = session?.user as { email?: string | null; role?: string | null } | undefined
   if (!user?.email) {
@@ -57,47 +58,42 @@ export async function GET(req: NextRequest) {
 
   const since = new Date(Date.now() - windowMs)
 
-  try {
-    const [telemetryRows, actionRows] = await Promise.all([
-      db
-        .select({
-          eventType: eventLog.eventType,
-          payload: eventLog.payload,
-          createdAt: eventLog.createdAt,
-        })
-        .from(eventLog)
-        .where(and(like(eventLog.eventType, 'telemetry:%'), gte(eventLog.createdAt, since))),
-      db
-        .select({
-          actionType: aiActionLog.actionType,
-          status: aiActionLog.status,
-          error: aiActionLog.error,
-          createdAt: aiActionLog.createdAt,
-        })
-        .from(aiActionLog)
-        .where(gte(aiActionLog.createdAt, since)),
-    ])
+  const [telemetryRows, actionRows] = await Promise.all([
+    db
+      .select({
+        eventType: eventLog.eventType,
+        payload: eventLog.payload,
+        createdAt: eventLog.createdAt,
+      })
+      .from(eventLog)
+      .where(and(like(eventLog.eventType, 'telemetry:%'), gte(eventLog.createdAt, since))),
+    db
+      .select({
+        actionType: aiActionLog.actionType,
+        status: aiActionLog.status,
+        error: aiActionLog.error,
+        createdAt: aiActionLog.createdAt,
+      })
+      .from(aiActionLog)
+      .where(gte(aiActionLog.createdAt, since)),
+  ])
 
-    const health = computeAiHealth(
-      telemetryRows as TelemetryRow[],
-      actionRows as ActionRow[],
-      windowMs,
-    )
-    // Key PRESENCE booleans only (never values/lengths/prefixes) — the
-    // one-glance answer to the chat bubble's "provider configuration" error.
-    // See docs/runbooks/ai-provider-outage.md.
-    const providerConfig: ProviderConfig = {
-      gemini: isGeminiConfigured(),
-      anthropic: isClaudeConfigured(),
-    }
-    return NextResponse.json({
-      window: windowParam,
-      generatedAt: new Date().toISOString(),
-      providerConfig,
-      ...health,
-    })
-  } catch (err) {
-    console.error('[api/admin/ai-health GET]', err instanceof Error ? err.message : err)
-    return NextResponse.json({ error: 'Failed to compute AI health' }, { status: 500 })
+  const health = computeAiHealth(
+    telemetryRows as TelemetryRow[],
+    actionRows as ActionRow[],
+    windowMs,
+  )
+  // Key PRESENCE booleans only (never values/lengths/prefixes) — the
+  // one-glance answer to the chat bubble's "provider configuration" error.
+  // See docs/runbooks/ai-provider-outage.md.
+  const providerConfig: ProviderConfig = {
+    gemini: isGeminiConfigured(),
+    anthropic: isClaudeConfigured(),
   }
-}
+  return NextResponse.json({
+    window: windowParam,
+    generatedAt: new Date().toISOString(),
+    providerConfig,
+    ...health,
+  })
+})

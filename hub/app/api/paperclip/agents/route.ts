@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { createLogger } from '@/lib/logger'
 import { getAgents } from '@/lib/paperclip'
+import { withFault } from '@/lib/route-fault'
 
 const log = createLogger('paperclip/agents')
 
@@ -18,7 +19,7 @@ export const runtime = 'nodejs'
  * clear-error) do NOT go through here — they go through the [...path] proxy,
  * where the role gate and ownership pre-checks live.
  */
-export async function GET(req: NextRequest) {
+export const GET = withFault('paperclip/agents', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -50,8 +51,13 @@ export async function GET(req: NextRequest) {
       { headers: { 'Cache-Control': 'private, max-age=20' } }
     )
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Failed to load agents'
+    // Rethrown for withFault to record and answer. The log line stays because
+    // it is the only place companyId survives — withFault's own line carries
+    // requestId/route/faultId but knows nothing about the workspace, and this
+    // is the field that separates "Paperclip is down" from "this one
+    // workspace's data is broken". The response the client used to get here
+    // echoed error.message verbatim; it now gets the fixed per-code message.
     log.error({ err: error, companyId }, 'Agent roster fetch failed')
-    return NextResponse.json({ error: message }, { status: 500 })
+    throw error
   }
-}
+})

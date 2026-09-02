@@ -13,6 +13,7 @@ import {
   sweepStale,
 } from '@/lib/dispatch-store'
 import { chatServeCounts, recordAiRun } from '@/lib/runs'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -35,7 +36,7 @@ export const maxDuration = 120
 
 const PROBE_MARKER = 'AGY_DISPATCH_OK'
 
-export async function GET(req: NextRequest) {
+export const GET = withFault('admin/dispatch-health', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   const user = session?.user as { email?: string | null; role?: string | null } | undefined
   if (!user?.email) {
@@ -145,4 +146,4 @@ export async function GET(req: NextRequest) {
     served24h,
     probe,
   })
-}
+})

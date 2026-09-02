@@ -9,6 +9,7 @@ import { CreateIssueRequestSchema } from '@/lib/zod-schemas'
 import { verifyGateToken } from '@/lib/gateToken'
 import { canWrite } from '@/lib/proxyAuthz'
 import type { HubUser } from '@/types'
+import { withFault } from '@/lib/route-fault'
 
 const log = createLogger('paperclip/issues')
 
@@ -26,7 +27,7 @@ const DEFAULT_COMPANY_ID = process.env.DEFAULT_PAPERCLIP_COMPANY_ID || RXFIT_CEO
  * Issue objects (state group, priority vocabulary). Access scoping matches
  * the runs route: non-wildcard users must be assigned to the company.
  */
-export async function GET(req: NextRequest) {
+export const GET = withFault('paperclip/issues', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -62,13 +63,18 @@ export async function GET(req: NextRequest) {
       { headers: { 'Cache-Control': 'private, max-age=20' } }
     )
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Failed to load issues'
+    // Rethrown for withFault to record and answer. The log line stays because
+    // it is the only place companyId survives — withFault's own line carries
+    // requestId/route/faultId but knows nothing about the workspace, and this
+    // is the field that separates "Paperclip is down" from "this one
+    // workspace's data is broken". The response the client used to get here
+    // echoed error.message verbatim; it now gets the fixed per-code message.
     log.error({ err: error, companyId }, 'Issue list fetch failed')
-    return NextResponse.json({ error: message }, { status: 500 })
+    throw error
   }
-}
+})
 
-export async function POST(req: Request) {
+export const POST = withFault('paperclip/issues', async (req: Request) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -215,6 +221,10 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ issue })
   } catch (error: unknown) {
+    // The catch stays for its SIDE EFFECT only: the issue.creation_failed
+    // ledger entry is the audit trail for a write that did not happen, and it
+    // must be written before the error leaves. The response is then withFault's
+    // to make — it used to echo error.message verbatim.
     const message = error instanceof Error ? error.message : 'Failed to create issue'
     log.error({ err: error }, 'Issue creation failed')
 
@@ -229,6 +239,6 @@ export async function POST(req: Request) {
       },
     }).catch(() => {})
 
-    return NextResponse.json({ error: message }, { status: 500 })
+    throw error
   }
-}
+})

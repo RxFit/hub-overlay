@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
+import { AppError } from '@/lib/errors'
 import { createLogger } from '@/lib/logger'
 import { getRuns } from '@/lib/paperclip'
+import { withFault } from '@/lib/route-fault'
 
 const log = createLogger('paperclip/runs')
 
@@ -16,7 +18,7 @@ export const runtime = 'nodejs'
  * company's recent issues; this route exposes that aggregation to the client
  * (chat intents like "view runs" and the Execution Feed).
  */
-export async function GET(req: NextRequest) {
+export const GET = withFault('paperclip/runs', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -49,8 +51,17 @@ export async function GET(req: NextRequest) {
     const runs = await getRuns(companyId, { limit })
     return NextResponse.json({ runs })
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Failed to fetch runs'
+    // This route answers 502, not 500: the aggregation is a fan-out across
+    // Paperclip, so a failure here is upstream's. Naming the code preserves
+    // that status through withFault (statusForCode maps upstream_5xx → 502)
+    // where a bare `throw` would flatten it to a 500 — and `cause` keeps the
+    // original error in the fault's causeChain, so nothing is lost. The
+    // response used to echo error.message verbatim.
     log.error({ err: error, companyId }, 'Run aggregation failed')
-    return NextResponse.json({ error: message }, { status: 502 })
+    throw new AppError('Paperclip run aggregation failed', {
+      code: 'upstream_5xx',
+      cause: error,
+      context: { route: 'paperclip/runs' },
+    })
   }
-}
+})

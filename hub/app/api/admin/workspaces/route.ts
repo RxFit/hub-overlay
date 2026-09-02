@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { paperclipFetch } from '@/lib/paperclip'
 import { recordEvent } from '@/lib/event-logger'
+import { withFault } from '@/lib/route-fault'
 
 
 // Standard C-Suite agent template — seeded for every new workspace
@@ -47,7 +48,7 @@ const AGENT_TEMPLATES = [
 // Custom paperclipPost deprecated in favor of shared hardened paperclipFetch
 
 
-export async function POST(req: NextRequest) {
+export const POST = withFault('admin/workspaces', async (req: NextRequest) => {
   // Auth guard — admin or superadmin. Workspace provisioning is an
   // admin-level action (matches INTENT_PERMISSIONS.create_workspace = 'admin'
   // in lib/interview.ts). Staff and onboarding are rejected.
@@ -87,96 +88,89 @@ export async function POST(req: NextRequest) {
   } = { company: null, agents: [], errors: [] }
 
   // 1. Create company in Paperclip
-  try {
-    const companyRes = await paperclipFetch<any>('/api/companies', {
-      method: 'POST',
-      body: JSON.stringify({
-        name: companyName.trim(),
-        identifier: issuePrefix.trim().toUpperCase(),
-        description: `${companyName} workspace — provisioned via Hub Admin Panel`,
-      }),
-    }, undefined, session?.user?.email ?? undefined)
-    results.company = companyRes.company ?? companyRes
-    const companyId = (results.company as Record<string, string>).id
+  const companyRes = await paperclipFetch<any>('/api/companies', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: companyName.trim(),
+      identifier: issuePrefix.trim().toUpperCase(),
+      description: `${companyName} workspace — provisioned via Hub Admin Panel`,
+    }),
+  }, undefined, session?.user?.email ?? undefined)
+  results.company = companyRes.company ?? companyRes
+  const companyId = (results.company as Record<string, string>).id
 
-    // 2. Seed agents
-    const templatesToSeed = agentTemplate === 'ceo-only'
-      ? AGENT_TEMPLATES.filter(t => t.role === 'CEO')
-      : AGENT_TEMPLATES
+  // 2. Seed agents
+  const templatesToSeed = agentTemplate === 'ceo-only'
+    ? AGENT_TEMPLATES.filter(t => t.role === 'CEO')
+    : AGENT_TEMPLATES
 
-    const createdAgents: Record<string, string> = {}  // role → agentId
+  const createdAgents: Record<string, string> = {}  // role → agentId
 
-    for (const template of templatesToSeed) {
-      try {
-        // Find reporting agent ID if needed
-        const reportsToId = template.reportingRole
-          ? createdAgents[template.reportingRole] ?? null
-          : null
+  for (const template of templatesToSeed) {
+    try {
+      // Find reporting agent ID if needed
+      const reportsToId = template.reportingRole
+        ? createdAgents[template.reportingRole] ?? null
+        : null
 
-        const agentRes = await paperclipFetch<any>(`/api/companies/${companyId}/agents`, {
-          method: 'POST',
-          body: JSON.stringify({
-            name: template.name(companyName.trim()),
-            role: template.role,
-            instructions: template.instructions(companyName.trim()),
-            canCreateAgents: template.canCreateAgents,
-            status: 'active',
-            adapterType: 'gemini_local',
-            adapterConfig: {
-              baseUrl: 'https://rxfit-llm-proxy-6r2wdzwkoq-uc.a.run.app',
-              model: 'auto',
+      const agentRes = await paperclipFetch<any>(`/api/companies/${companyId}/agents`, {
+        method: 'POST',
+        body: JSON.stringify({
+          name: template.name(companyName.trim()),
+          role: template.role,
+          instructions: template.instructions(companyName.trim()),
+          canCreateAgents: template.canCreateAgents,
+          status: 'active',
+          adapterType: 'gemini_local',
+          adapterConfig: {
+            baseUrl: 'https://rxfit-llm-proxy-6r2wdzwkoq-uc.a.run.app',
+            model: 'auto',
+          },
+          runtimeConfig: {
+            heartbeat: {
+              intervalSec: 86400,
+              enabled: true,
             },
-            runtimeConfig: {
-              heartbeat: {
-                intervalSec: 86400,
-                enabled: true,
-              },
-            },
-            reportsTo: reportsToId,
-          }),
-        }, undefined, session?.user?.email ?? undefined)
-        const agent = agentRes.agent ?? agentRes
-        createdAgents[template.role] = agent.id
-        results.agents.push(agent)
-      } catch (err) {
-        const msg = `Failed to create ${template.role}: ${err instanceof Error ? err.message : String(err)}`
-        results.errors.push(msg)
-      }
+          },
+          reportsTo: reportsToId,
+        }),
+      }, undefined, session?.user?.email ?? undefined)
+      const agent = agentRes.agent ?? agentRes
+      createdAgents[template.role] = agent.id
+      results.agents.push(agent)
+    } catch (err) {
+      const msg = `Failed to create ${template.role}: ${err instanceof Error ? err.message : String(err)}`
+      results.errors.push(msg)
     }
-
-    await recordEvent({
-      eventType: 'workspace.provisioned',
-      actor: `hub-user:${session?.user?.email || 'admin'}`,
-      resourceType: 'company',
-      resourceId: companyId,
-      payload: {
-        companyName,
-        issuePrefix,
-        agentsSeededCount: results.agents.length,
-      },
-    })
-
-    return NextResponse.json({
-      success: true,
-      companyName: companyName.trim(),
-      issuePrefix: issuePrefix.trim().toUpperCase(),
-      brandColor,
-      company: results.company,
-      agents: results.agents,
-      agentsCreated: results.agents.length,
-      errors: results.errors,
-      message: results.errors.length === 0
-        ? `Workspace "${companyName}" provisioned with ${results.agents.length} agents.`
-        : `Workspace created but ${results.errors.length} agent(s) failed. Check errors.`,
-    })
-  } catch (err) {
-    return NextResponse.json({
-      success: false,
-      error: `Failed to create company: ${err instanceof Error ? err.message : String(err)}`,
-    }, { status: 500 })
   }
-}
 
-export async function GET() {
+  await recordEvent({
+    eventType: 'workspace.provisioned',
+    actor: `hub-user:${session?.user?.email || 'admin'}`,
+    resourceType: 'company',
+    resourceId: companyId,
+    payload: {
+      companyName,
+      issuePrefix,
+      agentsSeededCount: results.agents.length,
+    },
+  })
+
+  return NextResponse.json({
+    success: true,
+    companyName: companyName.trim(),
+    issuePrefix: issuePrefix.trim().toUpperCase(),
+    brandColor,
+    company: results.company,
+    agents: results.agents,
+    agentsCreated: results.agents.length,
+    errors: results.errors,
+    message: results.errors.length === 0
+      ? `Workspace "${companyName}" provisioned with ${results.agents.length} agents.`
+      : `Workspace created but ${results.errors.length} agent(s) failed. Check errors.`,
+  })
+})
+
+export const GET = withFault('admin/workspaces', async () => {
   return NextResponse.json({ error: 'Method not allowed' }, { status: 405 })
-}
+})
