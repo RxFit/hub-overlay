@@ -1,0 +1,126 @@
+import { describe, it, expect } from 'vitest'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join, relative } from 'node:path'
+
+/* ════════════════════════════════════════════════════════════════════════════
+   No 2xx response may carry a failure body (ERROR_REPORTING_2026-08-24.md §3
+   Layer 3 step 4, and the Phase 2 "no-200-errors build guard").
+
+   WHY A SOURCE SCAN AND NOT JUST THE RUNTIME CHECK. withFault already inspects
+   2xx bodies via detectErrorIn2xx — but that check bails when the response has
+   no content-length, and NOTHING in this repo sets one: neither
+   NextResponse.json(...) nor new Response(string) populates the header before
+   serialization (measured, not assumed). So the runtime check is inert on every
+   response shape we actually produce, exactly as lib/route-fault.ts's module
+   header says. This scan is what covers the gap today.
+
+   WHAT IT CANNOT SEE, stated so nobody mistakes a green run for proof:
+     - keys that arrive through a spread. app/api/admin/work-probe builds
+       `base = { …, error: job.error }` and returns `{ ...base }` at 200; the
+       literal never contains `error:`, so this scan reads that file as clean.
+       That route carries `inspect2xx: false` with a why-comment instead.
+     - a body assembled in a variable before the call.
+     - a non-literal status (`{ status: gate.status }`, `upstream.status`),
+       which is skipped because the value is not knowable statically.
+   Between the two mechanisms the coverage is real but partial, and neither is
+   complete alone.
+
+   POLARITY, as everywhere else in this arc: INTENTIONAL is an explicit map with
+   a reason per entry, and an entry that no longer violates FAILS — so the set
+   can only shrink, and a new 2xx-with-error cannot be added silently.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/** Routes whose 2xx-with-failure-body is the deliberate protocol. */
+const INTENTIONAL: ReadonlyMap<string, string> = new Map([
+  [
+    'app/api/deep-runs/availability/route.ts',
+    '200 + `reason` IS the contract: "no worker, and here is why" is a successful ' +
+      'answer. The route never 500s into the UI by design; a fault response would ' +
+      'make the panel show an error for a healthy system. Carries inspect2xx: false.',
+  ],
+  [
+    'app/api/orgs/[orgId]/founder-lens/route.ts',
+    '207 Multi-Status with `{ error, details }` is precisely what 207 means — ' +
+      'some role updates succeeded and some did not, and the caller needs both.',
+  ],
+])
+
+const FAILURE_KEY = /\berror\s*:|\breason\s*:|\bok\s*:\s*false|\bsuccess\s*:\s*false/
+const LITERAL_ERROR_STATUS = /status:\s*[45]\d\d/
+const NON_LITERAL_STATUS = /status:\s*[A-Za-z_$][\w$]*(?:\.[\w$]+)*\s*[,}]/
+
+const hubRoot = join(__dirname, '..')
+const apiRoot = join(hubRoot, 'app', 'api')
+
+function routeFiles(dir: string): string[] {
+  const out: string[] = []
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, entry.name)
+    if (entry.isDirectory()) out.push(...routeFiles(p))
+    else if (entry.name === 'route.ts') out.push(p)
+  }
+  return out
+}
+
+/** Balanced-paren extraction of each NextResponse.json(...) call's arguments. */
+function jsonCalls(src: string): string[] {
+  const out: string[] = []
+  for (const m of src.matchAll(/NextResponse\.json\(/g)) {
+    let i = m.index! + m[0].length
+    let depth = 1
+    while (i < src.length && depth > 0) {
+      const c = src[i]
+      if (c === '(' || c === '[' || c === '{') depth++
+      else if (c === ')' || c === ']' || c === '}') depth--
+      i++
+    }
+    out.push(src.slice(m.index! + m[0].length, i - 1))
+  }
+  return out
+}
+
+function violations(src: string): string[] {
+  return jsonCalls(src).filter(
+    (call) =>
+      !LITERAL_ERROR_STATUS.test(call) &&
+      !NON_LITERAL_STATUS.test(call) &&
+      FAILURE_KEY.test(call),
+  )
+}
+
+describe('no 2xx response carries a failure body', () => {
+  const files = routeFiles(apiRoot)
+
+  it('finds the route surface (sanity: the glob is not silently empty)', () => {
+    expect(files.length).toBeGreaterThan(70)
+  })
+
+  for (const abs of files) {
+    const rel = relative(hubRoot, abs).split('\\').join('/')
+    it(rel, () => {
+      const found = violations(readFileSync(abs, 'utf8'))
+      if (INTENTIONAL.has(rel)) {
+        // An allowlisted route that stopped violating must leave the list —
+        // otherwise the reason rots and the set never shrinks.
+        expect(
+          found.length,
+          `${rel} no longer returns a 2xx failure body — delete its INTENTIONAL entry in tests/no-200-errors.test.ts`,
+        ).toBeGreaterThan(0)
+        return
+      }
+      expect(
+        found.map((f) => f.replace(/\s+/g, ' ').trim().slice(0, 120)),
+        `${rel} returns a 2xx whose body carries error/reason/ok:false/success:false. ` +
+          'A 2xx that means failure is the silent-failure class this arc exists to remove: ' +
+          'give it a real status code, or — if the 2xx genuinely IS the protocol — add it to ' +
+          'INTENTIONAL in tests/no-200-errors.test.ts with the reason.',
+      ).toEqual([])
+    })
+  }
+
+  it('the intentional list carries no entries for deleted routes', () => {
+    const live = new Set(files.map((f) => relative(hubRoot, f).split('\\').join('/')))
+    const stale = [...INTENTIONAL.keys()].filter((k) => !live.has(k))
+    expect(stale, `stale INTENTIONAL entries: ${stale.join(', ')}`).toEqual([])
+  })
+})

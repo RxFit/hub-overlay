@@ -27,6 +27,7 @@ import {
 } from '@/lib/tool-runs'
 import { db } from '@/lib/db'
 import { emit } from '@/lib/observability'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -62,7 +63,7 @@ async function requireStaff(): Promise<{ email: string; role: string } | NextRes
   return { email: user.email, role: user.role as string }
 }
 
-export async function POST(req: NextRequest) {
+export const POST = withFault('deep-runs', async (req: NextRequest) => {
   const auth = await requireStaff()
   if (auth instanceof NextResponse) return auth
 
@@ -174,12 +175,14 @@ export async function POST(req: NextRequest) {
     if (isMissingTableError(err)) {
       return NextResponse.json({ error: 'deep-run tables missing — run migrations', reason: 'not_migrated' }, { status: 503 })
     }
-    console.error('[deep-runs POST]', err instanceof Error ? err.message : err)
-    return NextResponse.json({ error: 'Failed to start the deep run' }, { status: 500 })
+    // The guard above is the only classification this catch makes. Everything
+    // else is withFault's to record and answer — it used to become an opaque
+    // 500 with nothing written down.
+    throw err
   }
-}
+})
 
-export async function GET(req: NextRequest) {
+export const GET = withFault('deep-runs', async (req: NextRequest) => {
   const auth = await requireStaff()
   if (auth instanceof NextResponse) return auth
 
@@ -197,8 +200,12 @@ export async function GET(req: NextRequest) {
     const runs = await listToolRuns(auth.email, { tool: toolParam ?? undefined, limit })
     return NextResponse.json({ runs })
   } catch (err) {
+    // Pre-migration is not a failure to report: an empty list is the honest
+    // answer for a table that does not exist yet, and the panel renders it.
     if (isMissingTableError(err)) return NextResponse.json({ runs: [] })
-    console.error('[deep-runs GET]', err instanceof Error ? err.message : err)
-    return NextResponse.json({ error: 'Failed to list deep runs' }, { status: 500 })
+    // The guard above is the only classification this catch makes. Everything
+    // else is withFault's to record and answer — it used to become an opaque
+    // 500 with nothing written down.
+    throw err
   }
-}
+})

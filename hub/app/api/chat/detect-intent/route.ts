@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth'
 import { GoogleGenerativeAI, SchemaType, type Schema } from '@google/generative-ai'
 import { withTimeout } from '@/lib/timeout'
 import { stripSuggestedTools } from '@/lib/model-output'
+import { withFault } from '@/lib/route-fault'
 
 /* Lazy-initialized so the API key is read at runtime, not module-load time.
    Prevents an empty-key client if Railway injects env vars after import. */
@@ -119,7 +120,7 @@ Respond with ONLY a valid JSON object on a single line, no markdown and no expla
   return null
 }
 
-export async function POST(req: NextRequest) {
+export const POST = withFault('chat/detect-intent', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -179,4 +180,4 @@ export async function POST(req: NextRequest) {
   }
 
   return NextResponse.json({ intent: null, extractedEntities: {} })
-}
+})

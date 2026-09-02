@@ -5,6 +5,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai'
 import type { ContextScoreResult, InterviewIntent } from '@/types'
 import { issueGateToken, GATE_PASS_THRESHOLD } from '@/lib/gateToken'
 import { stripSuggestedTools } from '@/lib/model-output'
+import { withFault } from '@/lib/route-fault'
 
 /**
  * Attach a server-signed gate token to a genuinely passing result (P0-2). This
@@ -176,7 +177,7 @@ function parseScoreResponse(raw: string): ContextScoreResult {
   }
 }
 
-export async function POST(req: NextRequest) {
+export const POST = withFault('chat/score-context', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -310,4 +311,4 @@ export async function POST(req: NextRequest) {
       headers: { 'X-Score-Fallback': 'fail-open', 'X-Score-Error': message.slice(0, 100) },
     })
   }
-}
+})

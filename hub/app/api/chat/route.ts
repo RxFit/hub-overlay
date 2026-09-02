@@ -28,6 +28,11 @@ import { persistUserTurn, persistAssistantTurn } from '@/lib/chat-store'
 import { emit, newRequestId } from '@/lib/observability'
 import type { ChatMessage, ChatAttachment } from '@/types'
 import '@/lib/validate-keys'  // Side-effect import: validates API keys on cold start
+import { toFault } from '@/lib/fault'
+import { reportFault } from '@/lib/fault-report'
+import { safeRequestId } from '@/lib/request-id'
+import { parseTraceparent } from '@/lib/trace-context'
+import { withFault } from '@/lib/route-fault'
 
 const log = createLogger('chat')
 
@@ -862,15 +867,36 @@ async function handleChat(req: NextRequest): Promise<Response> {
   return streamModelResponse(boundedMessages, systemPrompt, effectiveUseCase, Boolean(activeSkill), req, persistCtx)
 }
 
-export async function POST(req: NextRequest) {
+export const POST = withFault('chat', async (req: NextRequest) => {
   try {
     return await handleChat(req)
   } catch (err) {
     log.error({ err }, 'Chat request failed before streaming started')
+    // This catch is KEPT deliberately, unlike the generic 500 catches the rest
+    // of the sweep removed. chatErrorBody returns { error, details? }, which is
+    // NOT faultResponse's problem+json shape, and it is the contract the chat
+    // client's error handling reads. Generalizing chat-error.ts onto
+    // faultResponse is a real change with a client-visible blast radius — it
+    // gets its own PR, not sweep collateral.
+    //
+    // What WAS missing is the record: this path logged and returned, so a chat
+    // failure before the stream opened left nothing in Error Reporting and no
+    // fault id for the user to quote. reportFault closes that without touching
+    // the body.
+    reportFault(
+      toFault(err, {
+        layer: 'route',
+        route: 'chat',
+        method: req.method,
+        module: 'chat',
+        requestId: safeRequestId(req.headers.get('x-hub-request-id')),
+      }),
+      { rawStack: err instanceof Error ? err.stack : null, trace: parseTraceparent(req.headers.get('traceparent')) },
+    )
     // Raw error text is dev-only diagnostics — production bodies must stay generic.
     return NextResponse.json(
       chatErrorBody(err, process.env.NODE_ENV === 'production'),
       { status: 500 },
     )
   }
-}
+})

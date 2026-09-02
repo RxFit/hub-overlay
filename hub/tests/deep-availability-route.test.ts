@@ -1,3 +1,4 @@
+import { NextRequest } from 'next/server'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 /**
@@ -39,36 +40,42 @@ beforeEach(() => {
   dispatchMock.isDispatchEnabled.mockReset().mockReturnValue(true)
 })
 
+// withFault-wrapped now, so the handler takes a request even though the
+// route body ignores it — the wrapper reads x-hub-request-id off it.
+function faultReq() {
+  return new NextRequest('http://localhost/api/deep-runs/availability')
+}
+
 describe('GET /api/deep-runs/availability', () => {
   it('401s without a session; 403s below staff', async () => {
     sessionMock.mockResolvedValue(null)
-    expect((await GET()).status).toBe(401)
+    expect((await GET(faultReq())).status).toBe(401)
     sessionMock.mockResolvedValue({ user: { email: 'x@rxfitatx.com', role: 'onboarding' } })
     staffMock.mockReturnValue(false)
-    expect((await GET()).status).toBe(403)
+    expect((await GET(faultReq())).status).toBe(403)
   })
 
   it('reports live when dispatch is on and the worker heartbeat is fresh', async () => {
-    const body = await (await GET()).json()
+    const body = await (await GET(faultReq())).json()
     expect(body).toEqual({ available: true, reason: null, workerFresh: true })
   })
 
   it('reports dispatch_disabled without touching the store', async () => {
     dispatchMock.isDispatchEnabled.mockReturnValue(false)
-    const body = await (await GET()).json()
+    const body = await (await GET(faultReq())).json()
     expect(body).toEqual({ available: false, reason: 'dispatch_disabled', workerFresh: false })
     expect(storeMock.workCapableWorkerFresh).not.toHaveBeenCalled()
   })
 
   it('reports no_worker when the heartbeat is stale', async () => {
     storeMock.workCapableWorkerFresh.mockResolvedValue(false)
-    const body = await (await GET()).json()
+    const body = await (await GET(faultReq())).json()
     expect(body).toEqual({ available: false, reason: 'no_worker', workerFresh: false })
   })
 
   it('a store read failure degrades to offline — never a 500 into the chips', async () => {
     storeMock.workCapableWorkerFresh.mockRejectedValue(Object.assign(new Error('no table'), { code: '42P01' }))
-    const res = await GET()
+    const res = await GET(faultReq())
     expect(res.status).toBe(200)
     expect((await res.json()).available).toBe(false)
   })
