@@ -211,6 +211,7 @@ export interface ArtifactInput {
  *  attachment resolver slices at 16k; staying under it keeps the marker line
  *  and the leading sections intact for even the largest report. */
 export const ARTIFACT_ATTACHMENT_MAX_CHARS = 12_000
+const ARTIFACT_ATTACHMENT_MAX_DEPTH = 8
 
 /**
  * PURE: flatten an artifact's sections (one nesting level per depth) into
@@ -218,15 +219,27 @@ export const ARTIFACT_ATTACHMENT_MAX_CHARS = 12_000
  */
 export function renderArtifactText(content: ArtifactContentInput | null | undefined): string {
   const out: string[] = []
-  const walk = (sections: ArtifactSectionInput[] | undefined, depth: number) => {
-    for (const s of sections ?? []) {
+  let remaining = ARTIFACT_ATTACHMENT_MAX_CHARS
+  const walk = (sections: unknown, depth: number) => {
+    if (!Array.isArray(sections) || depth > ARTIFACT_ATTACHMENT_MAX_DEPTH || remaining <= 0) return
+    for (const raw of sections) {
+      if (remaining <= 0) break
+      if (!raw || typeof raw !== 'object') continue
+      const s = raw as Record<string, unknown>
+      const title = typeof s.title === 'string' && s.title.trim() ? s.title : 'Untitled section'
+      const body = typeof s.content === 'string' ? s.content.trim() : ''
       const heading = '#'.repeat(Math.min(2 + depth, 6))
-      const body = (s.content ?? '').trim()
-      out.push(body ? `${heading} ${s.title}\n${body}` : `${heading} ${s.title}`)
+      const rendered = body ? `${heading} ${title}\n${body}` : `${heading} ${title}`
+      const bounded = rendered.slice(0, remaining)
+      out.push(bounded)
+      remaining -= bounded.length + 2
       walk(s.children, depth + 1)
     }
   }
-  walk(content?.sections, 0)
+  const sections = content && typeof content === 'object'
+    ? (content as { sections?: unknown }).sections
+    : undefined
+  walk(sections, 0)
   return out.join('\n\n')
 }
 

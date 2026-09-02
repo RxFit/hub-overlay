@@ -34,6 +34,50 @@ export function formatArtifactDate(iso: string): string {
   }
 }
 
+const ARTIFACT_SECTION_TYPES = new Set<ToolArtifactSection['type']>([
+  'branch', 'hypothesis', 'pro', 'con', 'recommendation', 'step', 'score',
+  'critique', 'slide', 'insight', 'narrative', 'generic',
+])
+const MAX_VIEWER_SECTION_DEPTH = 8
+const MAX_VIEWER_SECTIONS = 250
+
+/**
+ * Artifact content is JSON supplied by authenticated clients, and older rows
+ * predate this viewer. Normalize it before rendering so one malformed row
+ * cannot throw from `.map()` or recurse without a bound and take down the Hub.
+ */
+export function normalizeViewerSections(content: unknown): ToolArtifactSection[] {
+  let seen = 0
+  const walk = (value: unknown, depth: number, path: string): ToolArtifactSection[] => {
+    if (!Array.isArray(value) || depth > MAX_VIEWER_SECTION_DEPTH || seen >= MAX_VIEWER_SECTIONS) return []
+    const sections: ToolArtifactSection[] = []
+    for (let i = 0; i < value.length && seen < MAX_VIEWER_SECTIONS; i += 1) {
+      const raw = value[i]
+      if (!raw || typeof raw !== 'object') continue
+      const section = raw as Record<string, unknown>
+      const title = typeof section.title === 'string' ? section.title : ''
+      const body = typeof section.content === 'string' ? section.content : ''
+      if (!title && !body) continue
+      seen += 1
+      const rawType = typeof section.type === 'string' ? section.type : ''
+      const children = walk(section.children, depth + 1, `${path}-${i}`)
+      sections.push({
+        id: typeof section.id === 'string' && section.id ? section.id : `${path}-${i}`,
+        type: ARTIFACT_SECTION_TYPES.has(rawType as ToolArtifactSection['type'])
+          ? rawType as ToolArtifactSection['type']
+          : 'generic',
+        title: title || 'Untitled section',
+        content: body,
+        ...(children.length > 0 ? { children } : {}),
+      })
+    }
+    return sections
+  }
+
+  if (!content || typeof content !== 'object') return []
+  return walk((content as { sections?: unknown }).sections, 0, 'artifact-section')
+}
+
 interface ArtifactViewerProps {
   artifact: ToolArtifactRecord
   onClose: () => void
@@ -46,7 +90,7 @@ export function ArtifactViewer({ artifact, onClose, onDiscuss }: ArtifactViewerP
   useModalA11y(dialogRef, onClose)
 
   const toolName = artifactToolName(artifact.toolId)
-  const sections = artifact.content?.sections ?? []
+  const sections = normalizeViewerSections(artifact.content)
   const metaBrief = artifact.content?.metadata?.brief
   const brief = typeof metaBrief === 'string' && metaBrief.trim() ? metaBrief.trim() : null
 

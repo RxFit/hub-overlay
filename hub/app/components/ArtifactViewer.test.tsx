@@ -110,6 +110,16 @@ describe('ArtifactViewer', () => {
     render({ artifact: { ...ARTIFACT, content: { toolId: 'issue-tree', title: 'x', sections: [] } } })
     expect(container!.textContent).toContain('This artifact has no saved sections.')
   })
+
+  it('degrades safely on malformed client-written content instead of throwing', () => {
+    const malformed = {
+      toolId: 'deep-research',
+      title: 'legacy',
+      sections: { not: 'an array' },
+    } as unknown as ToolArtifactRecord['content']
+    expect(() => render({ artifact: { ...ARTIFACT, content: malformed } })).not.toThrow()
+    expect(container!.textContent).toContain('This artifact has no saved sections.')
+  })
 })
 
 describe('helpers', () => {

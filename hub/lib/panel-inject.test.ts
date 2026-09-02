@@ -280,6 +280,12 @@ describe('renderArtifactText', () => {
     expect(renderArtifactText({})).toBe('')
     expect(renderArtifactText({ sections: [{ title: 'Only title', content: undefined as unknown as string }] })).toBe('## Only title')
   })
+
+  it('ignores malformed client-written section values instead of throwing', () => {
+    const malformed = { sections: { not: 'an array' } } as unknown as Parameters<typeof renderArtifactText>[0]
+    expect(() => renderArtifactText(malformed)).not.toThrow()
+    expect(renderArtifactText(malformed)).toBe('')
+  })
 })
 
 describe('date formatters are crash-proof on bad input', () => {
