@@ -34,6 +34,7 @@ export async function fetcher(url: string) {
 interface KPIDataResponse {
   kpis: LiveKPI[]
   projects: ProjectKPI[]
+  degraded?: boolean
   error?: string
 }
 
@@ -61,6 +62,7 @@ export function useKPIData(companyId?: string | null, isOpen: boolean = true) {
   return {
     kpis: data?.kpis ?? [],
     projects: data?.projects ?? [],
+    degraded: data?.degraded === true,
     isLoading,
     error: (error as Error | undefined) || data?.error,
     refetch,
