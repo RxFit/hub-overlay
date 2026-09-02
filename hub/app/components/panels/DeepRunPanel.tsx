@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import type { ToolPanelContentProps } from '@/types'
 import { MessageContent } from '@/app/components/MessageContent'
 import { parseDeepReport, type DeepReport } from '@/lib/deep-report'
@@ -14,6 +15,14 @@ import { parseDeepReport, type DeepReport } from '@/lib/deep-report'
    nothing until a run completes), and renders the landed report. Closing the
    panel or refreshing loses nothing — on mount the panel reattaches to the
    latest run for its tool.
+
+   A finished report is ALSO an artifact, automatically: the worker landing
+   saves it (lib/deep-artifacts.ts) and this panel asks the idempotent
+   `save_artifact` action for the artifact id when it renders a report — so
+   the "Saved to Artifacts" line is the truth, and older runs that landed
+   before auto-save get saved the first time they are reopened. The panel no
+   longer feeds the tool panel's manual Save & Close: there is nothing left
+   for the user to remember to do.
    ══════════════════════════════════════════════════════════════════════════════ */
 
 interface RunView {
@@ -33,6 +42,12 @@ interface RunView {
 }
 
 const POLL_MS = 5_000
+
+type SaveState =
+  | { status: 'idle' }
+  | { status: 'saving' }
+  | { status: 'saved'; artifact: { id: string; title: string } }
+  | { status: 'failed' }
 
 const TOOL_COPY: Record<string, { verb: string; briefPlaceholder: string; runningNote: string }> = {
   'deep-research': {
@@ -82,7 +97,6 @@ export default function DeepRunPanel({
   toolId,
   contextSummary,
   onInjectChat,
-  onArtifactUpdate,
   chatId,
 }: ToolPanelContentProps) {
   const copy = TOOL_COPY[toolId] ?? TOOL_COPY['deep-research']
@@ -92,8 +106,13 @@ export default function DeepRunPanel({
   const [report, setReport] = useState<DeepReport | null>(null)
   const [banner, setBanner] = useState<string | null>(null)
   const [confirmingCancel, setConfirmingCancel] = useState(false)
+  const [save, setSave] = useState<SaveState>({ status: 'idle' })
   const [now, setNow] = useState(() => Date.now())
   const aliveRef = useRef(true)
+  /* The run id whose artifact save is in flight or done — one ensure per run,
+     however many times adopt runs (mount reattach + poll can both land). */
+  const ensuredRunRef = useRef<string | null>(null)
+  const queryClient = useQueryClient()
 
   useEffect(() => {
     aliveRef.current = true
@@ -107,37 +126,44 @@ export default function DeepRunPanel({
     return () => clearInterval(t)
   }, [phase])
 
+  /* Ask the server for this run's artifact (creating it if the landing-side
+     save didn't already). Idempotent server-side, so calling it for a run
+     that was saved by an earlier session just returns the existing id. */
+  const ensureArtifact = useCallback(async (runId: string, force = false) => {
+    if (!force && ensuredRunRef.current === runId) return
+    ensuredRunRef.current = runId
+    setSave({ status: 'saving' })
+    try {
+      const res = await fetch(`/api/deep-runs/${runId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'save_artifact' }),
+      })
+      const body = (await res.json().catch(() => ({}))) as { artifact?: { id: string; title: string } }
+      if (!aliveRef.current) return
+      if (!res.ok || !body.artifact) {
+        setSave({ status: 'failed' })
+        return
+      }
+      setSave({ status: 'saved', artifact: body.artifact })
+      // The Documents › Artifacts list is a react-query cache — refresh it so
+      // the new row shows without a reload.
+      void queryClient.invalidateQueries({ queryKey: ['tool-artifacts'] })
+    } catch {
+      if (aliveRef.current) setSave({ status: 'failed' })
+    }
+  }, [queryClient])
+
   const adoptTerminal = useCallback((view: RunView) => {
     setRun(view)
     if (view.liveStatus === 'succeeded') {
-      const parsed = parseDeepReport(view.resultMd)
-      setReport(parsed)
+      setReport(parseDeepReport(view.resultMd))
       setPhase('done')
-      // Feed the existing Save & Close path: the report becomes a normal
-      // tool artifact (Postgres + pgvector) without any new plumbing.
-      onArtifactUpdate({
-        toolId: view.tool,
-        title: parsed?.title ?? view.brief.slice(0, 80),
-        sections: parsed
-          ? [
-              { id: `${view.id}-summary`, type: 'recommendation', title: 'Summary', content: parsed.summary },
-              ...parsed.sections.map((s, i) => ({
-                id: `${view.id}-s${i}`, type: 'insight' as const, title: s.heading, content: s.body,
-              })),
-              ...(parsed.sources.length > 0
-                ? [{
-                    id: `${view.id}-sources`, type: 'generic' as const, title: 'Sources',
-                    content: parsed.sources.map((s, i) => `[${i + 1}] ${s.title} — ${s.url}`).join('\n'),
-                  }]
-                : []),
-            ]
-          : [{ id: `${view.id}-report`, type: 'generic' as const, title: 'Report', content: view.resultMd ?? '' }],
-        metadata: { deepRunId: view.id, chatId: chatId ?? undefined },
-      })
+      void ensureArtifact(view.id)
     } else {
       setPhase('failed')
     }
-  }, [chatId, onArtifactUpdate])
+  }, [ensureArtifact])
 
   const pollOnce = useCallback(async (runId: string): Promise<void> => {
     const res = await fetch(`/api/deep-runs/${runId}`)
@@ -253,6 +279,7 @@ export default function DeepRunPanel({
     setRun(null)
     setReport(null)
     setBanner(null)
+    setSave({ status: 'idle' })
     setPhase('brief')
   }, [])
 
@@ -348,6 +375,22 @@ export default function DeepRunPanel({
           <div className="deep-run__report-meta">
             finished {run.finishedAt ? elapsedLabel(run.createdAt, Date.parse(run.finishedAt)) : ''} after start
           </div>
+          <div className={`deep-run__saved deep-run__saved--${save.status}`} role="status">
+            {save.status === 'saved' && (
+              <>
+                <span aria-hidden="true">✓</span> Saved to Artifacts — reopen it any time under Documents › Artifacts.
+              </>
+            )}
+            {save.status === 'saving' && 'Saving to Artifacts…'}
+            {save.status === 'failed' && (
+              <>
+                Couldn&apos;t save to Artifacts.{' '}
+                <button className="deep-run__link-btn" onClick={() => void ensureArtifact(run.id, true)}>
+                  Retry
+                </button>
+              </>
+            )}
+          </div>
         </div>
         {report ? (
           <>
@@ -388,7 +431,9 @@ export default function DeepRunPanel({
           </button>
           <button className="deep-run__context-btn" onClick={newRun}>New run</button>
         </div>
-        <p className="deep-run__hint">Save &amp; Close (top right) stores this report in your tool artifacts.</p>
+        <p className="deep-run__hint">
+          Starting a new run keeps this report — it stays in your Artifacts.
+        </p>
       </div>
     )
   }

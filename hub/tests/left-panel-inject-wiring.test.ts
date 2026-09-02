@@ -62,13 +62,24 @@ describe('DocumentsSection → chat wiring', () => {
     expect(src).toMatch(/onInjectChat\(message,\s*\[attachment\]\)/)
   })
 
-  it('sends artifact taps with the buildArtifactInject attachment (real artifact id)', () => {
-    expect(src).toMatch(/buildArtifactInject\(artifact\)/)
+  it('opens artifact taps in the viewer (the whole record, no second fetch)', () => {
+    expect(src).toMatch(/onOpenArtifact\(artifact\)/)
+    expect(src).toMatch(/onOpenArtifact:\s*\(artifact:\s*ToolArtifactRecord\)\s*=>\s*void/)
   })
 
   it('uses the status-tagging artifactsFetcher, not a raw fetch that masks HTTP errors', () => {
     expect(src).toMatch(/artifactsFetcher/)
     expect(src).not.toMatch(/fetch\(url\)\.then\(r\s*=>\s*r\.json\(\)\)/)
+  })
+})
+
+describe('ArtifactViewer → chat wiring', () => {
+  const src = componentSource('ArtifactViewer.tsx')
+
+  it('routes "Discuss in chat" through buildArtifactInject WITH the saved content', () => {
+    expect(src).toMatch(/from '@\/lib\/panel-inject'/)
+    expect(src).toMatch(/buildArtifactInject\(\{[\s\S]*?content:\s*artifact\.content[\s\S]*?\}\)/)
+    expect(src).toMatch(/onDiscuss\(message,\s*\[attachment\]\)/)
   })
 })
 
@@ -97,6 +108,15 @@ describe('bulk inject payload integrity', () => {
     for (let i = 0; i < 1_000; i++) {
       const { attachment } = buildArtifactInject({ id: `art-${i}`, toolId: 'issue-tree', title: `T${i}` })
       expect(attachment.content).toContain(`[artifact:art-${i}]`)
+    }
+  })
+
+  it('1k artifact discussions with 100KB of sections: every attachment stays bounded and keeps its marker first', () => {
+    const sections = Array.from({ length: 100 }, (_, i) => ({ title: `S${i}`, content: 'y'.repeat(1_000) }))
+    for (let i = 0; i < 1_000; i++) {
+      const { attachment } = buildArtifactInject({ id: `art-${i}`, toolId: 'deep-research', title: `T${i}`, content: { sections } })
+      expect(attachment.content!.length).toBeLessThanOrEqual(12_000)
+      expect(attachment.content!.startsWith(`[artifact:art-${i}]`)).toBe(true)
     }
   })
 

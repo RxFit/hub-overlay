@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { verifyCronSecret } from '@/lib/cron-auth'
 import { persistAssistantTurn } from '@/lib/chat-store'
+import { ensureDeepRunArtifactForRun } from '@/lib/deep-artifacts'
 import { parseDeepReport } from '@/lib/deep-report'
 import { DEEP_TOOLS, isDeepToolId } from '@/lib/deep-runs'
+import { getTenantId } from '@/lib/tenant-context'
 import { isMissingTableError, postResult, toolRunIdFrom, workItemRunSource } from '@/lib/dispatch-store'
 import { emit } from '@/lib/observability'
 import { withFault } from '@/lib/route-fault'
@@ -151,9 +153,26 @@ export const POST = withFault('worker/jobs/[id]/result', async (req: NextRequest
       void persistAssistantTurn({
         chatId: outcome.toolRun.chatId,
         userEmail: outcome.toolRun.userEmail,
-        content: `📌 **${toolName} finished${title ? `: ${title}` : ''}.** Open the ${toolName} panel to read the report and save it to your artifacts.`,
+        content: `📌 **${toolName} finished${title ? `: ${title}` : ''}.** Open the ${toolName} panel to read the report — it is also saved under Documents › Artifacts.`,
         model: typeof body.model === 'string' ? body.model.slice(0, 100) : undefined,
       })
+    }
+    // A landed report is an artifact from this moment (lib/deep-artifacts.ts):
+    // the Artifacts tab must not depend on a browser being open when the
+    // worker posts. AWAITED, unlike the pointer and the ledger above: Cloud
+    // Run throttles the instance once the response is sent, so a detached
+    // save could stall with the worker already told "recorded" and never
+    // retry. The durable row is what we wait for; the embedding inside is
+    // bounded and best-effort. Idempotent — the panel's own save is a no-op
+    // once this has run — and a failure never fails the ack: it only defers
+    // the save to the panel, which is the documented fallback.
+    if (recordedWork && outcome.toolRun && body.status === 'ok' && isDeepToolId(outcome.toolRun.tool)) {
+      const landed = outcome.toolRun
+      try {
+        await ensureDeepRunArtifactForRun(landed.id, landed.userEmail, getTenantId(), { embedTimeoutMs: 5_000 })
+      } catch (err) {
+        console.warn('[worker result] deep-run artifact save deferred to the panel:', err instanceof Error ? err.message : err)
+      }
     }
     if (discarded || recordedWork) {
       // The spend happened — the ledger's job is to say so, whether or not

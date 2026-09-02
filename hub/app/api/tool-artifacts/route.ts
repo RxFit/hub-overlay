@@ -7,6 +7,7 @@ import {
   getToolArtifact,
   updateToolArtifact,
   archiveToolArtifact,
+  isArtifactOwner,
 } from '@/lib/tool-artifacts'
 import { getTenantId } from '@/lib/tenant-context'
 import { canAccessAdminRoute } from '@/lib/roles'
@@ -115,8 +116,10 @@ export async function PATCH(req: NextRequest) {
     // admins/superadmins may mutate any artifact in the tenant; everyone else
     // may only mutate artifacts they created. Without this a staff user could
     // edit another user's artifact by id (IDOR across users within a tenant).
+    // Case-insensitive on the email (isArtifactOwner) — auto-saved deep-run
+    // artifacts carry the run's lowercased owner.
     const role = (session.user as Record<string, unknown>)?.role as string | undefined
-    if (!canAccessAdminRoute(role) && existing.createdBy !== (session.user.email ?? '__none__')) {
+    if (!canAccessAdminRoute(role) && !isArtifactOwner(existing.createdBy, session.user.email)) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 
@@ -162,7 +165,7 @@ export async function DELETE(req: NextRequest) {
     // may only archive artifacts they created. Without this a staff user could
     // soft-delete another user's artifact by id (IDOR across users in a tenant).
     const role = (session.user as Record<string, unknown>)?.role as string | undefined
-    if (!canAccessAdminRoute(role) && existing.createdBy !== (session.user.email ?? '__none__')) {
+    if (!canAccessAdminRoute(role) && !isArtifactOwner(existing.createdBy, session.user.email)) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 
