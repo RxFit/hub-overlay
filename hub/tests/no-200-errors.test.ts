@@ -46,8 +46,17 @@ const INTENTIONAL: ReadonlyMap<string, string> = new Map([
 ])
 
 const FAILURE_KEY = /\berror\s*:|\breason\s*:|\bok\s*:\s*false|\bsuccess\s*:\s*false/
-const LITERAL_ERROR_STATUS = /status:\s*[45]\d\d/
-const NON_LITERAL_STATUS = /status:\s*[A-Za-z_$][\w$]*(?:\.[\w$]+)*\s*[,}]/
+const LITERAL_ERROR_STATUS = /\bstatus:\s*[45]\d\d/
+const NON_LITERAL_STATUS = /\bstatus:\s*[A-Za-z_$][\w$]*(?:\.[\w$]+)*\s*[,}]?/
+
+/* The status regexes are applied ONLY to the response-init argument, never to
+ * the whole call. `NextResponse.json({ status: 500, error: 'failed' })` is a
+ * body with a `status` FIELD and no init — it returns HTTP 200 — and matching
+ * `status: 500` anywhere in the call text read that as a genuine 500 and
+ * skipped it. That is the exact regression this file exists to catch, so the
+ * guard was blind to its own headline case (verified: the suite passed 79/79
+ * with that literal injected into a route). Splitting the arguments is what
+ * fixes it, which is why jsonCalls returns them separately. */
 
 const hubRoot = join(__dirname, '..')
 const apiRoot = join(hubRoot, 'app', 'api')
@@ -62,30 +71,60 @@ function routeFiles(dir: string): string[] {
   return out
 }
 
-/** Balanced-paren extraction of each NextResponse.json(...) call's arguments. */
-function jsonCalls(src: string): string[] {
-  const out: string[] = []
+interface JsonCall {
+  /** First argument — the response BODY. */
+  body: string
+  /** Second argument — the response INIT, where a real HTTP status lives. */
+  init: string
+}
+
+/**
+ * Extract each `NextResponse.json(...)` call, split into its top-level
+ * arguments. Quotes and template literals are tracked so a brace or comma
+ * inside a string cannot throw off the depth count or the argument split.
+ */
+function jsonCalls(src: string): JsonCall[] {
+  const out: JsonCall[] = []
   for (const m of src.matchAll(/NextResponse\.json\(/g)) {
-    let i = m.index! + m[0].length
+    const start = m.index! + m[0].length
+    let i = start
     let depth = 1
+    let quote: string | null = null
+    const commas: number[] = []
     while (i < src.length && depth > 0) {
       const c = src[i]
-      if (c === '(' || c === '[' || c === '{') depth++
-      else if (c === ')' || c === ']' || c === '}') depth--
+      if (quote) {
+        if (c === '\\') i++
+        else if (c === quote) quote = null
+      } else if (c === "'" || c === '"' || c === '`') {
+        quote = c
+      } else if (c === '(' || c === '[' || c === '{') {
+        depth++
+      } else if (c === ')' || c === ']' || c === '}') {
+        depth--
+      } else if (c === ',' && depth === 1) {
+        commas.push(i)
+      }
       i++
     }
-    out.push(src.slice(m.index! + m[0].length, i - 1))
+    const whole = src.slice(start, i - 1)
+    const cut = commas.length > 0 ? commas[0] - start : whole.length
+    out.push({ body: whole.slice(0, cut), init: whole.slice(cut + 1) })
   }
   return out
 }
 
 function violations(src: string): string[] {
-  return jsonCalls(src).filter(
-    (call) =>
-      !LITERAL_ERROR_STATUS.test(call) &&
-      !NON_LITERAL_STATUS.test(call) &&
-      FAILURE_KEY.test(call),
-  )
+  return jsonCalls(src)
+    .filter(
+      ({ body, init }) =>
+        // Only the INIT can carry a real HTTP status. A `status` field in the
+        // body is payload, not the response code.
+        !LITERAL_ERROR_STATUS.test(init) &&
+        !NON_LITERAL_STATUS.test(init) &&
+        FAILURE_KEY.test(body),
+    )
+    .map(({ body }) => body)
 }
 
 describe('no 2xx response carries a failure body', () => {
