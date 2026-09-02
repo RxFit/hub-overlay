@@ -254,7 +254,17 @@ describe('POST /api/worker/jobs/[id]/result', () => {
     expect(chatStore.persistAssistantTurn).not.toHaveBeenCalled()
   })
 
-  it('a landed deep run is saved as an artifact at landing — no browser required', async () => {
+  it('a landed deep run is saved as an artifact at landing — no browser required, and the ack WAITS for the row', async () => {
+    // The save must be awaited, not detached: Cloud Run throttles the instance
+    // after the response, so a fire-and-forget save could stall with the
+    // worker already told "recorded". Prove the response only lands after
+    // the ensure has settled.
+    let settled = false
+    artifacts.ensureDeepRunArtifactForRun.mockImplementationOnce(async () => {
+      await new Promise(r => setTimeout(r, 25))
+      settled = true
+      return { id: 'a1', title: 'Deep Think: t', created: true }
+    })
     store.postResult.mockResolvedValue({
       outcome: 'recorded', prompt: 'p', requestId: null, kind: 'work_item',
       payloadMeta: { toolRunId: '11111111-1111-4111-8111-111111111111' },
@@ -263,7 +273,10 @@ describe('POST /api/worker/jobs/[id]/result', () => {
     })
     const res = await resultPost(request('/api/worker/jobs/j1/result', base), { params: { id: 'j1' } })
     expect(res.status).toBe(200)
-    expect(artifacts.ensureDeepRunArtifactForRun).toHaveBeenCalledWith('r1', 'staff@rxfitatx.com', 'rxfit')
+    expect(settled).toBe(true)
+    expect(artifacts.ensureDeepRunArtifactForRun).toHaveBeenCalledWith(
+      'r1', 'staff@rxfitatx.com', 'rxfit', expect.objectContaining({ embedTimeoutMs: expect.any(Number) }),
+    )
   })
 
   it('a failing artifact save never fails the worker ack — the panel-side save is the fallback', async () => {
@@ -273,9 +286,11 @@ describe('POST /api/worker/jobs/[id]/result', () => {
       payloadMeta: {}, toolRun: { id: 'r1', tool: 'deep-research', userEmail: 'staff@rxfitatx.com', chatId: 'chat-1' },
     })
     const res = await resultPost(request('/api/worker/jobs/j1/result', base), { params: { id: 'j1' } })
+    expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ outcome: 'recorded' })
-    // Let the detached promise settle so an unhandled rejection would surface here.
-    await new Promise(r => setTimeout(r, 0))
+    // The chat pointer and the ledger row still happen around a failed save.
+    expect(chatStore.persistAssistantTurn).toHaveBeenCalledTimes(1)
+    expect(ledger.recordAiRun).toHaveBeenCalledTimes(1)
   })
 
   it('no artifact save on failure, on discard, for chat turns, or for non-deep work items', async () => {

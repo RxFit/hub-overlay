@@ -27,6 +27,13 @@
  * The artifact id lives in `content.metadata.deepRunId`, which is also what
  * the old Save & Close path wrote, so pre-existing manual saves count as
  * "already saved" rather than being duplicated.
+ *
+ * Callers AWAIT the row. The worker route in particular must not detach it:
+ * Cloud Run throttles an instance's CPU once the response is sent, so a
+ * fire-and-forget save could stall forever with the worker already told
+ * "recorded" — and the panel-side safety net only fires when someone opens
+ * the panel. The embedding is the one step that is allowed to lag (bounded
+ * by EMBED_TIMEOUT_MS, best-effort by contract).
  */
 
 import { and, asc, eq, sql } from 'drizzle-orm'
@@ -36,6 +43,7 @@ import { parseDeepReport } from '@/lib/deep-report'
 import { DEEP_TOOLS, isDeepToolId } from '@/lib/deep-runs'
 import { embedToolArtifact } from '@/lib/tool-artifacts'
 import { getToolRunOwned } from '@/lib/tool-runs'
+import { withTimeout } from '@/lib/timeout'
 import { createLogger } from '@/lib/logger'
 import type { ToolArtifactData, ToolArtifactSection } from '@/types'
 
@@ -59,6 +67,19 @@ export interface EnsuredArtifact {
 
 /** Longest a fallback (brief-derived) title gets. */
 const TITLE_FROM_BRIEF_CHARS = 80
+
+/** Default bound on the best-effort embedding step. The row is the durable
+ *  product; a slow model call must never hold a caller (the worker's result
+ *  ack, the panel's "Saving…") hostage. On timeout the artifact simply isn't
+ *  semantically searchable yet — exactly the documented best-effort outcome. */
+export const EMBED_TIMEOUT_MS = 8_000
+
+export interface EnsureDeepRunArtifactOptions {
+  tenantId: string
+  createdBy?: string | null
+  /** Override the embedding bound (ms). */
+  embedTimeoutMs?: number
+}
 
 function toolDisplayName(tool: string): string {
   return isDeepToolId(tool) ? DEEP_TOOLS[tool].name : tool
@@ -124,16 +145,17 @@ function deepRunPredicate(tenantId: string, runId: string) {
  * The advisory lock serialises concurrent callers for the SAME run (the
  * landing side effect and the panel's adopt can race by design) while leaving
  * everything else untouched; the lock is transaction-scoped, so a crash
- * releases it. The embedding step runs AFTER the transaction and is
- * best-effort — an artifact that isn't semantically searchable is still an
- * artifact, and holding a row lock across a model call is not worth it.
+ * releases it. The embedding step runs AFTER the transaction, is bounded by
+ * a timeout, and is best-effort — an artifact that isn't semantically
+ * searchable is still an artifact, and holding a row lock (or a caller)
+ * across a model call is not worth it.
  *
  * Throws only when the DATABASE write itself fails; the caller decides
  * whether that is fatal (the API route) or logged (the worker landing).
  */
 export async function ensureDeepRunArtifact(
   run: DeepRunArtifactSource,
-  opts: { tenantId: string; createdBy?: string | null },
+  opts: EnsureDeepRunArtifactOptions,
 ): Promise<EnsuredArtifact> {
   const data = buildDeepRunArtifact(run)
   const title = deepRunArtifactTitle(run, data)
@@ -172,8 +194,16 @@ export async function ensureDeepRunArtifact(
 
   if (ensured.created) {
     log.info({ artifactId: ensured.id, runId: run.id, tool: run.tool }, 'Deep run report saved as artifact')
-    // Best-effort by contract (embedToolArtifact never throws).
-    await embedToolArtifact({ id: ensured.id, tenantId: opts.tenantId, toolId: run.tool, title, content: data })
+    // Best-effort by contract (embedToolArtifact never throws) and bounded:
+    // on timeout the call keeps running in the background and the caller
+    // moves on with the durable row already committed.
+    const embedded = await withTimeout(
+      embedToolArtifact({ id: ensured.id, tenantId: opts.tenantId, toolId: run.tool, title, content: data }),
+      opts.embedTimeoutMs ?? EMBED_TIMEOUT_MS,
+      false,
+      'deep-artifact-embed',
+    )
+    if (!embedded) log.warn({ artifactId: ensured.id }, 'Deep run artifact saved; embedding pending or skipped')
   }
   return ensured
 }
@@ -189,8 +219,9 @@ export async function ensureDeepRunArtifactForRun(
   runId: string,
   userEmail: string,
   tenantId: string,
+  opts: Pick<EnsureDeepRunArtifactOptions, 'embedTimeoutMs'> = {},
 ): Promise<EnsuredArtifact | null> {
   const run = await getToolRunOwned(runId, userEmail)
   if (!run || !isDeepToolId(run.tool) || run.status !== 'succeeded' || !run.resultMd?.trim()) return null
-  return ensureDeepRunArtifact(run, { tenantId, createdBy: run.userEmail })
+  return ensureDeepRunArtifact(run, { tenantId, createdBy: run.userEmail, ...opts })
 }

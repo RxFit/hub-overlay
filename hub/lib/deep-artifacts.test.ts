@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 /**
  * lib/deep-artifacts — the PURE half (report → artifact shape). The
@@ -6,11 +6,16 @@ import { describe, it, expect, vi } from 'vitest'
  * tests/deep-artifacts-db.test.ts; here the db is stubbed so importing the
  * module never touches a connection.
  */
-vi.mock('@/lib/db', () => ({ db: {}, withTransaction: vi.fn() }))
-vi.mock('@/lib/tool-artifacts', () => ({ embedToolArtifact: vi.fn(async () => true) }))
-vi.mock('@/lib/tool-runs', () => ({ getToolRunOwned: vi.fn() }))
+const { dbMock, embedMock, runsMock } = vi.hoisted(() => ({
+  dbMock: { db: {}, withTransaction: vi.fn() },
+  embedMock: { embedToolArtifact: vi.fn(async () => true) },
+  runsMock: { getToolRunOwned: vi.fn() },
+}))
+vi.mock('@/lib/db', () => dbMock)
+vi.mock('@/lib/tool-artifacts', () => embedMock)
+vi.mock('@/lib/tool-runs', () => runsMock)
 
-import { buildDeepRunArtifact, deepRunArtifactTitle } from './deep-artifacts'
+import { buildDeepRunArtifact, deepRunArtifactTitle, ensureDeepRunArtifact, ensureDeepRunArtifactForRun } from './deep-artifacts'
 
 const REPORT = [
   '# Churn drivers',
@@ -93,5 +98,66 @@ describe('deepRunArtifactTitle', () => {
   it('falls back to the raw tool id and "Untitled" for unknown tools / blank titles', () => {
     const data = buildDeepRunArtifact(RUN)
     expect(deepRunArtifactTitle({ tool: 'mystery-tool' }, { ...data, title: '' })).toBe('mystery-tool: Untitled')
+  })
+})
+
+/* The ensure path with the transaction stubbed: the row is the awaited
+   product; the embedding is bounded and can never turn a saved row into a
+   failure or a hang. The real transaction + lock run in
+   tests/deep-artifacts-db.test.ts against Postgres. */
+describe('ensureDeepRunArtifact — embedding is bounded and best-effort', () => {
+  beforeEach(() => {
+    dbMock.withTransaction.mockReset()
+    embedMock.embedToolArtifact.mockReset()
+    runsMock.getToolRunOwned.mockReset()
+  })
+
+  it('returns the committed row as soon as a slow embedding exceeds its bound (the call keeps running)', async () => {
+    dbMock.withTransaction.mockResolvedValue({ id: 'a1', title: 'Deep Research: Churn drivers', created: true })
+    let resolveEmbed: (v: boolean) => void = () => {}
+    embedMock.embedToolArtifact.mockImplementation(() => new Promise<boolean>(r => { resolveEmbed = r }))
+
+    const started = Date.now()
+    const ensured = await ensureDeepRunArtifact(RUN, { tenantId: 'rxfit', createdBy: 'me@rxfitatx.com', embedTimeoutMs: 30 })
+    expect(ensured).toEqual({ id: 'a1', title: 'Deep Research: Churn drivers', created: true })
+    expect(Date.now() - started).toBeLessThan(2_000)
+    expect(embedMock.embedToolArtifact).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'a1', tenantId: 'rxfit', toolId: 'deep-research', title: 'Deep Research: Churn drivers' }),
+    )
+    resolveEmbed(true)
+  })
+
+  it('does not embed at all when the row already existed (created:false)', async () => {
+    dbMock.withTransaction.mockResolvedValue({ id: 'a1', title: 't', created: false })
+    const ensured = await ensureDeepRunArtifact(RUN, { tenantId: 'rxfit' })
+    expect(ensured.created).toBe(false)
+    expect(embedMock.embedToolArtifact).not.toHaveBeenCalled()
+  })
+
+  it('propagates a failed transaction — the caller decides whether that is fatal', async () => {
+    dbMock.withTransaction.mockRejectedValue(new Error('db down'))
+    await expect(ensureDeepRunArtifact(RUN, { tenantId: 'rxfit' })).rejects.toThrow('db down')
+    expect(embedMock.embedToolArtifact).not.toHaveBeenCalled()
+  })
+
+  it('ForRun: saves nothing for a missing / non-deep / unfinished / empty run, and forwards the embed bound otherwise', async () => {
+    dbMock.withTransaction.mockResolvedValue({ id: 'a1', title: 't', created: true })
+    embedMock.embedToolArtifact.mockResolvedValue(true)
+    const landed = { ...RUN, status: 'succeeded', userEmail: 'me@rxfitatx.com' }
+
+    runsMock.getToolRunOwned.mockResolvedValue(null)
+    expect(await ensureDeepRunArtifactForRun(RUN.id, 'me@rxfitatx.com', 'rxfit')).toBeNull()
+    runsMock.getToolRunOwned.mockResolvedValue({ ...landed, tool: 'issue-tree' })
+    expect(await ensureDeepRunArtifactForRun(RUN.id, 'me@rxfitatx.com', 'rxfit')).toBeNull()
+    runsMock.getToolRunOwned.mockResolvedValue({ ...landed, status: 'queued', resultMd: null })
+    expect(await ensureDeepRunArtifactForRun(RUN.id, 'me@rxfitatx.com', 'rxfit')).toBeNull()
+    runsMock.getToolRunOwned.mockResolvedValue({ ...landed, resultMd: '   ' })
+    expect(await ensureDeepRunArtifactForRun(RUN.id, 'me@rxfitatx.com', 'rxfit')).toBeNull()
+    expect(dbMock.withTransaction).not.toHaveBeenCalled()
+
+    runsMock.getToolRunOwned.mockResolvedValue(landed)
+    const ensured = await ensureDeepRunArtifactForRun(RUN.id, 'me@rxfitatx.com', 'rxfit', { embedTimeoutMs: 50 })
+    expect(ensured?.created).toBe(true)
+    expect(dbMock.withTransaction).toHaveBeenCalledTimes(1)
   })
 })
