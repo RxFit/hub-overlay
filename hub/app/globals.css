@@ -3669,14 +3669,26 @@ a:hover .rx-arrow {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* Solid gold fill so the dark label stays legible; the pulse lives in the
+   glow around the tab, never in the fill (a fill that swung 0.2→0.7 alpha
+   made gold-on-gold text vanish at the peak and in light theme). */
 .tool-edge-indicator__glow {
   position: absolute;
   inset: 0 0 0 14px; /* the visible tab is 30px; the rest is hit area */
   border-radius: 10px 0 0 10px;
-  background: rgba(197, 160, 89, 0.4);
-  border: 1px solid rgba(197, 160, 89, 0.55);
+  background: var(--accent);
+  border: 1px solid rgba(255, 255, 255, 0.18);
   border-right: none;
-  animation: edgePulse 2s ease-in-out infinite;
+  animation: edgeHandlePulse 2s ease-in-out infinite;
+}
+
+@keyframes edgeHandlePulse {
+  0%, 100% { box-shadow: -2px 0 8px rgba(197, 160, 89, 0.25); opacity: 0.88; }
+  50%      { box-shadow: -6px 0 22px rgba(197, 160, 89, 0.6); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tool-edge-indicator__glow { animation: none; }
 }
 
 /* The handle says what it opens: the tool name runs up the bar, so the gold
@@ -3692,10 +3704,11 @@ a:hover .rx-arrow {
   font-weight: 700;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--accent);
+  /* Dark on the solid gold tab — the same pairing the accent buttons use —
+     so it reads at every point of the pulse and in both themes. */
+  color: hsl(224, 28%, 12%);
   white-space: nowrap;
   pointer-events: none;
-  text-shadow: 0 0 6px rgba(15, 17, 26, 0.9);
 }
 
 @keyframes edgePulse {
