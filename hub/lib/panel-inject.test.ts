@@ -4,6 +4,8 @@ import {
   buildEventInjectMessage,
   buildDocumentInject,
   buildArtifactInject,
+  renderArtifactText,
+  ARTIFACT_ATTACHMENT_MAX_CHARS,
   formatRelativeDate,
   formatShortDate,
   formatDueDate,
@@ -216,7 +218,7 @@ describe('buildArtifactInject', () => {
       toolId: 'decision-memo',
       title: 'Q3 Pricing Memo',
     })
-    expect(message).toBe('Show me the decision-memo artifact: Q3 Pricing Memo')
+    expect(message).toBe('Walk me through the saved decision-memo artifact "Q3 Pricing Memo" — lead with its key findings.')
     expect(attachment).toMatchObject({
       id: 'artifact-789',
       type: 'text',
@@ -226,12 +228,57 @@ describe('buildArtifactInject', () => {
     expect(attachment.content).toContain('[artifact:artifact-789]')
   })
 
+  it('names the tool for the reader when a display name is given', () => {
+    const { message } = buildArtifactInject({ id: 'a', toolId: 'deep-research', toolName: 'Deep Research', title: 'Churn' })
+    expect(message).toContain('saved Deep Research artifact "Churn"')
+  })
+
+  it('attaches the saved sections so the chat can discuss what was actually found', () => {
+    const { attachment } = buildArtifactInject({
+      id: 'a1',
+      toolId: 'deep-research',
+      title: 'Churn drivers',
+      content: {
+        sections: [
+          { title: 'Summary', content: 'Price is the driver.' },
+          { title: 'Evidence', content: 'Three cohorts.', children: [{ title: 'Cohort A', content: 'cites price' }] },
+          { title: 'Empty', content: '' },
+        ],
+      },
+    })
+    // The id marker leads, then one heading per section (nested = deeper heading).
+    expect(attachment.content?.startsWith('[artifact:a1] toolId=deep-research title="Churn drivers"\n\n')).toBe(true)
+    expect(attachment.content).toContain('## Summary\nPrice is the driver.')
+    expect(attachment.content).toContain('## Evidence\nThree cohorts.')
+    expect(attachment.content).toContain('### Cohort A\ncites price')
+    expect(attachment.content).toContain('## Empty')
+  })
+
+  it('bounds a huge artifact without ever losing the id marker', () => {
+    const { attachment } = buildArtifactInject({
+      id: 'big',
+      toolId: 'deep-research',
+      title: 'Huge',
+      content: { sections: Array.from({ length: 200 }, (_, i) => ({ title: `S${i}`, content: 'x'.repeat(1_000) })) },
+    })
+    expect(attachment.content!.length).toBeLessThanOrEqual(ARTIFACT_ATTACHMENT_MAX_CHARS)
+    expect(attachment.content!.startsWith('[artifact:big]')).toBe(true)
+  })
+
   it('disambiguates two artifacts sharing a toolId + title by id', () => {
     const a = buildArtifactInject({ id: 'a', toolId: 'storyline', title: 'Same Title' })
     const b = buildArtifactInject({ id: 'b', toolId: 'storyline', title: 'Same Title' })
     expect(a.message).toBe(b.message)
     expect(a.attachment.id).not.toBe(b.attachment.id)
     expect(a.attachment.content).not.toBe(b.attachment.content)
+  })
+})
+
+describe('renderArtifactText', () => {
+  it('is empty for missing content and never throws on sparse sections', () => {
+    expect(renderArtifactText(null)).toBe('')
+    expect(renderArtifactText({})).toBe('')
+    expect(renderArtifactText({ sections: [{ title: 'Only title', content: undefined as unknown as string }] })).toBe('## Only title')
   })
 })
 

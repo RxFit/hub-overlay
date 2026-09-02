@@ -368,9 +368,13 @@ const PLUGIN_LABELS: Record<string, string> = {
 export function SkillBadge({
   skill,
   onDismiss,
+  onOpen,
 }: {
   skill: ActiveSkill
   onDismiss: () => void
+  /** Tapping the badge body brings the tool panel back (it is one of the
+   *  "the tool is still active" markers, so it must also be the way in). */
+  onOpen?: () => void
 }) {
   const swipe = useSwipeDismiss(onDismiss)
 
@@ -390,14 +394,31 @@ export function SkillBadge({
       </span>
 
       {/* Label + Plugin */}
-      <div className="skill-badge__body">
-        <div className="skill-badge__title">
-          {skill.name || skill.id}
+      {onOpen ? (
+        <button
+          type="button"
+          className="skill-badge__body skill-badge__body--btn"
+          onClick={onOpen}
+          aria-label={`Open the ${skill.name || skill.id} panel`}
+          title="Open the tool panel"
+        >
+          <div className="skill-badge__title">
+            {skill.name || skill.id}
+          </div>
+          <div className="skill-badge__plugin">
+            {PLUGIN_LABELS[skill.plugin] || skill.plugin}
+          </div>
+        </button>
+      ) : (
+        <div className="skill-badge__body">
+          <div className="skill-badge__title">
+            {skill.name || skill.id}
+          </div>
+          <div className="skill-badge__plugin">
+            {PLUGIN_LABELS[skill.plugin] || skill.plugin}
+          </div>
         </div>
-        <div className="skill-badge__plugin">
-          {PLUGIN_LABELS[skill.plugin] || skill.plugin}
-        </div>
-      </div>
+      )}
 
       {/* Cancel button */}
       <button

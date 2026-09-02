@@ -10,7 +10,8 @@ import { canAccessAdminRoute } from '@/lib/roles'
 import { InterviewBadge, ActionConfirmCard, SkillBadge, SolutionCard } from '@/app/components/ChatEnhancements'
 import { ToolPanel } from '@/app/components/ToolPanel'
 import { ToolPanelCollapsedRail, MobileToolEdge } from '@/app/components/ToolPanelCollapsedRail'
-import type { ToolArtifactData } from '@/types'
+import { ArtifactViewer } from '@/app/components/ArtifactViewer'
+import type { ToolArtifactData, ToolArtifactRecord } from '@/types'
 import { ContextAttachMenu, AttachmentChips } from '@/app/components/ContextAttachMenu'
 import { SkillsPopover } from '@/app/components/SkillsPopover'
 import { SKILL_CATALOG, SKILL_MAP } from '@/lib/skills'
@@ -68,7 +69,7 @@ const ONBOARDING_SUGGESTIONS = [
 // AnimatedNumber is now imported from @/app/components/AnimatedNumber
 
 /* ── Left Panel: Context Layer ── */
-function LeftPanelImpl({ isOpen, onClose, onInjectChat, onInjectAction, panelRef, closeBtnRef, isMobileViewport, style, activeProject, workspaceName, kpis, kpiLoading, kpiError, onKpiRetry }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void; onInjectAction: (msg: string, attachments?: ChatAttachment[]) => void; panelRef?: React.Ref<HTMLElement>; closeBtnRef?: React.Ref<HTMLButtonElement>; isMobileViewport?: boolean; style?: React.CSSProperties; activeProject?: string; workspaceName?: string; kpis?: import('@/types').LiveKPI[]; kpiLoading?: boolean; kpiError?: unknown; onKpiRetry?: () => void }) {
+function LeftPanelImpl({ isOpen, onClose, onInjectChat, onInjectAction, onOpenArtifact, panelRef, closeBtnRef, isMobileViewport, style, activeProject, workspaceName, kpis, kpiLoading, kpiError, onKpiRetry }: { isOpen?: boolean; onClose?: () => void; onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void; onInjectAction: (msg: string, attachments?: ChatAttachment[]) => void; onOpenArtifact: (artifact: ToolArtifactRecord) => void; panelRef?: React.Ref<HTMLElement>; closeBtnRef?: React.Ref<HTMLButtonElement>; isMobileViewport?: boolean; style?: React.CSSProperties; activeProject?: string; workspaceName?: string; kpis?: import('@/types').LiveKPI[]; kpiLoading?: boolean; kpiError?: unknown; onKpiRetry?: () => void }) {
   const tenant = useTenant()
   return (
     <aside
@@ -99,7 +100,7 @@ function LeftPanelImpl({ isOpen, onClose, onInjectChat, onInjectAction, panelRef
           <CalendarSection onInjectChat={onInjectChat} />
         </SectionErrorBoundary>
         <SectionErrorBoundary label="Documents">
-          <DocumentsSection onInjectChat={onInjectChat} />
+          <DocumentsSection onInjectChat={onInjectChat} onOpenArtifact={onOpenArtifact} />
         </SectionErrorBoundary>
         <SectionErrorBoundary label="Tasks">
           <TasksSection onInjectChat={onInjectChat} onInjectAction={onInjectAction} />
@@ -345,6 +346,9 @@ export default function HubPage() {
   const [toolPanelOpen, setToolPanelOpen] = useState(false)
   const [toolPanelCollapsed, setToolPanelCollapsed] = useState(false)
   const [toolArtifacts, setToolArtifacts] = useState<ToolArtifactData | null>(null)
+  // Saved artifact open in the viewer (Documents › Artifacts tap). Independent
+  // of the tool-panel state: an older report can be read while a run is live.
+  const [viewedArtifact, setViewedArtifact] = useState<ToolArtifactRecord | null>(null)
 
   // Auth error detection
   const authError = (session?.user as Record<string, unknown> | undefined)?.error === 'RefreshAccessTokenError'
@@ -479,13 +483,25 @@ export default function HubPage() {
   const leftCloseBtnRef = useRef<HTMLButtonElement>(null)
   const leftOpenerRef = useRef<HTMLElement | null>(null)
   const [isMobileViewport, setIsMobileViewport] = useState(false)
+  // ≤1024px: the side panels are slide-in drawers (globals.css tablet
+  // breakpoint), not columns — so the Execution drawer must stay mounted
+  // there even while a tool panel is open, or its nav tab opens onto nothing.
+  const [isDrawerViewport, setIsDrawerViewport] = useState(false)
 
   useEffect(() => {
-    const mq = window.matchMedia('(max-width: 640px)')
-    const update = () => setIsMobileViewport(mq.matches)
+    const mobile = window.matchMedia('(max-width: 640px)')
+    const drawer = window.matchMedia('(max-width: 1024px)')
+    const update = () => {
+      setIsMobileViewport(mobile.matches)
+      setIsDrawerViewport(drawer.matches)
+    }
     update()
-    mq.addEventListener('change', update)
-    return () => mq.removeEventListener('change', update)
+    mobile.addEventListener('change', update)
+    drawer.addEventListener('change', update)
+    return () => {
+      mobile.removeEventListener('change', update)
+      drawer.removeEventListener('change', update)
+    }
   }, [])
 
   // Focus management for the mobile left drawer
@@ -596,6 +612,42 @@ export default function HubPage() {
     if (mobileTab === 'tool_panel') setMobileTab('chat')
   }, [mobileTab, setActiveSkill])
 
+  /* ── Bring the tool panel back (edge handle, skill badge, "tap to view") ──
+   * Un-collapses AND switches the phone "tab". The old edge tap only flipped
+   * the tab flag, so a collapsed panel stayed gone while every "still active"
+   * marker was lit — the Deep Research report was unreachable on a phone. */
+  const openToolPanel = useCallback(() => {
+    haptic()
+    setToolPanelOpen(true)
+    setToolPanelCollapsed(false)
+    setMobileLeftOpen(false)
+    setMobileRightOpen(false)
+    setChatPanelOpen(false)
+    setMobileTab('tool_panel')
+  }, [haptic, setMobileTab])
+
+  /* Phone: the collapse control means "back to chat" — the panel stays
+   * MOUNTED (CSS-hidden) so the report, the brief, and the poll survive, and
+   * the gold edge handle appears at once. Desktop keeps collapse-to-rail. */
+  const handleToolPanelToggle = useCallback(() => {
+    haptic()
+    if (isMobileViewport) setMobileTab('chat')
+    else setToolPanelCollapsed(c => !c)
+  }, [haptic, isMobileViewport, setMobileTab])
+
+  /* ── Saved artifacts: open in the viewer; "Discuss" injects the content ── */
+  const handleOpenArtifact = useCallback((artifact: ToolArtifactRecord) => {
+    haptic()
+    setViewedArtifact(artifact)
+  }, [haptic])
+  const closeArtifactViewer = useCallback(() => setViewedArtifact(null), [])
+  const handleDiscussArtifact = useCallback((message: string, attachments: ChatAttachment[]) => {
+    setViewedArtifact(null)
+    // Read-style inject (recall): no intent detection on "walk me through
+    // this report", same path the Documents rows use.
+    injectRecall(message, attachments)
+  }, [injectRecall])
+
   /* ── Save tool artifacts callback for ToolPanel ── */
   const handleSaveToolArtifacts = useCallback(async (artifacts: ToolArtifactData) => {
     await fetch('/api/tool-artifacts', {
@@ -697,7 +749,7 @@ export default function HubPage() {
       </div>
 
       <div className="panels-container">
-        <LeftPanel isOpen={mobileLeftOpen} onClose={handleClosePanels} onInjectChat={injectRecall} onInjectAction={injectExecute} panelRef={leftPanelRef} closeBtnRef={leftCloseBtnRef} isMobileViewport={isMobileViewport} activeProject={activeProject} workspaceName={projects?.[0]?.companyName} kpis={kpis} kpiLoading={kpiLoading} kpiError={kpiError} onKpiRetry={kpiRefetch} />
+        <LeftPanel isOpen={mobileLeftOpen} onClose={handleClosePanels} onInjectChat={injectRecall} onInjectAction={injectExecute} onOpenArtifact={handleOpenArtifact} panelRef={leftPanelRef} closeBtnRef={leftCloseBtnRef} isMobileViewport={isMobileViewport} activeProject={activeProject} workspaceName={projects?.[0]?.companyName} kpis={kpis} kpiLoading={kpiLoading} kpiError={kpiError} onKpiRetry={kpiRefetch} />
 
         {/* ── Center Panel: AI Chat (inlined for shared state) ── */}
         <main className="panel-center" aria-label="AI Chat">
@@ -753,6 +805,7 @@ export default function HubPage() {
               <SkillBadge
                 skill={activeSkill}
                 onDismiss={handleSkillDeactivate}
+                onOpen={openToolPanel}
               />
             )}
 
@@ -997,14 +1050,14 @@ export default function HubPage() {
                     onClick={() => { haptic(); handleSkillActivate('deep-research') }}
                     title={deepAvail.available === false ? 'Engine offline — runs execute on your desktop worker' : 'Minutes-long web research on your desktop engine'}
                   >
-                    <span aria-hidden="true">🔬</span> Deep Research
+                    Deep Research
                   </button>
                   <button
                     className={`deep-chip ${activeSkill?.id === 'deep-think' ? 'deep-chip--active' : ''}`}
                     onClick={() => { haptic(); handleSkillActivate('deep-think') }}
                     title={deepAvail.available === false ? 'Engine offline — runs execute on your desktop worker' : 'Minutes-long deliberation at high reasoning effort'}
                   >
-                    <span aria-hidden="true">🧠</span> Deep Think
+                    Deep Think
                   </button>
                   {deepAvail.available === false && (
                     <span className="deep-chips__status" role="status">engine offline</span>
@@ -1064,8 +1117,10 @@ export default function HubPage() {
             onInjectChat={injectDeepDive}
             onSaveArtifacts={handleSaveToolArtifacts}
             isCollapsed={toolPanelCollapsed}
-            onToggleCollapse={() => setToolPanelCollapsed(c => !c)}
+            onToggleCollapse={handleToolPanelToggle}
             chatId={chat.chatId}
+            mobileHidden={mobileTab !== 'tool_panel'}
+            mobileLayout={isMobileViewport}
           />
         )}
 
@@ -1076,7 +1131,10 @@ export default function HubPage() {
           />
         )}
 
-        {!isOnboarding && (!activeSkill || !toolPanelOpen) && (
+        {/* Desktop: the tool panel takes the right column, so the Execution
+            column yields. In drawer viewports both are overlays and the
+            Execution drawer stays mounted — its Activity tab must open it. */}
+        {!isOnboarding && (!activeSkill || !toolPanelOpen || isDrawerViewport) && (
           <RightPanel
             isOpen={mobileRightOpen}
             onClose={handleClosePanels}
@@ -1096,7 +1154,7 @@ export default function HubPage() {
         {activeSkill && mobileTab !== 'tool_panel' && (
           <MobileToolEdge
             activeSkill={activeSkill}
-            onTap={() => setMobileTab('tool_panel')}
+            onTap={openToolPanel}
           />
         )}
 
@@ -1138,6 +1196,17 @@ export default function HubPage() {
           injectDeepDive(text)
         }}
       />
+
+      {/* Saved artifact viewer (Documents › Artifacts). Layered above the
+          drawers so a phone can open one from the Tasks drawer and land back
+          on the list when it closes. */}
+      {viewedArtifact && (
+        <ArtifactViewer
+          artifact={viewedArtifact}
+          onClose={closeArtifactViewer}
+          onDiscuss={handleDiscussArtifact}
+        />
+      )}
 
       {/* Mobile: Glassmorphism Bottom Navigation Bar */}
       <nav className="mobile-bottom-nav" aria-label="Mobile navigation" role="tablist">

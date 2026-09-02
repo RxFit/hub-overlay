@@ -1,5 +1,6 @@
 'use client'
 
+import { useCallback, useRef } from 'react'
 import type { ActiveSkill } from '@/types'
 
 /* ══════════════════════════════════════════════════════════════════════════════
@@ -38,10 +39,11 @@ export function ToolPanelCollapsedRail({ activeSkill, onExpand }: ToolPanelColla
 
 /* ══════════════════════════════════════════════════════════════════════════════
    MOBILE EDGE INDICATOR
-   
+
    On mobile, when the tool is active but the panel is not visible (user is
    on the chat tab), a thin champagne gold pulsing bar appears on the right
-   edge of the screen. Tapping it switches to the tool panel view.
+   edge of the screen. Tapping it — or dragging it leftward, the gesture a
+   right-edge handle invites — brings the tool panel back.
    ══════════════════════════════════════════════════════════════════════════════ */
 
 interface MobileToolEdgeProps {
@@ -49,15 +51,37 @@ interface MobileToolEdgeProps {
   onTap: () => void
 }
 
+/** px of leftward travel that counts as "pull the panel in". */
+export const EDGE_SWIPE_OPEN_PX = 24
+
 export function MobileToolEdge({ activeSkill, onTap }: MobileToolEdgeProps) {
+  const startXRef = useRef<number | null>(null)
+
+  const onTouchStart = useCallback((e: React.TouchEvent) => {
+    startXRef.current = e.touches[0]?.clientX ?? null
+  }, [])
+
+  /* A finger that moved never produces a click, so a swipe and a tap are
+     mutually exclusive paths into the same idempotent open. */
+  const onTouchEnd = useCallback((e: React.TouchEvent) => {
+    const startX = startXRef.current
+    startXRef.current = null
+    const endX = e.changedTouches[0]?.clientX
+    if (startX == null || endX == null) return
+    if (startX - endX >= EDGE_SWIPE_OPEN_PX) onTap()
+  }, [onTap])
+
   return (
     <button
       className="tool-edge-indicator"
       onClick={onTap}
+      onTouchStart={onTouchStart}
+      onTouchEnd={onTouchEnd}
       aria-label={`${activeSkill.name} is active — tap to view`}
-      title="Tool panel active"
+      title={`${activeSkill.name} panel — tap or swipe left to open`}
     >
       <div className="tool-edge-indicator__glow" aria-hidden="true" />
+      <span className="tool-edge-indicator__label" aria-hidden="true">{activeSkill.name}</span>
     </button>
   )
 }

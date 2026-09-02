@@ -135,7 +135,14 @@ async function mockBackend(page: Page) {
           id: 'art-1',
           toolId: 'decision-memo',
           title: 'Pricing Memo',
-          content: {},
+          content: {
+            toolId: 'decision-memo',
+            title: 'Pricing Memo',
+            sections: [
+              { id: 's1', type: 'recommendation', title: 'Recommendation', content: 'Raise the base tier by 8% in Q4.' },
+              { id: 's2', type: 'pro', title: 'Why', content: 'Churn is not price-sensitive below 10%.' },
+            ],
+          },
           contextSummary: null,
           status: 'completed',
           createdBy: null,
@@ -286,15 +293,43 @@ test('transcript tap uses the summarize prompt and attaches the fileId', async (
   expect(body.attachments![0].fileId).toBe('file-2')
 })
 
-test('artifact tap attaches the resolvable [artifact:id] marker', async ({ page }) => {
+test('artifact tap opens the saved artifact; "Discuss in chat" attaches the marker AND the content', async ({ page }) => {
   await expandSection(page, /Documents/)
   await page.getByRole('tab', { name: 'Artifacts' }).click()
   const row = page.getByRole('listitem', { name: 'Artifact: Pricing Memo' })
   await expect(row).toBeVisible({ timeout: 30_000 })
+  // The row labels the tool by name, not by id.
+  await expect(row).toContainText('Decision Memo')
 
-  const body = await captureChatPost(page, () => row.click())
+  // A tap READS the artifact (the old behaviour fired a chat message with a
+  // bare id the route never resolved).
+  await row.click()
+  const dialog = page.getByRole('dialog', { name: 'Pricing Memo' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog).toContainText('Saved artifact · Decision Memo')
+  await expect(dialog).toContainText('Raise the base tier by 8% in Q4.')
+  await expect(dialog).toContainText('Churn is not price-sensitive below 10%.')
+
+  const body = await captureChatPost(page, () => dialog.getByRole('button', { name: 'Discuss in chat' }).click())
   const msg = body.messages[body.messages.length - 1].content
-  expect(msg).toBe('Show me the decision-memo artifact: Pricing Memo')
+  expect(msg).toContain('saved Decision Memo artifact "Pricing Memo"')
   expect(body.attachments).toHaveLength(1)
   expect(body.attachments![0].content).toContain('[artifact:art-1]')
+  expect(body.attachments![0].content).toContain('## Recommendation\nRaise the base tier by 8% in Q4.')
+  expect(body.useCase).toBe('recall')
+  // Discussing hands off to the chat — the viewer is gone.
+  await expect(dialog).toBeHidden()
+})
+
+test('the artifact viewer closes on Escape without sending anything', async ({ page }) => {
+  await expandSection(page, /Documents/)
+  await page.getByRole('tab', { name: 'Artifacts' }).click()
+  await page.getByRole('listitem', { name: 'Artifact: Pricing Memo' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Pricing Memo' })
+  await expect(dialog).toBeVisible()
+  let chatPosts = 0
+  page.on('request', r => { if (r.url().includes('/api/chat') && r.method() === 'POST') chatPosts++ })
+  await page.keyboard.press('Escape')
+  await expect(dialog).toBeHidden()
+  expect(chatPosts).toBe(0)
 })

@@ -4,6 +4,8 @@ import { authOptions } from '@/lib/auth'
 import { canAccessStaffRoute } from '@/lib/roles'
 import { cancelJob, getJobDetail, isMissingTableError } from '@/lib/dispatch-store'
 import { deriveRunView } from '@/lib/deep-runs'
+import { ensureDeepRunArtifact } from '@/lib/deep-artifacts'
+import { getTenantId } from '@/lib/tenant-context'
 import { cancelToolRun, getToolRunOwned, type ToolRunRecord } from '@/lib/tool-runs'
 import { withFault } from '@/lib/route-fault'
 
@@ -11,7 +13,7 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 /**
- * /api/deep-runs/[id] — watch and cancel one deep run
+ * /api/deep-runs/[id] — watch, cancel, and save one deep run
  * (docs/architecture/DEEP_LANE_2026-08-23.md §4.5, PR B).
  *
  * GET → the owner's run with its LIVE state (deriveRunView joins tool_runs'
@@ -22,6 +24,13 @@ export const dynamic = 'force-dynamic'
  * immediately (the user's intent is now), then the queue job is stood down —
  * the worker aborts within one heartbeat, which is where allotment stops
  * burning.
+ *
+ * POST { action: 'save_artifact' } → idempotent: the landed report becomes
+ * a tool artifact if it isn't one already (lib/deep-artifacts.ts). The
+ * worker landing normally does this first; the panel calls it on adopt as
+ * the safety net (older runs, a landing whose save failed) and to learn the
+ * artifact id it shows as "Saved to Artifacts". 409 while the run has no
+ * finished report — a queued/failed run has nothing to save.
  */
 
 interface SessionUser {
@@ -71,8 +80,28 @@ export const POST = withFault('deep-runs/[id]', async (req: NextRequest, { param
   } catch {
     return NextResponse.json({ error: 'invalid JSON body' }, { status: 400 })
   }
-  if (body.action !== 'cancel') {
-    return NextResponse.json({ error: "action must be 'cancel'" }, { status: 400 })
+  if (body.action !== 'cancel' && body.action !== 'save_artifact') {
+    return NextResponse.json({ error: "action must be 'cancel' or 'save_artifact'" }, { status: 400 })
+  }
+  if (body.action === 'save_artifact') {
+    try {
+      const run = await getToolRunOwned(params.id, auth.email)
+      if (!run) return NextResponse.json({ error: 'run not found' }, { status: 404 })
+      if (run.status !== 'succeeded' || !run.resultMd?.trim()) {
+        return NextResponse.json(
+          { error: 'the run has no finished report to save', reason: 'not_finished' },
+          { status: 409 },
+        )
+      }
+      const artifact = await ensureDeepRunArtifact(run, { tenantId: getTenantId(), createdBy: auth.email })
+      return NextResponse.json({ artifact })
+    } catch (err) {
+      if (isMissingTableError(err)) {
+        return NextResponse.json({ error: 'deep-run tables missing — run migrations' }, { status: 503 })
+      }
+      console.error('[deep-runs save_artifact]', err instanceof Error ? err.message : err)
+      return NextResponse.json({ error: 'Failed to save the report as an artifact' }, { status: 500 })
+    }
   }
   try {
     const jobId = await cancelToolRun(params.id, auth.email)

@@ -11,7 +11,7 @@ import { NextRequest } from 'next/server'
  * created-row-or-stand-down invariant, and the [id] read/cancel flows.
  */
 
-const { sessionMock, staffMock, storeMock, dispatchMock, toolRunsMock, skillsMock } = vi.hoisted(() => ({
+const { sessionMock, staffMock, storeMock, dispatchMock, toolRunsMock, skillsMock, artifactsMock } = vi.hoisted(() => ({
   sessionMock: vi.fn(),
   staffMock: vi.fn(),
   storeMock: {
@@ -40,6 +40,7 @@ const { sessionMock, staffMock, storeMock, dispatchMock, toolRunsMock, skillsMoc
     cancelToolRun: vi.fn(),
   },
   skillsMock: { loadSkillContent: vi.fn() },
+  artifactsMock: { ensureDeepRunArtifact: vi.fn() },
 }))
 
 vi.mock('next-auth', () => ({ getServerSession: sessionMock }))
@@ -49,6 +50,8 @@ vi.mock('@/lib/dispatch-store', () => storeMock)
 vi.mock('@/lib/agy-dispatch', () => dispatchMock)
 vi.mock('@/lib/tool-runs', () => toolRunsMock)
 vi.mock('@/lib/skills-loader', () => skillsMock)
+vi.mock('@/lib/deep-artifacts', () => artifactsMock)
+vi.mock('@/lib/tenant-context', () => ({ getTenantId: () => 'rxfit' }))
 vi.mock('@/lib/observability', () => ({ emit: vi.fn() }))
 vi.mock('@/lib/db', () => ({ db: {} }))
 
@@ -233,8 +236,10 @@ describe('POST /api/deep-runs/[id] (cancel)', () => {
     return new NextRequest('http://localhost:3000/api/deep-runs/r1', { method: 'POST', body: JSON.stringify({ action }) })
   }
 
-  it("400s any action other than 'cancel'", async () => {
+  it("400s any action other than 'cancel' / 'save_artifact'", async () => {
     expect((await detailPost(cancelReq('retry'), { params: { id: 'r1' } })).status).toBe(400)
+    expect(toolRunsMock.getToolRunOwned).not.toHaveBeenCalled()
+    expect(artifactsMock.ensureDeepRunArtifact).not.toHaveBeenCalled()
   })
 
   it('cancels the run first, then stands the queue job down', async () => {
@@ -261,5 +266,67 @@ describe('POST /api/deep-runs/[id] (cancel)', () => {
     const body = await (await detailPost(cancelReq(), { params: { id: 'r1' } })).json()
     expect(storeMock.cancelJob).not.toHaveBeenCalled()
     expect(body.run.liveStatus).toBe('succeeded')
+  })
+})
+
+describe('POST /api/deep-runs/[id] (save_artifact) — the panel-side auto-save', () => {
+  function saveReq(): NextRequest {
+    return new NextRequest('http://localhost:3000/api/deep-runs/r1', { method: 'POST', body: JSON.stringify({ action: 'save_artifact' }) })
+  }
+
+  beforeEach(() => {
+    artifactsMock.ensureDeepRunArtifact.mockReset().mockResolvedValue({ id: 'a1', title: 'Deep Research: Churn', created: true })
+  })
+
+  it('saves a landed report for its owner, tenant-scoped, and returns the artifact identity', async () => {
+    const landed = { ...QUEUED_RUN, status: 'succeeded', resultMd: '# Report', finishedAt: new Date().toISOString() }
+    toolRunsMock.getToolRunOwned.mockResolvedValue(landed)
+    const res = await detailPost(saveReq(), { params: { id: 'r1' } })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ artifact: { id: 'a1', title: 'Deep Research: Churn', created: true } })
+    expect(toolRunsMock.getToolRunOwned).toHaveBeenCalledWith('r1', 'staff@rxfitatx.com')
+    expect(artifactsMock.ensureDeepRunArtifact).toHaveBeenCalledWith(landed, { tenantId: 'rxfit', createdBy: 'staff@rxfitatx.com' })
+  })
+
+  it('is idempotent from the caller\'s view — an existing artifact comes back with created:false', async () => {
+    toolRunsMock.getToolRunOwned.mockResolvedValue({ ...QUEUED_RUN, status: 'succeeded', resultMd: '# Report' })
+    artifactsMock.ensureDeepRunArtifact.mockResolvedValue({ id: 'a1', title: 't', created: false })
+    const body = await (await detailPost(saveReq(), { params: { id: 'r1' } })).json()
+    expect(body.artifact.created).toBe(false)
+  })
+
+  it('409s while the run has no finished report (queued / failed / empty) — nothing to save', async () => {
+    for (const run of [
+      QUEUED_RUN,
+      { ...QUEUED_RUN, status: 'failed', errorClass: 'timeout' },
+      { ...QUEUED_RUN, status: 'succeeded', resultMd: '   ' },
+    ]) {
+      toolRunsMock.getToolRunOwned.mockResolvedValue(run)
+      const res = await detailPost(saveReq(), { params: { id: 'r1' } })
+      expect(res.status).toBe(409)
+      expect((await res.json()).reason).toBe('not_finished')
+    }
+    expect(artifactsMock.ensureDeepRunArtifact).not.toHaveBeenCalled()
+  })
+
+  it('404s a run that is not the caller\'s (owner scoping lives in the store read)', async () => {
+    toolRunsMock.getToolRunOwned.mockResolvedValue(null)
+    expect((await detailPost(saveReq(), { params: { id: 'r1' } })).status).toBe(404)
+    expect(artifactsMock.ensureDeepRunArtifact).not.toHaveBeenCalled()
+  })
+
+  it('stays behind the staff gate like every other deep-run action', async () => {
+    staffMock.mockReturnValue(false)
+    expect((await detailPost(saveReq(), { params: { id: 'r1' } })).status).toBe(403)
+    sessionMock.mockResolvedValue(null)
+    expect((await detailPost(saveReq(), { params: { id: 'r1' } })).status).toBe(401)
+  })
+
+  it('500s a failed save honestly, and 503s the missing-table case as not_migrated territory', async () => {
+    toolRunsMock.getToolRunOwned.mockResolvedValue({ ...QUEUED_RUN, status: 'succeeded', resultMd: '# Report' })
+    artifactsMock.ensureDeepRunArtifact.mockRejectedValue(new Error('db down'))
+    expect((await detailPost(saveReq(), { params: { id: 'r1' } })).status).toBe(500)
+    artifactsMock.ensureDeepRunArtifact.mockRejectedValue(Object.assign(new Error('no table'), { code: '42P01' }))
+    expect((await detailPost(saveReq(), { params: { id: 'r1' } })).status).toBe(503)
   })
 })
