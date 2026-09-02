@@ -189,12 +189,19 @@ export function gestureReducer(state: GestureState, input: GestureInput): Gestur
 }
 
 // Chat interaction zones where a horizontal drag must not be hijacked as a swipe.
-const INTERACTION_ZONE_SELECTORS = [
+export const INTERACTION_ZONE_SELECTORS = [
   '.chat-suggestions',
   '.chat-input-area',
   '.quoted-reply-chip',
   '.doc-filter-tabs',
   '.section-row',
+  // The right-edge tool handle owns its own leftward drag (it pulls the tool
+  // panel in); the drawer machine must never race it into the Activity drawer.
+  '.tool-edge-indicator',
+  // Full-screen overlays on phones: a report table, a brief textarea, or an
+  // artifact's sources need the finger — no drawer opens from behind them.
+  '.tool-panel',
+  '.artifact-viewer',
 ]
 
 function isBlockedTarget(target: EventTarget | null): boolean {

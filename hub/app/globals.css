@@ -2841,6 +2841,30 @@ a:hover .rx-arrow {
   min-width: 0;
 }
 
+/* The body doubles as the "open the panel" control — a button that keeps
+   the badge's typography and adds nothing but a cursor and a focus ring. */
+.skill-badge__body--btn {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.skill-badge__body--btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.skill-badge__body--btn:hover .skill-badge__title {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .skill-badge__title {
   font-weight: 600;
   color: var(--accent);
@@ -3157,25 +3181,31 @@ a:hover .rx-arrow {
 }
 
 /* ── Featured Deep chips (composer) + popover pinned tier ── */
+/* The two chips split the composer's full width evenly (flex: 1 each), text
+   centred, no glyphs — a matched pair, not two pills huddled at the left. */
 .deep-chips {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 2px 8px;
+  padding: 0 0 8px;
   flex-wrap: wrap;
 }
 
 .deep-chip {
+  flex: 1 1 0;
+  min-width: 0;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
   background: var(--bg-card);
   border: 1px solid var(--accent-border);
   color: var(--text-primary);
   border-radius: 999px;
-  padding: 6px 14px;
+  padding: 8px 12px;
   font-size: 0.78rem;
   font-weight: 700;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
   cursor: pointer;
   transition: background 0.15s ease, border-color 0.15s ease;
 }
@@ -3201,6 +3231,8 @@ a:hover .rx-arrow {
 }
 
 .deep-chips__status {
+  flex-basis: 100%;
+  text-align: center;
   color: var(--warn);
   font-size: 0.7rem;
   font-weight: 600;
@@ -3458,6 +3490,35 @@ a:hover .rx-arrow {
   flex-wrap: wrap;
 }
 
+/* "Saved to Artifacts" line under the report title — the truth about the
+   auto-save, never a promise (saving → saved / failed + retry). */
+.deep-run__saved {
+  margin-top: 6px;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+  min-height: 1em;
+}
+
+.deep-run__saved--saved {
+  color: var(--success);
+}
+
+.deep-run__saved--failed {
+  color: var(--warn);
+}
+
+.deep-run__link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
 .tool-panel__loading {
   display: flex;
   align-items: center;
@@ -3588,34 +3649,66 @@ a:hover .rx-arrow {
    MOBILE EDGE INDICATOR — Champagne gold pulsing bar on right edge
    ══════════════════════════════════════════════════════════════════════════════ */
 
+/* A mid-height drawer handle, not a full-height strip: a 44px hit zone that
+   ran top-to-bottom sat over the right half of the composer's Send button —
+   exactly the screen "Back to chat" now lands on. Vertically centred and
+   bounded, it never reaches the header or the composer on any phone. */
 .tool-edge-indicator {
   display: none;
   position: fixed;
   right: 0;
-  top: 0;
-  bottom: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: clamp(140px, 28vh, 220px);
   width: 44px; /* Meet 44px min touch target */
   z-index: 100;
   background: transparent;
   border: none;
   cursor: pointer;
   padding: 0;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.tool-edge-indicator::after {
-  content: '';
-  position: absolute;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  width: 3px; /* Visual indicator stays thin */
-}
-
+/* Solid gold fill so the dark label stays legible; the pulse lives in the
+   glow around the tab, never in the fill (a fill that swung 0.2→0.7 alpha
+   made gold-on-gold text vanish at the peak and in light theme). */
 .tool-edge-indicator__glow {
   position: absolute;
-  inset: 0;
-  background: rgba(197, 160, 89, 0.4);
-  animation: edgePulse 2s ease-in-out infinite;
+  inset: 0 0 0 14px; /* the visible tab is 30px; the rest is hit area */
+  border-radius: 10px 0 0 10px;
+  background: var(--accent);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-right: none;
+  animation: edgeHandlePulse 2s ease-in-out infinite;
+}
+
+@keyframes edgeHandlePulse {
+  0%, 100% { box-shadow: -2px 0 8px rgba(197, 160, 89, 0.25); opacity: 0.88; }
+  50%      { box-shadow: -6px 0 22px rgba(197, 160, 89, 0.6); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tool-edge-indicator__glow { animation: none; }
+}
+
+/* The handle says what it opens: the tool name runs up the bar, so the gold
+   strip reads as "Deep Research — tap to open", not as decoration. */
+.tool-edge-indicator__label {
+  position: absolute;
+  top: 50%;
+  left: 29px; /* centre of the 30px visible tab (14px inset + 15px) */
+  transform: translate(-50%, -50%) rotate(180deg);
+  writing-mode: vertical-rl;
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  /* Dark on the solid gold tab — the same pairing the accent buttons use —
+     so it reads at every point of the pulse and in both themes. */
+  color: hsl(224, 28%, 12%);
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 @keyframes edgePulse {
@@ -3811,6 +3904,239 @@ a:hover .rx-arrow {
 
   .tool-edge-indicator {
     display: block;
+  }
+
+  /* "Back to chat" on a phone: the panel stays mounted (the report, the
+     brief, the poll all survive) and only leaves the screen. Re-showing it
+     replays the slide-up. */
+  .tool-panel.tool-panel--mobile-hidden {
+    display: none;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   ARTIFACT VIEWER — read a saved artifact back (Documents › Artifacts)
+   Desktop: a right-hand slide-over. Phone: full-screen. Layered above the
+   drawers (z 1000) so it can open from the Tasks drawer and return to it.
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+.artifact-viewer__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 18, 30, 0.62);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  z-index: 1100;
+  animation: artifactViewerFade 0.25s ease-out forwards;
+}
+
+@keyframes artifactViewerFade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.artifact-viewer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(560px, 100vw);
+  z-index: 1101;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
+  border-left: 1px solid var(--border-accent);
+  box-shadow: var(--shadow-xl), var(--shadow-glow);
+  outline: none;
+  animation: artifactViewerSlide 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes artifactViewerSlide {
+  from { transform: translateX(48px); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+
+.artifact-viewer__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-card);
+  flex-shrink: 0;
+  position: relative;
+}
+
+.artifact-viewer__header::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--accent) 0%, var(--accent-dim) 60%, transparent 100%);
+  opacity: 0.7;
+}
+
+.artifact-viewer__heading {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.artifact-viewer__eyebrow {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent-dim);
+}
+
+.artifact-viewer__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.artifact-viewer__meta {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+}
+
+.artifact-viewer__close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(197, 160, 89, 0.15);
+  background: rgba(197, 160, 89, 0.05);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  transition: all var(--duration-fast) ease;
+}
+
+.artifact-viewer__close:hover {
+  background: rgba(197, 160, 89, 0.12);
+  color: var(--text-primary);
+}
+
+.artifact-viewer__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: var(--space-4) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 0.85rem;
+}
+
+.artifact-viewer__brief {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-style: italic;
+  line-height: 1.5;
+}
+
+.artifact-viewer__empty {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.artifact-viewer__section {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  background: var(--bg-card);
+  line-height: 1.55;
+}
+
+/* A recommendation/summary card carries the accent — it is the answer. */
+.artifact-viewer__section--recommendation {
+  background: var(--accent-glow);
+  border-color: var(--accent-border);
+}
+
+.artifact-viewer__section-title {
+  margin: 0 0 6px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.artifact-viewer__section .artifact-viewer__section {
+  margin-top: 8px;
+}
+
+.artifact-viewer__footer {
+  display: flex;
+  gap: 8px;
+  padding: var(--space-3) var(--space-5);
+  padding-bottom: calc(var(--space-3) + var(--safe-bottom));
+  border-top: 1px solid var(--border);
+  background: var(--bg-card);
+  flex-shrink: 0;
+}
+
+.artifact-viewer__discuss {
+  flex: 1;
+  background: var(--accent);
+  color: hsl(224, 28%, 12%);
+  border: none;
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-weight: 700;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.artifact-viewer__discuss:hover {
+  background: var(--accent-bright);
+}
+
+.artifact-viewer__dismiss {
+  background: transparent;
+  border: 1px solid var(--border-accent);
+  color: var(--accent);
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-weight: 600;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.artifact-viewer__dismiss:hover {
+  background: var(--accent-glow);
+}
+
+@media (max-width: 640px) {
+  .artifact-viewer {
+    width: 100vw;
+    border-left: none;
+    animation: toolPanelMobileSlideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .artifact-viewer,
+  .artifact-viewer__backdrop {
+    animation: none;
   }
 }
 

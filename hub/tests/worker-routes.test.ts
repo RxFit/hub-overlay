@@ -30,10 +30,15 @@ const store = vi.hoisted(() => ({
 }))
 const ledger = vi.hoisted(() => ({ recordAiRun: vi.fn().mockResolvedValue(undefined) }))
 const chatStore = vi.hoisted(() => ({ persistAssistantTurn: vi.fn().mockResolvedValue(undefined) }))
+const artifacts = vi.hoisted(() => ({
+  ensureDeepRunArtifactForRun: vi.fn().mockResolvedValue({ id: 'a1', title: 'Deep Research: t', created: true }),
+}))
 
 vi.mock('@/lib/dispatch-store', () => store)
 vi.mock('@/lib/runs', () => ledger)
 vi.mock('@/lib/chat-store', () => chatStore)
+vi.mock('@/lib/deep-artifacts', () => artifacts)
+vi.mock('@/lib/tenant-context', () => ({ getTenantId: () => 'rxfit' }))
 vi.mock('@/lib/observability', () => ({ emit: vi.fn() }))
 
 import { POST as claimPost } from '@/app/api/worker/claim/route'
@@ -60,6 +65,7 @@ beforeEach(() => {
   store.postResult.mockReset()
   ledger.recordAiRun.mockClear()
   chatStore.persistAssistantTurn.mockClear()
+  artifacts.ensureDeepRunArtifactForRun.mockClear()
 })
 
 describe('machine auth (all three routes)', () => {
@@ -246,6 +252,69 @@ describe('POST /api/worker/jobs/[id]/result', () => {
     })
     await resultPost(request('/api/worker/jobs/j3/result', base), { params: { id: 'j3' } })
     expect(chatStore.persistAssistantTurn).not.toHaveBeenCalled()
+  })
+
+  it('a landed deep run is saved as an artifact at landing — no browser required, and the ack WAITS for the row', async () => {
+    // The save must be awaited, not detached: Cloud Run throttles the instance
+    // after the response, so a fire-and-forget save could stall with the
+    // worker already told "recorded". Prove the response only lands after
+    // the ensure has settled.
+    let settled = false
+    artifacts.ensureDeepRunArtifactForRun.mockImplementationOnce(async () => {
+      await new Promise(r => setTimeout(r, 25))
+      settled = true
+      return { id: 'a1', title: 'Deep Think: t', created: true }
+    })
+    store.postResult.mockResolvedValue({
+      outcome: 'recorded', prompt: 'p', requestId: null, kind: 'work_item',
+      payloadMeta: { toolRunId: '11111111-1111-4111-8111-111111111111' },
+      // No chat: the artifact save never depended on one.
+      toolRun: { id: 'r1', tool: 'deep-think', userEmail: 'staff@rxfitatx.com', chatId: null },
+    })
+    const res = await resultPost(request('/api/worker/jobs/j1/result', base), { params: { id: 'j1' } })
+    expect(res.status).toBe(200)
+    expect(settled).toBe(true)
+    expect(artifacts.ensureDeepRunArtifactForRun).toHaveBeenCalledWith(
+      'r1', 'staff@rxfitatx.com', 'rxfit', expect.objectContaining({ embedTimeoutMs: expect.any(Number) }),
+    )
+  })
+
+  it('a failing artifact save never fails the worker ack — the panel-side save is the fallback', async () => {
+    artifacts.ensureDeepRunArtifactForRun.mockRejectedValueOnce(new Error('db blip'))
+    store.postResult.mockResolvedValue({
+      outcome: 'recorded', prompt: 'p', requestId: null, kind: 'work_item',
+      payloadMeta: {}, toolRun: { id: 'r1', tool: 'deep-research', userEmail: 'staff@rxfitatx.com', chatId: 'chat-1' },
+    })
+    const res = await resultPost(request('/api/worker/jobs/j1/result', base), { params: { id: 'j1' } })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ outcome: 'recorded' })
+    // The chat pointer and the ledger row still happen around a failed save.
+    expect(chatStore.persistAssistantTurn).toHaveBeenCalledTimes(1)
+    expect(ledger.recordAiRun).toHaveBeenCalledTimes(1)
+  })
+
+  it('no artifact save on failure, on discard, for chat turns, or for non-deep work items', async () => {
+    store.postResult.mockResolvedValue({
+      outcome: 'recorded', prompt: 'p', requestId: null, kind: 'work_item',
+      payloadMeta: {}, toolRun: { id: 'r2', tool: 'deep-think', userEmail: 'staff@rxfitatx.com', chatId: null },
+    })
+    await resultPost(
+      request('/api/worker/jobs/j2/result', { workerId: 'w1', attempt: 1, status: 'error', errorClass: 'timeout' }),
+      { params: { id: 'j2' } },
+    )
+    store.postResult.mockResolvedValue({
+      outcome: 'discarded_cancelled', prompt: 'p', requestId: null, kind: 'work_item',
+      payloadMeta: {}, toolRun: { id: 'r3', tool: 'deep-think', userEmail: 'staff@rxfitatx.com', chatId: null },
+    })
+    await resultPost(request('/api/worker/jobs/j3/result', base), { params: { id: 'j3' } })
+    store.postResult.mockResolvedValue({ outcome: 'recorded', prompt: 'p', requestId: 'r1', kind: 'chat_turn', payloadMeta: null, toolRun: null })
+    await resultPost(request('/api/worker/jobs/j4/result', base), { params: { id: 'j4' } })
+    store.postResult.mockResolvedValue({
+      outcome: 'recorded', prompt: 'p', requestId: null, kind: 'work_item',
+      payloadMeta: {}, toolRun: { id: 'r5', tool: 'some-other-tool', userEmail: 'staff@rxfitatx.com', chatId: null },
+    })
+    await resultPost(request('/api/worker/jobs/j5/result', base), { params: { id: 'j5' } })
+    expect(artifacts.ensureDeepRunArtifactForRun).not.toHaveBeenCalled()
   })
 
   it('discarded work_item is ledgered under its own source, never chat — the §7 hardcode fix', async () => {

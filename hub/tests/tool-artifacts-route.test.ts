@@ -18,7 +18,8 @@ const { state } = vi.hoisted(() => ({ state: { session: null as unknown } }))
 vi.mock('next-auth', () => ({ getServerSession: vi.fn(async () => state.session) }))
 vi.mock('@/lib/auth', () => ({ authOptions: {} }))
 vi.mock('@/lib/tenant-context', () => ({ getTenantId: () => 'rxfit' }))
-vi.mock('@/lib/tool-artifacts', () => ({
+vi.mock('@/lib/tool-artifacts', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/tool-artifacts')>()),
   saveToolArtifact: vi.fn(async () => ({ id: 'a1' })),
   getToolArtifacts: vi.fn(async () => []),
   getToolArtifact: vi.fn(async () => null),
@@ -70,6 +71,16 @@ describe('PATCH /api/tool-artifacts — creator ownership (IDOR)', () => {
     const res = await PATCH(patchReq({ id: 'a1', title: 'hijack' }))
     expect(res.status).toBe(403)
     expect(updateToolArtifact).not.toHaveBeenCalled()
+  })
+
+  it('ownership is case-insensitive on the email: a landing-side auto-save (lowercased owner) still belongs to a "Me@Example.com" session', async () => {
+    state.session = sess('staff', 'Me@Example.com')
+    vi.mocked(getToolArtifact).mockResolvedValue(MY_ARTIFACT as never)
+    expect((await PATCH(patchReq({ id: 'a1', title: 'ok' }))).status).toBe(200)
+    expect((await DELETE(deleteReq({ id: 'a1' }))).status).toBe(200)
+    // …but a different address that merely shares a prefix is still forbidden.
+    state.session = sess('staff', 'me@example.community')
+    expect((await PATCH(patchReq({ id: 'a1', title: 'no' }))).status).toBe(403)
   })
 
   it('allows the owner (staff) to mutate their own artifact', async () => {

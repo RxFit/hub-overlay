@@ -184,27 +184,84 @@ export function buildDocumentInject(
   return { message, attachment }
 }
 
+export interface ArtifactSectionInput {
+  title: string
+  content: string
+  children?: ArtifactSectionInput[]
+}
+
+export interface ArtifactContentInput {
+  title?: string
+  sections?: ArtifactSectionInput[]
+}
+
 export interface ArtifactInput {
   id: string
   toolId: string
   title: string
+  /** Human tool name for the message ("Deep Research"); falls back to the id. */
+  toolName?: string
+  /** The saved sections. When present the attachment carries the real
+   *  content, so the assistant discusses what was actually found instead of
+   *  a bare id it has no way to resolve. */
+  content?: ArtifactContentInput | null
+}
+
+/** Upper bound on the attached artifact text. The chat route's text
+ *  attachment resolver slices at 16k; staying under it keeps the marker line
+ *  and the leading sections intact for even the largest report. */
+export const ARTIFACT_ATTACHMENT_MAX_CHARS = 12_000
+const ARTIFACT_ATTACHMENT_MAX_DEPTH = 8
+
+/**
+ * PURE: flatten an artifact's sections (one nesting level per depth) into
+ * markdown the assistant can read — heading per section, body verbatim.
+ */
+export function renderArtifactText(content: ArtifactContentInput | null | undefined): string {
+  const out: string[] = []
+  let remaining = ARTIFACT_ATTACHMENT_MAX_CHARS
+  const walk = (sections: unknown, depth: number) => {
+    if (!Array.isArray(sections) || depth > ARTIFACT_ATTACHMENT_MAX_DEPTH || remaining <= 0) return
+    for (const raw of sections) {
+      if (remaining <= 0) break
+      if (!raw || typeof raw !== 'object') continue
+      const s = raw as Record<string, unknown>
+      const title = typeof s.title === 'string' && s.title.trim() ? s.title : 'Untitled section'
+      const body = typeof s.content === 'string' ? s.content.trim() : ''
+      const heading = '#'.repeat(Math.min(2 + depth, 6))
+      const rendered = body ? `${heading} ${title}\n${body}` : `${heading} ${title}`
+      const bounded = rendered.slice(0, remaining)
+      out.push(bounded)
+      remaining -= bounded.length + 2
+      walk(s.children, depth + 1)
+    }
+  }
+  const sections = content && typeof content === 'object'
+    ? (content as { sections?: unknown }).sections
+    : undefined
+  walk(sections, 0)
+  return out.join('\n\n')
 }
 
 /**
  * Build the message + attachment for a tapped tool artifact. The attachment
- * carries the real artifact id so the chat route resolves THIS artifact even
- * when two share a toolId + title.
+ * leads with the real artifact id so THIS artifact stays identifiable even
+ * when two share a toolId + title, then carries the saved sections (bounded)
+ * so the chat can actually discuss the findings.
  */
 export function buildArtifactInject(
   artifact: ArtifactInput,
 ): { message: string; attachment: ChatAttachment } {
-  const message = `Show me the ${artifact.toolId} artifact: ${artifact.title}`
+  const toolName = artifact.toolName || artifact.toolId
+  const message = `Walk me through the saved ${toolName} artifact "${artifact.title}" — lead with its key findings.`
+  // The resolvable id marker stays first and is never truncated away.
+  const marker = `[artifact:${artifact.id}] toolId=${artifact.toolId} title="${artifact.title}"`
+  const body = renderArtifactText(artifact.content)
   const attachment: ChatAttachment = {
     id: artifact.id,
     type: 'text',
     label: artifact.title,
-    // Embed the resolvable id so the chat route can fetch the artifact by id.
-    content: `[artifact:${artifact.id}] toolId=${artifact.toolId} title="${artifact.title}"`,
+    content: body ? `${marker}\n\n${body}`.slice(0, ARTIFACT_ATTACHMENT_MAX_CHARS) : marker,
   }
   return { message, attachment }
 }
