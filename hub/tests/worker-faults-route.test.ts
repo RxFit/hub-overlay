@@ -113,10 +113,38 @@ describe('the payload is data, not gospel', () => {
     expect(serialized).not.toMatch(/[\w.+-]+@[\w-]+\.[\w.-]+/)
   })
 
-  it('rejects an unbounded `code` — it is the one metric dimension', async () => {
-    const res = await POST(post({ workerId: 'w1', faults: [fault({ code: 'a'.repeat(200) })] }))
-    expect(res.status).toBe(422)
-    expect(reportMock).not.toHaveBeenCalled()
+  it('rejects a `code` outside the CLOSED taxonomy — shape alone does not bound cardinality', async () => {
+    // `internal_12345` matches a /^[a-z0-9_]{1,40}$/ shape perfectly well, so
+    // a shape check would let a buggy worker mint unbounded metric labels.
+    for (const code of ['a'.repeat(200), 'internal_12345', 'totally_made_up']) {
+      reportMock.mockClear()
+      const res = await POST(post({ workerId: 'w1', faults: [fault({ code })] }))
+      expect(res.status, `expected ${code} to be rejected`).toBe(422)
+      expect(reportMock).not.toHaveBeenCalled()
+    }
+  })
+
+  it('accepts every real FaultCode, so the guard cannot drift from the taxonomy', async () => {
+    for (const code of ['internal', 'db_error', 'upstream_5xx', 'worker_timeout']) {
+      reportMock.mockClear()
+      const res = await POST(post({ workerId: 'w1', faults: [fault({ code, faultId: 'HUB-ZZZZZZZZ' })] }))
+      expect(res.status, `expected ${code} to be accepted`).toBe(200)
+    }
+  })
+
+  it('forwards the spooled V8 stack as rawStack so Error Reporting groups by callsite', async () => {
+    // The record's top-level `message` is the scrubbed V8 stack (line numbers
+    // kept); fault.stack is the normalized-frames derivation. Dropping it
+    // grouped every worker crash by message instead of callsite.
+    const entry = { ...fault(), message: 'Error: boom\n    at boot (/app/hub/lib/dispatch-worker.ts:31:9)' }
+    await POST(post({ workerId: 'w1', faults: [entry] }))
+    expect(reportMock.mock.calls[0][1]?.rawStack).toContain('dispatch-worker.ts:31:9')
+  })
+
+  it('re-scrubs the forwarded stack too', async () => {
+    const entry = { ...fault(), message: 'Error: x\n    at f (/app/x.ts:1:1) password=hunter2' }
+    await POST(post({ workerId: 'w1', faults: [entry] }))
+    expect(reportMock.mock.calls[0][1]?.rawStack).not.toContain('hunter2')
   })
 
   it('rejects a malformed faultId and an over-long batch', async () => {

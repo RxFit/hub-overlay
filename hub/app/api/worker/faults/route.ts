@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { verifyCronSecret } from '@/lib/cron-auth'
 import { scrubFreeText, type FaultDraft } from '@/lib/fault'
+import { USER_MESSAGES } from '@/lib/fault-codes'
 import { reportFault } from '@/lib/fault-report'
 import { createLogger } from '@/lib/logger'
 import { withFault } from '@/lib/route-fault'
@@ -39,6 +40,8 @@ export const dynamic = 'force-dynamic'
 const MAX_FAULTS_PER_BATCH = 50
 const MAX_BODY_BYTES = 512 * 1024
 const MAX_TEXT = 2_000
+/** A V8 stack is longer than ordinary free text but still bounded. */
+const MAX_RAW_STACK = 16_000
 /** One bad batch must not produce an unbounded error body. */
 const MAX_REPORTED_ISSUES = 10
 
@@ -50,8 +53,16 @@ const FaultShape = z.object({
   faultId: z.string().regex(/^HUB-[A-Z2-7]{8}$/),
   fingerprint: z.string().regex(/^[0-9a-f]{1,32}$/),
   // `code` is the ONLY field used as a metric/alert dimension, so it is
-  // bounded by shape, not merely by length.
-  code: z.string().regex(/^[a-z0-9_]{1,40}$/),
+  // validated against the CLOSED FaultCode taxonomy rather than a shape.
+  // A shape does not bound cardinality — `internal_12345` matches
+  // /^[a-z0-9_]{1,40}$/ perfectly well — so a buggy worker generating
+  // dynamic codes could mint unbounded labels and slip past alert rules
+  // keyed to the real taxonomy. USER_MESSAGES is Record<FaultCode, string>,
+  // so its keys ARE that closed set and cannot drift from it: adding a code
+  // without a message already fails tsc.
+  code: z.string().refine((c): c is keyof typeof USER_MESSAGES => c in USER_MESSAGES, {
+    message: 'unknown fault code',
+  }),
   severity: z.enum(['fatal', 'error', 'degraded', 'expected']),
   message: text(),
   // `ts` is the one field that does NOT travel in the rebuilt draft — it
@@ -68,7 +79,19 @@ const FaultShape = z.object({
 const BatchSchema = z.object({
   workerId: z.string().min(1).max(100),
   faults: z
-    .array(z.object({ fault: FaultShape.passthrough(), origin: text(40).optional() }))
+    .array(
+      z.object({
+        fault: FaultShape.passthrough(),
+        origin: text(40).optional(),
+        // The spooled record's TOP-LEVEL message is the scrubbed V8 stack with
+        // line numbers kept — the shape Error Reporting's grouper needs.
+        // fault.stack is a different derivation (normalized frames, line
+        // numbers stripped). Dropping this grouped every worker crash by
+        // message instead of callsite, which for an import-time failure threw
+        // away the only usable trace.
+        message: text(MAX_RAW_STACK).optional(),
+      }),
+    )
     .min(1)
     .max(MAX_FAULTS_PER_BATCH),
 })
@@ -202,6 +225,9 @@ export const POST = withFault('worker/faults', async (req: NextRequest) => {
     } as unknown as FaultDraft
 
     reportFault(draft, {
+      // Re-scrubbed here as well: the sender is authenticated, the payload is
+      // still not trusted.
+      rawStack: entry.message ? scrubFreeText(entry.message) : null,
       // Preserve when the crash actually happened; a spooled record uploaded
       // on the next boot can be much older than its ingest time.
       occurredAt: f.ts,

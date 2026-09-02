@@ -83,6 +83,26 @@ describe('uploadSpooledFaults', () => {
     expect(drainSpool().records).toHaveLength(1)
   })
 
+  it('keeps draining past the batch cap in ONE boot — a healthy worker never boots again', async () => {
+    const total = 120 // > 2 batches of 50
+    for (let i = 0; i < total; i++) appendFaultToSpool({ fault: { faultId: `HUB-R${i}` } })
+    const fetchFn = ok()
+    const res = await uploadSpooledFaults(cfg, fetchFn)
+    expect(res).toEqual({ uploaded: total, failed: false })
+    // Three batches: 50 + 50 + 20, all in this boot.
+    expect((fetchFn as unknown as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(3)
+    expect(drainSpool().claimed).toBe(false)
+  })
+
+  it('stops the drain loop on failure and leaves the rest for next boot', async () => {
+    for (let i = 0; i < 120; i++) appendFaultToSpool({ fault: { faultId: `HUB-R${i}` } })
+    const fetchFn = ok(503)
+    expect((await uploadSpooledFaults(cfg, fetchFn)).failed).toBe(true)
+    expect((fetchFn as unknown as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1)
+    // Nothing lost — the whole spool is still owed.
+    expect(drainSpool().records.length).toBeGreaterThan(0)
+  })
+
   it('never throws, whatever the transport does', async () => {
     appendFaultToSpool({ fault: { faultId: 'HUB-AAAAAAAA' } })
     const weird = vi.fn(async () => ({ status: undefined }) as unknown as Response) as unknown as typeof fetch

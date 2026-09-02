@@ -317,15 +317,39 @@ const PERMANENTLY_REJECTED = new Set([400, 413, 422])
  * On any failure the batch is restored so the next boot retries it, and the
  * spool is bounded on the write side so a crash loop cannot grow it forever.
  */
+/** Ceiling on batches per boot: enough to clear a realistic crash loop
+ *  without letting a pathological spool delay slot startup. */
+const MAX_UPLOAD_BATCHES = 10
+
 export async function uploadSpooledFaults(
   cfg: WorkerConfig,
   fetchFn: typeof fetch,
   timeoutMs = 10_000,
 ): Promise<{ uploaded: number; failed: boolean }> {
+  // Keep draining while batches remain. A single call would upload only the
+  // first MAX_DRAIN_RECORDS and write the rest back — and since this runs
+  // ONLY at boot, a worker that then stays healthy would never send them,
+  // leaving records invisible until the nightly container rebuild discarded
+  // them. Bounded so a pathological spool cannot stall startup.
+  let uploaded = 0
+  for (let i = 0; i < MAX_UPLOAD_BATCHES; i++) {
+    const batch = await uploadOneSpooledBatch(cfg, fetchFn, timeoutMs)
+    uploaded += batch.uploaded
+    if (batch.failed) return { uploaded, failed: true }
+    if (!batch.more) break
+  }
+  return { uploaded, failed: false }
+}
+
+async function uploadOneSpooledBatch(
+  cfg: WorkerConfig,
+  fetchFn: typeof fetch,
+  timeoutMs: number,
+): Promise<{ uploaded: number; failed: boolean; more: boolean }> {
   const { records, claimed, leftover } = drainSpool()
   if (!claimed || records.length === 0) {
     if (claimed) commitSpool(process.env, leftover) // empty/unparsable: discard
-    return { uploaded: 0, failed: false }
+    return { uploaded: 0, failed: false, more: false }
   }
   try {
     const res = await fetchFn(`${cfg.hubUrl}/api/worker/faults`, {
@@ -337,7 +361,8 @@ export async function uploadSpooledFaults(
     if (res.status >= 200 && res.status < 300) {
       commitSpool(process.env, leftover)
       log.info({ uploaded: records.length }, 'uploaded spooled worker crash records')
-      return { uploaded: records.length, failed: false }
+      // `leftover` is non-empty exactly when the batch cap held records back.
+      return { uploaded: records.length, failed: false, more: leftover !== '' }
     }
     // Drop ONLY on statuses that conclusively mean this payload will never be
     // accepted. The earlier blanket 4xx rule was too broad and destroyed good
@@ -348,18 +373,18 @@ export async function uploadSpooledFaults(
     if (PERMANENTLY_REJECTED.has(res.status)) {
       commitSpool(process.env, leftover)
       log.warn({ status: res.status, dropped: records.length }, 'hub rejected spooled crash records as invalid; dropping batch')
-      return { uploaded: 0, failed: true }
+      return { uploaded: 0, failed: true, more: false }
     }
     restoreSpool()
     log.warn({ status: res.status }, 'spooled crash record upload failed; will retry next boot')
-    return { uploaded: 0, failed: true }
+    return { uploaded: 0, failed: true, more: false }
   } catch (err) {
     restoreSpool()
     log.warn(
       { err: err instanceof Error ? err.message : String(err) },
       'spooled crash record upload errored; will retry next boot',
     )
-    return { uploaded: 0, failed: true }
+    return { uploaded: 0, failed: true, more: false }
   }
 }
 
