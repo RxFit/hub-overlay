@@ -153,7 +153,9 @@ describe('the payload is data, not gospel', () => {
   it('caps the issue list so one bad batch cannot become a multi-MB response', async () => {
     // zod v3 records a .max() violation but still parses every element, so
     // the oversized batch is rejected by an explicit length check first.
-    const many = Array.from({ length: 5_000 }, () => fault({ faultId: 'not-valid' }))
+    // Over the 50-item cap but comfortably under the 512 KB byte cap, so this
+    // exercises the item check rather than tripping the body limit first.
+    const many = Array.from({ length: 300 }, () => fault({ faultId: 'not-valid' }))
     const res = await POST(post({ workerId: 'w1', faults: many }))
     expect(res.status).toBe(422)
     const body = await res.json()
@@ -161,8 +163,24 @@ describe('the payload is data, not gospel', () => {
     expect(reportMock).not.toHaveBeenCalled()
   })
 
+  it('413s a body that EXCEEDS the cap even with NO content-length header', async () => {
+    // The header is a hint from the party this route does not trust, and
+    // Number(null) is 0 (not NaN), so a header-only check passed a chunked
+    // request straight through to req.json(). The cap is enforced while
+    // reading now, so an oversized body is rejected without being buffered.
+    const huge = JSON.stringify({ workerId: 'w1', faults: [fault({ message: 'x'.repeat(700 * 1024) })] })
+    const req = new NextRequest('http://localhost/api/worker/faults', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-worker-secret': SECRET },
+      body: huge,
+    })
+    expect(req.headers.get('content-length')).toBeNull()
+    expect((await POST(req)).status).toBe(413)
+    expect(reportMock).not.toHaveBeenCalled()
+  })
+
   it('413s an oversized declared body and 400s invalid JSON', async () => {
-    const big = post({ workerId: 'w1', faults: [fault()] }, { contentLength: String(600 * 1024) })
+    const big = post({ workerId: 'w1', faults: [fault({ message: 'y'.repeat(600 * 1024) })] })
     expect((await POST(big)).status).toBe(413)
     const bad = new NextRequest('http://localhost/api/worker/faults', {
       method: 'POST',

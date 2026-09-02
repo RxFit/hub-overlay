@@ -299,6 +299,15 @@ export async function runSlot(ctx: SlotContext): Promise<void> {
 }
 
 /**
+ * The only statuses that mean "this batch is invalid and always will be":
+ * a malformed body, an oversized body, or a schema rejection. Everything else
+ * — including 401/403 (secret rotation), 404 (route not deployed yet), 408,
+ * 429 and every 5xx — is transient from the worker's point of view and must
+ * leave the spool intact for the next boot.
+ */
+const PERMANENTLY_REJECTED = new Set([400, 413, 422])
+
+/**
  * Upload any crash records this worker spooled before it died
  * (ERROR_REPORTING §3 Layer 10). Boot is the FIRST moment an HTTP call is
  * safe — during the crash the process is going away and an async request
@@ -330,11 +339,15 @@ export async function uploadSpooledFaults(
       log.info({ uploaded: records.length }, 'uploaded spooled worker crash records')
       return { uploaded: records.length, failed: false }
     }
-    // 4xx is not retryable — a malformed or rejected batch would fail
-    // identically forever and would then block every later record behind it.
-    if (res.status >= 400 && res.status < 500) {
+    // Drop ONLY on statuses that conclusively mean this payload will never be
+    // accepted. The earlier blanket 4xx rule was too broad and destroyed good
+    // records in two ordinary situations: a 401 while an AGY_WORKER_SECRET
+    // rotation is briefly out of sync, and a 404 from a worker that updated
+    // before the Hub deployment carrying this route finished. Both recover on
+    // their own, so both must RESTORE and retry.
+    if (PERMANENTLY_REJECTED.has(res.status)) {
       commitSpool(process.env, leftover)
-      log.warn({ status: res.status, dropped: records.length }, 'hub rejected spooled crash records; dropping batch')
+      log.warn({ status: res.status, dropped: records.length }, 'hub rejected spooled crash records as invalid; dropping batch')
       return { uploaded: 0, failed: true }
     }
     restoreSpool()

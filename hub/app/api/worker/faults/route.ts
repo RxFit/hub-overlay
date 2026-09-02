@@ -73,6 +73,37 @@ const BatchSchema = z.object({
     .max(MAX_FAULTS_PER_BATCH),
 })
 
+/**
+ * Read the request body with a hard byte ceiling, cancelling the stream the
+ * moment it is exceeded. Returns the text or a tooLarge marker; never buffers
+ * more than `max` bytes, so a multi-megabyte chunked upload costs one chunk
+ * rather than the whole payload.
+ */
+async function readBodyCapped(req: NextRequest, max: number): Promise<{ text: string; tooLarge: false } | { text: ''; tooLarge: true }> {
+  const reader = req.body?.getReader()
+  if (!reader) return { text: '', tooLarge: false }
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (!value) continue
+      total += value.byteLength
+      if (total > max) {
+        await reader.cancel().catch(() => {})
+        return { text: '', tooLarge: true }
+      }
+      chunks.push(value)
+    }
+  } catch {
+    // A truncated or aborted upload reads as invalid JSON below, which is the
+    // honest outcome — we never saw a complete batch.
+    return { text: '', tooLarge: false }
+  }
+  return { text: Buffer.concat(chunks).toString('utf8'), tooLarge: false }
+}
+
 const log = createLogger('worker-faults')
 
 export const POST = withFault('worker/faults', async (req: NextRequest) => {
@@ -84,14 +115,19 @@ export const POST = withFault('worker/faults', async (req: NextRequest) => {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const contentLength = Number(req.headers.get('content-length'))
-  if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) {
+  // The cap is enforced while READING, never from the caller's header. A
+  // chunked request simply omits content-length, and Number(null) is 0 — not
+  // NaN — so a header-only check passes it straight through and req.json()
+  // then buffers the whole payload. The header is a hint from the very party
+  // this route does not trust.
+  const read = await readBodyCapped(req, MAX_BODY_BYTES)
+  if (read.tooLarge) {
     return NextResponse.json({ error: 'body too large' }, { status: 413 })
   }
 
   let body: unknown
   try {
-    body = await req.json()
+    body = JSON.parse(read.text)
   } catch {
     return NextResponse.json({ error: 'invalid JSON body' }, { status: 400 })
   }

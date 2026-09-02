@@ -62,10 +62,25 @@ describe('uploadSpooledFaults', () => {
     expect(drainSpool().records).toHaveLength(1)
   })
 
-  it('DROPS the batch on a 4xx — a rejected batch would block every later record forever', async () => {
+  it.each([400, 413, 422])(
+    'DROPS the batch on %i — conclusively invalid, and would block every later record forever',
+    async (status) => {
+      appendFaultToSpool({ fault: { faultId: 'HUB-AAAAAAAA' } })
+      expect(await uploadSpooledFaults(cfg, ok(status))).toEqual({ uploaded: 0, failed: true })
+      expect(drainSpool().claimed).toBe(false)
+    },
+  )
+
+  it.each([
+    [401, 'an AGY_WORKER_SECRET rotation briefly out of sync'],
+    [403, 'a transient authorization failure'],
+    [404, 'a worker updated before the Hub deployment carrying this route'],
+    [429, 'rate limiting'],
+  ])('RESTORES on %i (%s) — these recover on their own, so the records must survive', async (status) => {
     appendFaultToSpool({ fault: { faultId: 'HUB-AAAAAAAA' } })
-    expect(await uploadSpooledFaults(cfg, ok(422))).toEqual({ uploaded: 0, failed: true })
-    expect(drainSpool().claimed).toBe(false)
+    expect(await uploadSpooledFaults(cfg, ok(status))).toEqual({ uploaded: 0, failed: true })
+    // The whole point: a self-recovering status must not destroy crash records.
+    expect(drainSpool().records).toHaveLength(1)
   })
 
   it('never throws, whatever the transport does', async () => {
