@@ -41,7 +41,7 @@ import { withTransaction } from '@/lib/db'
 import { toolArtifacts } from '@/lib/schema'
 import { parseDeepReport } from '@/lib/deep-report'
 import { DEEP_TOOLS, isDeepToolId } from '@/lib/deep-runs'
-import { embedToolArtifact } from '@/lib/tool-artifacts'
+import { embedToolArtifact, normalizeArtifactOwner } from '@/lib/tool-artifacts'
 import { getToolRunOwned } from '@/lib/tool-runs'
 import { withTimeout } from '@/lib/timeout'
 import { createLogger } from '@/lib/logger'
@@ -130,12 +130,22 @@ export function deepRunArtifactTitle(run: Pick<DeepRunArtifactSource, 'tool'>, d
   return `${toolDisplayName(run.tool)}: ${data.title || 'Untitled'}`
 }
 
-/** Build the tenant-scoped "artifact for this run" predicate once. */
-function deepRunPredicate(tenantId: string, runId: string) {
+/**
+ * The "artifact for this run" predicate: tenant + active + the run id in
+ * content.metadata — and, when the owner is known, THEIR row only.
+ * metadata.deepRunId is client-writable through POST /api/tool-artifacts, so
+ * without the owner clause any user in the tenant could pre-create a row
+ * claiming someone else's run id and silently block that owner's auto-save
+ * (the panel would say "Saved" while their list stayed empty). Owner
+ * comparison is case-insensitive, like every other createdBy check.
+ */
+function deepRunPredicate(tenantId: string, runId: string, owner: string | null | undefined) {
+  const ownerKey = normalizeArtifactOwner(owner)
   return and(
     eq(toolArtifacts.tenantId, tenantId),
     eq(toolArtifacts.status, 'active'),
     sql`${toolArtifacts.content}->'metadata'->>'deepRunId' = ${runId}`,
+    ...(ownerKey ? [sql`lower(${toolArtifacts.createdBy}) = ${ownerKey}`] : []),
   )
 }
 
@@ -169,7 +179,7 @@ export async function ensureDeepRunArtifact(
     const existing = await tx
       .select({ id: toolArtifacts.id, title: toolArtifacts.title })
       .from(toolArtifacts)
-      .where(deepRunPredicate(opts.tenantId, run.id))
+      .where(deepRunPredicate(opts.tenantId, run.id, opts.createdBy))
       .orderBy(asc(toolArtifacts.createdAt))
       .limit(1)
     if (existing[0]) {
@@ -185,7 +195,7 @@ export async function ensureDeepRunArtifact(
         title,
         content: data,
         contextSummary: null,
-        createdBy: opts.createdBy ?? null,
+        createdBy: opts.createdBy ? normalizeArtifactOwner(opts.createdBy) : null,
         status: 'active',
       })
       .returning({ id: toolArtifacts.id, title: toolArtifacts.title })

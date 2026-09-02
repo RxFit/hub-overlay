@@ -12,7 +12,10 @@ const { dbMock, embedMock, runsMock } = vi.hoisted(() => ({
   runsMock: { getToolRunOwned: vi.fn() },
 }))
 vi.mock('@/lib/db', () => dbMock)
-vi.mock('@/lib/tool-artifacts', () => embedMock)
+vi.mock('@/lib/tool-artifacts', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/tool-artifacts')>()),
+  embedToolArtifact: embedMock.embedToolArtifact,
+}))
 vi.mock('@/lib/tool-runs', () => runsMock)
 
 import { buildDeepRunArtifact, deepRunArtifactTitle, ensureDeepRunArtifact, ensureDeepRunArtifactForRun } from './deep-artifacts'

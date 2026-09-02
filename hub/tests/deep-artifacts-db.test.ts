@@ -98,6 +98,26 @@ describeDb('deep-run artifacts (Postgres)', () => {
     expect(ensured).toEqual({ id: manualId, title: 'Deep Research: manual', created: false })
   })
 
+  it("another user's row claiming the same run id never blocks the owner's save (dedupe is owner-scoped)", async () => {
+    const run = await landedRun(crypto.randomUUID())
+    const sql = getSql()
+    // metadata.deepRunId is client-writable via POST /api/tool-artifacts —
+    // simulate a colleague's row that names this run.
+    const [{ id: intruderId }] = await sql<{ id: string }[]>`
+      INSERT INTO tool_artifacts (tenant_id, tool_id, title, content, created_by)
+      VALUES ('rxfit', 'deep-research', 'not yours', ${sql.json({
+        toolId: 'deep-research', title: 'x', sections: [], metadata: { deepRunId: run.id },
+      })}::jsonb, 'colleague@rxfitatx.com')
+      RETURNING id
+    `
+    const ensured = await ensureDeepRunArtifact(run, { tenantId: 'rxfit', createdBy: OWNER })
+    expect(ensured.created).toBe(true)
+    expect(ensured.id).not.toBe(intruderId)
+    // …and the owner's own row is what dedupes from now on.
+    const again = await ensureDeepRunArtifact(run, { tenantId: 'rxfit', createdBy: OWNER })
+    expect(again).toEqual({ id: ensured.id, title: ensured.title, created: false })
+  })
+
   it('an archived artifact does not block a fresh save (only active rows count)', async () => {
     const run = await landedRun(crypto.randomUUID())
     const first = await ensureDeepRunArtifact(run, { tenantId: 'rxfit', createdBy: OWNER })
