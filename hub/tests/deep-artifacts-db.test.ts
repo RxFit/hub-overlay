@@ -77,13 +77,22 @@ describeDb('deep-run artifacts (Postgres)', () => {
   it('a manual Save & Close from the old path (same metadata.deepRunId) counts as already saved', async () => {
     const run = await landedRun(crypto.randomUUID())
     const sql = getSql()
+    // sql.json(): the raw postgres-js client JSON.stringify()s any jsonb-typed
+    // parameter, so a pre-stringified value would land double-encoded (a JSON
+    // string scalar, where ->'metadata' is NULL). The app's drizzle client
+    // overrides that serializer, which is why the product path never hits it.
+    const manualContent = { toolId: 'deep-research', title: 'manual', sections: [], metadata: { deepRunId: run.id } }
     const [{ id: manualId }] = await sql<{ id: string }[]>`
       INSERT INTO tool_artifacts (tenant_id, tool_id, title, content, created_by)
-      VALUES ('rxfit', 'deep-research', 'Deep Research: manual', ${JSON.stringify({
-        toolId: 'deep-research', title: 'manual', sections: [], metadata: { deepRunId: run.id },
-      })}::jsonb, ${OWNER})
+      VALUES ('rxfit', 'deep-research', 'Deep Research: manual', ${sql.json(manualContent)}::jsonb, ${OWNER})
       RETURNING id
     `
+    // Sanity: the seed is a real object in the column, not a quoted string.
+    const [{ deep_run_id }] = await sql<{ deep_run_id: string | null }[]>`
+      SELECT content->'metadata'->>'deepRunId' AS deep_run_id FROM tool_artifacts WHERE id = ${manualId}
+    `
+    expect(deep_run_id).toBe(run.id)
+
     const ensured = await ensureDeepRunArtifact(run, { tenantId: 'rxfit', createdBy: OWNER })
     expect(ensured).toEqual({ id: manualId, title: 'Deep Research: manual', created: false })
   })
