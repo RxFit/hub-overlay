@@ -1,5 +1,7 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { spawnSync } from 'node:child_process'
+import fs from 'node:fs'
+import os from 'node:os'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 
@@ -25,14 +27,26 @@ const tsxCli = require.resolve('tsx/cli')
  *  scrubbed: the value is interpolated into pino's error message verbatim. */
 const SECRET_LEVEL = 'sk-supersecrettoken1234'
 
+/** Each run gets its own spool file so the assertions cannot see a stale one. */
+let spoolFile: string
+
 function runEntrypoint() {
   return spawnSync(process.execPath, [tsxCli, 'scripts/dispatch-worker.ts'], {
     cwd: hubRoot,
     encoding: 'utf8',
     timeout: 60_000,
-    env: { ...process.env, LOG_LEVEL: SECRET_LEVEL, NODE_ENV: 'production' },
+    env: {
+      ...process.env,
+      LOG_LEVEL: SECRET_LEVEL,
+      NODE_ENV: 'production',
+      FAULT_SPOOL_PATH: spoolFile,
+    },
   })
 }
+
+beforeEach(() => {
+  spoolFile = join(fs.mkdtempSync(join(os.tmpdir(), 'entry-spool-')), 'faults.ndjson')
+})
 
 describe('an import-time failure in the worker graph is still captured', () => {
   it('emits exactly one structured dispatch-worker record and exits nonzero', () => {
@@ -74,5 +88,21 @@ describe('an import-time failure in the worker graph is still captured', () => {
     const serialized = JSON.stringify(rec)
     expect(serialized).not.toContain(SECRET_LEVEL)
     expect(serialized).toContain('<token>')
+
+    // 4. END TO END: the same crash also SPOOLED the record, which is what
+    //    the next boot uploads to the Hub. Without this, worker crashes stay
+    //    in the desktop container's docker logs and the server can still only
+    //    observe a lease expiring (§3 Layer 10).
+    expect(fs.existsSync(spoolFile), 'crash did not write the upload spool').toBe(true)
+    const spooled = fs
+      .readFileSync(spoolFile, 'utf8')
+      .split('\n')
+      .filter((l) => l.trim())
+      .map((l) => JSON.parse(l))
+    expect(spooled).toHaveLength(1)
+    expect(spooled[0].surface).toBe('dispatch-worker')
+    expect(spooled[0].fault.faultId).toBe(rec.fault.faultId)
+    // The spooled copy is scrubbed too — it travels over the network next.
+    expect(JSON.stringify(spooled[0])).not.toContain(SECRET_LEVEL)
   }, 90_000)
 })

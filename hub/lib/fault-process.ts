@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import { toFault, scrubFreeText, type FaultDraft } from '@/lib/fault'
 import { getFaultReportCounters } from '@/lib/fault-report'
+import { appendFaultToSpool } from '@/lib/fault-spool'
 
 /**
  * Process-level fault capture (ERROR_REPORTING_2026-08-24.md §3 Layer 8).
@@ -81,21 +82,25 @@ import { getFaultReportCounters } from '@/lib/fault-report'
 export type FaultSurface = 'next-server' | 'dispatch-worker'
 
 /**
- * KNOWN LIMITATION on the 'dispatch-worker' surface, stated so this is never
- * mistaken for more than it is. The worker runs in Docker on the operator's
- * desktop and NEVER on Cloud Run (scripts/agy-worker/Dockerfile); it reaches
- * the Hub only over HTTPS, and app/api/worker exposes exactly three routes —
- * claim, heartbeat and result. So a record written here reaches that
- * container's local stderr (`docker logs`) and nothing else: it does not land
- * in Cloud Logging, and the Hub still sees only a lease expiring.
+ * The 'dispatch-worker' surface reaches the Hub via a SPOOL, not this write.
  *
- * What this DOES buy: the crash is now structured, scrubbed and attributable
- * locally, where previously it was a raw stack or nothing at all. What it does
- * NOT buy: remote diagnosis. Closing that needs a worker fault sink — spool
- * the record and upload it on the next claim, or add a dedicated endpoint —
- * which is its own change (endpoint, shared-secret auth, spool file, size
- * caps, retry) and is tracked in the spec's Layer 10. Deliberately not widened
- * into this PR.
+ * The worker runs in Docker on the operator's desktop and NEVER on Cloud Run
+ * (scripts/agy-worker/Dockerfile); it reaches the Hub only over HTTPS, so an
+ * fs.writeSync here lands in that container's `docker logs` and nowhere else.
+ * Uploading during the crash is not an option — the process is going away and
+ * an async request loses the race. So on this surface every crash record is
+ * ALSO appended synchronously to a bounded on-disk spool
+ * (lib/fault-spool.ts), and the next boot POSTs it to /api/worker/faults
+ * (lib/dispatch-worker.ts uploadSpooledFaults) before claiming any work.
+ * The Hub re-reports each record, so a worker crash now reaches Cloud Logging
+ * and event_log with its ORIGINAL timestamp instead of the server merely
+ * observing a lease expire.
+ *
+ * RESIDUAL, stated rather than assumed: the spool lives in the container's
+ * writable layer, so `docker rm` (as opposed to a restart) discards anything
+ * not yet uploaded, and a worker that never starts again never uploads.
+ * Surviving that needs a bind mount — an operator change, documented in
+ * docs/runbooks/, not silently assumed here.
  */
 
 /** GCP LogEntry severities (Error Reporting ingests ERROR and above). */
@@ -103,6 +108,24 @@ const CRITICAL = 'CRITICAL'
 const INFO = 'INFO'
 
 let installed = false
+
+/**
+ * Emit a crash record: always synchronously to stderr, and on the WORKER
+ * surface also to the on-disk spool, because stderr there reaches only the
+ * desktop container. The spool is what the next boot uploads to the Hub — see
+ * lib/fault-spool.ts. Spooling never affects the stderr write: a full disk
+ * must not cost us the local diagnosis.
+ */
+function emitCrashLine(line: Record<string, unknown>, surface: FaultSurface): void {
+  writeSyncLine(line)
+  if (surface === 'dispatch-worker') {
+    try {
+      appendFaultToSpool(line)
+    } catch {
+      /* appendFaultToSpool is already total; this is belt-and-braces */
+    }
+  }
+}
 
 /** Write one line synchronously to stderr. Never throws: this runs on the
  *  crash path, where a throw would replace the diagnosis with noise. */
@@ -159,10 +182,11 @@ export function installProcessFaultHandlers(opts: { surface: FaultSurface }): bo
         severity: 'fatal',
         context: { kind: origin ?? 'uncaughtException' },
       })
-      writeSyncLine(
+      emitCrashLine(
         processFaultLine(fault, err instanceof Error ? (err.stack ?? null) : null, surface, {
           origin: origin ?? 'uncaughtException',
         }),
+        surface,
       )
     } catch {
       writeSyncLine({ severity: CRITICAL, surface, message: '[fault-process] uncaughtExceptionMonitor failed to normalize' })
@@ -183,10 +207,11 @@ export function installProcessFaultHandlers(opts: { surface: FaultSurface }): bo
         severity: 'fatal',
         context: { kind: 'unhandledRejection' },
       })
-      writeSyncLine(
+      emitCrashLine(
         processFaultLine(fault, reason instanceof Error ? (reason.stack ?? null) : null, surface, {
           origin: 'unhandledRejection',
         }),
+        surface,
       )
     } catch {
       writeSyncLine({ severity: CRITICAL, surface, message: '[fault-process] unhandledRejection failed to normalize' })

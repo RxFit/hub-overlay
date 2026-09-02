@@ -1,5 +1,6 @@
 import { agyErrorType, agyGenerateText, agyVersion, truncateAgyError, type AgyOptions, type AgyResult } from '@/lib/agy'
 import { createLogger } from '@/lib/logger'
+import { drainSpool, commitSpool, restoreSpool } from '@/lib/fault-spool'
 
 /**
  * lib/dispatch-worker.ts — the desktop worker's core loop (Phase 2.5 PR 2).
@@ -297,6 +298,58 @@ export async function runSlot(ctx: SlotContext): Promise<void> {
   }
 }
 
+/**
+ * Upload any crash records this worker spooled before it died
+ * (ERROR_REPORTING §3 Layer 10). Boot is the FIRST moment an HTTP call is
+ * safe — during the crash the process is going away and an async request
+ * loses the race — so the spool is drained here, before slots start claiming.
+ *
+ * Best-effort by construction: this must never delay or prevent real work.
+ * On any failure the batch is restored so the next boot retries it, and the
+ * spool is bounded on the write side so a crash loop cannot grow it forever.
+ */
+export async function uploadSpooledFaults(
+  cfg: WorkerConfig,
+  fetchFn: typeof fetch,
+  timeoutMs = 10_000,
+): Promise<{ uploaded: number; failed: boolean }> {
+  const { records, claimed, leftover } = drainSpool()
+  if (!claimed || records.length === 0) {
+    if (claimed) commitSpool(process.env, leftover) // empty/unparsable: discard
+    return { uploaded: 0, failed: false }
+  }
+  try {
+    const res = await fetchFn(`${cfg.hubUrl}/api/worker/faults`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-worker-secret': cfg.secret },
+      body: JSON.stringify({ workerId: cfg.workerId, faults: records }),
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+    if (res.status >= 200 && res.status < 300) {
+      commitSpool(process.env, leftover)
+      log.info({ uploaded: records.length }, 'uploaded spooled worker crash records')
+      return { uploaded: records.length, failed: false }
+    }
+    // 4xx is not retryable — a malformed or rejected batch would fail
+    // identically forever and would then block every later record behind it.
+    if (res.status >= 400 && res.status < 500) {
+      commitSpool(process.env, leftover)
+      log.warn({ status: res.status, dropped: records.length }, 'hub rejected spooled crash records; dropping batch')
+      return { uploaded: 0, failed: true }
+    }
+    restoreSpool()
+    log.warn({ status: res.status }, 'spooled crash record upload failed; will retry next boot')
+    return { uploaded: 0, failed: true }
+  } catch (err) {
+    restoreSpool()
+    log.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'spooled crash record upload errored; will retry next boot',
+    )
+    return { uploaded: 0, failed: true }
+  }
+}
+
 /** Boot every configured slot; resolves only when `stop` aborts. */
 export async function startWorker(cfg: WorkerConfig, deps: WorkerDeps = {}, stop?: AbortSignal): Promise<void> {
   const fetchFn = deps.fetchFn ?? fetch
@@ -309,6 +362,11 @@ export async function startWorker(cfg: WorkerConfig, deps: WorkerDeps = {}, stop
     { hubUrl: cfg.hubUrl, workerId: cfg.workerId, chatSlots: cfg.chatSlots, workSlots: cfg.workSlots, agyVersion: agyVersionValue },
     'dispatch worker starting (PARALLEL_OK slot policy)',
   )
+
+  // Ship whatever the previous life spooled before doing anything else, so a
+  // crash-restart loop still reports every iteration rather than only the
+  // one that happens to survive.
+  await uploadSpooledFaults(cfg, fetchFn)
 
   // Envelope-drift gate: no claims until one marker prompt round-trips.
   if (cfg.canary === true) {
