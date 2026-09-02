@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { resolveGoogleAuth, googleWriteErrorResponse, googleRouteCtx } from '@/lib/google-session'
 import { listGA4Properties } from '@/lib/google/analytics'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
@@ -17,7 +18,7 @@ export const runtime = 'nodejs'
  * A grant predating `analytics.readonly` surfaces as MISSING_SCOPE so the
  * client can prompt a one-time re-consent rather than showing an empty picker.
  */
-export async function GET(req: NextRequest) {
+export const GET = withFault('google/analytics/properties', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   const role = (session?.user as Record<string, unknown>)?.role as string
 
@@ -37,4 +38,4 @@ export async function GET(req: NextRequest) {
   } catch (err) {
     return googleWriteErrorResponse(err, 'Google Analytics', googleRouteCtx(req, '/api/google/analytics/properties'))
   }
-}
+})

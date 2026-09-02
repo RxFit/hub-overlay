@@ -4,6 +4,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { resolveGoogleAuth } from '@/lib/google-session'
 import { getChatSelfUserName } from '@/lib/google'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
@@ -23,7 +24,7 @@ const cache = new Map<string, { name: string | null; exp: number }>()
 const POSITIVE_TTL_MS = 60 * 60 * 1000
 const NEGATIVE_TTL_MS = 5 * 60 * 1000
 
-export async function GET(req: NextRequest) {
+export const GET = withFault('google/chat/me', async (req: NextRequest) => {
   const auth = await resolveGoogleAuth(req)
   if (!auth.ok) return auth.response
 
@@ -40,4 +41,4 @@ export async function GET(req: NextRequest) {
     cache.set(email, { name, exp: Date.now() + (name ? POSITIVE_TTL_MS : NEGATIVE_TTL_MS) })
   }
   return NextResponse.json({ name })
-}
+})

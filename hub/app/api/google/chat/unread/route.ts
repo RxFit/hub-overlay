@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { resolveGoogleAuth, googleApiErrorResponse, googleRouteCtx } from '@/lib/google-session'
 import { getSpaceReadState, countChatMessagesSince } from '@/lib/google'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
@@ -18,7 +19,7 @@ export const runtime = 'nodejs'
  * Per-space failures degrade silently (count 0) so one bad space never blanks
  * the badge. Concurrency is throttled to stay under Google API rate limits.
  */
-export async function GET(req: NextRequest) {
+export const GET = withFault('google/chat/unread', async (req: NextRequest) => {
   const auth = await resolveGoogleAuth(req)
   if (!auth.ok) return auth.response
 
@@ -61,4 +62,4 @@ export async function GET(req: NextRequest) {
   } catch (err) {
     return googleApiErrorResponse(err, googleRouteCtx(req, '/api/google/chat/unread'))
   }
-}
+})

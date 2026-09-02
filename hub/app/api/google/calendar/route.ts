@@ -6,10 +6,11 @@ import { GoogleCalendarCreateSchema } from '@/lib/zod-schemas'
 import { authOptions } from '@/lib/auth'
 import { listUpcomingEvents, createCalendarEvent, deleteCalendarEvent, listCalendars, GoogleCalendarEvent } from '@/lib/google'
 import { updateCalendarEvent } from '@/lib/google/calendar'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
-export async function GET(req: NextRequest) {
+export const GET = withFault('google/calendar', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -64,9 +65,9 @@ export async function GET(req: NextRequest) {
   } catch (error) {
     return googleApiErrorResponse(error, googleRouteCtx(req, '/api/google/calendar'))
   }
-}
+})
 
-export async function POST(req: NextRequest) {
+export const POST = withFault('google/calendar', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -98,7 +99,7 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     return googleApiErrorResponse(error, googleRouteCtx(req, '/api/google/calendar'))
   }
-}
+})
 
 /**
  * PATCH /api/google/calendar — update an existing event in place.
@@ -113,7 +114,7 @@ export async function POST(req: NextRequest) {
  * link. Attendees are notified by default — a silent reschedule leaves everyone
  * holding the old time.
  */
-export async function PATCH(req: NextRequest) {
+export const PATCH = withFault('google/calendar', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -159,9 +160,9 @@ export async function PATCH(req: NextRequest) {
   } catch (error) {
     return googleApiErrorResponse(error, googleRouteCtx(req, '/api/google/calendar'))
   }
-}
+})
 
-export async function DELETE(req: NextRequest) {
+export const DELETE = withFault('google/calendar', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -188,4 +189,4 @@ export async function DELETE(req: NextRequest) {
   } catch (error) {
     return googleApiErrorResponse(error, googleRouteCtx(req, '/api/google/calendar'))
   }
-}
+})

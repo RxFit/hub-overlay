@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth'
 import { resolveGoogleAuth, googleWriteErrorResponse, googleRouteCtx } from '@/lib/google-session'
 import { querySearchConsole, GSC_DIMENSIONS, type GSCDimension } from '@/lib/google/search-console'
 import { getEffectivePrefs } from '@/lib/google/prefs-db'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
@@ -19,7 +20,7 @@ export const runtime = 'nodejs'
  * (an over-long range is clamped, not zero-filled) and rare-query anonymization
  * (query-dimensioned results carry a warning that their totals under-report).
  */
-export async function POST(req: NextRequest) {
+export const POST = withFault('google/search-console/query', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   const role = (session?.user as Record<string, unknown>)?.role as string
 
@@ -72,4 +73,4 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     return googleWriteErrorResponse(err, 'Google Search Console', googleRouteCtx(req, '/api/google/search-console/query'))
   }
-}
+})

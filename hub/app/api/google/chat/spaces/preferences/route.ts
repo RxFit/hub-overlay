@@ -6,6 +6,7 @@ import {
   getChatSpacePreferences,
   upsertChatSpacePreferences,
 } from '@/lib/chat-space-preferences-db'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
@@ -25,7 +26,7 @@ export const runtime = 'nodejs'
    change.
    ══════════════════════════════════════════════════════════════════════════════ */
 
-export async function GET(_req: NextRequest) {
+export const GET = withFault('google/chat/spaces/preferences', async (_req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user?.email) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
@@ -33,9 +34,9 @@ export async function GET(_req: NextRequest) {
   // preferences (i.e. plain defaults), never an error.
   const prefs = await getChatSpacePreferences(session.user.email)
   return NextResponse.json(prefs)
-}
+})
 
-export async function PUT(req: NextRequest) {
+export const PUT = withFault('google/chat/spaces/preferences', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user?.email) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
@@ -63,4 +64,4 @@ export async function PUT(req: NextRequest) {
       { status: 502 },
     )
   }
-}
+})

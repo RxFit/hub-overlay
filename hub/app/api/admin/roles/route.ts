@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth'
 import { getAllRoleEntries, upsertUserRole } from '@/lib/userRoles'
 import { canAssignRole } from '@/lib/roles'
 import { recordEvent } from '@/lib/event-logger'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
@@ -15,7 +16,7 @@ const ROLE_RANK: Record<string, number> = {
   superadmin: 3,
 }
 
-export async function GET(req: NextRequest) {
+export const GET = withFault('admin/roles', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   const callerRole = (session?.user as Record<string, unknown>)?.role as string
 
@@ -23,17 +24,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
   }
 
-  try {
-    const users = await getAllRoleEntries()
-    return NextResponse.json({ users })
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error'
-    return NextResponse.json({ error: message }, { status: 500 })
-  }
-}
+  const users = await getAllRoleEntries()
+  return NextResponse.json({ users })
+})
 
 /* ── POST /api/admin/roles ── */
-export async function POST(req: NextRequest) {
+export const POST = withFault('admin/roles', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   const callerRole = (session?.user as Record<string, unknown>)?.role as string
   const callerEmail = session?.user?.email || ''
@@ -103,33 +99,28 @@ export async function POST(req: NextRequest) {
     // DB lookup failure — proceed (the upsert will still respect canAssignRole)
   }
 
-  try {
-    // Log a warning if staff gets no project assignments (they'll see nothing useful)
-    if (role === 'staff' && (!assignedProjects || assignedProjects.length === 0)) {
-      console.warn(`[admin/roles] Staff user ${email} assigned with no projects — they will see an empty dashboard until projects are assigned`)
-    }
-
-    await upsertUserRole({
-      email,
-      role,
-      assignedProjects: assignedProjects || [],
-      assignedBy: callerEmail,
-    })
-
-    await recordEvent({
-      eventType: 'role.updated',
-      actor: `hub-user:${callerEmail}`,
-      resourceType: 'user_role',
-      resourceId: email,
-      payload: {
-        newRole: role,
-        assignedProjects: assignedProjects || [],
-      },
-    })
-
-    return NextResponse.json({ success: true, email, role })
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error'
-    return NextResponse.json({ error: message }, { status: 500 })
+  // Log a warning if staff gets no project assignments (they'll see nothing useful)
+  if (role === 'staff' && (!assignedProjects || assignedProjects.length === 0)) {
+    console.warn(`[admin/roles] Staff user ${email} assigned with no projects — they will see an empty dashboard until projects are assigned`)
   }
-}
+
+  await upsertUserRole({
+    email,
+    role,
+    assignedProjects: assignedProjects || [],
+    assignedBy: callerEmail,
+  })
+
+  await recordEvent({
+    eventType: 'role.updated',
+    actor: `hub-user:${callerEmail}`,
+    resourceType: 'user_role',
+    resourceId: email,
+    payload: {
+      newRole: role,
+      assignedProjects: assignedProjects || [],
+    },
+  })
+
+  return NextResponse.json({ success: true, email, role })
+})

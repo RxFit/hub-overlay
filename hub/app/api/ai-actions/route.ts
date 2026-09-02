@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth'
 import { canAccessAdminRoute } from '@/lib/roles'
 import { clampInt } from '@/lib/num'
 import { listAiActions } from '@/lib/ai-audit'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
@@ -18,7 +19,7 @@ export const runtime = 'nodejs'
  * trail is REJECTED with 403 (chosen over silently scoping-to-self so the
  * caller gets an explicit signal rather than misleading data).
  */
-export async function GET(req: NextRequest) {
+export const GET = withFault('ai-actions', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   const user = session?.user as { email?: string | null; role?: string | null } | undefined
   if (!user?.email) {
@@ -41,11 +42,6 @@ export async function GET(req: NextRequest) {
     targetEmail = requestedUser
   }
 
-  try {
-    const actions = await listAiActions({ userEmail: targetEmail, limit })
-    return NextResponse.json({ actions })
-  } catch (err) {
-    console.error('[api/ai-actions GET]', err instanceof Error ? err.message : err)
-    return NextResponse.json({ error: 'Failed to load AI actions' }, { status: 500 })
-  }
-}
+  const actions = await listAiActions({ userEmail: targetEmail, limit })
+  return NextResponse.json({ actions })
+})

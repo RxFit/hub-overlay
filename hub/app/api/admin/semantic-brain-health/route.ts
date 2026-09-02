@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { canAccessAdminRoute } from '@/lib/roles'
 import { checkSemanticBrainHealth } from '@/lib/vertex-health'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
@@ -26,7 +27,7 @@ export const runtime = 'nodejs'
  * Returns 200 when healthy and 503 when not, so an uptime check can watch it
  * directly. The body is identical either way.
  */
-export async function GET(req: NextRequest) {
+export const GET = withFault('admin/semantic-brain-health', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   const user = session?.user as { email?: string | null; role?: string | null } | undefined
   if (!user?.email) {
@@ -40,4 +41,4 @@ export async function GET(req: NextRequest) {
   const report = await checkSemanticBrainHealth(probe || undefined)
 
   return NextResponse.json(report, { status: report.healthy ? 200 : 503 })
-}
+})

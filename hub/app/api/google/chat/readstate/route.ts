@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { resolveGoogleAuth, googleApiErrorResponse, googleRouteCtx } from '@/lib/google-session'
 import { getSpaceReadState, updateSpaceReadState } from '@/lib/google'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
@@ -8,7 +9,7 @@ export const runtime = 'nodejs'
  * GET /api/google/chat/readstate?spaceId=spaces/XXXX
  * Returns the authenticated user's lastReadTime for a space.
  */
-export async function GET(req: NextRequest) {
+export const GET = withFault('google/chat/readstate', async (req: NextRequest) => {
   const auth = await resolveGoogleAuth(req)
   if (!auth.ok) return auth.response
 
@@ -41,7 +42,7 @@ export async function GET(req: NextRequest) {
 
     return googleApiErrorResponse(err, googleRouteCtx(req, '/api/google/chat/readstate'))
   }
-}
+})
 
 /**
  * POST /api/google/chat/readstate  { spaceId: "spaces/XXXX" }
@@ -51,7 +52,7 @@ export async function GET(req: NextRequest) {
  * scope — sessions consented before the scope upgrade get MISSING_SCOPE (200)
  * and the client silently skips until the user re-signs-in.
  */
-export async function POST(req: NextRequest) {
+export const POST = withFault('google/chat/readstate', async (req: NextRequest) => {
   const auth = await resolveGoogleAuth(req)
   if (!auth.ok) return auth.response
 
@@ -79,4 +80,4 @@ export async function POST(req: NextRequest) {
     }
     return googleApiErrorResponse(err, googleRouteCtx(req, '/api/google/chat/readstate'))
   }
-}
+})

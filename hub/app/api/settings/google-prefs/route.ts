@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth'
 import { getEffectivePrefs, savePrefs } from '@/lib/google/prefs-db'
 import { normalizePrefsInput } from '@/lib/google/prefs'
 import { recordEvent } from '@/lib/event-logger'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
@@ -18,7 +19,7 @@ export const runtime = 'nodejs'
  * so the settings UI shows what the app is actually using rather than an empty
  * form on a deployment that has always run on env vars.
  */
-export async function GET() {
+export const GET = withFault('settings/google-prefs', async () => {
   const session = await getServerSession(authOptions)
   const role = (session?.user as Record<string, unknown>)?.role as string
 
@@ -29,15 +30,10 @@ export async function GET() {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
-  try {
-    return NextResponse.json({ prefs: await getEffectivePrefs() })
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
-    return NextResponse.json({ error: message }, { status: 500 })
-  }
-}
+  return NextResponse.json({ prefs: await getEffectivePrefs() })
+})
 
-export async function PUT(req: NextRequest) {
+export const PUT = withFault('settings/google-prefs', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   const role = (session?.user as Record<string, unknown>)?.role as string
   const email = session?.user?.email ?? ''
@@ -56,19 +52,14 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
-  try {
-    // Writes throw on failure so a save that did not persist is reported as
-    // one, rather than returning a reassuring 200.
-    const saved = await savePrefs(normalizePrefsInput(body), email)
-    await recordEvent({
-      eventType: 'google_prefs_updated',
-      actor: email,
-      resourceType: 'google_prefs',
-      payload: { ga4PropertyId: saved.ga4PropertyId, gscSiteUrl: saved.gscSiteUrl },
-    }).catch(() => {})
-    return NextResponse.json({ prefs: saved })
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
-    return NextResponse.json({ error: message }, { status: 500 })
-  }
-}
+  // Writes throw on failure so a save that did not persist is reported as
+  // one, rather than returning a reassuring 200.
+  const saved = await savePrefs(normalizePrefsInput(body), email)
+  await recordEvent({
+    eventType: 'google_prefs_updated',
+    actor: email,
+    resourceType: 'google_prefs',
+    payload: { ga4PropertyId: saved.ga4PropertyId, gscSiteUrl: saved.gscSiteUrl },
+  }).catch(() => {})
+  return NextResponse.json({ prefs: saved })
+})

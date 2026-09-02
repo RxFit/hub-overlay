@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { resolveGoogleAuth, googleWriteErrorResponse, googleRouteCtx } from '@/lib/google-session'
 import { listGSCSites } from '@/lib/google/search-console'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
@@ -13,7 +14,7 @@ export const runtime = 'nodejs'
  * a tenant-level setting. Unverified sites are filtered out upstream so the
  * picker cannot offer something that would only 403 later.
  */
-export async function GET(req: NextRequest) {
+export const GET = withFault('google/search-console/sites', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   const role = (session?.user as Record<string, unknown>)?.role as string
 
@@ -33,4 +34,4 @@ export async function GET(req: NextRequest) {
   } catch (err) {
     return googleWriteErrorResponse(err, 'Google Search Console', googleRouteCtx(req, '/api/google/search-console/sites'))
   }
-}
+})

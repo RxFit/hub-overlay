@@ -7,6 +7,7 @@ import { listAiActions } from '@/lib/ai-audit'
 import { aiActionToFeedItem } from '@/lib/ai-action-feed'
 import { runToFeedItem } from '@/lib/run-feed'
 import type { FeedItem } from '@/types'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -36,7 +37,7 @@ export const dynamic = 'force-dynamic'
 const DEFAULT_LIMIT = 40
 const MAX_LIMIT = 100
 
-export async function GET(req: NextRequest) {
+export const GET = withFault('runs', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   const user = session?.user as { email?: string | null; role?: string | null } | undefined
   if (!user?.email) {
@@ -51,23 +52,18 @@ export async function GET(req: NextRequest) {
     ? Math.min(Math.max(rawLimit, 1), MAX_LIMIT)
     : DEFAULT_LIMIT
 
-  try {
-    // Both reads are independent; the actions read is best-effort so a
-    // hiccup there cannot blank the runs feed (mirrors /api/feed's posture).
-    const [runs, actions] = await Promise.all([
-      listAiRuns({ limit }),
-      listAiActions({ userEmail: user.email, limit: 15 }).catch(() => []),
-    ])
+  // Both reads are independent; the actions read is best-effort so a
+  // hiccup there cannot blank the runs feed (mirrors /api/feed's posture).
+  const [runs, actions] = await Promise.all([
+    listAiRuns({ limit }),
+    listAiActions({ userEmail: user.email, limit: 15 }).catch(() => []),
+  ])
 
-    const feed: FeedItem[] = [
-      ...runs.map(runToFeedItem),
-      ...actions.map(aiActionToFeedItem),
-    ]
-    feed.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+  const feed: FeedItem[] = [
+    ...runs.map(runToFeedItem),
+    ...actions.map(aiActionToFeedItem),
+  ]
+  feed.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
 
-    return NextResponse.json({ feed })
-  } catch (err) {
-    console.error('[runs] feed read failed:', err instanceof Error ? err.message : err)
-    return NextResponse.json({ error: 'runs read failed' }, { status: 500 })
-  }
-}
+  return NextResponse.json({ feed })
+})

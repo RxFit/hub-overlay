@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { resolveGoogleAuth, googleWriteErrorResponse, googleRouteCtx } from '@/lib/google-session'
 import { searchContacts } from '@/lib/google'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
@@ -12,7 +13,7 @@ export const runtime = 'nodejs'
  * can turn "email Maria" into a real address. A grant predating the scope
  * surfaces as MISSING_SCOPE for a one-time re-consent.
  */
-export async function GET(req: NextRequest) {
+export const GET = withFault('google/contacts', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -32,4 +33,4 @@ export async function GET(req: NextRequest) {
   } catch (err) {
     return googleWriteErrorResponse(err, 'Google Contacts', googleRouteCtx(req, '/api/google/contacts'))
   }
-}
+})

@@ -5,6 +5,7 @@ import { createLogger } from '@/lib/logger'
 import { getCompanies, getAgents, getIssues, getRuns } from '@/lib/paperclip'
 import { classifyAgentRole } from '@/lib/agentRoles'
 import type { CEOPulseRecord, DepartmentPulse, DepartmentHealth, AgentRoleKey, Agent, Run } from '@/types'
+import { withFault } from '@/lib/route-fault'
 
 const log = createLogger('paperclip/ceo-pulse')
 
@@ -33,7 +34,7 @@ function scoreFromRuns(
   return 'ON_TRACK'
 }
 
-export async function GET(req: Request) {
+export const GET = withFault('paperclip/ceo-pulse', async (req: Request) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -42,168 +43,162 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
   const orgId = searchParams.get('orgId')
 
-  try {
-    // Fetch all companies and scope to user's access
-    const user = session.user as Record<string, unknown>
-    const role = user.role as string
-    const assignedProjects = (user.assignedProjects as string[]) ?? []
+  // Fetch all companies and scope to user's access
+  const user = session.user as Record<string, unknown>
+  const role = user.role as string
+  const assignedProjects = (user.assignedProjects as string[]) ?? []
 
-    const rawCompanies = await getCompanies()
-    const hasWildcard = assignedProjects.includes('*') || role === 'superadmin'
+  const rawCompanies = await getCompanies()
+  const hasWildcard = assignedProjects.includes('*') || role === 'superadmin'
 
-    let allCompanies = [...rawCompanies]
-    if (!hasWildcard) {
-      allCompanies = allCompanies.filter(c => assignedProjects.includes(c.id))
+  let allCompanies = [...rawCompanies]
+  if (!hasWildcard) {
+    allCompanies = allCompanies.filter(c => assignedProjects.includes(c.id))
+  }
+
+  if (orgId) {
+    const existsGlobally = rawCompanies.some(c => c.id === orgId || c.identifier === orgId)
+    const hasAccess = allCompanies.some(c => c.id === orgId || c.identifier === orgId)
+    if (existsGlobally && !hasAccess) {
+      return NextResponse.json({ error: 'Access denied: you are not assigned to this workspace' }, { status: 403 })
     }
+  }
 
-    if (orgId) {
-      const existsGlobally = rawCompanies.some(c => c.id === orgId || c.identifier === orgId)
-      const hasAccess = allCompanies.some(c => c.id === orgId || c.identifier === orgId)
-      if (existsGlobally && !hasAccess) {
-        return NextResponse.json({ error: 'Access denied: you are not assigned to this workspace' }, { status: 403 })
-      }
+  const companies = orgId
+    ? allCompanies.filter(c => c.id === orgId || c.identifier === orgId)
+    : allCompanies.sort((a, b) => (a.identifier ?? a.name).localeCompare(b.identifier ?? b.name)).slice(0, 1) // Deterministic: alphabetical fallback from scoped set
+
+  if (companies.length === 0) {
+    // Return a graceful empty pulse rather than erroring
+    const emptyPulse: CEOPulseRecord = {
+      pulseId: new Date().toISOString(),
+      org: 'Unknown',
+      orgId: orgId ?? '',
+      globalHealthPct: 0,
+      departments: [],
+      escalations: [],
+      lastPulseAt: new Date().toISOString(),
     }
+    return NextResponse.json(emptyPulse)
+  }
 
-    const companies = orgId
-      ? allCompanies.filter(c => c.id === orgId || c.identifier === orgId)
-      : allCompanies.sort((a, b) => (a.identifier ?? a.name).localeCompare(b.identifier ?? b.name)).slice(0, 1) // Deterministic: alphabetical fallback from scoped set
+  const company = companies[0]
+  const cutoffDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) // 7 days ago
 
-    if (companies.length === 0) {
-      // Return a graceful empty pulse rather than erroring
-      const emptyPulse: CEOPulseRecord = {
-        pulseId: new Date().toISOString(),
-        org: 'Unknown',
-        orgId: orgId ?? '',
-        globalHealthPct: 0,
-        departments: [],
-        escalations: [],
-        lastPulseAt: new Date().toISOString(),
-      }
-      return NextResponse.json(emptyPulse)
-    }
+  // Fetch agents, issues, and runs in parallel. Individual failures degrade
+  // to [] so one flaky endpoint doesn't blank the pulse — but if ALL THREE
+  // fail, the backend is down and we must say so instead of fabricating a
+  // "healthy, empty" pulse (2026-06 audit P1-4: blank panels, never an alert).
+  const settled = await Promise.allSettled([
+    getAgents(company.id),
+    getIssues(company.id, { limit: 50 }),
+    getRuns(company.id, { limit: 50 }),
+  ])
+  if (settled.every((s) => s.status === 'rejected')) {
+    log.error(
+      { companyId: company.id, errors: settled.map((s) => String((s as PromiseRejectedResult).reason)) },
+      'CEO pulse: all Paperclip fetches failed'
+    )
+    return NextResponse.json(
+      { error: 'Paperclip backend unreachable — pulse unavailable' },
+      { status: 502 }
+    )
+  }
+  const [agents, issues, runs] = settled.map((s) =>
+    s.status === 'fulfilled' ? s.value : []
+  ) as [Agent[], import('@/types').Issue[], Run[]]
 
-    const company = companies[0]
-    const cutoffDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) // 7 days ago
+  // Build per-role pulse data
+  const roleGroups = new Map<AgentRoleKey, Agent[]>()
+  for (const agent of agents) {
+    const role = classifyAgentRole(agent.name)
+    if (!roleGroups.has(role)) roleGroups.set(role, [])
+    roleGroups.get(role)!.push(agent)
+  }
 
-    // Fetch agents, issues, and runs in parallel. Individual failures degrade
-    // to [] so one flaky endpoint doesn't blank the pulse — but if ALL THREE
-    // fail, the backend is down and we must say so instead of fabricating a
-    // "healthy, empty" pulse (2026-06 audit P1-4: blank panels, never an alert).
-    const settled = await Promise.allSettled([
-      getAgents(company.id),
-      getIssues(company.id, { limit: 50 }),
-      getRuns(company.id, { limit: 50 }),
-    ])
-    if (settled.every((s) => s.status === 'rejected')) {
-      log.error(
-        { companyId: company.id, errors: settled.map((s) => String((s as PromiseRejectedResult).reason)) },
-        'CEO pulse: all Paperclip fetches failed'
-      )
-      return NextResponse.json(
-        { error: 'Paperclip backend unreachable — pulse unavailable' },
-        { status: 502 }
-      )
-    }
-    const [agents, issues, runs] = settled.map((s) =>
-      s.status === 'fulfilled' ? s.value : []
-    ) as [Agent[], import('@/types').Issue[], Run[]]
+  const departments: DepartmentPulse[] = []
+  
+  for (const [role, roleAgents] of Array.from(roleGroups.entries())) {
+    if (role === 'ceo') continue // CEO is the auditor, not audited
 
-    // Build per-role pulse data
-    const roleGroups = new Map<AgentRoleKey, Agent[]>()
+    // Count runs for this role's agents
+    const agentIds = new Set(roleAgents.map(a => a.id))
+    const roleRuns = runs.filter(r => agentIds.has(r.agentId))
+    const recentRuns = roleRuns.filter(r => {
+      try { return new Date(r.startedAt ?? '') >= cutoffDate } catch { return false }
+    })
+    const failedRuns = roleRuns.filter(r => r.status === 'failed')
+
+    const status = scoreFromRuns(roleRuns.length, failedRuns.length, recentRuns.length)
+    
+    // Find last completed task (run)
+    const lastRun = recentRuns.sort((a: Run, b: Run) => {
+      const ta = a.completedAt ? new Date(a.completedAt).getTime() : 0
+      const tb = b.completedAt ? new Date(b.completedAt).getTime() : 0
+      return tb - ta
+    })[0]
+
+    departments.push({
+      role,
+      status,
+      lastTask: lastRun ? `Run ${lastRun.issueIdentifier}` : 'No recent tasks',
+      lastTaskTime: lastRun?.completedAt ?? undefined,
+      // Count issues that are actually blocked (Paperclip status === 'blocked',
+      // surfaced by normalization as state.name 'Blocked'); previously this
+      // counted ALL in-flight issues, inflating the metric.
+      blockedTasks: issues.filter(i =>
+        ((i as { status?: string }).status === 'blocked' || i.state?.name === 'Blocked') &&
+        agentIds.has(i.assigneeId ?? '')
+      ).length,
+      correctiveAction: null,
+    })
+  }
+
+  // If no role groups found, create fallback department entries from raw agent names
+  if (departments.length === 0 && agents.length > 0) {
+    const seenRoles = new Set<string>()
     for (const agent of agents) {
       const role = classifyAgentRole(agent.name)
-      if (!roleGroups.has(role)) roleGroups.set(role, [])
-      roleGroups.get(role)!.push(agent)
-    }
-
-    const departments: DepartmentPulse[] = []
-    
-    for (const [role, roleAgents] of Array.from(roleGroups.entries())) {
-      if (role === 'ceo') continue // CEO is the auditor, not audited
-
-      // Count runs for this role's agents
-      const agentIds = new Set(roleAgents.map(a => a.id))
-      const roleRuns = runs.filter(r => agentIds.has(r.agentId))
-      const recentRuns = roleRuns.filter(r => {
-        try { return new Date(r.startedAt ?? '') >= cutoffDate } catch { return false }
-      })
-      const failedRuns = roleRuns.filter(r => r.status === 'failed')
-
-      const status = scoreFromRuns(roleRuns.length, failedRuns.length, recentRuns.length)
-      
-      // Find last completed task (run)
-      const lastRun = recentRuns.sort((a: Run, b: Run) => {
-        const ta = a.completedAt ? new Date(a.completedAt).getTime() : 0
-        const tb = b.completedAt ? new Date(b.completedAt).getTime() : 0
-        return tb - ta
-      })[0]
-
+      if (role === 'ceo' || seenRoles.has(role)) continue
+      seenRoles.add(role)
       departments.push({
         role,
-        status,
-        lastTask: lastRun ? `Run ${lastRun.issueIdentifier}` : 'No recent tasks',
-        lastTaskTime: lastRun?.completedAt ?? undefined,
-        // Count issues that are actually blocked (Paperclip status === 'blocked',
-        // surfaced by normalization as state.name 'Blocked'); previously this
-        // counted ALL in-flight issues, inflating the metric.
-        blockedTasks: issues.filter(i =>
-          ((i as { status?: string }).status === 'blocked' || i.state?.name === 'Blocked') &&
-          agentIds.has(i.assigneeId ?? '')
-        ).length,
+        status: agent.status === 'active' ? 'ON_TRACK' : agent.status === 'error' ? 'CRITICAL' : 'DRIFTING',
+        lastTask: 'Fetching...',
+        lastTaskTime: agent.lastHeartbeat ?? undefined,
+        blockedTasks: 0,
         correctiveAction: null,
       })
     }
-
-    // If no role groups found, create fallback department entries from raw agent names
-    if (departments.length === 0 && agents.length > 0) {
-      const seenRoles = new Set<string>()
-      for (const agent of agents) {
-        const role = classifyAgentRole(agent.name)
-        if (role === 'ceo' || seenRoles.has(role)) continue
-        seenRoles.add(role)
-        departments.push({
-          role,
-          status: agent.status === 'active' ? 'ON_TRACK' : agent.status === 'error' ? 'CRITICAL' : 'DRIFTING',
-          lastTask: 'Fetching...',
-          lastTaskTime: agent.lastHeartbeat ?? undefined,
-          blockedTasks: 0,
-          correctiveAction: null,
-        })
-      }
-    }
-
-    // Compute global health percentage
-    const onTrackCount = departments.filter(d => d.status === 'ON_TRACK').length
-    const globalHealthPct = departments.length > 0
-      ? Math.round((onTrackCount / departments.length) * 100)
-      : 100
-
-    // Identify escalations (CRITICAL departments)
-    const escalations = departments
-      .filter(d => d.status === 'CRITICAL')
-      .map(d => `${d.role.toUpperCase()} is CRITICAL — immediate attention required`)
-
-    const pulse: CEOPulseRecord = {
-      pulseId: new Date().toISOString(),
-      org: company.name,
-      orgId: company.id,
-      globalHealthPct,
-      departments,
-      escalations,
-      lastPulseAt: new Date().toISOString(),
-      nextPulseAt: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(),
-    }
-
-    return NextResponse.json(pulse, {
-      headers: {
-        // Cache for 4 minutes (pulse cadence is 5 min, slight buffer)
-        'Cache-Control': 'private, max-age=240',
-      },
-    })
-
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Failed to generate CEO pulse'
-    log.error({ err: error }, 'CEO pulse generation failed')
-    return NextResponse.json({ error: message }, { status: 500 })
   }
-}
+
+  // Compute global health percentage
+  const onTrackCount = departments.filter(d => d.status === 'ON_TRACK').length
+  const globalHealthPct = departments.length > 0
+    ? Math.round((onTrackCount / departments.length) * 100)
+    : 100
+
+  // Identify escalations (CRITICAL departments)
+  const escalations = departments
+    .filter(d => d.status === 'CRITICAL')
+    .map(d => `${d.role.toUpperCase()} is CRITICAL — immediate attention required`)
+
+  const pulse: CEOPulseRecord = {
+    pulseId: new Date().toISOString(),
+    org: company.name,
+    orgId: company.id,
+    globalHealthPct,
+    departments,
+    escalations,
+    lastPulseAt: new Date().toISOString(),
+    nextPulseAt: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(),
+  }
+
+  return NextResponse.json(pulse, {
+    headers: {
+      // Cache for 4 minutes (pulse cadence is 5 min, slight buffer)
+      'Cache-Control': 'private, max-age=240',
+    },
+  })
+
+})
