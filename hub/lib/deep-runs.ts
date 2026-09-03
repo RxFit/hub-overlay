@@ -18,6 +18,7 @@
 import type { JobDetail } from '@/lib/dispatch-store'
 import type { ToolRunRecord } from '@/lib/tool-runs'
 import { DEEP_TOOL_IDS } from '@/lib/skills'
+import { fenceUntrusted, UNTRUSTED_CONTENT_POLICY } from '@/lib/prompt-safety'
 
 export { DEEP_TOOL_IDS }
 export type DeepToolId = (typeof DEEP_TOOL_IDS)[number]
@@ -130,7 +131,8 @@ export function composeRunPrompt(tool: DeepToolId, brief: string, skillContent: 
     REPORT_CONTRACT,
   ]
   if (contextPayload?.trim()) {
-    parts.push(`# Inputs\n\n${contextPayload.trim()}`)
+    parts.push(UNTRUSTED_CONTENT_POLICY)
+    parts.push(`# Inputs\n\n${fenceUntrusted('Selected tool artifacts', contextPayload.trim())}`)
   }
   parts.push(`# The brief\n${brief.trim()}`)
   return parts.join('\n\n')
