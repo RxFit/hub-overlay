@@ -82,8 +82,11 @@ export const eventLog = pgTable(
   },
   (t) => ({
     // Speeds the ai-health read (WHERE event_type LIKE 'telemetry:%' AND
-    // created_at >= …) and the retention prune (WHERE tenant_id AND
-    // created_at < cutoff) — both otherwise seq-scan an append-only table.
+    // created_at >= …). It does NOT serve the retention prune
+    // (lib/agent-memory.ts pruneOldEventLogs, WHERE created_at < cutoff):
+    // the leading column is event_type, so that delete scans. A bare
+    // created_at index is scheduled for Phase 4 (ERROR_REPORTING_2026-08-24.md
+    // §8 "Indexes the reads actually need", :939) with CONCURRENTLY.
     typeCreatedIdx: index('event_log_type_created_idx').on(t.eventType, t.createdAt),
   }),
 )

@@ -15,7 +15,25 @@ import {
   getGoogleRefreshToken,
   storeGoogleRefreshToken,
 } from '@/lib/google-token-store'
+import { toFault } from '@/lib/fault'
+import { reportFault } from '@/lib/fault-report'
+import { createLogger } from '@/lib/logger'
+import { hashEmail } from '@/lib/observability'
 import { swallow } from '@/lib/swallow'
+
+/**
+ * Module logger. Static imports of lib/logger (pino) and lib/fault-report are
+ * SAFE here because lib/auth.ts is Node-only: middleware.ts imports only
+ * next-auth/jwt (never this module), no client-bundled file imports this
+ * module (verified by grep — every importer is a route handler, a server
+ * component or the server-actions file), and nothing in the app declares an
+ * edge runtime. The same two imports already ship in lib/google-session.ts.
+ *
+ * PII CONTRACT (ERROR_REPORTING_2026-08-24.md): every line this logger writes
+ * carries `userHash` = hashEmail(email) as the ONLY user attribution. Never a
+ * raw email, never a token, never a Google response body.
+ */
+const log = createLogger('auth')
 
 /* ── Admin email lists (comma-separated env vars) ── */
 const SUPERADMIN_EMAILS = (process.env.SUPERADMIN_EMAILS || '')
@@ -199,6 +217,67 @@ async function requestTokenRefresh(refreshToken: string): Promise<TokenRefreshRe
 }
 
 /**
+ * Report ONE fault for a failed refresh (ERROR_REPORTING_2026-08-24.md §
+ * "NextAuth is uninstrumented and cannot be wrapped", Phase 2 bullet 3).
+ *
+ * The NextAuth catch-all route re-exports NextAuth(authOptions) directly, so no
+ * route wrapper ever sees a refresh failure — the jwt callback IS the boundary,
+ * and before this the only trace was a console.error line that nothing grouped
+ * or counted. The hourly forced-re-login is the app's documented recurring
+ * failure mode (see the header of app/components/Providers.tsx); this is what
+ * makes it visible.
+ *
+ *  - fatal     → `auth_reauth_required`. The grant is dead; the user WILL be
+ *                re-prompted. Severity stays the code's default (`expected`,
+ *                like the reauth 401 in lib/google-session.ts) — a revoked
+ *                grant is an upstream outcome, not a defect; the CODE is the
+ *                dimension the relogin dashboard keys on, not the severity.
+ *  - transient → `upstream_unavailable`, severity `degraded`. The session
+ *                survives (routes answer 503-retryable); this is a Google
+ *                token-endpoint blip, worth counting but never an ERROR page.
+ *
+ * WHAT IS EMITTED — and, more importantly, what is NOT. The record carries the
+ * classification, the HTTP status and the OAuth error CODE (`invalid_grant`,
+ * or the synthetic `no_refresh_token`). It NEVER carries the refresh token,
+ * the access token, the Google response body, or a raw email: `userHash` is
+ * the only attribution. A refresh token in a log line would be a credential
+ * leak into Cloud Logging's retention window, and lib/fault.ts's scrubber is
+ * a backstop, not the control — so the token is simply never passed.
+ *
+ * Context keys use lib/fault.ts's ALLOWLIST (scrubContext drops anything
+ * else silently): `tag` = the operation, `kind` = the OAuth error code,
+ * `status` = the HTTP status, `provider` = 'google'.
+ */
+function reportRefreshFault(
+  kind: 'fatal' | 'transient',
+  email: string,
+  detail: { status?: number; oauthError?: string },
+): void {
+  const oauthError = detail.oauthError ?? 'none'
+  const err = new Error(`token refresh ${kind}: ${oauthError}`)
+  const fault = toFault(err, {
+    layer: 'lib',
+    module: 'auth',
+    code: kind === 'fatal' ? 'auth_reauth_required' : 'upstream_unavailable',
+    ...(kind === 'transient' ? { severity: 'degraded' as const } : {}),
+    userHash: email ? hashEmail(email) : null,
+    context: {
+      provider: 'google',
+      tag: 'refreshAccessToken',
+      kind: oauthError,
+      ...(detail.status !== undefined ? { status: detail.status } : {}),
+    },
+  })
+  // A structured line beside the report so the refresh shows up in the
+  // module='auth' log stream too (the fault line is module-less JSON).
+  // Same fields, same PII contract: classification + code only.
+  const fields = { code: fault.code, faultId: fault.faultId, kind, status: detail.status ?? null, oauthError, userHash: fault.userHash }
+  if (kind === 'transient') log.warn(fields, 'token refresh transient (session preserved)')
+  else log.warn(fields, 'token refresh fatal (re-auth required)')
+  reportFault(fault, { rawStack: err.stack ?? null })
+}
+
+/**
  * Exchange the refresh token for a fresh access token.
  *
  * TRANSIENT FAILURES NO LONGER END THE SESSION. The previous version treated
@@ -225,7 +304,10 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
   const email = ((token.email as string) || '').toLowerCase()
 
   if (!refreshToken) {
-    // No credential to refresh with — genuinely needs a fresh grant.
+    // No credential to refresh with — genuinely needs a fresh grant. This is
+    // the same user-visible outcome as a dead grant (a forced re-login), so it
+    // is reported under the same code; `kind` tells the two apart.
+    reportRefreshFault('fatal', email, { oauthError: 'no_refresh_token' })
     return { ...token, accessToken: undefined, accessTokenExpires: 0, error: REFRESH_FATAL_ERROR }
   }
 
@@ -272,10 +354,10 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
   }
 
   const kind = classifyRefreshFailure(lastStatus, lastBody)
-  // Log the classification and the OAuth error CODE only — never the token.
-  console.error(
-    `[auth] token refresh ${kind} (status=${lastStatus ?? 'none'}, error=${String(lastBody?.error ?? 'none')})`,
-  )
+  reportRefreshFault(kind, email, {
+    status: lastStatus,
+    oauthError: typeof lastBody?.error === 'string' ? lastBody.error : undefined,
+  })
 
   if (kind === 'transient') {
     // Session preserved. Keep the refresh token, schedule a near-term retry,
@@ -349,14 +431,40 @@ async function resolveUserRole(
         assignedBy: 'system',
       })
     } catch (err) {
-      console.error('[auth] Failed to auto-create user row:', err)
+      // The user still signs in as onboarding; only the durable row is lost
+      // (it is re-attempted at the next hourly refresh), hence degraded.
+      reportRoleFault(err, normalized, 'autoCreateUserRow')
     }
 
     return { role: 'onboarding', assignedProjects: [] }
   } catch (err) {
-    console.error('[auth] role lookup failed — preserving the existing role:', err)
+    // Degraded, not error: the caller keeps the session's existing role, so
+    // the user sees nothing — but a DB outage at the hourly refresh cadence
+    // is exactly the kind of quiet failure that must still be counted.
+    reportRoleFault(err, normalized, 'roleLookup')
     return null
   }
+}
+
+/**
+ * Report a role-lookup failure as a degraded fault. Behavior is unchanged
+ * (the callers still return onboarding / null); this only replaces the
+ * console.error that nothing grouped. The code is NOT forced: toFault's
+ * recognize() reads the postgres.js SQLSTATE off `err.code`, so a connection
+ * failure lands as `db_error` and a missing table as `db_table_missing` —
+ * more useful than a blanket code chosen here. `tag` is the allowlisted
+ * context key for the operation name (see reportRefreshFault).
+ */
+function reportRoleFault(err: unknown, normalizedEmail: string, op: 'autoCreateUserRow' | 'roleLookup'): void {
+  const fault = toFault(err, {
+    layer: 'lib',
+    module: 'auth',
+    severity: 'degraded',
+    userHash: hashEmail(normalizedEmail),
+    context: { tag: op },
+  })
+  log.warn({ code: fault.code, faultId: fault.faultId, op, userHash: fault.userHash }, 'role lookup degraded')
+  reportFault(fault, { rawStack: err instanceof Error ? err.stack : null })
 }
 
 export const authOptions: NextAuthOptions = {
@@ -441,7 +549,18 @@ export const authOptions: NextAuthOptions = {
         // defensive — getUserRole is already catch-wrapped; fail closed.
       }
 
-      console.warn('[auth] sign-in denied for non-allowlisted account:', email)
+      // Expected behavior, NOT a fault: an unknown Google account being turned
+      // away is the allowlist doing its job, so it must not feed the fault
+      // pipeline (it would let any stranger inflate the error rate at will).
+      // It IS worth a warn line for the "I can't get in" support case — but
+      // the previous version wrote the RAW email here, a PII-contract
+      // violation (Cloud Logging retention is not a place for addresses).
+      // hashEmail is the only attribution; the domain is kept because "which
+      // domain keeps knocking" is the operator's actual question.
+      log.warn(
+        { userHash: hashEmail(email), domain: domain || null },
+        'sign-in denied: account not on any allowlist',
+      )
       return false
     },
 
@@ -531,6 +650,42 @@ export const authOptions: NextAuthOptions = {
         if (nameOverride) u.name = nameOverride
       }
       return session
+    },
+  },
+  // ── Auth lifecycle visibility (ERROR_REPORTING_2026-08-24.md Phase 2:
+  // "Instrument authOptions.callbacks / events in lib/auth.ts") ──
+  // The fault reports above only ever fire on FAILURE. Reading them without a
+  // denominator is misleading: five `auth_reauth_required` faults an hour is a
+  // crisis at 5 sign-ins and noise at 5,000. These two events are that
+  // denominator — one INFO line per successful sign-in and per sign-out, in
+  // the same module='auth' stream and with the same `userHash` join key, so
+  // the relogin rate can be read straight from Logs Explorer.
+  //
+  // next-auth 4.24.14 calls event handlers fire-and-forget and logs their
+  // throws itself, so they must be cheap and self-contained: no DB writes, no
+  // awaits on anything slow, and no raw email (hashEmail only).
+  events: {
+    async signIn({ user, account, isNewUser }) {
+      const email = (user?.email || '').toLowerCase().trim()
+      log.info(
+        {
+          userHash: email ? hashEmail(email) : null,
+          provider: account?.provider ?? null,
+          isNewUser: isNewUser ?? false,
+        },
+        'auth sign-in',
+      )
+    },
+    async signOut({ token }) {
+      // JWT strategy: `token` is the session JWT; `session` is undefined here.
+      const email = ((token?.email as string | undefined) || '').toLowerCase().trim()
+      log.info(
+        {
+          userHash: email ? hashEmail(email) : null,
+          provider: 'google',
+        },
+        'auth sign-out',
+      )
     },
   },
   pages: {

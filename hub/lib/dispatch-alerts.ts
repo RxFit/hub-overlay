@@ -9,6 +9,7 @@ import { normalizeReports } from './reports/config'
 import { sendChatMessage } from './google'
 import { tagHubChatPost } from './chat-post-tag'
 import { swallow } from '@/lib/swallow'
+import { runRetention } from '@/lib/retention'
 
 /**
  * Push alerting for the desktop-dispatch system (hardening move 1,
@@ -442,12 +443,31 @@ export interface AlertTickDeps {
 }
 
 export const defaultAlertTickDeps: AlertTickDeps = {
-  // Guaranteed hourly reap + sweep: the 5%-probabilistic sweep starves at low
-  // traffic (Soon-table item; the sweep itself is advisory-locked in
-  // dispatch-store). Failures here must not block alerting.
+  // This tick is the home ERROR_REPORTING_2026-08-24.md §3 Layer 7 (:293,
+  // "The same tick absorbs the housekeeping the app currently has nowhere to
+  // put") designates for the maintenance the app had no cron of its own for — the
+  // HARDENING_REVIEW_2026-08-20.md:119 open item ("guaranteed invocation from
+  // the existing hourly cron route; also decouple event_log pruning from
+  // kpis/sync"). Three things run here, in order:
+  //  1. reapExpired + sweepStale — the 5%-probabilistic sweep starves at low
+  //     traffic; the sweep itself is advisory-locked in dispatch-store. Their
+  //     failures are benign guards and swallow() to a debug line.
+  //  2. runRetention — event_log (30d, all tenants), the three AI ledgers
+  //     (90d) and expired agent memories. Its failures are NOT swallowed:
+  //     lib/retention.ts reports each as a degraded fault and resolves anyway,
+  //     because a prune that quietly fails every hour is the immortal-rows
+  //     problem the spec names.
+  // Nothing here may reject: alert evaluation runs after housekeeping and is
+  // the one path that must never be taken down by hygiene work. Not rejecting
+  // does not cover a timeout, though: three of the four deletes runRetention
+  // adds scan (only ai_runs has a created_at index — lib/retention.ts), so
+  // per spec :291-292 the tick's budget was raised BEFORE adding to it —
+  // maxDuration 300 in app/api/cron/dispatch-alert/route.ts and --max-time
+  // 300 in .github/workflows/dispatch-alert.yml, the platform ceiling.
   housekeep: async () => {
     await reapExpired().catch((err: unknown) => swallow(err, { module: 'dispatch-alerts', op: 'housekeepReapExpired' }))
     await sweepStale().catch((err: unknown) => swallow(err, { module: 'dispatch-alerts', op: 'housekeepSweepStale' }))
+    await runRetention()
   },
   loadSnapshot: loadAlertSnapshot,
   loadLastState: loadLastAlertState,

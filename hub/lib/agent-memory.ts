@@ -103,12 +103,42 @@ export async function pruneExpiredMemories(tenantId: string): Promise<void> {
 }
 
 /**
- * Prunes event logs older than 30 days to optimize DB size.
+ * Prunes `event_log` rows older than `days` (default 30) across ALL tenants
+ * and returns the deleted row count.
+ *
+ * ALL-TENANTS ON PURPOSE (ERROR_REPORTING_2026-08-24.md §8 "Volume control",
+ * Retention row :938): the previous version filtered on
+ * `tenant_id = getTenantId()`, so any row that
+ * landed under a different tenant_id — a fault written with an unexpected
+ * tenant, a row from a since-removed tenant — was immortal. Retention is a
+ * storage-hygiene concern for the table, not a per-tenant read, so the WHERE
+ * clause is `created_at < cutoff` and nothing else.
+ *
+ * CALLED FROM THE HOURLY TICK, NOT A BUTTON: this used to run only from
+ * POST /api/kpis/sync (spec §2.3) — a user clicking "sync KPIs" in settings
+ * silently ran a 30-day delete, and a deploy where nobody clicked ran none.
+ * lib/retention.ts's runRetention() now calls it from
+ * defaultAlertTickDeps.housekeep (lib/dispatch-alerts.ts), the cron-driven
+ * hourly tick the spec designates as the home for housekeeping.
+ *
+ * INDEX CAVEAT: `event_log_type_created_idx` is on (event_type, created_at)
+ * — it leads on event_type, so this delete's `created_at < cutoff` predicate
+ * cannot use it and the statement scans the table. That is tolerable hourly
+ * on a 30-day-bounded table; the spec (§8 "Indexes the reads actually need"
+ * row, :939) schedules `CREATE INDEX CONCURRENTLY IF NOT EXISTS … ON
+ * event_log (created_at)` for Phase 4, alongside the fingerprint expression
+ * index the fault aggregations need. The index is deliberately NOT added
+ * here only because the spec assigns it to Phase 4 with that DDL — there is
+ * no mechanical obstacle: drizzle/migrate.mjs runs every statement as a
+ * standalone autocommit `await sql` tagged-template call (no BEGIN or
+ * transaction anywhere in the file), so CONCURRENTLY will run there when
+ * Phase 4 lands.
  */
-export async function pruneOldEventLogs(tenantId: string): Promise<void> {
-  const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
-  log.info({ cutoff }, 'Pruning event logs older than 30 days')
-  await db
-    .delete(eventLog)
-    .where(and(eq(eventLog.tenantId, tenantId), lt(eventLog.createdAt, cutoff)))
+export async function pruneOldEventLogs(days = 30): Promise<number> {
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+  log.info({ cutoff, days }, 'Pruning event logs older than retention window (all tenants)')
+  const result = await db.delete(eventLog).where(lt(eventLog.createdAt, cutoff))
+  // postgres-js exposes the affected-row count as `count` (drizzle's
+  // postgres-js driver returns the RowList, not a pg `rowCount`).
+  return result.count
 }

@@ -189,10 +189,15 @@ export function flattenError(msg: string | null | undefined, max = 300): string 
 
 /** Allowlist-first is the only posture that survives a library adding a field
  *  nobody anticipated; a denylist fails open on `passwd2` or `X-Api-Secret`.
- *  Anything not listed is DROPPED, not redacted. */
+ *  Anything not listed is DROPPED, not redacted.
+ *
+ *  `op` is the operation name lib/retry.ts (and the swallow() convention)
+ *  attribute a record to — a code-chosen identifier like 'listLabels', never
+ *  user-supplied — added so the recovered-after-retry `degraded` fault says
+ *  WHICH call was retried instead of arriving with context null. */
 const ALLOWED_CONTEXT_KEYS: ReadonlySet<string> = new Set([
   'route', 'method', 'status', 'provider', 'model', 'jobId', 'runId', 'kind',
-  'attempt', 'bytesSent', 'finishReason', 'retryCount', 'key', 'tag',
+  'attempt', 'bytesSent', 'finishReason', 'retryCount', 'key', 'tag', 'op',
 ])
 
 const MAX_CONTEXT_KEYS = 10
@@ -345,6 +350,25 @@ function recognize(err: unknown): Recognized {
   return { code: 'internal' }
 }
 
+/**
+ * The retry count lib/retry.ts stamps onto an exhausted error as a
+ * NON-ENUMERABLE `retryCount` annotation (so the terminal record made here
+ * at the boundary carries the attempts — spec §3 Layer 4 :233 "attempts are counted onto
+ * the eventual record"). Only a non-negative integer counts; anything else
+ * (absent, a getter that throws, a float, a string from some foreign error
+ * shape) reads as 0 — this mapper never throws and never trusts a field it
+ * did not allowlist the shape of.
+ */
+function readRetryCount(err: unknown): number {
+  if (typeof err !== 'object' || err === null) return 0
+  try {
+    const v = (err as { retryCount?: unknown }).retryCount
+    return typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : 0
+  } catch {
+    return 0
+  }
+}
+
 /** Normalize ANY thrown value into a FaultDraft. Never throws. */
 export function toFault(err: unknown, ctx: FaultContext): FaultDraft {
   const recognized = recognize(err)
@@ -404,7 +428,8 @@ export function toFault(err: unknown, ctx: FaultContext): FaultDraft {
     blame: cancelled ? 'cancelled' : classification.blame,
     isExpected: cancelled ? true : classification.isExpected,
     isRetryable: recognized.retryableOverride ?? classification.isRetryable,
-    retryCount: ctx.retryCount ?? 0,
+    // The boundary's explicit count wins; else the lib/retry.ts annotation.
+    retryCount: ctx.retryCount ?? readRetryCount(err),
     partial: ctx.partial ?? false,
     httpStatus: ctx.httpStatus ?? (cancelled ? null : statusForCode(code)),
     userHash: ctx.userHash ?? null,

@@ -83,7 +83,13 @@ jobs:
           # (https://SERVICE-PROJECTNUMBER.REGION.run.app); if it ever changes,
           # `gcloud run services describe hub --region us-central1 --format='value(status.url)'`
           # is the source of truth.
-          CODE=$(curl -s -o /tmp/alert.json -w '%{http_code}' --max-time 90 \
+          # --max-time 300 matches the route's maxDuration and the Cloud Run
+          # platform ceiling (deploy.yml --timeout=300): the tick now runs
+          # retention (four bounded deletes, three of them table scans) before
+          # alert evaluation, and ERROR_REPORTING_2026-08-24.md :291-292 says
+          # raise the tick's budget BEFORE adding to it — a curl that gives up
+          # at 90s would report a healthy-but-slow tick as an outage.
+          CODE=$(curl -s -o /tmp/alert.json -w '%{http_code}' --max-time 300 \
             -X POST -H "x-cron-secret: $CRON_SECRET" \
             "https://hub-11747747730.us-central1.run.app/api/cron/dispatch-alert" || echo 000)
           echo "POST /api/cron/dispatch-alert -> HTTP $CODE"
