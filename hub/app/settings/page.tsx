@@ -11,6 +11,7 @@ import { ReportScheduleSettings } from '@/app/settings/components/ReportSchedule
 import { FocusPreferencesSettings } from '@/app/settings/components/FocusPreferencesSettings'
 import { useCompanies } from '@/app/hooks/useCompanies'
 import type { Company } from '@/types'
+import { swallow } from '@/lib/swallow'
 
 /* ── Types ── */
 
@@ -649,7 +650,10 @@ function KPIEditorCard({ isAdmin }: { isAdmin: boolean }) {
     setDeleting(id)
     try {
       const res = await fetch(`/api/settings/kpis?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
-      const d = await res.json().catch(() => ({}))
+      const d = await res.json().catch((err: unknown) => {
+        swallow(err, { module: 'settings/KPIEditorCard', op: 'parseDeleteResponseBody' })
+        return ({})
+      })
       if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`)
       await load()
     } catch (e) {
@@ -987,7 +991,10 @@ function ConnectedServicesCard() {
     setDeleting(secretId)
     try {
       const res = await fetch(`/api/settings/keys?id=${encodeURIComponent(secretId)}&companyId=${encodeURIComponent(selectedCompanyId)}`, { method: 'DELETE' })
-      const data = await res.json().catch(() => ({}))
+      const data = await res.json().catch((err: unknown) => {
+        swallow(err, { module: 'settings/ConnectedServicesCard', op: 'parseDeleteResponseBody' })
+        return ({})
+      })
       if (!res.ok) throw new Error(data.error || 'Delete failed')
       await loadSecrets()
     } catch (e) {

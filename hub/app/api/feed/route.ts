@@ -6,6 +6,7 @@ import { listAiActions } from '@/lib/ai-audit'
 import { aiActionToFeedItem } from '@/lib/ai-action-feed'
 import type { FeedItem } from '@/types'
 import { withFault } from '@/lib/route-fault'
+import { emptyOn } from '@/lib/swallow'
 
 export const runtime = 'nodejs'
 
@@ -32,7 +33,7 @@ export const GET = withFault('feed', async () => {
   // (listAiActions normalizes the email's case itself.)
   const email = typeof user.email === 'string' ? user.email : null
   const aiActionsPromise = email
-    ? listAiActions({ userEmail: email, limit: 15 }).catch(() => [])
+    ? listAiActions({ userEmail: email, limit: 15 }).catch((err: unknown) => emptyOn(err, { module: 'feed', op: 'listAiActions' }, []))
     : Promise.resolve([])
 
   try {
@@ -49,12 +50,12 @@ export const GET = withFault('feed', async () => {
     const [issueResults, agentResults] = await Promise.all([
       Promise.all(
         companySlice.map((c) =>
-          getIssues(c.id, { limit: 10 }).catch(() => [])
+          getIssues(c.id, { limit: 10 }).catch((err: unknown) => emptyOn(err, { module: 'feed', op: 'getIssues' }, []))
         )
       ),
       Promise.all(
         companySlice.map((c) =>
-          getAgents(c.id).catch(() => [])
+          getAgents(c.id).catch((err: unknown) => emptyOn(err, { module: 'feed', op: 'getAgents' }, []))
         )
       ),
     ])

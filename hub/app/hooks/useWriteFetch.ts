@@ -1,5 +1,6 @@
 'use client'
 import { signIn } from 'next-auth/react'
+import { swallow } from '@/lib/swallow'
 
 /**
  * Fetch wrapper for write mutations (POST/DELETE/PUT).
@@ -12,7 +13,8 @@ import { signIn } from 'next-auth/react'
 export async function writeFetch<T = any>(input: RequestInfo, init?: RequestInit): Promise<T> {
   const res = await fetch(input, init)
   if (res.status === 401) {
-    const body = await res.json().catch(() => ({}))
+    // Non-JSON or empty 401 body: fall through to the default reauth message.
+    const body = await res.json().catch((err: unknown) => { swallow(err, { module: 'useWriteFetch', op: 'parse401Body' }); return ({}) })
     // Honor the explicit reauth contract; default to reauth on any 401.
     if (body?.reauth !== false) signIn('google')
     const err = new Error(body?.error || 'Session expired — please sign in again')
@@ -20,10 +22,12 @@ export async function writeFetch<T = any>(input: RequestInfo, init?: RequestInit
     throw err
   }
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}))
+    // Non-JSON or empty error body: fall through to the generic status message.
+    const body = await res.json().catch((err: unknown) => { swallow(err, { module: 'useWriteFetch', op: 'parseErrorBody' }); return ({}) })
     const err = new Error(body?.error || `Request failed (${res.status})`)
     ;(err as any).status = res.status
     throw err
   }
-  return res.json().catch(() => ({} as T))
+  // Empty/non-JSON success body (e.g. 204): resolve to an empty object per the contract above.
+  return res.json().catch((err: unknown) => { swallow(err, { module: 'useWriteFetch', op: 'parseSuccessBody' }); return ({} as T) })
 }

@@ -1,4 +1,5 @@
 import { semanticChunk } from './chunker'
+import { swallow } from '@/lib/swallow'
 
 export interface IngestionResult {
   success: boolean
@@ -48,7 +49,9 @@ export async function ingestDocument(
     })
 
     if (!clearRes.ok) {
-      const errBody = await clearRes.text().catch(() => 'Unknown error')
+      // Body read failure is benign here: the clear step is already non-fatal and
+      // we only wanted the text for the warning line.
+      const errBody = await clearRes.text().catch((err: unknown) => { swallow(err, { module: 'ingest-client', op: 'readClearErrorBody' }); return 'Unknown error' })
       console.warn(`[Ingest Client] Warning: Failed to clear old chunks: ${clearRes.status} - ${errBody}`)
     } else {
       console.log(`[Ingest Client] Old chunks cleared successfully.`)
@@ -78,7 +81,9 @@ export async function ingestDocument(
       })
 
       if (!res.ok) {
-        const errBody = await res.text().catch(() => 'Unknown error')
+        // The upsert already failed (non-ok status); losing the body text only
+        // degrades the thrown message, so the read failure is swallowed.
+        const errBody = await res.text().catch((err: unknown) => { swallow(err, { module: 'ingest-client', op: 'readUpsertErrorBody' }); return 'Unknown error' })
         throw new Error(`Failed to upsert chunk ${i + 1}: HTTP ${res.status} - ${errBody}`)
       }
 

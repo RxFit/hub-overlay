@@ -33,6 +33,7 @@ import { stripDegradedBanner, stripSuggestedTools } from '@/lib/model-output'
 import { CLIENT_ABORT_MS } from '@/lib/timeout-config'
 import { getAdminContactEmail } from '@/lib/access-request'
 import { executeAction, MISSING_SCOPE_MARKER } from '@/lib/actions/executeAction'
+import { swallow } from '@/lib/swallow'
 import type { InterviewState, ActionSpec, ChatAttachment, ActiveSkill, Company } from '@/types'
 
 /**
@@ -610,7 +611,8 @@ export function useChatEngine(options: UseChatEngineOptions) {
             // No intent detected, just send to normal chat API
             sendToApi(fullMessage, committed, 'deep_dive', msgAttachments)
           }
-        }).catch(() => {
+        }).catch((err: unknown) => {
+          swallow(err, { module: 'useChatEngine', op: 'detectIntent' })
           sendToApi(fullMessage, committed, 'deep_dive', msgAttachments)
         })
       }
@@ -644,7 +646,7 @@ export function useChatEngine(options: UseChatEngineOptions) {
               setContextWeakDim(result.weakDimension ?? null)
             }
           })
-          .catch(() => { /* fail silently — score stays at previous value */ })
+          .catch((err: unknown) => swallow(err, { module: 'useChatEngine', op: 'scoreContext' })) /* fail silently — score stays at previous value */
           .finally(() => setIsScoring(false))
       }
 
@@ -844,8 +846,9 @@ Respond with EXACTLY one of:
                   // unavailable (empty verdict) — fail open.
                   proceedFallback()
                 }
-              }).catch(() => {
+              }).catch((err: unknown) => {
                 // Abort/timeout or network error — fail open.
+                swallow(err, { module: 'useChatEngine', op: 'ceoQualityGate' })
                 proceedFallback()
               }).finally(() => clearTimeout(evalTimeoutId))
               return

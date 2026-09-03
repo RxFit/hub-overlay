@@ -1,6 +1,7 @@
 'use client'
 
 import { useQuery } from '@tanstack/react-query'
+import { swallow } from '@/lib/swallow'
 import type { CEOPulseRecord } from '@/types'
 
 /* ══════════════════════════════════════════════════════════════════════════════
@@ -12,7 +13,7 @@ import type { CEOPulseRecord } from '@/types'
 async function fetcher<T>(url: string): Promise<T> {
   const res = await fetch(url)
   if (!res.ok) {
-    const body = await res.text().catch(() => 'Unknown error')
+    const body = await res.text().catch((err: unknown) => { swallow(err, { module: 'useBusinessManager', op: 'readErrorBody' }); return 'Unknown error' })
     const err = new Error(`API error ${res.status}: ${body}`)
     ;(err as any).status = res.status
     throw err

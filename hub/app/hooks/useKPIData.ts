@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { signIn } from 'next-auth/react'
 import type { LiveKPI, ProjectKPI } from '@/types'
+import { swallow } from '@/lib/swallow'
 
 /**
  * KPI read fetcher (NS-6). Migrated off SWR onto TanStack Query while
@@ -15,7 +16,7 @@ import type { LiveKPI, ProjectKPI } from '@/types'
 export async function fetcher(url: string) {
   const res = await fetch(url)
   if (res.status === 401) {
-    const body = await res.json().catch(() => ({}))
+    const body = await res.json().catch((err: unknown) => { swallow(err, { module: 'useKPIData', op: 'parse401Body' }); return ({}) })
     // Honor the explicit reauth contract; default to reauth on any 401.
     if (body?.reauth !== false) signIn('google')
     const err = new Error(body?.error || 'Session expired — please sign in again')
@@ -23,7 +24,7 @@ export async function fetcher(url: string) {
     throw err
   }
   if (!res.ok) {
-    const errorData = await res.json().catch(() => ({}))
+    const errorData = await res.json().catch((err: unknown) => { swallow(err, { module: 'useKPIData', op: 'parseErrorBody' }); return ({}) })
     const err = new Error(errorData.error || `API error ${res.status}`)
     ;(err as any).status = res.status
     throw err

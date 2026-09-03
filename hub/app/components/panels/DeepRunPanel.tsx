@@ -5,6 +5,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import type { ToolPanelContentProps } from '@/types'
 import { MessageContent } from '@/app/components/MessageContent'
 import { parseDeepReport, type DeepReport } from '@/lib/deep-report'
+import { swallow } from '@/lib/swallow'
 
 /* ══════════════════════════════════════════════════════════════════════════════
    DEEP RUN PANEL — shared workspace for Deep Research / Deep Think
@@ -139,7 +140,7 @@ export default function DeepRunPanel({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'save_artifact' }),
       })
-      const body = (await res.json().catch(() => ({}))) as { artifact?: { id: string; title: string } }
+      const body = (await res.json().catch((err: unknown) => { swallow(err, { module: 'DeepRunPanel', op: 'parseSaveArtifactBody' }); return {} })) as { artifact?: { id: string; title: string } }
       if (!aliveRef.current) return
       if (!res.ok || !body.artifact) {
         setSave({ status: 'failed' })
@@ -191,7 +192,7 @@ export default function DeepRunPanel({
         if (latest && latest.status === 'queued') {
           setRun(latest)
           setPhase('watching')
-          void pollOnce(latest.id).catch(() => {})
+          void pollOnce(latest.id).catch((err: unknown) => swallow(err, { module: 'DeepRunPanel', op: 'reattachPoll' }))
         } else if (latest && latest.status === 'succeeded' && latest.resultMd) {
           adoptTerminal({ ...latest, liveStatus: 'succeeded' })
         } else {
@@ -209,8 +210,9 @@ export default function DeepRunPanel({
   useEffect(() => {
     if (phase !== 'watching' || !run) return
     const t = setInterval(() => {
-      void pollOnce(run.id).catch(() => {
+      void pollOnce(run.id).catch((err: unknown) => {
         /* transient poll failure — keep the last known state, try again */
+        swallow(err, { module: 'DeepRunPanel', op: 'pollRun' })
       })
     }, POLL_MS)
     return () => clearInterval(t)

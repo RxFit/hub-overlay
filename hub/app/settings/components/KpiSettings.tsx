@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { swallow } from '@/lib/swallow'
 
 /* ── Types ── */
 
@@ -165,7 +166,7 @@ export function KpiSettings({ isAdmin }: { isAdmin: boolean }) {
     setDeleting(id)
     try {
       const res = await fetch(`/api/settings/kpis?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
-      const d = await res.json().catch(() => ({}))
+      const d = await res.json().catch((err: unknown) => { swallow(err, { module: 'KpiSettings', op: 'parseDeleteResponseBody' }); return ({}) })
       if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`)
       await load()
     } catch (e) {

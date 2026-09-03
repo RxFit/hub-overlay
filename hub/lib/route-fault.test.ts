@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { NextRequest, NextResponse } from 'next/server'
 import { withFault, isFaultWrapped, safeRequestId, isNextControlFlow, detectErrorIn2xx } from './route-fault'
 import { AppError } from './errors'
+import { emptyOn, swallow } from './swallow'
 
 // The reporter is mocked file-wide so every test can assert on (and sabotage)
 // it. toFault is wrapped so ONE test can make the normalizer itself explode.
@@ -223,6 +224,82 @@ describe('THE test: the reporter can never break a request', () => {
     const res = await handler(req())
     expect(res.status).toBe(500)
     expect(res.headers.get('x-hub-fault-id')).toBeTruthy()
+  })
+})
+
+describe('x-hub-partial — a degraded read is told to the client (Layer 9 #2)', () => {
+  // emptyOn's debug line is noise here; the header is the assertion.
+  let debugSpy: ReturnType<typeof vi.spyOn>
+  beforeEach(() => {
+    debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    debugSpy.mockRestore()
+  })
+
+  /** A library function several frames below the handler — the realistic
+   *  shape of the 26 sites: nobody threads a "partial" bag through here. */
+  async function loadLabelsBestEffort(): Promise<string[]> {
+    await Promise.resolve()
+    return Promise.reject(new Error('gmail 503')).catch((err) => emptyOn(err, { module: 'gmail', op: 'labels' }, []))
+  }
+
+  it('a handler whose subtree calls emptyOn yields x-hub-partial: 1 on its 2xx', async () => {
+    const handler = withFault('probe', async () => {
+      const labels = await loadLabelsBestEffort()
+      return NextResponse.json({ labels })
+    })
+    const res = await handler(req())
+    expect(res.status).toBe(200)
+    expect(res.headers.get('x-hub-partial')).toBe('1')
+    expect(await res.json()).toEqual({ labels: [] })
+    expect(reportMock).not.toHaveBeenCalled() // partial is not a fault
+  })
+
+  it('a handler that does not call emptyOn carries no such header — swallow() alone does not count', async () => {
+    const handler = withFault('probe', async () => {
+      swallow(new Error('localStorage is not defined'), { module: 'prefs', op: 'read' })
+      return NextResponse.json({ ok: true })
+    })
+    const res = await handler(req())
+    expect(res.status).toBe(200)
+    expect(res.headers.has('x-hub-partial')).toBe(false)
+  })
+
+  it('a 500 never carries it, even when emptyOn ran before the throw', async () => {
+    const handler = withFault('probe', async () => {
+      await loadLabelsBestEffort()
+      throw new AppError('db down', { code: 'db_error' })
+    })
+    const res = await handler(req())
+    expect(res.status).toBe(500)
+    expect(res.headers.has('x-hub-partial')).toBe(false)
+  })
+
+  it('a handler-returned non-2xx never carries it either', async () => {
+    const handler = withFault('probe', async () => {
+      await loadLabelsBestEffort()
+      return NextResponse.json({ error: 'nope' }, { status: 404 })
+    })
+    const res = await handler(req())
+    expect(res.status).toBe(404)
+    expect(res.headers.has('x-hub-partial')).toBe(false)
+  })
+
+  it('two concurrent requests do not share the flag', async () => {
+    const partialHandler = withFault('probe', async () => {
+      await new Promise((r) => setTimeout(r, 0))
+      await loadLabelsBestEffort()
+      return NextResponse.json({ labels: [] })
+    })
+    const cleanHandler = withFault('probe', async () => {
+      await new Promise((r) => setTimeout(r, 0))
+      await new Promise((r) => setTimeout(r, 0))
+      return NextResponse.json({ ok: true })
+    })
+    const [a, b] = await Promise.all([partialHandler(req()), cleanHandler(req())])
+    expect(a.headers.get('x-hub-partial')).toBe('1')
+    expect(b.headers.has('x-hub-partial')).toBe(false)
   })
 })
 

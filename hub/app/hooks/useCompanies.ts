@@ -1,10 +1,16 @@
 import { useQuery } from '@tanstack/react-query'
 import type { Company } from '@/types'
+import { swallow } from '@/lib/swallow'
 
 async function fetcher(url: string): Promise<{ companies: Company[] }> {
   const res = await fetch(url)
   if (!res.ok) {
-    const data = await res.json().catch(() => ({}))
+    // A non-JSON error body is expected from proxies/edge 5xx pages; fall back
+    // to an empty object so the status-based message below still fires.
+    const data = await res.json().catch((err: unknown) => {
+      swallow(err, { module: 'useCompanies', op: 'parseErrorBody' })
+      return {}
+    })
     throw new Error(data.error || `API error ${res.status}`)
   }
   return res.json()

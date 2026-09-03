@@ -13,6 +13,7 @@ import {
   type WorkspaceInfo,
   type WorkspaceRuntimeAction,
 } from '@/lib/execution-panel'
+import { swallow } from '@/lib/swallow'
 
 /* ══════════════════════════════════════════════════════════════════════════
    EXECUTION PANEL HOOKS — Issues & Agents tabs (Phase 2)
@@ -27,7 +28,10 @@ import {
 async function fetcher<T>(url: string): Promise<T> {
   const res = await fetch(url)
   if (!res.ok) {
-    const body = await res.text().catch(() => 'Unknown error')
+    const body = await res.text().catch((err: unknown) => {
+      swallow(err, { module: 'useExecutionPanel', op: 'readErrorBody' })
+      return 'Unknown error'
+    })
     const err = new Error(`API error ${res.status}: ${body}`)
     ;(err as any).status = res.status
     throw err
@@ -42,7 +46,10 @@ async function writeJson<T>(url: string, method: string, body?: unknown): Promis
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   if (!res.ok) {
-    const text = await res.text().catch(() => 'Unknown error')
+    const text = await res.text().catch((err: unknown) => {
+      swallow(err, { module: 'useExecutionPanel', op: 'readWriteErrorBody' })
+      return 'Unknown error'
+    })
     // Surface the proxy's error message (role gate, loop detector) verbatim —
     // it is written for humans.
     let message = `Request failed (${res.status})`
@@ -56,7 +63,10 @@ async function writeJson<T>(url: string, method: string, body?: unknown): Promis
     ;(err as any).status = res.status
     throw err
   }
-  return res.json().catch(() => ({}) as T)
+  return res.json().catch((err: unknown) => {
+    swallow(err, { module: 'useExecutionPanel', op: 'parseWriteResponse' })
+    return ({}) as T
+  })
 }
 
 /* ── Issues tab ── */

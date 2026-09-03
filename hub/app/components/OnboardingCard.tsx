@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useSession } from 'next-auth/react'
 import { useTenant } from '@/app/components/TenantProvider'
+import { swallow } from '@/lib/swallow'
 
 const ONBOARDED_KEY = 'hub-onboarded'
 
@@ -48,8 +49,9 @@ export function OnboardingCard({ onDismiss }: OnboardingCardProps) {
   // Self-register as onboarding so admin can see this user in /settings
   useEffect(() => {
     if (!session?.user?.email) return
-    fetch('/api/auth/register', { method: 'POST' }).catch(() => {
+    fetch('/api/auth/register', { method: 'POST' }).catch((err: unknown) => {
       // Non-fatal — user still has onboarding role
+      swallow(err, { module: 'OnboardingCard', op: 'selfRegister' })
     })
   }, [session?.user?.email])
 

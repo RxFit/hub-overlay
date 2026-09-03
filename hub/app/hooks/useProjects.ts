@@ -1,10 +1,15 @@
 import { useQuery } from '@tanstack/react-query'
 import type { Project } from '@/types'
+import { swallow } from '@/lib/swallow'
 
 async function fetcher(url: string): Promise<{ projects: Project[] }> {
   const res = await fetch(url)
   if (!res.ok) {
-    const data = await res.json().catch(() => ({}))
+    // Non-JSON error bodies fall back to {} so the status-code message wins.
+    const data = await res.json().catch((err: unknown) => {
+      swallow(err, { module: 'useProjects', op: 'parseErrorBody' })
+      return {}
+    })
     throw new Error(data.error || `API error ${res.status}`)
   }
   return res.json()

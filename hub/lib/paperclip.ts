@@ -5,6 +5,7 @@ import { createLogger } from '@/lib/logger'
 import { breaker } from '@/lib/circuit-breaker'
 import { withRetry } from '@/lib/retry'
 import { loopDetector } from '@/lib/loop-detector'
+import { swallow, emptyOn } from '@/lib/swallow'
 import { getTenantId } from './tenant-context'
 import { isProtectedCompany } from '@/lib/protected-workspaces'
 import crypto from 'crypto'
@@ -267,7 +268,10 @@ export async function paperclipFetch<T>(
     }
 
     if (!res.ok) {
-      const bodyText = await res.text().catch(() => 'Unknown error')
+      const bodyText = await res.text().catch((err: unknown) => {
+        swallow(err, { module: 'paperclip', op: 'readErrorBody' })
+        return 'Unknown error'
+      })
       throw new Error(`Paperclip API error ${res.status}: ${bodyText}`)
     }
 
@@ -458,7 +462,7 @@ export async function getRuns(
   // sorted updated-desc, so their first 8 issues are identical → same runs.
   const [issues, agents] = await Promise.all([
     opts?.issues ?? getIssues(companyId, { limit: 10 }),
-    opts?.agents ?? getAgents(companyId).catch(() => [] as Agent[]),
+    opts?.agents ?? getAgents(companyId).catch((err: unknown) => emptyOn(err, { module: 'paperclip', op: 'getAgentsForRuns' }, [] as Agent[])),
   ])
   if (issues.length === 0) return []
 

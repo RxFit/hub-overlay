@@ -28,6 +28,7 @@ import { emit, newRequestId } from '@/lib/observability'
 import type { ChatMessage, ChatAttachment } from '@/types'
 import '@/lib/validate-keys'  // Side-effect import: validates API keys on cold start
 import { withFault } from '@/lib/route-fault'
+import { emptyOn } from '@/lib/swallow'
 
 const log = createLogger('chat')
 
@@ -684,7 +685,7 @@ async function handleChat(req: NextRequest): Promise<Response> {
 
           // Get recent issues across scoped companies (first 3 for context)
           const issuePromises = companies.slice(0, 3).map(c =>
-            getIssues(c.id, { limit: 5 }).catch(() => [])
+            getIssues(c.id, { limit: 5 }).catch((err: unknown) => emptyOn(err, { module: 'chat/route', op: 'getIssues' }, []))
           )
           const issueResults = await Promise.all(issuePromises)
           const allIssues = issueResults.flat()
@@ -696,7 +697,7 @@ async function handleChat(req: NextRequest): Promise<Response> {
           // Also get agent status for system prompt context — INDIVIDUAL details, not just counts
           try {
             const agentPromises = companies.slice(0, 3).map(c =>
-              getAgents(c.id).catch(() => [])
+              getAgents(c.id).catch((err: unknown) => emptyOn(err, { module: 'chat/route', op: 'getAgents' }, []))
             )
             const agentResults = await Promise.all(agentPromises)
             const allAgents = agentResults.flat()
@@ -731,7 +732,7 @@ async function handleChat(req: NextRequest): Promise<Response> {
           // Fetch recent runs to provide actual execution history for audit queries
           try {
             const runPromises = companies.slice(0, 3).map(c =>
-              getRuns(c.id, { limit: 5 }).catch(() => [])
+              getRuns(c.id, { limit: 5 }).catch((err: unknown) => emptyOn(err, { module: 'chat/route', op: 'getRuns' }, []))
             )
             const runResults = await Promise.all(runPromises)
             const allRuns = runResults.flat()

@@ -8,6 +8,7 @@ import { aiActionToFeedItem } from '@/lib/ai-action-feed'
 import { runToFeedItem } from '@/lib/run-feed'
 import type { FeedItem } from '@/types'
 import { withFault } from '@/lib/route-fault'
+import { emptyOn } from '@/lib/swallow'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -56,7 +57,9 @@ export const GET = withFault('runs', async (req: NextRequest) => {
   // hiccup there cannot blank the runs feed (mirrors /api/feed's posture).
   const [runs, actions] = await Promise.all([
     listAiRuns({ limit }),
-    listAiActions({ userEmail: user.email, limit: 15 }).catch(() => []),
+    listAiActions({ userEmail: user.email, limit: 15 }).catch((err: unknown) =>
+      emptyOn(err, { module: 'api/runs', op: 'listAiActions' }, []),
+    ),
   ])
 
   const feed: FeedItem[] = [

@@ -7,6 +7,7 @@
 
 import { Agent } from 'undici'
 import type { LookupAddress } from 'node:dns'
+import { swallow } from '@/lib/swallow'
 
 const MAX_TEXT_LENGTH = 16_000  // ~4K tokens
 
@@ -214,7 +215,7 @@ export async function fetchUrlContent(url: string): Promise<string> {
     return `[Failed to fetch URL: ${msg}]`
   } finally {
     // Release the pinned-dispatcher's sockets.
-    if (dispatcher) await dispatcher.close().catch(() => {})
+    if (dispatcher) await dispatcher.close().catch((err: unknown) => swallow(err, { module: 'content-fetch', op: 'closePinnedDispatcher' }))
   }
 }
 
@@ -252,7 +253,7 @@ export async function fetchDriveDocContent(
         }
       )
       if (!res.ok) {
-        const body = await res.text().catch(() => '')
+        const body = await res.text().catch((err: unknown) => { swallow(err, { module: 'content-fetch', op: 'readDriveExportErrorBody' }); return '' })
         return `[Failed to export Google Doc: HTTP ${res.status} ${body}]`
       }
       text = await res.text()

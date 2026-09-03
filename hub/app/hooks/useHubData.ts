@@ -4,6 +4,8 @@ import { useQuery } from '@tanstack/react-query'
 import { getSession, signIn } from 'next-auth/react'
 import { useEffect, useRef } from 'react'
 
+import { swallow } from '@/lib/swallow'
+
 /* ── Auth error recovery ── */
 
 /**
@@ -100,7 +102,10 @@ async function fetcher<T>(url: string): Promise<T> {
   if (res.status === 401) {
     // Read the route's reauth signal so `{ reauth: false }` can suppress the
     // automatic sign-in redirect (see shouldTriggerReauth).
-    const body = await res.json().catch(() => ({} as Record<string, unknown>))
+    const body = await res.json().catch((err: unknown) => {
+      swallow(err, { module: 'useHubData', op: 'parse401Body' })
+      return ({} as Record<string, unknown>)
+    })
     // `refresh: true` means the cookie's access token is merely stale, not
     // dead. Rotate it first (see refreshSessionCookie) so the retry TanStack
     // Query is about to make lands on a live token — instead of the old
@@ -115,7 +120,10 @@ async function fetcher<T>(url: string): Promise<T> {
   }
 
   if (!res.ok) {
-    const body = await res.text().catch(() => 'Unknown error')
+    const body = await res.text().catch((err: unknown) => {
+      swallow(err, { module: 'useHubData', op: 'readErrorBody' })
+      return 'Unknown error'
+    })
     const err = new Error(`API error ${res.status}: ${body}`)
     ;(err as any).status = res.status
     throw err

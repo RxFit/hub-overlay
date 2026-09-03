@@ -33,6 +33,7 @@ import { emit } from '@/lib/observability'
 import { withFault } from '@/lib/route-fault'
 import { getTenantId } from '@/lib/tenant-context'
 import { normalizeArtifactOwner } from '@/lib/tool-artifacts'
+import { swallow, emptyOn } from '@/lib/swallow'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -213,11 +214,11 @@ export const POST = withFault('deep-runs', async (req: NextRequest) => {
       })
     } catch (err) {
       // No job ⇒ the row must not sit 'queued' (it would hold the cap).
-      await finishToolRun(db, runId, { status: 'failed', errorClass: 'no_worker', error: 'enqueue failed' }).catch(() => null)
+      await finishToolRun(db, runId, { status: 'failed', errorClass: 'no_worker', error: 'enqueue failed' }).catch((err: unknown) => emptyOn(err, { module: 'api/deep-runs', op: 'finishToolRunAfterEnqueueFailure' }, null))
       throw err
     }
     if ('refused' in outcome) {
-      await finishToolRun(db, runId, { status: 'failed', errorClass: 'queue_full', error: 'dispatch queue at work capacity' }).catch(() => null)
+      await finishToolRun(db, runId, { status: 'failed', errorClass: 'queue_full', error: 'dispatch queue at work capacity' }).catch((err: unknown) => emptyOn(err, { module: 'api/deep-runs', op: 'finishToolRunAfterQueueRefusal' }, null))
       return NextResponse.json(
         { error: 'The deep engine is at capacity — try again shortly', reason: 'queue_full' },
         { status: 503 },
@@ -226,7 +227,7 @@ export const POST = withFault('deep-runs', async (req: NextRequest) => {
     emit({ type: 'dispatch_enqueued', jobId: outcome.id, kind: 'work_item' })
     // Best-effort: landing keys on toolRunId, not job_id; a lost attach only
     // costs the live-state derivation, which then reports by age.
-    await attachToolRunJob(runId, outcome.id).catch(() => {})
+    await attachToolRunJob(runId, outcome.id).catch((err: unknown) => swallow(err, { module: 'api/deep-runs', op: 'attachToolRunJob' }))
 
     return NextResponse.json({
       run: {

@@ -15,6 +15,7 @@
 import { createLogger } from '@/lib/logger'
 import { breaker } from '@/lib/circuit-breaker'
 import { withRetry } from '@/lib/retry'
+import { swallow } from '@/lib/swallow'
 import { getTenantId } from './tenant-context'
 
 const log = createLogger('paperclipSession')
@@ -87,7 +88,10 @@ async function doSignIn(): Promise<string> {
   })
 
   if (!res.ok) {
-    const body = await res.text().catch(() => '')
+    const body = await res.text().catch((err: unknown) => {
+      swallow(err, { module: 'paperclipSession', op: 'readSignInErrorBody' })
+      return ''
+    })
     throw new Error(`Paperclip sign-in failed (${res.status}): ${body}`)
   }
 

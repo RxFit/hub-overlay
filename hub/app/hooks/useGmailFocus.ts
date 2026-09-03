@@ -2,6 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query'
 import type { FocusItem } from '@/lib/gmail-focus'
+import { emptyOn } from '@/lib/swallow'
 
 /**
  * useGmailFocus — client read of the AI-ranked Focus queue
@@ -29,7 +30,7 @@ export function useGmailFocus(enabled: boolean = true, opts: { background?: bool
     queryFn: async (): Promise<{ items: FocusDisplayItem[]; degraded: boolean }> => {
       const r = await fetch('/api/google/gmail/focus')
       if (!r.ok) return { items: [], degraded: true }
-      const d = await r.json().catch(() => null)
+      const d = await r.json().catch((err: unknown) => emptyOn(err, { module: 'useGmailFocus', op: 'parseFocusBody' }, null))
       return {
         items: Array.isArray(d?.items) ? (d.items as FocusDisplayItem[]) : [],
         // The server sets this when the AI ranking stage failed and the items

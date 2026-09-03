@@ -10,6 +10,7 @@ import { recordAiAction } from '@/lib/ai-audit'
 import { checkActionLimit } from '@/lib/rate-limit'
 import { newRequestId } from '@/lib/observability'
 import { withFault } from '@/lib/route-fault'
+import { swallow } from '@/lib/swallow'
 
 export const runtime = 'nodejs'
 
@@ -101,7 +102,10 @@ export const POST = withFault('google/gmail/actions', async (req: NextRequest) =
         signal: AbortSignal.timeout(10_000),
       })
       if (!res.ok) {
-        const text = await res.text().catch(() => 'unknown')
+        const text = await res.text().catch((err: unknown) => {
+          swallow(err, { module: 'google/gmail/actions', op: 'readTrashErrorBody' })
+          return 'unknown'
+        })
         throw new Error(`Gmail API ${res.status}: ${text}`)
       }
       if (isAiAction) await recordAiAction({ ...auditBase, status: 'success' })
@@ -118,7 +122,10 @@ export const POST = withFault('google/gmail/actions', async (req: NextRequest) =
       { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(10_000) }
     )
     if (!metaRes.ok) {
-      const text = await metaRes.text().catch(() => 'unknown')
+      const text = await metaRes.text().catch((err: unknown) => {
+        swallow(err, { module: 'google/gmail/actions', op: 'readThreadMetaErrorBody' })
+        return 'unknown'
+      })
       throw new Error(`Gmail API ${metaRes.status}: ${text}`)
     }
     const meta = parseGmailThreadMeta((await metaRes.json()) as GmailThread)
