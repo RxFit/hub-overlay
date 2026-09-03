@@ -161,6 +161,7 @@ describe('ensureDeepRunArtifact — embedding is bounded and best-effort', () =>
     runsMock.getToolRunOwned.mockResolvedValue(landed)
     const ensured = await ensureDeepRunArtifactForRun(RUN.id, 'me@rxfitatx.com', 'rxfit', { embedTimeoutMs: 50 })
     expect(ensured?.created).toBe(true)
+    expect(runsMock.getToolRunOwned).toHaveBeenLastCalledWith(RUN.id, 'rxfit', 'me@rxfitatx.com')
     expect(dbMock.withTransaction).toHaveBeenCalledTimes(1)
   })
 })

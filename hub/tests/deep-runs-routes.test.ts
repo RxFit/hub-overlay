@@ -147,16 +147,17 @@ describe('POST /api/deep-runs', () => {
     expect(toolRunsMock.createToolRun.mock.invocationCallOrder[0])
       .toBeLessThan(storeMock.enqueueJob.mock.invocationCallOrder[0])
     expect(toolRunsMock.createToolRun).toHaveBeenCalledWith(
-      expect.objectContaining({ id: run.id, tool: 'deep-think', chatId: 'chat-1' }),
+      expect.objectContaining({ id: run.id, tool: 'deep-think', tenantId: 'rxfit', chatId: 'chat-1' }),
     )
 
     const enq = storeMock.enqueueJob.mock.calls[0][0]
     expect(enq.kind).toBe('work_item')
-    expect(enq.meta).toMatchObject({ toolRunId: run.id, tool: 'deep-think', userEmail: 'staff@rxfitatx.com', effort: 'high' })
+    expect(enq.meta).toMatchObject({ toolRunId: run.id, tool: 'deep-think', tenantId: 'rxfit', userEmail: 'staff@rxfitatx.com', effort: 'high' })
     expect(enq.prompt).toContain('should we expand')
 
     expect(toolRunsMock.attachToolRunJob).toHaveBeenCalledWith(run.id, 'j1')
-    expect(toolRunsMock.expireStaleToolRuns).toHaveBeenCalledWith('staff@rxfitatx.com')
+    expect(toolRunsMock.expireStaleToolRuns).toHaveBeenCalledWith('rxfit', 'staff@rxfitatx.com')
+    expect(toolRunsMock.countActiveToolRuns).toHaveBeenCalledWith('rxfit', 'staff@rxfitatx.com')
   })
 
   it('transports only selected owned artifact metadata and content into the durable run and prompt', async () => {
@@ -241,12 +242,12 @@ describe('POST /api/deep-runs', () => {
 describe('GET /api/deep-runs', () => {
   it('defaults to 10 when no limit is given — Number(null) must not clamp to 1', async () => {
     await listGet(new NextRequest('http://localhost:3000/api/deep-runs'))
-    expect(toolRunsMock.listToolRuns).toHaveBeenCalledWith('staff@rxfitatx.com', { tool: undefined, limit: 10 })
+    expect(toolRunsMock.listToolRuns).toHaveBeenCalledWith('rxfit', 'staff@rxfitatx.com', { tool: undefined, limit: 10 })
   })
 
   it('clamps an explicit limit into 1..20', async () => {
     await listGet(new NextRequest('http://localhost:3000/api/deep-runs?limit=999'))
-    expect(toolRunsMock.listToolRuns).toHaveBeenCalledWith('staff@rxfitatx.com', { tool: undefined, limit: 20 })
+    expect(toolRunsMock.listToolRuns).toHaveBeenCalledWith('rxfit', 'staff@rxfitatx.com', { tool: undefined, limit: 20 })
   })
 })
 
@@ -255,6 +256,7 @@ describe('GET /api/deep-runs/[id]', () => {
     toolRunsMock.getToolRunOwned.mockResolvedValue(null)
     const res = await detailGet(new NextRequest('http://localhost:3000/api/deep-runs/r1'), { params: { id: 'r1' } })
     expect(res.status).toBe(404)
+    expect(toolRunsMock.getToolRunOwned).toHaveBeenCalledWith('r1', 'rxfit', 'staff@rxfitatx.com')
   })
 
   it('derives the live view from the dispatch job for a queued run', async () => {
@@ -294,7 +296,7 @@ describe('POST /api/deep-runs/[id] (cancel)', () => {
     toolRunsMock.cancelToolRun.mockResolvedValue('j1')
     toolRunsMock.getToolRunOwned.mockResolvedValue({ ...QUEUED_RUN, status: 'cancelled', errorClass: 'abort' })
     const body = await (await detailPost(cancelReq(), { params: { id: 'r1' } })).json()
-    expect(toolRunsMock.cancelToolRun).toHaveBeenCalledWith('r1', 'staff@rxfitatx.com')
+    expect(toolRunsMock.cancelToolRun).toHaveBeenCalledWith('r1', 'rxfit', 'staff@rxfitatx.com')
     expect(storeMock.cancelJob).toHaveBeenCalledWith('j1')
     expect(body.run.liveStatus).toBe('cancelled')
   })
@@ -332,7 +334,7 @@ describe('POST /api/deep-runs/[id] (save_artifact) — the panel-side auto-save'
     const res = await detailPost(saveReq(), { params: { id: 'r1' } })
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ artifact: { id: 'a1', title: 'Deep Research: Churn', created: true } })
-    expect(toolRunsMock.getToolRunOwned).toHaveBeenCalledWith('r1', 'staff@rxfitatx.com')
+    expect(toolRunsMock.getToolRunOwned).toHaveBeenCalledWith('r1', 'rxfit', 'staff@rxfitatx.com')
     expect(artifactsMock.ensureDeepRunArtifact).toHaveBeenCalledWith(landed, { tenantId: 'rxfit', createdBy: 'staff@rxfitatx.com' })
   })
 

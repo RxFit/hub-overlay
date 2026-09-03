@@ -74,7 +74,7 @@ function resolveArtifact(artifact: { title: string; toolId: string; content: unk
  *   staff+ session (onboarding excluded, same policy as tool-artifacts) →
  *   valid tool + brief → dispatch enabled/configured → fresh worker
  *   heartbeat (allotment-only, FAIL HONEST: no metered fallback, design §7)
- *   → per-user cap of 1 active run.
+ *   → per-tenant-user cap of 1 active run.
  *
  * GET ?tool=&limit= → { runs } — the caller's own runs, newest first.
  * Owner-scoping lives in lib/tool-runs.ts, not here.
@@ -98,6 +98,7 @@ async function requireStaff(): Promise<{ email: string; role: string } | NextRes
 export async function POST(req: NextRequest) {
   const auth = await requireStaff()
   if (auth instanceof NextResponse) return auth
+  const tenantId = getTenantId()
 
   let body: { tool?: unknown; brief?: unknown; chatId?: unknown; context?: unknown }
   try {
@@ -129,7 +130,7 @@ export async function POST(req: NextRequest) {
         .from(toolArtifacts)
         .where(and(
           inArray(toolArtifacts.id, contextIds),
-          eq(toolArtifacts.tenantId, getTenantId()),
+          eq(toolArtifacts.tenantId, tenantId),
           eq(toolArtifacts.status, 'active'),
           sql`lower(${toolArtifacts.createdBy}) = ${normalizeArtifactOwner(auth.email)}`,
         ))
@@ -166,8 +167,8 @@ export async function POST(req: NextRequest) {
 
     // Retire zombie rows first so the unique cap below can never deadlock a
     // user on a corpse, then a fast advisory check for the friendly 409.
-    await expireStaleToolRuns(auth.email)
-    if ((await countActiveToolRuns(auth.email)) >= 1) {
+    await expireStaleToolRuns(tenantId, auth.email)
+    if ((await countActiveToolRuns(tenantId, auth.email)) >= 1) {
       return NextResponse.json(
         { error: 'You already have a deep run in flight — wait for it or cancel it first', reason: 'active_run_exists' },
         { status: 409 },
@@ -183,7 +184,7 @@ export async function POST(req: NextRequest) {
     const runId = crypto.randomUUID()
     const cfg = DEEP_TOOLS[tool]
     try {
-      await createToolRun({ id: runId, tool, brief, inputs: ownedArtifacts, userEmail: auth.email, chatId })
+      await createToolRun({ id: runId, tool, brief, inputs: ownedArtifacts, tenantId, userEmail: auth.email, chatId })
     } catch (err) {
       if (isActiveRunConflict(err)) {
         return NextResponse.json(
@@ -204,6 +205,7 @@ export async function POST(req: NextRequest) {
         meta: {
           toolRunId: runId,
           tool,
+          tenantId,
           userEmail: auth.email.toLowerCase().trim(),
           ...(cfg.effort ? { effort: cfg.effort } : {}),
         },
@@ -248,6 +250,7 @@ export async function POST(req: NextRequest) {
 export async function GET(req: NextRequest) {
   const auth = await requireStaff()
   if (auth instanceof NextResponse) return auth
+  const tenantId = getTenantId()
 
   const toolParam = req.nextUrl.searchParams.get('tool')
   if (toolParam !== null && !isDeepToolId(toolParam)) {
@@ -260,7 +263,7 @@ export async function GET(req: NextRequest) {
   const limit = Number.isFinite(parsed) ? Math.min(Math.max(Math.round(parsed), 1), 20) : 10
 
   try {
-    const runs = await listToolRuns(auth.email, { tool: toolParam ?? undefined, limit })
+    const runs = await listToolRuns(tenantId, auth.email, { tool: toolParam ?? undefined, limit })
     return NextResponse.json({ runs })
   } catch (err) {
     if (isMissingTableError(err)) return NextResponse.json({ runs: [] })

@@ -544,7 +544,7 @@ export const dispatchWorkers = pgTable('dispatch_workers', {
  * the split the dispatch queue enforces: dispatch_jobs content is transient
  * (scrubbed on delivery) and ai_runs stores provenance-never-content, so the
  * brief and the finished report live HERE, access-controlled like any other
- * product table (owner-scoped by user_email).
+ * product table (tenant + owner scoped).
  *
  * `status` holds only enqueue + terminal states (queued | succeeded | failed
  * | cancelled). The live "running" presentation is DERIVED by joining the
@@ -566,6 +566,7 @@ export const toolRuns = pgTable(
     resultMd:   text('result_md'),                                  // the finished report (markdown)
     errorClass: text('error_class'),                                // typed class on failure, never stack text
     error:      text('error'),                                      // single-line truncated message
+    tenantId:   text('tenant_id').notNull().references(() => tenants.id),
     userEmail:  text('user_email').notNull(),                       // session-attributed owner
     chatId:     text('chat_id'),                                    // originating conversation, when any
     jobId:      uuid('job_id'),                                     // dispatch_jobs.id (no FK — job rows are TTL-deleted)
@@ -576,10 +577,10 @@ export const toolRuns = pgTable(
     finishedAt: timestamp('finished_at', { withTimezone: true }),
   },
   (t) => ({
-    userCreatedIdx: index('tool_runs_user_created_idx').on(t.userEmail, t.createdAt.desc()),
+    userCreatedIdx: index('tool_runs_user_created_idx').on(t.tenantId, t.userEmail, t.createdAt.desc()),
     jobIdx:         index('tool_runs_job_idx').on(t.jobId),
     // Also in migrate.mjs (the deploy path): tool_runs_one_active_per_user,
-    // a partial UNIQUE index on (user_email) WHERE status = 'queued' — the
+    // a partial UNIQUE index on (tenant_id, user_email) WHERE status = 'queued' — the
     // race-proof form of the one-active-run cap. Declared there rather than
     // here because drizzle's schema DSL is not the applied migration.
   }),

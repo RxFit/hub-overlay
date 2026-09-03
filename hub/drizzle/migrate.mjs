@@ -571,6 +571,14 @@ async function run() {
   `
   console.log('[migrate] ✓ dispatch_jobs + dispatch_workers tables')
 
+  // The legacy tool_runs table predated tenant scoping. Ensure the backfill
+  // target exists before upgrading any historical rows below.
+  await sql`
+    INSERT INTO tenants (id, name, domain)
+    VALUES ('rxfit', 'RxFit Athletics', 'rxfitatx.com')
+    ON CONFLICT (id) DO NOTHING
+  `
+
   // Tool runs — the deep lane's durable product record (Deep Research /
   // Deep Think, docs/architecture/DEEP_LANE_2026-08-23.md). Briefs and
   // finished reports live here because dispatch content is transient and
@@ -587,6 +595,7 @@ async function run() {
       result_md   TEXT,
       error_class TEXT,
       error       TEXT,
+      tenant_id   TEXT NOT NULL REFERENCES tenants(id),
       user_email  TEXT NOT NULL,
       chat_id     TEXT,
       job_id      UUID,
@@ -599,21 +608,34 @@ async function run() {
     )
   `
   await sql`ALTER TABLE tool_runs ADD COLUMN IF NOT EXISTS inputs JSONB`
+  await sql`ALTER TABLE tool_runs ADD COLUMN IF NOT EXISTS tenant_id TEXT`
+  await sql`UPDATE tool_runs SET tenant_id = 'rxfit' WHERE tenant_id IS NULL`
+  await sql`ALTER TABLE tool_runs ALTER COLUMN tenant_id SET NOT NULL`
   await sql`
-    CREATE INDEX IF NOT EXISTS tool_runs_user_created_idx
-    ON tool_runs (user_email, created_at DESC)
+    DO $$ BEGIN
+      ALTER TABLE tool_runs
+        ADD CONSTRAINT tool_runs_tenant_id_tenants_id_fk
+        FOREIGN KEY (tenant_id) REFERENCES tenants(id);
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$
+  `
+  await sql`DROP INDEX IF EXISTS tool_runs_user_created_idx`
+  await sql`
+    CREATE INDEX tool_runs_user_created_idx
+    ON tool_runs (tenant_id, user_email, created_at DESC)
   `
   await sql`
     CREATE INDEX IF NOT EXISTS tool_runs_job_idx
     ON tool_runs (job_id)
   `
-  // The one-active-run-per-user cap, enforced where it cannot race: two
+  // The one-active-run-per-tenant-user cap, enforced where it cannot race: two
   // overlapping POSTs both pass a count check, but only one survives this
   // partial unique index. expireStaleToolRuns retires zombie 'queued' rows
   // so a crash can never deadlock a user on a corpse.
+  await sql`DROP INDEX IF EXISTS tool_runs_one_active_per_user`
   await sql`
-    CREATE UNIQUE INDEX IF NOT EXISTS tool_runs_one_active_per_user
-    ON tool_runs (user_email) WHERE status = 'queued'
+    CREATE UNIQUE INDEX tool_runs_one_active_per_user
+    ON tool_runs (tenant_id, user_email) WHERE status = 'queued'
   `
   console.log('[migrate] ✓ tool_runs table')
 

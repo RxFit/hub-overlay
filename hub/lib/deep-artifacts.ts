@@ -227,7 +227,7 @@ export async function ensureDeepRunArtifact(
 }
 
 /**
- * Landing-side entry point: look the run up by id (owner-scoped, same read
+ * Landing-side entry point: look the run up by id (tenant + owner scoped, same read
  * the panel uses) and save it when — and only when — it is a landed deep
  * run with a report. Returns null when there is nothing to save (unknown
  * run, not a deep tool, not succeeded, empty report) so callers can treat
@@ -239,7 +239,7 @@ export async function ensureDeepRunArtifactForRun(
   tenantId: string,
   opts: Pick<EnsureDeepRunArtifactOptions, 'embedTimeoutMs'> = {},
 ): Promise<EnsuredArtifact | null> {
-  const run = await getToolRunOwned(runId, userEmail)
+  const run = await getToolRunOwned(runId, tenantId, userEmail)
   if (!run || !isDeepToolId(run.tool) || run.status !== 'succeeded' || !run.resultMd?.trim()) return null
   return ensureDeepRunArtifact(run, { tenantId, createdBy: run.userEmail, ...opts })
 }
