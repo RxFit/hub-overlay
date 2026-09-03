@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { toolArtifacts } from '@/lib/schema'
-import { eq, inArray, and } from 'drizzle-orm'
+import { eq, inArray, and, sql } from 'drizzle-orm'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { canAccessStaffRoute } from '@/lib/roles'
 import {
   composeRunPrompt,
+  contextPayloadError,
   deepToolDeadlineMs,
   briefError,
   DEEP_TOOLS,
@@ -29,6 +30,8 @@ import {
 } from '@/lib/tool-runs'
 import { db } from '@/lib/db'
 import { emit } from '@/lib/observability'
+import { getTenantId } from '@/lib/tenant-context'
+import { normalizeArtifactOwner } from '@/lib/tool-artifacts'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -112,19 +115,30 @@ export async function POST(req: NextRequest) {
   let contextPayload: string | undefined
   let ownedArtifacts: { id: string; title: string; toolId: string }[] | undefined
   if (body.context !== undefined) {
-    if (!Array.isArray(body.context) || body.context.length > 6 || !body.context.every(id => typeof id === 'string')) {
-      return NextResponse.json({ error: 'context must be an array of up to 6 artifact ID strings' }, { status: 400 })
+    if (
+      !Array.isArray(body.context) ||
+      body.context.length > 6 ||
+      !body.context.every((id): id is string => typeof id === 'string' && id.trim().length > 0)
+    ) {
+      return NextResponse.json({ error: 'context must be an array of up to 6 non-empty artifact ID strings' }, { status: 400 })
     }
-    contextIds = body.context
+    contextIds = [...new Set(body.context.map(id => id.trim()))]
     if (contextIds.length > 0) {
       const owned = await db
         .select({ id: toolArtifacts.id, content: toolArtifacts.content, title: toolArtifacts.title, toolId: toolArtifacts.toolId })
         .from(toolArtifacts)
-        .where(and(inArray(toolArtifacts.id, contextIds), eq(toolArtifacts.createdBy, auth.email)))
+        .where(and(
+          inArray(toolArtifacts.id, contextIds),
+          eq(toolArtifacts.tenantId, getTenantId()),
+          eq(toolArtifacts.status, 'active'),
+          sql`lower(${toolArtifacts.createdBy}) = ${normalizeArtifactOwner(auth.email)}`,
+        ))
       if (owned.length !== contextIds.length) {
         return NextResponse.json({ error: 'one or more context artifacts do not exist or are not owned by you' }, { status: 403 })
       }
       contextPayload = owned.map(resolveArtifact).join('\n\n')
+      const contextProblem = contextPayloadError(contextPayload)
+      if (contextProblem) return NextResponse.json({ error: contextProblem }, { status: 400 })
       ownedArtifacts = owned.map(o => ({ id: o.id, title: o.title, toolId: o.toolId }))
     }
   }

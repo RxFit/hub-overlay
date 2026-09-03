@@ -3,6 +3,8 @@ import {
   BRIEF_MAX_CHARS,
   briefError,
   composeRunPrompt,
+  CONTEXT_MAX_BYTES,
+  contextPayloadError,
   DEEP_TOOLS,
   deepToolDeadlineMs,
   deriveRunView,
@@ -69,6 +71,11 @@ describe('config', () => {
     expect(briefError('  ')).toContain('at least')
     expect(briefError('x'.repeat(BRIEF_MAX_CHARS + 1))).toContain('at most')
     expect(briefError(7)).toContain('at least')
+  })
+
+  it('bounds serialized artifact context by UTF-8 bytes, not characters', () => {
+    expect(contextPayloadError('x'.repeat(CONTEXT_MAX_BYTES))).toBeNull()
+    expect(contextPayloadError('é'.repeat(CONTEXT_MAX_BYTES))).toContain('at most')
   })
 })
 

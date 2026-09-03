@@ -594,9 +594,11 @@ async function run() {
       model       TEXT,
       latency_ms  INTEGER,
       usage       JSONB,
+      inputs      JSONB,
       finished_at TIMESTAMPTZ
     )
   `
+  await sql`ALTER TABLE tool_runs ADD COLUMN IF NOT EXISTS inputs JSONB`
   await sql`
     CREATE INDEX IF NOT EXISTS tool_runs_user_created_idx
     ON tool_runs (user_email, created_at DESC)

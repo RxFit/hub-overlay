@@ -11,7 +11,7 @@ import { NextRequest } from 'next/server'
  * created-row-or-stand-down invariant, and the [id] read/cancel flows.
  */
 
-const { sessionMock, staffMock, storeMock, dispatchMock, toolRunsMock, skillsMock, artifactsMock } = vi.hoisted(() => ({
+const { sessionMock, staffMock, storeMock, dispatchMock, toolRunsMock, skillsMock, artifactsMock, dbWhereMock } = vi.hoisted(() => ({
   sessionMock: vi.fn(),
   staffMock: vi.fn(),
   storeMock: {
@@ -41,6 +41,7 @@ const { sessionMock, staffMock, storeMock, dispatchMock, toolRunsMock, skillsMoc
   },
   skillsMock: { loadSkillContent: vi.fn() },
   artifactsMock: { ensureDeepRunArtifact: vi.fn() },
+  dbWhereMock: vi.fn(),
 }))
 
 vi.mock('next-auth', () => ({ getServerSession: sessionMock }))
@@ -53,7 +54,11 @@ vi.mock('@/lib/skills-loader', () => skillsMock)
 vi.mock('@/lib/deep-artifacts', () => artifactsMock)
 vi.mock('@/lib/tenant-context', () => ({ getTenantId: () => 'rxfit' }))
 vi.mock('@/lib/observability', () => ({ emit: vi.fn() }))
-vi.mock('@/lib/db', () => ({ db: {} }))
+vi.mock('@/lib/db', () => ({
+  db: {
+    select: () => ({ from: () => ({ where: dbWhereMock }) }),
+  },
+}))
 
 import { POST as createPost, GET as listGet } from '@/app/api/deep-runs/route'
 import { GET as detailGet, POST as detailPost } from '@/app/api/deep-runs/[id]/route'
@@ -87,6 +92,7 @@ beforeEach(() => {
   toolRunsMock.getToolRunOwned.mockReset()
   toolRunsMock.cancelToolRun.mockReset()
   skillsMock.loadSkillContent.mockReset().mockResolvedValue(null)
+  dbWhereMock.mockReset().mockResolvedValue([])
 })
 
 describe('auth', () => {
@@ -151,6 +157,48 @@ describe('POST /api/deep-runs', () => {
 
     expect(toolRunsMock.attachToolRunJob).toHaveBeenCalledWith(run.id, 'j1')
     expect(toolRunsMock.expireStaleToolRuns).toHaveBeenCalledWith('staff@rxfitatx.com')
+  })
+
+  it('transports only selected owned artifact metadata and content into the durable run and prompt', async () => {
+    dbWhereMock.mockResolvedValue([{
+      id: 'artifact-1',
+      title: 'Prior report',
+      toolId: 'seo-audit',
+      content: { sections: [{ title: 'Finding', content: 'Prior context' }] },
+    }])
+
+    const res = await createPost(post({
+      tool: 'deep-think',
+      brief: 'use prior context',
+      context: [' artifact-1 ', 'artifact-1'],
+    }))
+
+    expect(res.status).toBe(200)
+    expect(toolRunsMock.createToolRun).toHaveBeenCalledWith(expect.objectContaining({
+      inputs: [{ id: 'artifact-1', title: 'Prior report', toolId: 'seo-audit' }],
+    }))
+    expect(storeMock.enqueueJob.mock.calls[0][0].prompt).toContain('Prior context')
+  })
+
+  it('rejects unavailable artifact IDs before creating or enqueueing a run', async () => {
+    const res = await createPost(post({ tool: 'deep-think', brief: 'use prior context', context: ['missing'] }))
+    expect(res.status).toBe(403)
+    expect(toolRunsMock.createToolRun).not.toHaveBeenCalled()
+    expect(storeMock.enqueueJob).not.toHaveBeenCalled()
+  })
+
+  it('rejects artifact context that cannot safely fit in the worker CLI argument', async () => {
+    dbWhereMock.mockResolvedValue([{
+      id: 'artifact-1',
+      title: 'Oversized report',
+      toolId: 'seo-audit',
+      content: 'x'.repeat(17_000),
+    }])
+    const res = await createPost(post({ tool: 'deep-think', brief: 'use prior context', context: ['artifact-1'] }))
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toContain('selected context must be at most')
+    expect(toolRunsMock.createToolRun).not.toHaveBeenCalled()
+    expect(storeMock.enqueueJob).not.toHaveBeenCalled()
   })
 
   it('the unique-index conflict is the atomic cap: 409 without enqueueing', async () => {

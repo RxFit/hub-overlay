@@ -82,6 +82,10 @@ export function deepToolDeadlineMs(tool: DeepToolId): number {
 
 export const BRIEF_MIN_CHARS = 3
 export const BRIEF_MAX_CHARS = 8_000
+// The desktop worker shell-quotes the composed prompt into a single CLI
+// argument. Keep artifact context comfortably below Windows' command-line
+// ceiling after quote expansion and after adding the protocol + brief.
+export const CONTEXT_MAX_BYTES = 16_000
 
 export function briefError(brief: unknown): string | null {
   if (typeof brief !== 'string' || brief.trim().length < BRIEF_MIN_CHARS) {
@@ -89,6 +93,13 @@ export function briefError(brief: unknown): string | null {
   }
   if (brief.length > BRIEF_MAX_CHARS) {
     return `brief must be at most ${BRIEF_MAX_CHARS} characters`
+  }
+  return null
+}
+
+export function contextPayloadError(contextPayload: string): string | null {
+  if (Buffer.byteLength(contextPayload, 'utf8') > CONTEXT_MAX_BYTES) {
+    return `selected context must be at most ${CONTEXT_MAX_BYTES} bytes`
   }
   return null
 }

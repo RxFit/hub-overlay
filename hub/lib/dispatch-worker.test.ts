@@ -180,6 +180,20 @@ describe('claim → execute → post cycle', () => {
     expect(runFn).toHaveBeenCalledWith('the prompt', expect.objectContaining({ model: 'gemini-3-pro', effort: 'low' }))
   })
 
+  it('passes validated addDirs from payloadMeta into the run', async () => {
+    const stop = new AbortController()
+    const { fetchFn } = makeFetch({
+      claim: (n) => {
+        if (n === 1) return jsonRes(200, { job: jobWire({ payloadMeta: { addDirs: ['.'] } }) })
+        stop.abort()
+        return jsonRes(204)
+      },
+    })
+    const runFn = vi.fn().mockResolvedValue({ text: 'x', raw: {}, latencyMs: 1 })
+    await startWorker(CFG, { fetchFn, runFn, sleepFn: instantSleep, agyVersionFn: async () => null }, stop.signal)
+    expect(runFn).toHaveBeenCalledWith('the prompt', expect.objectContaining({ addDirs: ['.'] }))
+  })
+
   it('a Hub cancel on the heartbeat aborts the agy run and posts errorClass abort', async () => {
     const stop = new AbortController()
     const { fetchFn, calls } = makeFetch({

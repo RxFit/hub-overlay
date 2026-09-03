@@ -10,7 +10,7 @@ import {
   workerFresh,
 } from '@/lib/dispatch-store'
 import { dispatchFreshMs, isDispatchConfigured, isDispatchEnabled } from '@/lib/agy-dispatch'
-import { buildProbePrompt, containsFreshTimestamp, DEFAULT_PROBE_URL } from '@/lib/work-probe'
+import { buildFileProbePrompt, buildProbePrompt, containsFreshTimestamp, DEFAULT_PROBE_URL } from '@/lib/work-probe'
 import { emit } from '@/lib/observability'
 
 export const runtime = 'nodejs'
@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
     /* empty body is fine - defaults apply */
   }
   const mode = body.mode === 'file' ? 'file' : 'url'
-  
+
   let url = DEFAULT_PROBE_URL
   if (mode === 'url' && typeof body.url === 'string') {
     try {
