@@ -562,6 +562,7 @@ export const toolRuns = pgTable(
     tool:       text('tool').notNull(),                             // 'deep-research' | 'deep-think' (open union)
     status:     text('status').default('queued').notNull(),         // queued | succeeded | failed | cancelled
     brief:      text('brief').notNull(),                            // the user-confirmed run brief
+    inputs:     jsonb('inputs'),                                    // prompt transport inputs (e.g. documents)
     resultMd:   text('result_md'),                                  // the finished report (markdown)
     errorClass: text('error_class'),                                // typed class on failure, never stack text
     error:      text('error'),                                      // single-line truncated message

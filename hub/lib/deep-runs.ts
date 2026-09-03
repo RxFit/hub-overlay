@@ -112,13 +112,17 @@ Then end the reply with EXACTLY one fenced code block labeled json, shaped:
  * Compose the single self-contained run prompt. Pure: the caller supplies
  * the SKILL.md body (or null → built-in protocol), so tests never touch fs.
  */
-export function composeRunPrompt(tool: DeepToolId, brief: string, skillContent: string | null): string {
+export function composeRunPrompt(tool: DeepToolId, brief: string, skillContent: string | null, contextPayload?: string): string {
   const protocol = skillContent?.trim() || DEEP_TOOLS[tool].fallbackProtocol
-  return [
+  const parts = [
     protocol,
     REPORT_CONTRACT,
-    `# The brief\n${brief.trim()}`,
-  ].join('\n\n')
+  ]
+  if (contextPayload?.trim()) {
+    parts.push(`# Inputs\n\n${contextPayload.trim()}`)
+  }
+  parts.push(`# The brief\n${brief.trim()}`)
+  return parts.join('\n\n')
 }
 
 /* ── Live-state derivation (design §4.5: state, never a percentage) ──────── */

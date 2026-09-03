@@ -36,6 +36,13 @@
       "when": 1783440030383,
       "tag": "0004_furry_mockingbird",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1788405048040,
+      "tag": "0005_high_proteus",
+      "breakpoints": true
     }
   ]
 }

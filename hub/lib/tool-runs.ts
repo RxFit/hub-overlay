@@ -27,6 +27,7 @@ export interface ToolRunRecord {
   tool: string
   status: ToolRunStatus
   brief: string
+  inputs?: { id: string; title: string; toolId: string }[]
   resultMd: string | null
   errorClass: string | null
   error: string | null
@@ -56,6 +57,7 @@ function toRecord(r: typeof toolRuns.$inferSelect): ToolRunRecord {
     tool: r.tool,
     status: r.status as ToolRunStatus,
     brief: r.brief,
+    inputs: (r.inputs as { id: string; title: string; toolId: string }[]) ?? undefined,
     resultMd: r.resultMd ?? null,
     errorClass: r.errorClass ?? null,
     error: r.error ?? null,
@@ -81,6 +83,7 @@ export interface CreateToolRunInput {
   id: string
   tool: string
   brief: string
+  inputs?: { id: string; title: string; toolId: string }[]
   userEmail: string
   chatId?: string | null
   /** Attached after the enqueue via attachToolRunJob. */
@@ -102,6 +105,7 @@ export async function createToolRun(input: CreateToolRunInput): Promise<void> {
     id: input.id,
     tool: input.tool,
     brief: input.brief,
+    inputs: input.inputs ? input.inputs : null,
     userEmail: input.userEmail.toLowerCase().trim(),
     chatId: input.chatId ?? null,
     jobId: input.jobId ?? null,

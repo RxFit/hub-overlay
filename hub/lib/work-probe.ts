@@ -26,6 +26,19 @@ export function buildProbePrompt(url: string, marker: string): string {
   ].join('\n')
 }
 
+export function buildFileProbePrompt(marker: string, filename: string): string {
+  return [
+    'You are running as a headless work-item probe for the Hub deep lane.',
+    `Use your tools to read the file '${filename}' in the directory provided to you.`,
+    'Then reply with EXACTLY two lines and nothing else:',
+    `Line 1: ${marker}`,
+    'Line 2: the first 60 characters of the file, verbatim.',
+    'If you could not read the file with a tool, reply instead with:',
+    `Line 1: ${marker}`,
+    'Line 2: NO_TOOLS: one short sentence naming what stopped you.',
+  ].join('\n')
+}
+
 /** Any ISO-8601-ish timestamp in the text within ±window of now. A model
  *  without tools has no wall clock, so a fresh timestamp is strong evidence
  *  of a live fetch (and unlike echoed content, it cannot be pre-trained). */

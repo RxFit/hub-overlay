@@ -176,8 +176,9 @@ export async function executeJob(ctx: SlotContext, job: ClaimedJobWire): Promise
     const result = await ctx.runFn(job.payloadText ?? '', {
       timeoutMs: Math.max(budget, 5_000),
       signal: controller.signal,
-      model: job.payloadMeta?.model,
-      effort: job.payloadMeta?.effort,
+      model: typeof job.payloadMeta?.model === 'string' ? job.payloadMeta.model : undefined,
+      effort: typeof job.payloadMeta?.effort === 'string' ? job.payloadMeta.effort as 'low' | 'medium' | 'high' : undefined,
+      addDirs: Array.isArray(job.payloadMeta?.addDirs) ? (job.payloadMeta.addDirs as string[]) : undefined,
     })
     post = {
       workerId: ctx.cfg.workerId,

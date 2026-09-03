@@ -60,14 +60,16 @@ export async function POST(req: NextRequest) {
   const denied = await requireAdmin()
   if (denied) return denied
 
-  let body: { url?: unknown; deadlineMs?: unknown } = {}
+  let body: { url?: unknown; deadlineMs?: unknown; mode?: unknown } = {}
   try {
     body = await req.json()
   } catch {
-    /* empty body is fine — defaults apply */
+    /* empty body is fine - defaults apply */
   }
+  const mode = body.mode === 'file' ? 'file' : 'url'
+  
   let url = DEFAULT_PROBE_URL
-  if (typeof body.url === 'string') {
+  if (mode === 'url' && typeof body.url === 'string') {
     try {
       const parsed = new URL(body.url)
       if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') throw new Error('scheme')
@@ -83,13 +85,14 @@ export async function POST(req: NextRequest) {
 
   const marker = `AGY_WORK_PROBE_${crypto.randomUUID().slice(0, 8)}`
   try {
+    const isFile = mode === 'file'
     const outcome = await enqueueJob({
       kind: 'work_item',
-      prompt: buildProbePrompt(url, marker),
+      prompt: isFile ? buildFileProbePrompt(marker, 'package.json') : buildProbePrompt(url, marker),
       deadlineMs,
-      // marker is a random token minted above — provenance, not content, so
+      // marker is a random token minted above - provenance, not content, so
       // it may ride payload_meta (which survives the scrub) for the GET.
-      meta: { probe: true, marker, url },
+      meta: isFile ? { probe: true, marker, mode: 'file', addDirs: ['.'] } : { probe: true, marker, url, mode: 'url' },
     })
     if ('refused' in outcome) {
       return NextResponse.json({ error: 'work queue full — drain or cancel queued work items first' }, { status: 503 })
@@ -166,15 +169,29 @@ export async function GET(req: NextRequest) {
       })
     }
     const marker = typeof job.payloadMeta?.marker === 'string' ? job.payloadMeta.marker : null
+    const mode = job.payloadMeta?.mode === 'file' ? 'file' : 'url'
     const markerVerified = marker !== null && delivered.text.includes(marker)
-    const freshnessVerified = containsFreshTimestamp(delivered.text, Date.now(), FRESHNESS_WINDOW_MS)
     const noTools = delivered.text.includes('NO_TOOLS')
+    
+    let freshnessVerified = false
+    let fileVerified = false
+    let verdict = 'FAIL'
+    
+    if (mode === 'file') {
+      fileVerified = delivered.text.includes('casatrejo-hub')
+      verdict = markerVerified && fileVerified && !noTools ? 'PASS' : 'FAIL'
+    } else {
+      freshnessVerified = containsFreshTimestamp(delivered.text, Date.now(), FRESHNESS_WINDOW_MS)
+      verdict = markerVerified && freshnessVerified && !noTools ? 'PASS' : 'FAIL'
+    }
+    
     const meta = delivered.resultMeta as { model?: string; latencyMs?: number; usage?: Record<string, number> } | null
     return NextResponse.json({
       ...base,
-      verdict: markerVerified && freshnessVerified && !noTools ? 'PASS' : 'FAIL',
+      verdict,
+      mode,
       markerVerified,
-      freshnessVerified,
+      ...(mode === 'file' ? { fileVerified } : { freshnessVerified }),
       noToolsReported: noTools,
       sample: delivered.text.slice(0, 400),
       model: meta?.model ?? null,

@@ -82,6 +82,8 @@ export interface AgyOptions {
   /** Model slug to pin (default: agy's own default, or AGY_MODEL env). */
   model?: string
   effort?: 'low' | 'medium' | 'high'
+  /** Directories to allow tool access to (via --add-dir). */
+  addDirs?: string[]
   /** Hard wall-clock ceiling for the whole run. Default 120s (AGY_TIMEOUT_MS). */
   timeoutMs?: number
   /** Abort mid-run (Phase 2.5 worker: a Hub cancel arriving on the heartbeat
@@ -523,6 +525,9 @@ export async function agyGenerateText(prompt: string, opts: AgyOptions = {}): Pr
   ]
   if (model) parts.push(`--model ${shQuote(model)}`)
   if (opts.effort) parts.push(`--effort ${shQuote(opts.effort)}`)
+  if (opts.addDirs) {
+    for (const d of opts.addDirs) parts.push(`--add-dir ${shQuote(d)}`)
+  }
 
   const { output, exitCode, timedOut, aborted } = await runUnderPty(parts.join(' '), timeoutMs, opts.signal)
   const cleaned = stripTui(output).trim()

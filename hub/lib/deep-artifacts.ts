@@ -55,6 +55,7 @@ export interface DeepRunArtifactSource {
   tool: string
   brief: string
   resultMd: string | null
+  inputs?: { id: string; title: string; toolId: string }[] | null
   chatId?: string | null
 }
 
@@ -94,9 +95,16 @@ function toolDisplayName(tool: string): string {
  */
 export function buildDeepRunArtifact(run: DeepRunArtifactSource): ToolArtifactData {
   const parsed = parseDeepReport(run.resultMd)
+  
+  let headPrefix = ''
+  if (run.inputs && run.inputs.length > 0) {
+    const lineage = run.inputs.map(i => `* ${i.title}`).join('\n')
+    headPrefix = `> **Built on:**\n${lineage}\n\n`
+  }
+
   const sections: ToolArtifactSection[] = parsed
     ? [
-        { id: `${run.id}-summary`, type: 'recommendation', title: 'Summary', content: parsed.summary },
+        { id: `${run.id}-summary`, type: 'recommendation', title: 'Summary', content: headPrefix + parsed.summary },
         ...parsed.sections.map((s, i) => ({
           id: `${run.id}-s${i}`, type: 'insight' as const, title: s.heading, content: s.body,
         })),
@@ -107,7 +115,7 @@ export function buildDeepRunArtifact(run: DeepRunArtifactSource): ToolArtifactDa
             }]
           : []),
       ]
-    : [{ id: `${run.id}-report`, type: 'generic', title: 'Report', content: run.resultMd ?? '' }]
+    : [{ id: `${run.id}-report`, type: 'generic', title: 'Report', content: headPrefix + (run.resultMd ?? '') }]
 
   return {
     toolId: run.tool,
