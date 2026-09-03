@@ -22,6 +22,10 @@ import { join, relative } from 'node:path'
      - a body assembled in a variable before the call.
      - a non-literal status (`{ status: gate.status }`, `upstream.status`),
        which is skipped because the value is not knowable statically.
+     - `{ ok }` / `{ success }` shorthand. `{ error }` and `{ reason }`
+       shorthand ARE matched (the key alone is the signal), but `ok` and
+       `success` only mean failure when their value is `false`, and a
+       shorthand value is a variable this scan cannot evaluate.
    Between the two mechanisms the coverage is real but partial, and neither is
    complete alone.
 
@@ -45,7 +49,16 @@ const INTENTIONAL: ReadonlyMap<string, string> = new Map([
   ],
 ])
 
-const FAILURE_KEY = /\berror\s*:|\breason\s*:|\bok\s*:\s*false|\bsuccess\s*:\s*false/
+/* Two spellings of the same failure key. `error: x` is the explicit form;
+ * `{ error }` is ES2015 shorthand and carries no colon, so a regex that
+ * anchors on `error\s*:` reads `NextResponse.json({ error })` as clean
+ * (verified: injected into a route, the suite passed 79/79). The shorthand
+ * branch requires the identifier at PROPERTY position — preceded by `{` or
+ * `,` — so `{ message: error }`, where `error` is a value, does not match.
+ * `{ ok }` / `{ success }` shorthand is NOT matched: the value is a variable,
+ * and this scan does not evaluate variables (see the header). */
+const FAILURE_KEY =
+  /\berror\s*:|\breason\s*:|\bok\s*:\s*false|\bsuccess\s*:\s*false|[{,]\s*(?:error|reason)\s*(?=[,}])/
 const LITERAL_ERROR_STATUS = /\bstatus:\s*[45]\d\d/
 const NON_LITERAL_STATUS = /\bstatus:\s*[A-Za-z_$][\w$]*(?:\.[\w$]+)*\s*[,}]?/
 
