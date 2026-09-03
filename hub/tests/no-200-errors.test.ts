@@ -22,10 +22,13 @@ import { join, relative } from 'node:path'
      - a body assembled in a variable before the call.
      - a non-literal status (`{ status: gate.status }`, `upstream.status`),
        which is skipped because the value is not knowable statically.
-     - `{ ok }` / `{ success }` shorthand. `{ error }` and `{ reason }`
-       shorthand ARE matched (the key alone is the signal), but `ok` and
-       `success` only mean failure when their value is `false`, and a
-       shorthand value is a variable this scan cannot evaluate.
+     - the VALUE behind `{ ok }` / `{ success }` shorthand. `{ error }` and
+       `{ reason }` shorthand are matched because the key alone is the
+       signal. `ok` and `success` only mean failure when `false`, and a
+       shorthand value is a variable this scan cannot evaluate — so it is
+       flagged conservatively rather than passed: write the literal
+       (`ok: true`) or add an INTENTIONAL entry. Passing on "cannot tell"
+       would make the guard blind to precisely the case it exists for.
    Between the two mechanisms the coverage is real but partial, and neither is
    complete alone.
 
@@ -53,12 +56,19 @@ const INTENTIONAL: ReadonlyMap<string, string> = new Map([
  * `{ error }` is ES2015 shorthand and carries no colon, so a regex that
  * anchors on `error\s*:` reads `NextResponse.json({ error })` as clean
  * (verified: injected into a route, the suite passed 79/79). The shorthand
- * branch requires the identifier at PROPERTY position — preceded by `{` or
+ * branches require the identifier at PROPERTY position — preceded by `{` or
  * `,` — so `{ message: error }`, where `error` is a value, does not match.
- * `{ ok }` / `{ success }` shorthand is NOT matched: the value is a variable,
- * and this scan does not evaluate variables (see the header). */
+ *
+ * `{ ok }` / `{ success }` shorthand is flagged CONSERVATIVELY. Those keys
+ * only mean failure when the value is `false`, and a shorthand value is a
+ * variable this scan cannot evaluate — which is exactly why it must not be
+ * waved through: a guard that answers "I cannot tell" with "pass" is not a
+ * guard. A route that legitimately returns `{ ok }` at 2xx has two honest
+ * options, both cheap: write the literal (`ok: true`), which this regex
+ * accepts, or add an INTENTIONAL entry with the reason. (Measured before
+ * adopting this: zero routes in the tree use the shorthand today.) */
 const FAILURE_KEY =
-  /\berror\s*:|\breason\s*:|\bok\s*:\s*false|\bsuccess\s*:\s*false|[{,]\s*(?:error|reason)\s*(?=[,}])/
+  /\berror\s*:|\breason\s*:|\bok\s*:\s*false|\bsuccess\s*:\s*false|[{,]\s*(?:error|reason|ok|success)\s*(?=[,}])/
 const LITERAL_ERROR_STATUS = /\bstatus:\s*[45]\d\d/
 const NON_LITERAL_STATUS = /\bstatus:\s*[A-Za-z_$][\w$]*(?:\.[\w$]+)*\s*[,}]?/
 
