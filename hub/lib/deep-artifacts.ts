@@ -55,6 +55,7 @@ export interface DeepRunArtifactSource {
   tool: string
   brief: string
   resultMd: string | null
+  inputs?: { id: string; title: string; toolId: string }[] | null
   chatId?: string | null
 }
 
@@ -94,9 +95,16 @@ function toolDisplayName(tool: string): string {
  */
 export function buildDeepRunArtifact(run: DeepRunArtifactSource): ToolArtifactData {
   const parsed = parseDeepReport(run.resultMd)
+  
+  let headPrefix = ''
+  if (run.inputs && run.inputs.length > 0) {
+    const lineage = run.inputs.map(i => `* ${i.title}`).join('\n')
+    headPrefix = `> **Built on:**\n${lineage}\n\n`
+  }
+
   const sections: ToolArtifactSection[] = parsed
     ? [
-        { id: `${run.id}-summary`, type: 'recommendation', title: 'Summary', content: parsed.summary },
+        { id: `${run.id}-summary`, type: 'recommendation', title: 'Summary', content: headPrefix + parsed.summary },
         ...parsed.sections.map((s, i) => ({
           id: `${run.id}-s${i}`, type: 'insight' as const, title: s.heading, content: s.body,
         })),
@@ -107,7 +115,7 @@ export function buildDeepRunArtifact(run: DeepRunArtifactSource): ToolArtifactDa
             }]
           : []),
       ]
-    : [{ id: `${run.id}-report`, type: 'generic', title: 'Report', content: run.resultMd ?? '' }]
+    : [{ id: `${run.id}-report`, type: 'generic', title: 'Report', content: headPrefix + (run.resultMd ?? '') }]
 
   return {
     toolId: run.tool,
@@ -219,7 +227,7 @@ export async function ensureDeepRunArtifact(
 }
 
 /**
- * Landing-side entry point: look the run up by id (owner-scoped, same read
+ * Landing-side entry point: look the run up by id (tenant + owner scoped, same read
  * the panel uses) and save it when — and only when — it is a landed deep
  * run with a report. Returns null when there is nothing to save (unknown
  * run, not a deep tool, not succeeded, empty report) so callers can treat
@@ -231,7 +239,7 @@ export async function ensureDeepRunArtifactForRun(
   tenantId: string,
   opts: Pick<EnsureDeepRunArtifactOptions, 'embedTimeoutMs'> = {},
 ): Promise<EnsuredArtifact | null> {
-  const run = await getToolRunOwned(runId, userEmail)
+  const run = await getToolRunOwned(runId, tenantId, userEmail)
   if (!run || !isDeepToolId(run.tool) || run.status !== 'succeeded' || !run.resultMd?.trim()) return null
   return ensureDeepRunArtifact(run, { tenantId, createdBy: run.userEmail, ...opts })
 }

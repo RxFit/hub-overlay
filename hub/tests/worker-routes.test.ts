@@ -233,13 +233,13 @@ describe('POST /api/worker/jobs/[id]/result', () => {
     // Run started outside any conversation → nothing to point into.
     store.postResult.mockResolvedValue({
       outcome: 'recorded', prompt: 'p', requestId: null, kind: 'work_item',
-      payloadMeta: {}, toolRun: { id: 'r1', tool: 'deep-think', userEmail: 'staff@rxfitatx.com', chatId: null },
+      payloadMeta: {}, toolRun: { id: 'r1', tool: 'deep-think', tenantId: 'rxfit', userEmail: 'staff@rxfitatx.com', chatId: null },
     })
     await resultPost(request('/api/worker/jobs/j1/result', base), { params: { id: 'j1' } })
     // Worker error → the panel carries the failure; the chat gets no ghost note.
     store.postResult.mockResolvedValue({
       outcome: 'recorded', prompt: 'p', requestId: null, kind: 'work_item',
-      payloadMeta: {}, toolRun: { id: 'r2', tool: 'deep-think', userEmail: 'staff@rxfitatx.com', chatId: 'chat-1' },
+      payloadMeta: {}, toolRun: { id: 'r2', tool: 'deep-think', tenantId: 'rxfit', userEmail: 'staff@rxfitatx.com', chatId: 'chat-1' },
     })
     await resultPost(
       request('/api/worker/jobs/j2/result', { workerId: 'w1', attempt: 1, status: 'error', errorClass: 'timeout' }),
@@ -269,7 +269,7 @@ describe('POST /api/worker/jobs/[id]/result', () => {
       outcome: 'recorded', prompt: 'p', requestId: null, kind: 'work_item',
       payloadMeta: { toolRunId: '11111111-1111-4111-8111-111111111111' },
       // No chat: the artifact save never depended on one.
-      toolRun: { id: 'r1', tool: 'deep-think', userEmail: 'staff@rxfitatx.com', chatId: null },
+      toolRun: { id: 'r1', tool: 'deep-think', tenantId: 'rxfit', userEmail: 'staff@rxfitatx.com', chatId: null },
     })
     const res = await resultPost(request('/api/worker/jobs/j1/result', base), { params: { id: 'j1' } })
     expect(res.status).toBe(200)
@@ -283,7 +283,7 @@ describe('POST /api/worker/jobs/[id]/result', () => {
     artifacts.ensureDeepRunArtifactForRun.mockRejectedValueOnce(new Error('db blip'))
     store.postResult.mockResolvedValue({
       outcome: 'recorded', prompt: 'p', requestId: null, kind: 'work_item',
-      payloadMeta: {}, toolRun: { id: 'r1', tool: 'deep-research', userEmail: 'staff@rxfitatx.com', chatId: 'chat-1' },
+      payloadMeta: {}, toolRun: { id: 'r1', tool: 'deep-research', tenantId: 'rxfit', userEmail: 'staff@rxfitatx.com', chatId: 'chat-1' },
     })
     const res = await resultPost(request('/api/worker/jobs/j1/result', base), { params: { id: 'j1' } })
     expect(res.status).toBe(200)

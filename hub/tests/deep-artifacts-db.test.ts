@@ -35,7 +35,7 @@ const STRANGER = `${NS}stranger@rxfitatx.com`
 const REPORT = '# Churn drivers\n\nPrice.\n\n```json\n{"title":"Churn drivers","summary":"Price is the driver.","sections":[{"heading":"Evidence","body":"cohorts"}],"sources":[]}\n```'
 
 async function landedRun(id: string, tool = 'deep-research', userEmail = OWNER) {
-  await createToolRun({ id, tool, brief: 'Why churn?', userEmail, chatId: 'chat-1' })
+  await createToolRun({ id, tool, brief: 'Why churn?', tenantId: 'rxfit', userEmail, chatId: 'chat-1' })
   const landed = await finishToolRun(db, id, { status: 'succeeded', resultMd: REPORT })
   expect(landed?.id).toBe(id)
   return { id, tool, brief: 'Why churn?', resultMd: REPORT, chatId: 'chat-1' }
@@ -161,7 +161,7 @@ describeDb('deep-run artifacts (Postgres)', () => {
 
   it('ensure-by-run-id: nothing to save while queued, the artifact once landed, still nothing for the wrong owner', async () => {
     const id = crypto.randomUUID()
-    await createToolRun({ id, tool: 'deep-think', brief: 'Decide pricing', userEmail: OWNER })
+    await createToolRun({ id, tool: 'deep-think', brief: 'Decide pricing', tenantId: 'rxfit', userEmail: OWNER })
     expect(await ensureDeepRunArtifactForRun(id, OWNER, 'rxfit')).toBeNull()
 
     await finishToolRun(db, id, { status: 'succeeded', resultMd: REPORT })
@@ -175,7 +175,7 @@ describeDb('deep-run artifacts (Postgres)', () => {
 
   it('a landing-side save is listed for its owner however the session spells the email', async () => {
     const id = crypto.randomUUID()
-    await createToolRun({ id, tool: 'deep-research', brief: 'Why churn?', userEmail: MIXED_CASE })
+    await createToolRun({ id, tool: 'deep-research', brief: 'Why churn?', tenantId: 'rxfit', userEmail: MIXED_CASE })
     await finishToolRun(db, id, { status: 'succeeded', resultMd: REPORT })
     const saved = await ensureDeepRunArtifactForRun(id, MIXED_CASE, 'rxfit')
     expect(saved?.created).toBe(true)
@@ -192,7 +192,7 @@ describeDb('deep-run artifacts (Postgres)', () => {
 
   it('a failed run is never saved as an artifact', async () => {
     const id = crypto.randomUUID()
-    await createToolRun({ id, tool: 'deep-research', brief: 'b', userEmail: OWNER })
+    await createToolRun({ id, tool: 'deep-research', brief: 'b', tenantId: 'rxfit', userEmail: OWNER })
     await finishToolRun(db, id, { status: 'failed', errorClass: 'timeout', error: 'took too long' })
     expect(await ensureDeepRunArtifactForRun(id, OWNER, 'rxfit')).toBeNull()
     expect(await ownRows()).toHaveLength(0)
