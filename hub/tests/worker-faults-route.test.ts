@@ -124,6 +124,18 @@ describe('the payload is data, not gospel', () => {
     }
   })
 
+  it('rejects codes that are only ACCEPTED via Object.prototype, not own keys of the taxonomy', async () => {
+    // `in` is prototype-chain-aware: `'constructor' in {}` is true even though
+    // no fault code named `constructor` was ever declared. A membership check
+    // against the closed taxonomy must test OWN keys only.
+    for (const code of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      reportMock.mockClear()
+      const res = await POST(post({ workerId: 'w1', faults: [fault({ code })] }))
+      expect(res.status, `expected ${code} to be rejected`).toBe(422)
+      expect(reportMock).not.toHaveBeenCalled()
+    }
+  })
+
   it('accepts every real FaultCode, so the guard cannot drift from the taxonomy', async () => {
     for (const code of ['internal', 'db_error', 'upstream_5xx', 'worker_timeout']) {
       reportMock.mockClear()

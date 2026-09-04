@@ -116,4 +116,91 @@ describe('uploadSpooledFaults', () => {
     expect(fetchFn).not.toHaveBeenCalled()
     expect(drainSpool().claimed).toBe(false)
   })
+
+  /* ══════════════════════════════════════════════════════════════════════
+     Bounded boot-drain budget (T-151). The old loop re-checked a live
+     MAX_UPLOAD_BATCHES=10 ceiling every iteration, so >500 records lost the
+     remainder silently (`failed: false` with records still unsent, invisible
+     until a boot that might never come), and a continuously-appending
+     producer could make an unbounded loop stall startup forever. The budget
+     must instead be fixed ONCE from the first claimed snapshot's leftover.
+     ══════════════════════════════════════════════════════════════════════ */
+
+  const rawSpoolIds = () =>
+    fs
+      .readFileSync(spoolPath(), 'utf8')
+      .split('\n')
+      .filter((l) => l.trim())
+      .map((l) => (JSON.parse(l) as { fault: { faultId: string } }).fault.faultId)
+
+  it('drains a 501-record spool completely in 11 calls, with no remainder — the old ceiling stopped at 500', async () => {
+    const total = 501
+    for (let i = 0; i < total; i++) appendFaultToSpool({ fault: { faultId: `HUB-R${i}` } })
+    const fetchFn = ok()
+    const res = await uploadSpooledFaults(cfg, fetchFn)
+    expect(res).toEqual({ uploaded: total, failed: false })
+    expect((fetchFn as unknown as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(11)
+    expect(drainSpool().claimed).toBe(false)
+  })
+
+  it.each([503, 401, 429])(
+    'a %i on the second batch acknowledges exactly the first 50 and retains all 70 unacknowledged records in order',
+    async (status) => {
+      const total = 120
+      for (let i = 0; i < total; i++) appendFaultToSpool({ fault: { faultId: `HUB-R${i}` } })
+      const fetchFn = vi
+        .fn()
+        .mockResolvedValueOnce(new Response('{}', { status: 200 }))
+        .mockResolvedValue(new Response('{}', { status })) as unknown as typeof fetch
+      const res = await uploadSpooledFaults(cfg, fetchFn)
+      expect(res).toEqual({ uploaded: 50, failed: true })
+      expect(rawSpoolIds()).toEqual(Array.from({ length: 70 }, (_, i) => `HUB-R${i + 50}`))
+    },
+  )
+
+  it('a 422 on the second batch permanently drops it but retains the untried tail', async () => {
+    const total = 120
+    for (let i = 0; i < total; i++) appendFaultToSpool({ fault: { faultId: `HUB-R${i}` } })
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('{}', { status: 200 }))
+      .mockResolvedValue(new Response('{}', { status: 422 })) as unknown as typeof fetch
+    const res = await uploadSpooledFaults(cfg, fetchFn)
+    expect(res).toEqual({ uploaded: 50, failed: true })
+    // Records 50-99 were permanently rejected and dropped; only the final
+    // 20, never attempted, remain.
+    expect(rawSpoolIds()).toEqual(Array.from({ length: 20 }, (_, i) => `HUB-R${i + 100}`))
+  })
+
+  it('bounds the drain to the initial-snapshot budget under continuous concurrent appends — no record is lost', async () => {
+    const initial = 120
+    for (let i = 0; i < initial; i++) appendFaultToSpool({ fault: { faultId: `HUB-R${i}` } })
+    let nextId = initial
+    const posted: string[] = []
+    const fetchFn = vi.fn(async (_url: unknown, init: unknown) => {
+      const body = JSON.parse((init as RequestInit).body as string) as { faults: { fault: { faultId: string } }[] }
+      posted.push(...body.faults.map((f) => f.fault.faultId))
+      // A producer that never stops: append a fresh batch while this boot's
+      // drain is still in flight.
+      for (let i = 0; i < 30; i++) appendFaultToSpool({ fault: { faultId: `HUB-R${nextId++}` } })
+      return new Response('{}', { status: 200 })
+    }) as unknown as typeof fetch
+
+    const res = await uploadSpooledFaults(cfg, fetchFn)
+
+    // The initial claim saw 120 records: one 50-record batch plus a 70-record
+    // leftover, budgeting 1 + ceil(70/50) = 3 total batches — fixed at that
+    // claim and never recomputed, so the appends below cannot extend it.
+    expect((fetchFn as unknown as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(3)
+    expect(res).toEqual({ uploaded: 150, failed: false })
+
+    const remaining = rawSpoolIds()
+    const allCreated = Array.from({ length: nextId }, (_, i) => `HUB-R${i}`)
+    const union = [...posted, ...remaining].sort(
+      (a, b) => Number(a.slice('HUB-R'.length)) - Number(b.slice('HUB-R'.length)),
+    )
+    expect(union).toEqual(allCreated)
+    expect(posted).toHaveLength(150)
+    expect(remaining).toHaveLength(60)
+  })
 })

@@ -59,8 +59,9 @@ const FaultShape = z.object({
   // dynamic codes could mint unbounded labels and slip past alert rules
   // keyed to the real taxonomy. USER_MESSAGES is Record<FaultCode, string>,
   // so its keys ARE that closed set and cannot drift from it: adding a code
-  // without a message already fails tsc.
-  code: z.string().refine((c): c is keyof typeof USER_MESSAGES => c in USER_MESSAGES, {
+  // without a message already fails tsc. `Object.hasOwn` (not `in`) because
+  // `in` is prototype-chain-aware: `'constructor' in {}` is true.
+  code: z.string().refine((c): c is keyof typeof USER_MESSAGES => Object.hasOwn(USER_MESSAGES, c), {
     message: 'unknown fault code',
   }),
   severity: z.enum(['fatal', 'error', 'degraded', 'expected']),
