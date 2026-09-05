@@ -5,6 +5,8 @@ import { useQueryClient } from '@tanstack/react-query'
 import type { ToolPanelContentProps } from '@/types'
 import { MessageContent } from '@/app/components/MessageContent'
 import { parseDeepReport, type DeepReport } from '@/lib/deep-report'
+import { swallow } from '@/lib/swallow'
+import { observePartialResponse } from '@/lib/partial-response-client'
 
 /* ══════════════════════════════════════════════════════════════════════════════
    DEEP RUN PANEL — shared workspace for Deep Research / Deep Think
@@ -139,7 +141,7 @@ export default function DeepRunPanel({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'save_artifact' }),
       })
-      const body = (await res.json().catch(() => ({}))) as { artifact?: { id: string; title: string } }
+      const body = (await res.json().catch((err: unknown) => { swallow(err, { module: 'DeepRunPanel', op: 'parseSaveArtifactBody' }); return {} })) as { artifact?: { id: string; title: string } }
       if (!aliveRef.current) return
       if (!res.ok || !body.artifact) {
         setSave({ status: 'failed' })
@@ -167,6 +169,7 @@ export default function DeepRunPanel({
 
   const pollOnce = useCallback(async (runId: string): Promise<void> => {
     const res = await fetch(`/api/deep-runs/${runId}`)
+    observePartialResponse(res)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const { run: view } = (await res.json()) as { run: RunView }
     if (!aliveRef.current) return
@@ -184,6 +187,7 @@ export default function DeepRunPanel({
     ;(async () => {
       try {
         const res = await fetch(`/api/deep-runs?tool=${toolId}&limit=1`)
+        observePartialResponse(res)
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const { runs } = (await res.json()) as { runs: RunView[] }
         if (cancelled || !aliveRef.current) return
@@ -191,7 +195,7 @@ export default function DeepRunPanel({
         if (latest && latest.status === 'queued') {
           setRun(latest)
           setPhase('watching')
-          void pollOnce(latest.id).catch(() => {})
+          void pollOnce(latest.id).catch((err: unknown) => swallow(err, { module: 'DeepRunPanel', op: 'reattachPoll' }))
         } else if (latest && latest.status === 'succeeded' && latest.resultMd) {
           adoptTerminal({ ...latest, liveStatus: 'succeeded' })
         } else {
@@ -209,8 +213,9 @@ export default function DeepRunPanel({
   useEffect(() => {
     if (phase !== 'watching' || !run) return
     const t = setInterval(() => {
-      void pollOnce(run.id).catch(() => {
+      void pollOnce(run.id).catch((err: unknown) => {
         /* transient poll failure — keep the last known state, try again */
+        swallow(err, { module: 'DeepRunPanel', op: 'pollRun' })
       })
     }, POLL_MS)
     return () => clearInterval(t)
@@ -229,12 +234,14 @@ export default function DeepRunPanel({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tool: toolId, brief: brief.trim(), chatId: chatId ?? undefined }),
       })
+      observePartialResponse(res)
       const body = (await res.json()) as { run?: RunView; error?: string; reason?: string }
       if (!aliveRef.current) return
       if (!res.ok || !body.run) {
         if (body.reason === 'active_run_exists') {
           // Adopt the run that's already in flight instead of arguing.
           const list = await fetch(`/api/deep-runs?tool=${toolId}&limit=1`)
+          observePartialResponse(list)
           const { runs } = (await list.json()) as { runs: RunView[] }
           if (runs[0] && runs[0].status === 'queued') {
             setRun(runs[0])

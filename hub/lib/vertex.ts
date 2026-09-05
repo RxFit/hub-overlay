@@ -12,6 +12,8 @@
  * Falls back gracefully if not configured.
  */
 
+import { swallow } from '@/lib/swallow'
+
 const GCP_PROJECT = process.env.VERTEX_GCP_PROJECT ?? 'semantic-brain-desktop'
 const ENGINE_ID = process.env.VERTEX_ENGINE_ID ?? 'semanticbrain_1779229063037'
 const LOCATION = 'global'
@@ -168,7 +170,7 @@ export async function searchSemanticBrain(
     })
 
     if (!res.ok) {
-      const errBody = await res.text().catch(() => '')
+      const errBody = await res.text().catch((err: unknown) => { swallow(err, { module: 'vertex', op: 'readSearchErrorBody' }); return '' })
       console.error(`[vertex] Search failed: ${res.status} ${errBody}`)
       return null
     }

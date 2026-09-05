@@ -39,6 +39,7 @@
  */
 
 import { GOOGLE_API_TIMEOUT_MS } from '../timeout-config'
+import { swallow } from '@/lib/swallow'
 
 /** Tuning for the retry loop. Defaults suit interactive routes. */
 export interface RetryPolicy {
@@ -182,7 +183,10 @@ async function fetchWithRetry(
 
     // Read the body once: it is needed both to decide retryability (403 case)
     // and to build the thrown error message.
-    const body = await res.text().catch(() => 'Unknown error')
+    const body = await res.text().catch((err: unknown) => {
+      swallow(err, { module: 'google/client', op: 'readErrorBody' })
+      return 'Unknown error'
+    })
     const isLast = attempt === attempts - 1
     if (isLast || !isRetryableStatus(res.status, body)) {
       throw new Error(`Google API error ${res.status}: ${body}`)

@@ -13,6 +13,7 @@ import { dispatchFreshMs, isDispatchConfigured, isDispatchEnabled } from '@/lib/
 import { buildFileProbePrompt, buildProbePrompt, containsFreshTimestamp, DEFAULT_PROBE_URL } from '@/lib/work-probe'
 import { emit } from '@/lib/observability'
 import { withFault } from '@/lib/route-fault'
+import { swallow } from '@/lib/swallow'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -101,7 +102,10 @@ export const POST = withFault('admin/work-probe', async (req: NextRequest) => {
     emit({ type: 'dispatch_enqueued', jobId: outcome.id, kind: 'work_item' })
     // Advisory context, not gates: a probe enqueued against a stale worker is
     // a legitimate way to prove the 'deadline' expiry path end to end.
-    const fresh = await workerFresh(dispatchFreshMs()).catch(() => false)
+    const fresh = await workerFresh(dispatchFreshMs()).catch((err: unknown) => {
+      swallow(err, { module: 'admin/work-probe', op: 'workerFresh' })
+      return false
+    })
     return NextResponse.json({
       jobId: outcome.id,
       marker,

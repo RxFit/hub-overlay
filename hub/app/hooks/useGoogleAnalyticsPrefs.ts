@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useState } from 'react'
 import { refreshSessionCookie } from '@/app/hooks/useHubData'
 import type { GooglePrefsValues } from '@/lib/google/prefs'
+import { swallow } from '@/lib/swallow'
 
 /**
  * Hooks for the tenant's analytics configuration — which GA4 property and
@@ -20,7 +21,10 @@ import type { GooglePrefsValues } from '@/lib/google/prefs'
 async function fetcher<T>(url: string): Promise<T> {
   const res = await fetch(url)
   if (res.status === 401) {
-    const body = await res.json().catch(() => ({} as Record<string, unknown>))
+    const body = await res.json().catch((err: unknown) => {
+      swallow(err, { module: 'useGoogleAnalyticsPrefs', op: 'parse401Body' })
+      return {} as Record<string, unknown>
+    })
     // A merely-stale access token is repairable — rotate the cookie so the
     // retry succeeds instead of bouncing the user to sign-in.
     if (body?.refresh === true) await refreshSessionCookie()
@@ -30,7 +34,10 @@ async function fetcher<T>(url: string): Promise<T> {
     throw err
   }
   if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: 'Unknown error' }))
+    const body = await res.json().catch((err: unknown) => {
+      swallow(err, { module: 'useGoogleAnalyticsPrefs', op: 'parseErrorBody' })
+      return { error: 'Unknown error' }
+    })
     const err = new Error(body?.error ?? `API error ${res.status}`)
     ;(err as any).status = res.status
     ;(err as any).code = body?.code
@@ -146,7 +153,10 @@ export function useSaveGooglePrefs() {
           body: JSON.stringify(values),
         })
         if (!res.ok) {
-          const body = await res.json().catch(() => ({}))
+          const body = await res.json().catch((err: unknown) => {
+            swallow(err, { module: 'useGoogleAnalyticsPrefs', op: 'parseSaveErrorBody' })
+            return {}
+          })
           throw new Error(body?.error ?? `Save failed (${res.status})`)
         }
         const { prefs } = (await res.json()) as { prefs: GooglePrefsValues }

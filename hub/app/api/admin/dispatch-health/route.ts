@@ -14,6 +14,7 @@ import {
 } from '@/lib/dispatch-store'
 import { chatServeCounts, recordAiRun } from '@/lib/runs'
 import { withFault } from '@/lib/route-fault'
+import { swallow } from '@/lib/swallow'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -59,7 +60,7 @@ export const GET = withFault('admin/dispatch-health', async (req: NextRequest) =
   let recent: Awaited<ReturnType<typeof listRecentJobs>> = []
   try {
     await reapExpired()
-    void sweepStale().catch(() => {})
+    void sweepStale().catch((err: unknown) => swallow(err, { module: 'admin/dispatch-health', op: 'sweepStale' }))
     const cutoff = Date.now() - dispatchFreshMs()
     workers = (await listWorkers()).map((w) => ({ ...w, fresh: w.lastSeenAt.getTime() > cutoff }))
     depths = await queueDepths()
@@ -132,7 +133,10 @@ export const GET = withFault('admin/dispatch-health', async (req: NextRequest) =
   // Move 3: who actually served the last 24h of chat (status ok, by engine) —
   // the allotment-vs-metered ratio the alerting thresholds on. Best-effort:
   // a ledger read failure must not take the health surface down.
-  const served24h = await chatServeCounts().catch(() => ({}) as Record<string, number>)
+  const served24h = await chatServeCounts().catch((err: unknown) => {
+    swallow(err, { module: 'admin/dispatch-health', op: 'chatServeCounts' })
+    return ({}) as Record<string, number>
+  })
 
   return NextResponse.json({
     generatedAt: new Date().toISOString(),

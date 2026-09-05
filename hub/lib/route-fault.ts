@@ -3,6 +3,9 @@ import type { NextRequest } from 'next/server'
 import { toFault, faultResponse, newFaultId, type FaultDraft } from '@/lib/fault'
 import { reportFault } from '@/lib/fault-report'
 import { createLogger } from '@/lib/logger'
+// Importing partial-context also REGISTERS it as lib/swallow.ts's marker —
+// the side effect is the wiring, so this import must not be tree-shaken away.
+import { runWithPartialFlag, isPartial } from '@/lib/partial-context'
 import { safeRequestId } from '@/lib/request-id'
 import { parseTraceparent, gcpTraceFields } from '@/lib/trace-context'
 
@@ -20,7 +23,12 @@ import { parseTraceparent, gcpTraceFields } from '@/lib/trace-context'
  *      supplies it unvalidated — correlation poisoning plus unbounded log
  *      cardinality. Same posture as middleware deleting a client-supplied
  *      x-tenant-id.
- *   2. run the handler
+ *   2. run the handler — inside a runWithPartialFlag scope, so an emptyOn()
+ *      anywhere in its async subtree can flag the request as a degraded
+ *      read. The flag is captured INSIDE the scope (ALS is gone after the
+ *      outer await resumes) and surfaces as `x-hub-partial: 1` on a 2xx
+ *      only: a 500 already says everything failed, and a partial marker on
+ *      it would be noise (Layer 9 #2).
  *   3. RE-THROW Next control flow FIRST — redirect() and notFound() are
  *      implemented as throws; a naive catch turns every intended navigation
  *      into a fake 500. Detected via the digest string, never instanceof.
@@ -123,7 +131,10 @@ export function withFault<A extends unknown[]>(
     const isProd = process.env.NODE_ENV === 'production'
 
     try {
-      const res = await handler(req, ...args)
+      const { res, partial } = await runWithPartialFlag(async () => {
+        const handled = await handler(req, ...args)
+        return { res: handled, partial: isPartial() }
+      })
 
       const violation = inspect2xx ? await detectErrorIn2xx(res) : null
       if (violation) {
@@ -150,6 +161,8 @@ export function withFault<A extends unknown[]>(
       // fetch()-produced Responses have immutable headers — skip silently.
       try {
         res.headers.set('x-hub-request-id', requestId)
+        // Only a 2xx can be "partial": success-shaped with something missing.
+        if (partial && res.status >= 200 && res.status < 300) res.headers.set('x-hub-partial', '1')
       } catch {
         /* immutable headers (proxied Response) */
       }

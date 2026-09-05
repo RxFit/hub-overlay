@@ -219,6 +219,12 @@ describe('shutdown', () => {
       ringFull: expect.any(Number),
       sinkFailed: expect.any(Number),
     })
+    // lib/swallow.ts has no logger and no sink of its own — this line is the
+    // only place its totals surface, so losing them here would be silent.
+    expect(line!.swallowCounters).toMatchObject({
+      swallowed: expect.any(Number),
+      partial: expect.any(Number),
+    })
     expect(exitSpy).not.toHaveBeenCalled()
     exitSpy.mockRestore()
   })

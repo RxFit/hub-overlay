@@ -8,6 +8,7 @@ import { resolveTenantToken } from './reports/access-token'
 import { normalizeReports } from './reports/config'
 import { sendChatMessage } from './google'
 import { tagHubChatPost } from './chat-post-tag'
+import { swallow } from '@/lib/swallow'
 
 /**
  * Push alerting for the desktop-dispatch system (hardening move 1,
@@ -445,8 +446,8 @@ export const defaultAlertTickDeps: AlertTickDeps = {
   // traffic (Soon-table item; the sweep itself is advisory-locked in
   // dispatch-store). Failures here must not block alerting.
   housekeep: async () => {
-    await reapExpired().catch(() => {})
-    await sweepStale().catch(() => {})
+    await reapExpired().catch((err: unknown) => swallow(err, { module: 'dispatch-alerts', op: 'housekeepReapExpired' }))
+    await sweepStale().catch((err: unknown) => swallow(err, { module: 'dispatch-alerts', op: 'housekeepSweepStale' }))
   },
   loadSnapshot: loadAlertSnapshot,
   loadLastState: loadLastAlertState,
