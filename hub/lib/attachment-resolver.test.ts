@@ -41,6 +41,8 @@ vi.mock('@/lib/ai-audit', () => ({ getAiAction: (...a: unknown[]) => getAiAction
 vi.mock('@/lib/tool-runs', () => ({ getToolRunOwned: (...a: unknown[]) => getToolRunOwned(...a) }))
 vi.mock('@/lib/tenant-context', () => ({ getTenantId: () => 'rxfit' }))
 vi.mock('@/lib/roles', () => ({ canAccessAdminRoute: (role: string) => role === 'admin' || role === 'superadmin' }))
+const getDispatchAlert = vi.fn()
+vi.mock('@/lib/dispatch-alerts', () => ({ getDispatchAlert: (...a: unknown[]) => getDispatchAlert(...a) }))
 
 import { resolveAttachmentContext } from '@/lib/attachment-resolver'
 import type { ChatAttachment, ChatMessage } from '@/types'
@@ -55,6 +57,7 @@ beforeEach(() => {
   getAiRun.mockReset()
   getAiAction.mockReset()
   getToolRunOwned.mockReset()
+  getDispatchAlert.mockReset()
 })
 
 describe('record attachments (Phase 4 PR 1 — right-panel card taps)', () => {
@@ -90,6 +93,23 @@ describe('record attachments (Phase 4 PR 1 — right-panel card taps)', () => {
     const out = await resolveAttachmentContext([a], lastUserMsg, undefined, { userEmail: 'staff@x', role: 'staff' })
     expect(getAiAction).toHaveBeenCalledWith('a1a1a1a1-2222-4000-8000-000000000002', 'staff@x')
     expect(out).toContain('No AI action with this id exists')
+  })
+
+  it('resolves a dispatch alert for an admin (tenant-scoped) with plain-English meanings, and withholds it from staff', async () => {
+    const ALERT_ID = 'e1e1e1e1-3333-4000-8000-000000000003'
+    getDispatchAlert.mockResolvedValue({ id: ALERT_ID, createdAt: new Date('2026-09-05T14:00:00Z'), kinds: ['worker_stale'], channel: 'chat' })
+    const a: ChatAttachment = { id: 'x', type: 'record', label: 'Dispatch alert: desktop worker offline', recordKind: 'dispatch_alert', recordId: ALERT_ID }
+    const out = await resolveAttachmentContext([a], lastUserMsg, undefined, { userEmail: 'd@x', role: 'admin' })
+    expect(getDispatchAlert).toHaveBeenCalledWith('rxfit', ALERT_ID)
+    expect(out).toContain('Conditions: worker_stale')
+    expect(out).toContain('What "worker_stale" means')
+    expect(out).toContain('delivered via chat')
+    expect(out).toContain('dispatch alert history')
+
+    getDispatchAlert.mockClear()
+    const staff = await resolveAttachmentContext([a], lastUserMsg, undefined, { userEmail: 'd@x', role: 'staff' })
+    expect(getDispatchAlert).not.toHaveBeenCalled()
+    expect(staff).toContain('admin-only')
   })
 
   it('degrades a malformed or scope-less reference to a lookup-failed block', async () => {

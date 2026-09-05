@@ -423,6 +423,9 @@ export function useNeedsYou(enabled: boolean = true) {
     void qc.invalidateQueries({ queryKey: ['runs-feed'] })
   }
 
+  /** Never throws: a network-layer rejection is an ordinary failed result, and
+   *  the queue is re-read either way so an optimistic removal is undone by
+   *  the truth (the card comes back if the server never saw the dismiss). */
   async function dismiss(key: string, undo = false): Promise<boolean> {
     // Optimistic: drop the card now; the refetch below is the truth.
     if (!undo) {
@@ -430,25 +433,36 @@ export function useNeedsYou(enabled: boolean = true) {
         cur ? { ...cur, items: cur.items.filter((i) => i.key !== key), dismissedCount: cur.dismissedCount + 1 } : cur,
       )
     }
-    const res = await fetch('/api/execution/queue/dismiss', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key, undo }),
-    })
-    invalidate()
-    return res.ok
+    try {
+      const res = await fetch('/api/execution/queue/dismiss', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, undo }),
+      })
+      return res.ok
+    } catch {
+      return false
+    } finally {
+      invalidate()
+    }
   }
 
+  /** Never throws — see dismiss. */
   async function retryDeepRun(runId: string): Promise<{ ok: true } | { ok: false; error: string }> {
-    const res = await fetch(`/api/deep-runs/${encodeURIComponent(runId)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'retry' }),
-    })
-    const body = await res.json().catch(() => ({} as { error?: string }))
-    invalidate()
-    if (res.ok) return { ok: true }
-    return { ok: false, error: typeof body?.error === 'string' ? body.error : `Retry failed (${res.status})` }
+    try {
+      const res = await fetch(`/api/deep-runs/${encodeURIComponent(runId)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'retry' }),
+      })
+      const body = await res.json().catch(() => ({} as { error?: string }))
+      if (res.ok) return { ok: true }
+      return { ok: false, error: typeof body?.error === 'string' ? body.error : `Retry failed (${res.status})` }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error && err.message ? `Retry failed: ${err.message}` : 'Retry failed: network error' }
+    } finally {
+      invalidate()
+    }
   }
 
   return {

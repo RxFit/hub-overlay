@@ -305,6 +305,22 @@ export async function listDispatchAlerts(tenantId: string, since: Date, limit: n
   })
 }
 
+/** One alert row by id, tenant-scoped — the needs-you Explain tap for an
+ *  alert card (Phase 4 PR 2). Same content-free shape as the list reader. */
+export async function getDispatchAlert(tenantId: string, id: string): Promise<DispatchAlertRow | null> {
+  const [row] = await db
+    .select({ id: eventLog.id, payload: eventLog.payload, createdAt: eventLog.createdAt })
+    .from(eventLog)
+    .where(and(eq(eventLog.tenantId, tenantId), eq(eventLog.id, id), eq(eventLog.eventType, DISPATCH_ALERT_EVENT)))
+    .limit(1)
+  if (!row) return null
+  const payload = row.payload as { kinds?: unknown; channel?: unknown } | null
+  const kinds = Array.isArray(payload?.kinds)
+    ? payload!.kinds.filter((k): k is string => typeof k === 'string').map((k) => k.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 32))
+    : []
+  return { id: row.id, createdAt: row.createdAt, kinds, channel: typeof payload?.channel === 'string' ? payload.channel : 'none' }
+}
+
 async function loadLastAlertState(tenantId: string): Promise<LastAlertState | null> {
   const [row] = await db
     .select({ payload: eventLog.payload, createdAt: eventLog.createdAt })

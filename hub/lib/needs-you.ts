@@ -207,7 +207,8 @@ export function alertToNeedsYou(row: DispatchAlertRow): NeedsYouItem | null {
     title: `Dispatch alert: ${labels.join(', ')}`,
     description: row.channel === 'chat' || row.channel === 'github' ? `delivered via ${row.channel}` : 'recorded (delivery suppressed)',
     createdAt: row.createdAt.toISOString(),
-    record: null,
+    // Explainable: resolved admin-only by the attachment resolver (getDispatchAlert).
+    record: { recordKind: 'dispatch_alert', recordId: row.id },
     retry: null,
   }
 }

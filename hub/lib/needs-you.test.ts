@@ -111,7 +111,7 @@ describe('builders', () => {
 
   it('a delivered dispatch alert is an FYI with plain-English kinds; a recovery row is skipped', () => {
     const item = alertToNeedsYou({ id: 'e1', createdAt: new Date(NOW), kinds: ['worker_stale', 'agy_error_streak'], channel: 'chat' })!
-    expect(item).toMatchObject({ key: 'alert:e1', kind: 'notify', record: null, retry: null })
+    expect(item).toMatchObject({ key: 'alert:e1', kind: 'notify', record: { recordKind: 'dispatch_alert', recordId: 'e1' }, retry: null })
     expect(item.title).toBe('Dispatch alert: desktop worker offline, agy failing repeatedly')
     expect(item.description).toBe('delivered via chat')
     expect(alertToNeedsYou({ id: 'e2', createdAt: new Date(NOW), kinds: [], channel: 'chat' })).toBeNull()

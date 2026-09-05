@@ -119,17 +119,30 @@ export function NeedsYouQueue({
       return
     }
     setBusyKey(item.key)
-    const result = await retryDeepRun(item.retry.runId)
-    setBusyKey(null)
-    setFlash(result.ok
-      ? { key: item.key, text: 'Retried — a new run is queued', tone: 'ok' }
-      : { key: item.key, text: result.error, tone: 'err' })
+    try {
+      // retryDeepRun never throws, but the busy flag must clear on ANY exit —
+      // a stuck "Retrying…" until reload is worse than the failure itself.
+      const result = await retryDeepRun(item.retry.runId)
+      setFlash(result.ok
+        ? { key: item.key, text: 'Retried — a new run is queued', tone: 'ok' }
+        : { key: item.key, text: result.error, tone: 'err' })
+    } catch (err) {
+      setFlash({ key: item.key, text: err instanceof Error ? err.message : 'Retry failed', tone: 'err' })
+    } finally {
+      setBusyKey(null)
+    }
   }
 
   const handleDismiss = async (item: NeedsYouItem) => {
     setBusyKey(item.key)
-    await dismiss(item.key)
-    setBusyKey(null)
+    try {
+      const ok = await dismiss(item.key)
+      if (!ok) setFlash({ key: item.key, text: 'Could not dismiss — it will stay in the queue', tone: 'err' })
+    } catch (err) {
+      setFlash({ key: item.key, text: err instanceof Error ? err.message : 'Could not dismiss', tone: 'err' })
+    } finally {
+      setBusyKey(null)
+    }
   }
 
   // Nothing to show and nothing wrong: the queue takes no space at all.

@@ -236,7 +236,7 @@ export const ChatRequestSchema = z.object({
     url: z.string().optional(),
     mimeType: z.string().optional(),
     // 'record' — a Hub ledger row by reference (right-panel card tap).
-    recordKind: z.enum(['ai_run', 'ai_action', 'tool_run']).optional(),
+    recordKind: z.enum(['ai_run', 'ai_action', 'tool_run', 'dispatch_alert']).optional(),
     recordId: z.string().max(64).optional(),
   })).optional(),
 })
