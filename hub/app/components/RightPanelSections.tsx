@@ -3,6 +3,8 @@
 import { useState, useMemo, useCallback, memo } from 'react'
 import { useRuns } from '@/app/hooks/useHubData'
 import type { FeedItem } from '@/app/hooks/useHubData'
+import type { ChatAttachment } from '@/types'
+import { feedItemToAttachment, buildFeedInjectMessage } from '@/lib/feed-attachment'
 
 /* ══════════════════════════════════════════════════════════════════════════════
    TYPE STYLING MAP
@@ -55,7 +57,7 @@ const FeedCard = memo(function FeedCard({
 }: {
   item: FeedItem
   index: number
-  onInjectChat: (msg: string) => void
+  onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void
 }) {
   const typeKey = (item as any).type as FeedItemType | undefined
   const feedType = typeKey ?? 'info'
@@ -72,7 +74,13 @@ const FeedCard = memo(function FeedCard({
       data-feed-type={feedType}
       data-feed-source={item.source}
       role="listitem"
-      onClick={() => onInjectChat(`Tell me more about: ${item.title}`)}
+      // The tap carries the ledger row BY REFERENCE (lib/feed-attachment.ts);
+      // the chat route resolves it in the caller's scope so the assistant
+      // explains the actual run/action instead of improvising from a title.
+      onClick={() => {
+        const att = feedItemToAttachment(item)
+        onInjectChat(buildFeedInjectMessage(item), att ? [att] : undefined)
+      }}
       aria-label={`${label}: ${item.title}. ${truncatedDesc}. ${relTime}`}
       style={{
         animation: `rxSlideInUp 0.35s cubic-bezier(0.16, 1, 0.3, 1) ${index * 50}ms both`,
@@ -198,8 +206,9 @@ export function ExecutionFeed({
   onInjectChat,
   canViewRuns,
 }: {
-  // Read-style feed-card taps ("tell me more about: …") — direct, intent-free path.
-  onInjectChat: (msg: string) => void
+  // Read-style feed-card taps ("tell me more about: …") — direct, intent-free
+  // path, carrying the tapped row as a 'record' attachment.
+  onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void
   // Runs data is admin-gated (§3.4 — chat ledger rows have no attribution yet,
   // so a staff view cannot be scoped). False renders a quiet admin-only state
   // and never fetches.

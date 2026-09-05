@@ -123,7 +123,7 @@ function buildScoringPrompt(
 
   const dimensionList = dimensions.map(d => `- ${d.replace(/_/g, ' ')}`).join('\n')
 
-  return `You are the Paperclip AI Context Sufficiency Evaluator. Your job is to score whether an Interview Mode session has collected enough context to safely execute a "${intent}" action.
+  return `You are the Hub's Context Sufficiency Evaluator. Your job is to score whether an Interview Mode session has collected enough context to safely execute a "${intent}" action.
 
 ## Collected Context
 ${contextSummary || '(no context collected yet)'}

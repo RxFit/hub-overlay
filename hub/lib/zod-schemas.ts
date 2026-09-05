@@ -229,12 +229,15 @@ export const ChatRequestSchema = z.object({
   exaMode: z.boolean().optional(),
   attachments: z.array(z.object({
     id: z.string(),
-    type: z.enum(['document', 'url', 'text']),
+    type: z.enum(['document', 'url', 'text', 'record']),
     label: z.string(),
     content: z.string().optional(),
     fileId: z.string().optional(),
     url: z.string().optional(),
     mimeType: z.string().optional(),
+    // 'record' — a Hub ledger row by reference (right-panel card tap).
+    recordKind: z.enum(['ai_run', 'ai_action', 'tool_run']).optional(),
+    recordId: z.string().max(64).optional(),
   })).optional(),
 })
 

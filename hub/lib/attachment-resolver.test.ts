@@ -32,6 +32,16 @@ vi.mock('@/lib/content-fetch', () => ({
 }))
 vi.mock('@/lib/vertex', () => ({ searchSemanticBrain: (...a: unknown[]) => searchSemanticBrain(...a) }))
 
+// Record attachments (right-panel card taps) — scoped ledger reads.
+const getAiRun = vi.fn()
+const getAiAction = vi.fn()
+const getToolRunOwned = vi.fn()
+vi.mock('@/lib/runs', () => ({ getAiRun: (...a: unknown[]) => getAiRun(...a) }))
+vi.mock('@/lib/ai-audit', () => ({ getAiAction: (...a: unknown[]) => getAiAction(...a) }))
+vi.mock('@/lib/tool-runs', () => ({ getToolRunOwned: (...a: unknown[]) => getToolRunOwned(...a) }))
+vi.mock('@/lib/tenant-context', () => ({ getTenantId: () => 'rxfit' }))
+vi.mock('@/lib/roles', () => ({ canAccessAdminRoute: (role: string) => role === 'admin' || role === 'superadmin' }))
+
 import { resolveAttachmentContext } from '@/lib/attachment-resolver'
 import type { ChatAttachment, ChatMessage } from '@/types'
 
@@ -42,6 +52,52 @@ beforeEach(() => {
   fetchUrlContent.mockReset()
   fetchDriveDocContent.mockReset()
   searchSemanticBrain.mockReset()
+  getAiRun.mockReset()
+  getAiAction.mockReset()
+  getToolRunOwned.mockReset()
+})
+
+describe('record attachments (Phase 4 PR 1 — right-panel card taps)', () => {
+  const RUN_ID = '89378f4f-1111-4000-8000-000000000001'
+  const runRow = {
+    id: RUN_ID, createdAt: '2026-09-05T14:00:00.000Z', engine: 'agy', model: null, source: 'chat',
+    status: 'ok', errorClass: null, error: 'never shown', latencyMs: 25_600, inputTokens: null,
+    outputTokens: null, cacheReadTokens: null, totalTokens: 22_271, promptChars: 100,
+    promptSha256: 'ff', requestId: null, userEmail: null, meta: { workerId: 'danny-desktop' },
+  }
+  const att: ChatAttachment = { id: 'r', type: 'record', label: 'Run 89378f4f — agy chat served', recordKind: 'ai_run', recordId: RUN_ID }
+
+  it('resolves an ai_run for an admin into an explained record block', async () => {
+    getAiRun.mockResolvedValue(runRow)
+    const out = await resolveAttachmentContext([att], lastUserMsg, undefined, { userEmail: 'd@x', role: 'admin' })
+    expect(getAiRun).toHaveBeenCalledWith(RUN_ID)
+    expect(out).toContain('### Attached Execution Record: "Run 89378f4f — agy chat served"')
+    expect(out).toContain('served successfully')
+    expect(out).toContain('Worker: danny-desktop')
+    expect(out).toContain('What this is: one row of the Hub')
+    expect(out).not.toContain('never shown')
+  })
+
+  it('withholds ai_runs from a non-admin WITHOUT reading the ledger', async () => {
+    const out = await resolveAttachmentContext([att], lastUserMsg, undefined, { userEmail: 'd@x', role: 'staff' })
+    expect(getAiRun).not.toHaveBeenCalled()
+    expect(out).toContain('admin-only')
+  })
+
+  it('reads an ai_action only inside the caller\'s own scope', async () => {
+    getAiAction.mockResolvedValue(null)
+    const a: ChatAttachment = { id: 'a', type: 'record', label: 'AI performed an action', recordKind: 'ai_action', recordId: 'a1a1a1a1-2222-4000-8000-000000000002' }
+    const out = await resolveAttachmentContext([a], lastUserMsg, undefined, { userEmail: 'staff@x', role: 'staff' })
+    expect(getAiAction).toHaveBeenCalledWith('a1a1a1a1-2222-4000-8000-000000000002', 'staff@x')
+    expect(out).toContain('No AI action with this id exists')
+  })
+
+  it('degrades a malformed or scope-less reference to a lookup-failed block', async () => {
+    const bad: ChatAttachment = { id: 'b', type: 'record', label: 'x', recordKind: 'ai_run', recordId: 'DROP TABLE; --' }
+    expect(await resolveAttachmentContext([bad], lastUserMsg, undefined, { userEmail: 'd@x', role: 'admin' })).toContain('could not be looked up')
+    expect(await resolveAttachmentContext([att], lastUserMsg, undefined)).toContain('could not be looked up')
+    expect(getAiRun).not.toHaveBeenCalled()
+  })
 })
 
 describe('resolveAttachmentContext', () => {

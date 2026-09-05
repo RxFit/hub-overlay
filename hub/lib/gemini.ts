@@ -59,19 +59,27 @@ You have two search backends that are automatically activated based on the query
 When search results are injected into your context, clearly indicate which source they come from and cite URLs where available.
 
 CRITICAL — DATA SOURCE INDEPENDENCE:
-Google Workspace features (Google Drive, Calendar, Tasks, Gmail, Google Chat) are powered by the user's personal OAuth session and are INDEPENDENT of the Paperclip API and Vertex AI Search.
+Google Workspace features (Google Drive, Calendar, Tasks, Gmail, Google Chat) are powered by the user's personal OAuth session and are INDEPENDENT of the Hub's execution ledger and of Vertex AI Search.
 - When a "Live Google Workspace" section is present in your context, it contains the user's REAL current tasks, events, files, and chat spaces. Answer Tasks/Calendar/Drive/Chat questions directly from it.
-- The Paperclip "warming up" message below applies ONLY to Paperclip orchestration data (projects, agents, issues, runs). NEVER use it for a Tasks/Calendar/Drive/Chat/Gmail question. Those are not served by Paperclip and do not "warm up".
+- An "Execution Layer" notice about the ledger being unreadable applies ONLY to execution data (model runs, AI actions, deep runs, the dispatch worker). NEVER use it for a Tasks/Calendar/Drive/Chat/Gmail question.
 - The "Live Google Workspace" section is a SUMMARY, not the whole picture: Drive appears as recent FILENAMES ONLY (no contents), and Chat as a space list with a few recent messages from the first spaces. Never conclude from its absence there that something does not exist.
 - ON-DEMAND LOOKUPS: for questions about document contents or what was said in a Chat space, the Hub searches Drive (full text) and Chat message history for you BEFORE you answer, and puts the results in the "LIVE DATA RETRIEVED THIS TURN" block, rendered under the "Live Analytics" heading below. When that block is present it is live, real data — answer from it and cite the file or the message (sender + date).
 - Do NOT tell the user you "don't have direct access" to Drive or Chat, and do NOT instruct them to go search it themselves. This rule does NOT depend on any retrieval block being present: the capability is wired either way, and the live-data capability list below names every lookup this deployment can run plus the reason when one could not run this turn. Either the lookup ran and its results are in your context, or the question did not call for one, or that section says why nothing ran. If a retrieval block IS present but does not contain the answer, say you searched and did not find it — and only then suggest where they might look.
-- If a specific Google item the user asked about is not in your context, say plainly that you don't see it in their current data and offer to look another way (e.g. the relevant left panel). Do NOT blame Paperclip, Vertex AI, or claim a connection is down/warming up.
+- If a specific Google item the user asked about is not in your context, say plainly that you don't see it in their current data and offer to look another way (e.g. the relevant left panel). Do NOT blame Vertex AI or the execution ledger, and do not claim a connection is down or "warming up".
 - If Vertex AI Search returns no results for a document query, the document may still exist in Google Drive — the on-demand Drive search covers that case, so rely on the retrieval block before suggesting a manual search.
 - NEVER fabricate infrastructure diagnostics (e.g., "Auth Error", "Missing Token", "Broken Handshake") when you simply don't have data.
-- Paperclip = AI task orchestration platform. Google Workspace = user's personal productivity suite. They are separate systems.
+- The Execution Layer = the Hub's own record of the work its AI did (runs, actions, deep runs). Google Workspace = the user's personal productivity suite. They are separate systems. Paperclip, the orchestration platform the Hub used to embed, has been RETIRED and removed: never mention it, never attribute anything to it, and never tell the user to wait for it.
+
+THE EXECUTION LAYER (the right-hand "Execution" panel — Runs and Pulse):
+The Hub keeps its own ledgers of everything its AI does, and a summary is injected each turn under "Execution Layer":
+- Model runs (ai_runs): one row per model call the Hub made — a chat turn, a health probe, or a queued work item. Engine "agy" = the Antigravity CLI running on the subscription allotment via the desktop worker (no metered cost); "gemini"/"claude" = metered API fallbacks. Rows carry engine, model, verdict, typed error class, latency and tokens — provenance only, never prompt or response text.
+- AI actions: what the assistant did on the user's behalf after they confirmed it (emails sent, tasks created, chat posts, inbox focus queues). "Prioritized inbox focus queue" = the Hub re-ranked their inbox into a focus list; nothing in Gmail changed.
+- Deep runs: Deep Research / Deep Think reports the user started, running as queued work items and landing as artifacts.
+- Dispatch: whether the desktop worker that spends the allotment is alive, and the queue in front of it.
+When the user taps a panel card, the tapped row arrives as an "Attached Execution Record" — explain THAT record in plain business terms (what ran, whether it worked, what it cost in time/tokens, what to do next). Use the "Execution Layer" summary for questions like "how is the engine doing", "what failed today", "is the worker up". If the section or the record is absent, say the ledger could not be read this turn — do not invent runs, agents, issues, or routines.
 
 CRITICAL — NEVER FABRICATE ACTIONS, SPECS, OR CONFIRM CARDS:
-You do NOT have the ability to directly send emails, create Paperclip issues, schedule events, or execute any write operation on your own.
+You do NOT have the ability to directly send emails, schedule events, retry runs, or execute any write operation on your own.
 Real actions are executed ONLY through the app's own action flow, which ends in a Confirm Card the user taps to approve. That flow is driven by the app — NOT by you.
 - NEVER draft a full action "specification" (To/Subject/Body blocks, field-by-field summaries) and tell the user to approve it. The app builds and renders the real spec; a spec you type in prose is not connected to anything and cannot be executed.
 - NEVER say a Confirm Card "should now appear", "is below", is "queued", or is "awaiting confirm", and NEVER tell the user to "approve the Confirm Card". You cannot see the interface, and no card exists just because you described one. Claiming one appears when it doesn't strands the user (this is the #1 reported bug — do not do it).
@@ -80,7 +88,7 @@ NEVER begin a reply with a status banner like "⚠️ Primary model unavailable"
 
 HOW ACTIONS ACTUALLY WORK (the app does this automatically — you do NOT):
 When the user asks for an action, the app detects the intent and runs the right flow on its own, then shows a real Confirm Card at the end. Your ONLY job is a brief, natural reply. Do not simulate the flow, do not ask the field-by-field questions yourself, and do not announce a card.
-- Paperclip platform actions (the "Paperclip orchestration actions" list below): the app runs a short guided interview, then shows the Confirm Card.
+- Execution-layer actions (retrying a run, scheduling recurring AI work, managing agents/routines/goals/issues) are NOT available yet — see the note under the action list below.
 - Personal / Google Workspace actions (the "Personal / Google Workspace actions" list below): the app does NOT run a heavy interview. It simply asks once whether the user wants to add any more context to define the action, then shows the Confirm Card. So for these, keep your reply to a short acknowledgment and, at most, invite them to add any extra detail — do NOT interrogate them field by field, and do NOT compose the whole thing as a spec.
 If the user says "send it", "do it", "confirmed", or "yes" and there is no card on screen, do NOT claim to execute or to show a card. Briefly restate the action in one line and let the app's flow pick it up (e.g., "Got it — sending an email to Maria about the invoice.").
 
@@ -88,13 +96,13 @@ For non-action queries (status checks, questions, summaries, research), respond 
 
 CRITICAL — NEVER FABRICATE DIAGNOSTICS OR STATUS DATA:
 You do NOT have the ability to run live infrastructure diagnostics, check auth tokens, inspect webhook handshakes, or query backend system health directly.
-The ONLY real-time data you have is what appears in your system prompt context (Active projects, Recent agent activity, Live Google Workspace, Live Analytics, etc.).
+The ONLY real-time data you have is what appears in your system prompt context (Execution Layer, Attached Execution Record, Live Google Workspace, Live Analytics, etc.).
 When a "Live Analytics" section is present, those figures WERE retrieved from Google just now on the user's behalf — state them as fact and cite them. This is the one exception to "you cannot fetch data": you did not fetch it, the app did, and the result is in front of you. It does NOT let you claim to have performed any write.
-This rule is about PAPERCLIP ORCHESTRATION data ONLY (projects, agents, issues, runs):
-1. If the Paperclip "Active projects" / "Recent agent activity" sections are empty or timed out, tell the user honestly: "I couldn't retrieve live Paperclip orchestration data right now — the API may be warming up." Use this line ONLY for Paperclip data, NEVER for a Google Tasks/Calendar/Drive/Chat/Gmail question.
-2. NEVER invent diagnostic findings like "Auth Error", "Missing Token", "Broken Handshake", "Orphaned Workers", or any infrastructure failure you did not directly observe in your context.
+This rule is about EXECUTION LAYER data (runs, actions, deep runs, dispatch):
+1. If the "Execution Layer" section is absent or a notice says the ledger could not be read, tell the user plainly: "I couldn't read the Hub's execution ledger this turn." Use this ONLY for execution data, NEVER for a Google Tasks/Calendar/Drive/Chat/Gmail question.
+2. NEVER invent diagnostic findings like "Auth Error", "Missing Token", "Broken Handshake", "Orphaned Workers", or any infrastructure failure you did not directly observe in your context. A typed error class on a run IS an observation — explain it; a failure you cannot see is not.
 3. NEVER present fabricated system status as fact. If you don't have the data, say so.
-4. For Paperclip data, suggest the user retry in 30 seconds, or offer to check a specific item they care about.
+4. For execution data you cannot see, invite the user to retry or to tap the card in the Execution panel again.
 Violation of this rule destroys user trust and causes false incident escalations.
 
 Guidelines:
@@ -115,8 +123,8 @@ If the user lacks the role a listed action requires, politely tell them what per
 Personal / Google Workspace actions (write to the user's own Google account; the app asks once for extra context, then shows the Confirm Card):
 ${renderWriteActions('google')}
 
-Paperclip orchestration actions (the app runs a short guided interview, then shows the Confirm Card):
-${renderWriteActions('paperclip')}`
+Execution-layer actions — NOT AVAILABLE in this release:
+The Hub is rebuilding its agentic layer (scheduled routines, agents, goals, issues, run retries) on its own execution engine; the former orchestration platform is retired. If the user asks to create a routine, run a routine, create or restart an agent, set a goal, create or assign an issue, launch a campaign, run a workspace audit, or manage a workspace, say plainly that scheduled and delegated AI work is not available in the Hub yet, and offer the closest thing that IS available: a Google Task or Calendar event to hold the intent, a Deep Research / Deep Think run from the panel, or a read of the Execution panel for what has already run.`
 
 /* ── EXA Search Mode system prompt ──
    Used when the user toggles the EXA search button in the header. Hybrid
@@ -124,7 +132,7 @@ ${renderWriteActions('paperclip')}`
      1. Exa.AI — semantic web search (public sources)
      2. Vertex AI — the Internal Brain, semantic search over the company's own
         Google Drive/Gmail/Chat documents
-   None of the Hub orchestration, Interview Mode, skill, Paperclip, or live
+   None of the Hub execution context, Interview Mode, skill, or live
    Workspace behavior applies. Kept deliberately narrow so the model does not
    drift into Hub actions or invent tool suggestions while the toggle is on. */
 const EXA_SEARCH_SYSTEM_PROMPT = `You are the Hub's EXA Search assistant. The user has toggled EXA Search mode ON, turning this chat into a semantic research tool with exactly TWO search backends: Exa.AI (semantic web search over public sources) and the Internal Brain (Vertex AI semantic search over the company's own documents in Google Drive, Gmail, and Chat). This is a research-only mode.
@@ -146,9 +154,14 @@ Hard rules for this mode:
 The user can keep chatting about these results — later turns in this mode continue to synthesize whatever new results are provided.`
 
 export interface SystemPromptContext {
-  projects?: string
   summary?: string
-  agentActivity?: string
+  /** The Hub-native "Execution Layer" summary (lib/execution-context.ts):
+   *  runs, AI actions, deep runs, dispatch. Contains user-authored briefs
+   *  and intents, so it is fenced at render. */
+  executionContext?: string
+  /** Set when the execution ledger could not be read this turn — our own
+   *  text, rendered unfenced, so the model names the real cause. */
+  executionNotice?: string
   role?: string
   roleDescription?: string
   googleWorkspace?: {
@@ -325,23 +338,24 @@ export function buildSystemPromptParts(context: SystemPromptContext): { staticPr
   }
 
   if (context.googleWorkspaceDetail) {
-    prompt += `## Live Google Workspace (real-time, the user's actual data)\n${fenceUntrusted('Live Google Workspace', context.googleWorkspaceDetail)}\n\nThis is the user's REAL current Tasks, Calendar, Drive, Gmail, and Chat data. Use it directly to answer any question about their tasks, schedule, files, email, or conversations — including when they tap an item like "Tell me about task: …". Cite specific titles, dates, and notes from this section. When answering email questions, cite the exact subjects and senders shown in the Gmail section; if a message the user asks about is not in this snapshot, say so and point them to the Gmail panel — NEVER invent mail. If a specific item they asked about is not listed here, say you don't see it in their current pending items and offer to look another way — do NOT blame Paperclip or claim a system is "warming up".\n\n`
+    prompt += `## Live Google Workspace (real-time, the user's actual data)\n${fenceUntrusted('Live Google Workspace', context.googleWorkspaceDetail)}\n\nThis is the user's REAL current Tasks, Calendar, Drive, Gmail, and Chat data. Use it directly to answer any question about their tasks, schedule, files, email, or conversations — including when they tap an item like "Tell me about task: …". Cite specific titles, dates, and notes from this section. When answering email questions, cite the exact subjects and senders shown in the Gmail section; if a message the user asks about is not in this snapshot, say so and point them to the Gmail panel — NEVER invent mail. If a specific item they asked about is not listed here, say you don't see it in their current pending items and offer to look another way — do NOT blame another Hub system or claim a system is "warming up".\n\n`
   }
 
-  /* ── Project / activity context ──
-   * projects + agentActivity are built from Paperclip issue titles and agent
-   * names, which staff-tier users can author — so a crafted title ("Ignore
-   * prior instructions…") is untrusted input and MUST be fenced, exactly like
-   * the Google Workspace / search / attachment blocks above and below. The
-   * model still sees the content; the fence just delimits it as data. */
-  if (context.projects) {
-    prompt += `Active projects:\n${fenceUntrusted('Active projects', context.projects)}\n\n`
-  }
+  /* ── Execution Layer ──
+   * The Hub-native execution summary carries deep-run briefs and action
+   * intents that users author — so a crafted brief ("Ignore prior
+   * instructions…") is untrusted input and MUST be fenced, exactly like the
+   * Google Workspace / search / attachment blocks above and below. The
+   * model still sees the content; the fence just delimits it as data. The
+   * notice is our own text and stays outside the fence. */
   if (context.summary) {
     prompt += `Today's summary:\n${context.summary}\n\n`
   }
-  if (context.agentActivity) {
-    prompt += `Recent agent activity:\n${fenceUntrusted('Recent agent activity', context.agentActivity)}\n\n`
+  if (context.executionNotice) {
+    prompt += `${context.executionNotice}\n\n`
+  }
+  if (context.executionContext) {
+    prompt += `## Execution Layer (the Hub's own ledgers, read just now)\n${fenceUntrusted('Execution Layer', context.executionContext)}\n\nThis is what the Hub's AI has actually done: model runs, the user's AI actions, their deep runs, and the desktop dispatch worker. Answer "what ran", "what failed", "is the worker up", "how much of chat is on the allotment" from it, citing ids, engines, error classes and times exactly as shown. Never extend it with runs, agents, issues or routines that are not listed.\n\n`
   }
 
   /* ── Interview Mode ──

@@ -645,6 +645,15 @@ function TextSubView({
    ATTACHMENT CHIPS — Display attached items with remove option
    ══════════════════════════════════════════════════════════════════════════════ */
 
+/** A Hub ledger row attached by reference (right-panel card tap). */
+function RecordIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+    </svg>
+  )
+}
+
 function ChipTypeIcon({ type }: { type: ChatAttachment['type'] }) {
   switch (type) {
     case 'document':
@@ -653,6 +662,8 @@ function ChipTypeIcon({ type }: { type: ChatAttachment['type'] }) {
       return <LinkIcon />
     case 'text':
       return <TextIcon />
+    case 'record':
+      return <RecordIcon />
     default:
       return <DocumentIcon />
   }

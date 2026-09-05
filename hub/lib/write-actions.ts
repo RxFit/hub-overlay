@@ -28,13 +28,15 @@ import type { InterviewIntent, ActionPermission } from '@/types'
 import { getRequiredPermission } from './interview'
 
 /**
- * Which flow an intent runs through. The two surfaces behave differently and
- * the prompt must describe them differently: Paperclip actions run a short
- * guided interview, personal/Google actions ask once for extra context. Getting
- * that backwards is what made the model interrogate users field-by-field for a
- * one-line "email Maria".
+ * Which flow an intent runs through. Personal/Google actions ask once for
+ * extra context, then show the Confirm Card. The 'execution' surface is the
+ * former orchestration-platform set (routines, agents, goals, issues): those
+ * intents still exist in interview.ts so the catalog stays type-complete, but
+ * the engine behind them is retired (AGENTS.md), so the prompt advertises
+ * them as NOT available rather than listing them — a listed action the app
+ * cannot finish is the phantom-flow bug this file exists to prevent.
  */
-export type WriteActionSurface = 'google' | 'paperclip'
+export type WriteActionSurface = 'google' | 'execution'
 
 export interface WriteAction {
   /** Prompt-facing phrase — what the user would recognise asking for. */
@@ -60,28 +62,28 @@ export const WRITE_ACTION_CATALOG: Record<InterviewIntent, WriteAction> = {
   send_gmail: { label: 'Send an email via Gmail', surface: 'google' },
   post_chat_message: { label: 'Post a message in a Google Chat space', surface: 'google' },
 
-  /* ── Paperclip orchestration ── */
+  /* ── Execution layer (retired engine — not advertised, see surface doc) ── */
   send_communication: {
     label: 'Delegate a memo / outreach / multi-recipient communication to the COO agent',
-    surface: 'paperclip',
+    surface: 'execution',
   },
-  create_paperclip_issue: { label: 'Create a Paperclip issue → triggers agent investigation', surface: 'paperclip' },
-  check_agent_status: { label: 'Check agent status — current health of all agents', surface: 'paperclip' },
-  view_runs: { label: 'View run history — recent agent executions', surface: 'paperclip' },
-  run_routine: { label: 'Run an existing routine right now, outside its schedule', surface: 'paperclip' },
-  assign_issue: { label: 'Assign or reassign an issue to a specific agent', surface: 'paperclip' },
-  update_issue_state: { label: 'Update an issue state (open, in-progress, done, cancelled)', surface: 'paperclip' },
-  create_agent: { label: 'Create a new AI agent with custom instructions', surface: 'paperclip' },
-  launch_campaign: { label: 'Launch a multi-agent campaign or initiative', surface: 'paperclip' },
-  restart_agent: { label: 'Restart an agent that is in an error state', surface: 'paperclip' },
-  run_audit: { label: 'Run a workspace audit', surface: 'paperclip' },
-  create_workspace: { label: 'Create a workspace with agent templates', surface: 'paperclip' },
-  delete_workspace: { label: 'Delete an entire workspace', surface: 'paperclip' },
-  create_routine: { label: 'Create a recurring routine (scheduled agent work)', surface: 'paperclip' },
-  update_routine: { label: 'Update a routine — pause, resume, rename or reschedule it', surface: 'paperclip' },
-  create_goal: { label: 'Create a business goal for the company, a team, or an agent', surface: 'paperclip' },
-  update_goal: { label: 'Update a goal — mark it achieved, activate, cancel, or edit it', surface: 'paperclip' },
-  delete_agent: { label: 'Delete an agent permanently', surface: 'paperclip' },
+  create_paperclip_issue: { label: 'Create an issue → triggers agent investigation', surface: 'execution' },
+  check_agent_status: { label: 'Check agent status — current health of all agents', surface: 'execution' },
+  view_runs: { label: 'View run history — recent agent executions', surface: 'execution' },
+  run_routine: { label: 'Run an existing routine right now, outside its schedule', surface: 'execution' },
+  assign_issue: { label: 'Assign or reassign an issue to a specific agent', surface: 'execution' },
+  update_issue_state: { label: 'Update an issue state (open, in-progress, done, cancelled)', surface: 'execution' },
+  create_agent: { label: 'Create a new AI agent with custom instructions', surface: 'execution' },
+  launch_campaign: { label: 'Launch a multi-agent campaign or initiative', surface: 'execution' },
+  restart_agent: { label: 'Restart an agent that is in an error state', surface: 'execution' },
+  run_audit: { label: 'Run a workspace audit', surface: 'execution' },
+  create_workspace: { label: 'Create a workspace with agent templates', surface: 'execution' },
+  delete_workspace: { label: 'Delete an entire workspace', surface: 'execution' },
+  create_routine: { label: 'Create a recurring routine (scheduled agent work)', surface: 'execution' },
+  update_routine: { label: 'Update a routine — pause, resume, rename or reschedule it', surface: 'execution' },
+  create_goal: { label: 'Create a business goal for the company, a team, or an agent', surface: 'execution' },
+  update_goal: { label: 'Update a goal — mark it achieved, activate, cancel, or edit it', surface: 'execution' },
+  delete_agent: { label: 'Delete an agent permanently', surface: 'execution' },
 }
 
 const TIER_ORDER: readonly ActionPermission[] = ['onboarding', 'staff', 'admin', 'superadmin']

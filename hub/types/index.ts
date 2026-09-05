@@ -338,14 +338,21 @@ export interface ProjectKPI {
 
 /* ── Chat Attachment Types ── */
 
+/** A Hub ledger row attached by reference (a right-panel card tap). The
+ *  server resolves it with the caller's own scope — the client never carries
+ *  the record's content, only its identity. */
+export type ChatRecordKind = 'ai_run' | 'ai_action' | 'tool_run'
+
 export interface ChatAttachment {
   id: string
-  type: 'document' | 'url' | 'text'
-  label: string           // Display name (file name, URL, "Pasted text")
+  type: 'document' | 'url' | 'text' | 'record'
+  label: string           // Display name (file name, URL, "Pasted text", card title)
   content?: string        // For 'text' type or pre-resolved content
   fileId?: string         // For 'document' type (Google Drive file ID)
   url?: string            // For 'url' type
   mimeType?: string       // For document type
+  recordKind?: ChatRecordKind // For 'record' type — which ledger
+  recordId?: string       // For 'record' type — the row id
 }
 
 /* ── Active Skill Types ── */

@@ -3,6 +3,12 @@ import { searchSemanticBrain } from '@/lib/vertex'
 import { fetchUrlWithExa } from '@/lib/exa'
 import { withTimeout } from '@/lib/timeout'
 import { createLogger } from '@/lib/logger'
+import { getAiRun } from '@/lib/runs'
+import { getAiAction } from '@/lib/ai-audit'
+import { getToolRunOwned } from '@/lib/tool-runs'
+import { getTenantId } from '@/lib/tenant-context'
+import { canAccessAdminRoute } from '@/lib/roles'
+import { formatAiRunRecord, formatAiActionRecord, formatToolRunRecord } from '@/lib/execution-context'
 import type { ChatAttachment, ChatMessage } from '@/types'
 
 const log = createLogger('attachment-resolver')
@@ -18,12 +24,92 @@ const MAX_ATTACHMENTS = 5
  * inline behaviour. On any thrown error the item degrades to a "[Failed to load
  * content]" block so a single bad attachment never rejects the whole batch.
  */
+/**
+ * Who is asking — needed only for 'record' attachments, whose resolution is
+ * a scoped ledger read (ai_runs is admin-plane; ai_action_log and tool_runs
+ * are owner-scoped). Absent scope resolves records to an "unavailable" block,
+ * never to another user's row.
+ */
+export interface AttachmentScope {
+  userEmail: string
+  role: string | undefined
+}
+
+const RECORD_UUID = /^[0-9a-f-]{8,64}$/i
+
+/**
+ * A right-panel card tapped into chat. The card carried only its title before
+ * this existed, so the model answered "tell me more about Run 89378f4f" from
+ * nothing — and reached for the retired Paperclip explanation. Now the row
+ * itself is read (provenance only, by ledger contract) and rendered with a
+ * short glossary so the model can actually explain it.
+ */
+async function resolveRecord(att: ChatAttachment, scope: AttachmentScope | undefined): Promise<string> {
+  const head = `### Attached Execution Record: "${att.label}"`
+  const id = att.recordId ?? ''
+  if (!scope || !att.recordKind || !RECORD_UUID.test(id)) {
+    return `${head}
+
+[Record reference is incomplete — tell the user the card could not be looked up and invite them to tap it again.]`
+  }
+  const glossary = RECORD_GLOSSARY[att.recordKind]
+  if (att.recordKind === 'ai_run') {
+    if (!canAccessAdminRoute(scope.role)) {
+      return `${head}
+
+[Model-run details are admin-only. Tell the user an admin can look this run up from the Execution panel.]`
+    }
+    const run = await getAiRun(id)
+    if (!run) return `${head}
+
+[No run with this id exists in the ai_runs ledger any more.]`
+    return `${head}
+
+${formatAiRunRecord(run)}
+
+${glossary}`
+  }
+  if (att.recordKind === 'ai_action') {
+    const action = await getAiAction(id, scope.userEmail)
+    if (!action) return `${head}
+
+[No AI action with this id exists in the user's own action log.]`
+    return `${head}
+
+${formatAiActionRecord(action)}
+
+${glossary}`
+  }
+  const run = await getToolRunOwned(id, getTenantId(), scope.userEmail)
+  if (!run) return `${head}
+
+[No deep run with this id exists for this user.]`
+  return `${head}
+
+${formatToolRunRecord(run)}
+
+${glossary}`
+}
+
+const RECORD_GLOSSARY: Record<NonNullable<ChatAttachment['recordKind']>, string> = {
+  ai_run:
+    'What this is: one row of the Hub\'s own ai_runs ledger — a single model call the Hub made (a chat turn, a health probe, or a queued work item). "agy" runs execute on the Antigravity CLI subscription allotment via the desktop worker and cost nothing extra; "gemini"/"claude" runs are metered API calls (the fallback chain). The ledger stores provenance only: prompt size and fingerprint, never prompt or response text — so you cannot quote what was said, only describe the run. Explain the verdict, engine, cost class, latency and tokens in plain business terms; for a failure, explain the error class (auth = worker token needs rotation; timeout = the run exceeded its deadline; empty = agy returned nothing, treated as failure by design) and what to do about it.',
+  ai_action:
+    'What this is: one row of the user\'s own AI action log — an action the assistant carried out on their behalf after they confirmed it (email sent, task created, chat message posted, inbox focus queue built). The log stores routing metadata only (recipient, space, task id), never message bodies. "Prioritized inbox focus queue" means the Hub re-ranked the user\'s inbox into a focus list; it changed nothing in Gmail. Explain what happened, whether it succeeded, and offer the natural follow-up (retry, open the item, adjust).',
+  tool_run:
+    'What this is: one Deep Research / Deep Think run the user started from the panel. It runs as a queued work item on the desktop worker and lands its report as an artifact. "queued" means still running or waiting for the worker; "failed" carries a typed error class. Explain the state and, if it failed, what the class means and whether re-running is sensible.',
+}
+
 async function resolveAttachment(
   att: ChatAttachment,
   lastUserMsg: ChatMessage | undefined,
   accessToken: string | undefined,
+  scope: AttachmentScope | undefined,
 ): Promise<string | null> {
   try {
+    if (att.type === 'record') {
+      return await resolveRecord(att, scope)
+    }
     if (att.type === 'text' && att.content) {
       // Direct text — use as-is
       return `### Attached Text: "${att.label}"\n\n${att.content.slice(0, 16_000)}`
@@ -100,6 +186,7 @@ export async function resolveAttachmentContext(
   attachments: ChatAttachment[] | undefined,
   lastUserMsg: ChatMessage | undefined,
   accessToken: string | undefined,
+  scope?: AttachmentScope,
 ): Promise<string> {
   if (!attachments || attachments.length === 0) return ''
 
@@ -107,7 +194,7 @@ export async function resolveAttachmentContext(
     await Promise.all(
       attachments
         .slice(0, MAX_ATTACHMENTS)
-        .map(att => resolveAttachment(att, lastUserMsg, accessToken)),
+        .map(att => resolveAttachment(att, lastUserMsg, accessToken, scope)),
     )
   ).filter((p): p is string => p !== null)
 

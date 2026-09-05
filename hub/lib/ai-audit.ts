@@ -23,7 +23,7 @@ import crypto from 'crypto'
 import { db } from './db'
 import { aiActionLog } from './schema'
 import { emit } from './observability'
-import { eq, desc } from 'drizzle-orm'
+import { and, eq, desc } from 'drizzle-orm'
 
 /** Actions the AI can take. Open-ended (`string`) so new intents don't need a code change here. */
 export type AiActionType = 'gmail_send' | 'chat_post' | 'task_create' | (string & {})
@@ -164,15 +164,8 @@ export interface AiActionRecord {
  * Read recent audit rows for a single user, newest first. `limit` is expected
  * to be pre-clamped by the caller (the route clamps it).
  */
-export async function listAiActions(opts: { userEmail: string; limit: number }): Promise<AiActionRecord[]> {
-  const rows = await db
-    .select()
-    .from(aiActionLog)
-    .where(eq(aiActionLog.userEmail, opts.userEmail.toLowerCase().trim()))
-    .orderBy(desc(aiActionLog.createdAt))
-    .limit(opts.limit)
-
-  return rows.map((r) => ({
+function toActionRecord(r: typeof aiActionLog.$inferSelect): AiActionRecord {
+  return {
     id: r.id,
     createdAt: r.createdAt instanceof Date ? r.createdAt.toISOString() : String(r.createdAt),
     userEmail: r.userEmail ?? null,
@@ -184,5 +177,27 @@ export async function listAiActions(opts: { userEmail: string; limit: number }):
     requestId: r.requestId ?? null,
     status: r.status,
     error: r.error ?? null,
-  }))
+  }
+}
+
+/** Read one audit row by id, scoped to its owner — a row belonging to anyone
+ *  else reads as absent, never as forbidden. */
+export async function getAiAction(id: string, userEmail: string): Promise<AiActionRecord | null> {
+  const rows = await db
+    .select()
+    .from(aiActionLog)
+    .where(and(eq(aiActionLog.id, id), eq(aiActionLog.userEmail, userEmail.toLowerCase().trim())))
+    .limit(1)
+  return rows[0] ? toActionRecord(rows[0]) : null
+}
+
+export async function listAiActions(opts: { userEmail: string; limit: number }): Promise<AiActionRecord[]> {
+  const rows = await db
+    .select()
+    .from(aiActionLog)
+    .where(eq(aiActionLog.userEmail, opts.userEmail.toLowerCase().trim()))
+    .orderBy(desc(aiActionLog.createdAt))
+    .limit(opts.limit)
+
+  return rows.map(toActionRecord)
 }

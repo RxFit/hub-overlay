@@ -63,7 +63,7 @@ a disruption can't dark the Hub.
 | **1 · Gateway** | ✅ done (`hub/lib/agy.ts`, PRs #178–#181) | `agyGenerateText()`, runtime binary provisioning, `/api/admin/agy-health` |
 | **2 · Worker + ledger** | in progress | Chat integration ✅ (`hub/lib/agy-chat.ts`, `AGY_CHAT_ENABLED`); `ai_runs` ledger ✅ (`hub/lib/runs.ts`, engine-agnostic). Remaining: conversations table, Chat post-tagging convention — see `scripts/agy/README.md` § Phase 2 remaining scope |
 | **3 · Rewire right panel** | designed, executing | Runs feed + dispatch ops rail, ops-only writes, Paperclip rip-out. Design + PR-by-PR plan: `hub/docs/architecture/PHASE3_EXECUTION_PANEL_2026-08-22.md` — **read it before touching the panel** (it names the blocking keys migration and the rip-out landmines) |
-| **4 · Reborn tooling** | planned | Re-point Interview Mode, the score-context gate, Pre-Cog, and the skills loader from "assemble a REST payload" to "brief and verify an `agy` run" |
+| **4 · Reborn tooling + agentic panel** | executing | Re-point Interview Mode, the score-context gate, Pre-Cog, and the skills loader from "assemble a REST payload" to "brief and verify an `agy` run". Panel arc: `hub/docs/architecture/PHASE4_AGENTIC_PANEL_2026-09-05.md` — PR 1 shipped (the assistant reads the Hub's own execution ledgers via `hub/lib/execution-context.ts`; card taps attach the record; Pulse tab on live data). Next: needs-you queue + retry, playbooks catalog, scorecards |
 
 ## Right Panel — Target Structure (CLI engine version)
 
@@ -84,6 +84,14 @@ The panel's three-layer mental model is unchanged; only the Execution engine swa
 Writes in Phase 3 are **ops-only** (cancel a job, fire a probe), admin-gated.
 Briefing an `agy` run from the panel is Phase 4 and waits on the reborn
 context-sufficiency gate — do not add a brief button before it exists.
+
+**Context flows the other way too (Phase 4 PR 1).** The chat route injects the
+Hub's own execution snapshot (`hub/lib/execution-context.ts`: runs, AI actions,
+deep runs, dispatch) as the "Execution Layer" prompt section every turn, and a
+panel card tap attaches the tapped ledger row as a `record` attachment resolved
+server-side in the caller's scope. Never add a panel surface the assistant
+cannot see through that reader — the panel and the assistant must describe
+the same facts.
 
 Design guardrails from the old panel carry over: every write is wrapped in the AI
 Assistant's guardrails (role gates, gate tokens, interview flows), everything
