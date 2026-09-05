@@ -96,7 +96,7 @@ describe('deriveRunView — the honesty table', () => {
     id: 'r1', tool: 'deep-research', status: 'queued', brief: 'b',
     resultMd: null, errorClass: null, error: null, userEmail: 'u@x.com',
     chatId: null, jobId: 'j1', attempt: 0, model: null, latencyMs: null,
-    usage: null, createdAt: new Date(now - 60_000).toISOString(), finishedAt: null,
+    usage: null, createdAt: new Date(now - 60_000).toISOString(), finishedAt: null, retryOf: null,
     ...over,
   })
   const job = (over: Partial<JobDetail> = {}): JobDetail => ({

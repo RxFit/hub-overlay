@@ -8,7 +8,8 @@ import { getAiAction } from '@/lib/ai-audit'
 import { getToolRunOwned } from '@/lib/tool-runs'
 import { getTenantId } from '@/lib/tenant-context'
 import { canAccessAdminRoute } from '@/lib/roles'
-import { formatAiRunRecord, formatAiActionRecord, formatToolRunRecord } from '@/lib/execution-context'
+import { formatAiRunRecord, formatAiActionRecord, formatToolRunRecord, formatDispatchAlertRecord } from '@/lib/execution-context'
+import { getDispatchAlert } from '@/lib/dispatch-alerts'
 import type { ChatAttachment, ChatMessage } from '@/types'
 
 const log = createLogger('attachment-resolver')
@@ -69,6 +70,14 @@ ${formatAiRunRecord(run)}
 
 ${glossary}`
   }
+  if (att.recordKind === 'dispatch_alert') {
+    if (!canAccessAdminRoute(scope.role)) {
+      return `${head}\n\n[Dispatch alerts are admin-only. Tell the user an admin can look this alert up from the Execution panel.]`
+    }
+    const alert = await getDispatchAlert(getTenantId(), id)
+    if (!alert) return `${head}\n\n[No dispatch alert with this id exists in the event log any more.]`
+    return `${head}\n\n${formatDispatchAlertRecord(alert)}\n\n${glossary}`
+  }
   if (att.recordKind === 'ai_action') {
     const action = await getAiAction(id, scope.userEmail)
     if (!action) return `${head}
@@ -96,6 +105,8 @@ const RECORD_GLOSSARY: Record<NonNullable<ChatAttachment['recordKind']>, string>
     'What this is: one row of the Hub\'s own ai_runs ledger — a single model call the Hub made (a chat turn, a health probe, or a queued work item). "agy" runs execute on the Antigravity CLI subscription allotment via the desktop worker and cost nothing extra; "gemini"/"claude" runs are metered API calls (the fallback chain). The ledger stores provenance only: prompt size and fingerprint, never prompt or response text — so you cannot quote what was said, only describe the run. Explain the verdict, engine, cost class, latency and tokens in plain business terms; for a failure, explain the error class (auth = worker token needs rotation; timeout = the run exceeded its deadline; empty = agy returned nothing, treated as failure by design) and what to do about it.',
   ai_action:
     'What this is: one row of the user\'s own AI action log — an action the assistant carried out on their behalf after they confirmed it (email sent, task created, chat message posted, inbox focus queue built). The log stores routing metadata only (recipient, space, task id), never message bodies. "Prioritized inbox focus queue" means the Hub re-ranked the user\'s inbox into a focus list; it changed nothing in Gmail. Explain what happened, whether it succeeded, and offer the natural follow-up (retry, open the item, adjust).',
+  dispatch_alert:
+    'What this is: one row of the Hub\'s dispatch alert history — the hourly cron evaluated the desktop worker, the agy failure streak and the allotment share, found a condition, and recorded it (delivering to Google Chat unless the same condition was already delivered inside the 6h re-alert window). It says the ENGINE had a problem at that time, not that any of the user\'s work was lost: chat kept answering on metered fallbacks. Explain the condition in plain terms, whether it is still current (the Execution Layer section shows the worker\'s state now), and what the owner should do (bring the desktop worker back; rotate the agy token per the agy-gateway runbook).',
   tool_run:
     'What this is: one Deep Research / Deep Think run the user started from the panel. It runs as a queued work item on the desktop worker and lands its report as an artifact. "queued" means still running or waiting for the worker; "failed" carries a typed error class. Explain the state and, if it failed, what the class means and whether re-running is sensible.',
 }

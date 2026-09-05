@@ -519,6 +519,31 @@ export function formatAiActionRecord(action: AiActionRecord, now: number = Date.
   return rows.map(([k, v]) => `- ${k}: ${v}`).join('\n')
 }
 
+const ALERT_MEANING: Record<string, string> = {
+  worker_stale: 'the desktop worker that spends the agy allotment stopped heart-beating — chat falls back to metered models and deep runs cannot start until it is back',
+  tables_missing: 'the dispatch tables are not migrated on this deployment — run the migrations',
+  agy_error_streak: 'several agy runs failed in a row — usually the OAuth token needs rotation (see the agy-gateway runbook)',
+  allotment_collapse: 'chat turns were served mostly by metered models instead of the allotment — check the worker and the agy token',
+}
+
+/** One dispatch alert row (event_log) for the needs-you Explain tap. Content-free by construction. */
+export function formatDispatchAlertRecord(
+  row: { id: string; createdAt: Date | string; kinds: string[]; channel: string },
+  now: number = Date.now(),
+): string {
+  const createdIso = row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt)
+  const rows: Array<[string, string]> = [
+    ['Alert id', row.id],
+    ['When', `${whenCT(createdIso)} CT (${ago(createdIso, now)})`],
+    ['Delivery', row.channel === 'chat' || row.channel === 'github' ? `delivered via ${row.channel}` : `recorded only (${row.channel}) — a repeat inside the re-alert window is not re-delivered`],
+    ['Conditions', row.kinds.length ? row.kinds.join(', ') : 'none (this is a recovery record)'],
+  ]
+  for (const k of row.kinds) {
+    rows.push([`What "${k}" means`, ALERT_MEANING[k] ?? 'an unrecognised alert kind — treat as a dispatch health problem'])
+  }
+  return rows.map(([k, v]) => `- ${k}: ${v}`).join('\n')
+}
+
 export function formatToolRunRecord(run: ToolRunRecord, now: number = Date.now()): string {
   const rows: Array<[string, string]> = [
     ['Deep run id', run.id],

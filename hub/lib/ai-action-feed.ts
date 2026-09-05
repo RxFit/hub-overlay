@@ -25,7 +25,7 @@ function targetString(target: unknown, key: string): string | null {
   return s.length > 0 ? s : null
 }
 
-function firstTargetString(target: unknown, keys: string[]): string | null {
+export function firstTargetString(target: unknown, keys: string[]): string | null {
   for (const key of keys) {
     const s = targetString(target, key)
     if (s) return s
@@ -33,8 +33,10 @@ function firstTargetString(target: unknown, keys: string[]): string | null {
   return null
 }
 
-/** Success/failed titles per action type; anything unknown gets a generic line. */
-function buildTitle(row: AiActionRecord, failed: boolean): string {
+/** Success/failed titles per action type; anything unknown gets a generic line.
+ *  Exported so the needs-you queue (lib/needs-you.ts) words a failed action
+ *  exactly as its feed card does. */
+export function buildActionTitle(row: AiActionRecord, failed: boolean): string {
   switch (row.actionType) {
     case 'gmail_send': {
       const recipient = firstTargetString(row.target, ['recipient', 'to']) ?? 'a recipient'
@@ -81,7 +83,7 @@ export function aiActionToFeedItem(row: AiActionRecord): FeedItem {
     id: `ai-${row.id}`,
     source: 'ai_action',
     type,
-    title: buildTitle(row, failed),
+    title: buildActionTitle(row, failed),
     description: buildDescription(row, failed),
     timestamp: typeof row.createdAt === 'string' ? row.createdAt : new Date().toISOString(),
     icon: 'sparkles',

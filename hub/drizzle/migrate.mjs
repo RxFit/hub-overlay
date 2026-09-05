@@ -604,10 +604,12 @@ async function run() {
       latency_ms  INTEGER,
       usage       JSONB,
       inputs      JSONB,
-      finished_at TIMESTAMPTZ
+      finished_at TIMESTAMPTZ,
+      retry_of    UUID
     )
   `
   await sql`ALTER TABLE tool_runs ADD COLUMN IF NOT EXISTS inputs JSONB`
+  await sql`ALTER TABLE tool_runs ADD COLUMN IF NOT EXISTS retry_of UUID`
   await sql`ALTER TABLE tool_runs ADD COLUMN IF NOT EXISTS tenant_id TEXT`
   await sql`UPDATE tool_runs SET tenant_id = 'rxfit' WHERE tenant_id IS NULL`
   await sql`ALTER TABLE tool_runs ALTER COLUMN tenant_id SET NOT NULL`
@@ -638,6 +640,24 @@ async function run() {
     ON tool_runs (tenant_id, user_email) WHERE status = 'queued'
   `
   console.log('[migrate] ✓ tool_runs table')
+
+  // Needs-you queue dismissals (Phase 4 PR 2). The queue is derived from the
+  // ledgers; a dismissal is a per-user overlay keyed by the item's stable key
+  // so provenance rows are never mutated. Undo deletes the row.
+  await sql`
+    CREATE TABLE IF NOT EXISTS queue_dismissals (
+      id           TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id    TEXT NOT NULL REFERENCES tenants(id),
+      user_email   TEXT NOT NULL,
+      item_key     TEXT NOT NULL,
+      dismissed_at TIMESTAMPTZ DEFAULT now() NOT NULL
+    )
+  `
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS queue_dismissals_user_key_uniq
+    ON queue_dismissals (tenant_id, user_email, item_key)
+  `
+  console.log('[migrate] ✓ queue_dismissals table')
 
   // Hub Secrets — operator-managed third-party credentials, moved off
   // Paperclip's Secrets API when Paperclip was retired. `ciphertext` is an

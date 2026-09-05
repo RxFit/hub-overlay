@@ -5,7 +5,7 @@ import type { FaultCode } from '@/lib/fault-codes'
  * (ERROR_REPORTING_2026-08-24.md §3 Layer 4, §3 Layer 9 #2).
  *
  * The distinction between the two exports is load-bearing and permanent:
- *  - `swallow` is for the ~85 benign guards (localStorage, formatting,
+ *  - `swallow` is for the ~86 benign guards (localStorage, formatting,
  *    best-effort cleanup) where nothing the user asked for is lost.
  *  - `emptyOn` is for the 22 SILENT DATA OMISSION sites — `.catch(() => [])`
  *    / `.catch(() => null)` — where the response is shaped like success but
@@ -14,8 +14,8 @@ import type { FaultCode } from '@/lib/fault-codes'
  *    could not be loaded" instead of "nothing here". Choosing emptyOn at a
  *    site records that judgment once so nobody has to re-derive it.
  *
- * ISOMORPHISM CONSTRAINT — this module MUST stay dependency-free. 38 of the
- * 107 call sites it serves are client code ('use client' hooks/components).
+ * ISOMORPHISM CONSTRAINT — this module MUST stay dependency-free. 39 of the
+ * 108 call sites it serves are client code ('use client' hooks/components).
  * lib/logger.ts imports pino unguarded, lib/fault.ts imports next/server and
  * node crypto, and anything touching node:async_hooks is server-only; any
  * one of them here breaks every client bundle that swallows a localStorage
