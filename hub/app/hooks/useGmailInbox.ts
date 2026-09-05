@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { signIn } from 'next-auth/react'
 import { extractEmail, replySubject } from '@/lib/email-address'
 import { swallow } from '@/lib/swallow'
+import { observePartialResponse } from '@/lib/partial-response-client'
 
 /**
  * useGmailInbox — the Gmail inbox data/logic extracted from GoogleChatPanel's
@@ -124,6 +125,7 @@ export function useGmailInbox({ onUnreadCount }: UseGmailInboxOptions) {
     queryKey: ['gmail', 'inbox'],
     queryFn: async () => {
       const r = await fetch('/api/google/gmail?view=inbox&maxResults=20')
+      observePartialResponse(r)
       // Route 401 through reauth like the sibling Google hooks
       // (useKPIData / useWriteFetch) so an expired token re-authenticates
       // instead of parsing an error body into an empty inbox + a 0 badge.
@@ -183,6 +185,7 @@ export function useGmailInbox({ onUnreadCount }: UseGmailInboxOptions) {
       const r = await fetch(
         `/api/google/gmail?view=inbox&maxResults=50&pageToken=${encodeURIComponent(effectiveNextToken)}`
       )
+      observePartialResponse(r)
       if (r.status === 401) {
         const body = await r.json().catch((err: unknown) => { swallow(err, { module: 'useGmailInbox', op: 'parseLoadMore401Body' }); return {} })
         if (body?.reauth !== false) signIn('google')
@@ -212,6 +215,7 @@ export function useGmailInbox({ onUnreadCount }: UseGmailInboxOptions) {
     setMobileView('thread')
     try {
       const r = await fetch(`/api/google/gmail?threadId=${id}`)
+      observePartialResponse(r)
       if (r.status === 401) {
         const body = await r.json().catch((err: unknown) => { swallow(err, { module: 'useGmailInbox', op: 'parseOpenThread401Body' }); return {} })
         if (body?.reauth !== false) signIn('google')

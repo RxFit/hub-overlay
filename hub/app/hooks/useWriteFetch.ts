@@ -1,6 +1,7 @@
 'use client'
 import { signIn } from 'next-auth/react'
 import { swallow } from '@/lib/swallow'
+import { observePartialResponse } from '@/lib/partial-response-client'
 
 /**
  * Fetch wrapper for write mutations (POST/DELETE/PUT).
@@ -12,6 +13,7 @@ import { swallow } from '@/lib/swallow'
  */
 export async function writeFetch<T = any>(input: RequestInfo, init?: RequestInit): Promise<T> {
   const res = await fetch(input, init)
+  observePartialResponse(res)
   if (res.status === 401) {
     // Non-JSON or empty 401 body: fall through to the default reauth message.
     const body = await res.json().catch((err: unknown) => { swallow(err, { module: 'useWriteFetch', op: 'parse401Body' }); return ({}) })

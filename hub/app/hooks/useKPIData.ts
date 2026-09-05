@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { signIn } from 'next-auth/react'
 import type { LiveKPI, ProjectKPI } from '@/types'
 import { swallow } from '@/lib/swallow'
+import { observePartialResponse } from '@/lib/partial-response-client'
 
 /**
  * KPI read fetcher (NS-6). Migrated off SWR onto TanStack Query while
@@ -15,6 +16,7 @@ import { swallow } from '@/lib/swallow'
  */
 export async function fetcher(url: string) {
   const res = await fetch(url)
+  observePartialResponse(res)
   if (res.status === 401) {
     const body = await res.json().catch((err: unknown) => { swallow(err, { module: 'useKPIData', op: 'parse401Body' }); return ({}) })
     // Honor the explicit reauth contract; default to reauth on any 401.

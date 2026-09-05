@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { swallow } from '@/lib/swallow'
+import { observePartialResponse } from '@/lib/partial-response-client'
 
 /* ── Types ── */
 
@@ -108,6 +109,7 @@ export function KpiSettings({ isAdmin }: { isAdmin: boolean }) {
     setSyncStatus({ syncing: true, result: null, error: null })
     try {
       const res = await fetch('/api/kpis/sync', { method: 'POST' })
+      observePartialResponse(res)
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`)
       setSyncStatus({ syncing: false, result: d, error: null })

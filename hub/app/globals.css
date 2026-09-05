@@ -4839,6 +4839,36 @@ a:hover .rx-arrow {
   border-color: rgba(239, 68, 68, 0.25);
 }
 
+/* ── Partial Response Banner ── */
+.partial-response-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  background: rgba(245, 158, 11, 0.1);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.28);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--warning, #f59e0b);
+}
+
+.partial-response-btn {
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.12);
+  color: inherit;
+  font-family: var(--font-heading);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.partial-response-btn:hover {
+  background: rgba(245, 158, 11, 0.2);
+}
+
 /* ── Animated Number ── */
 .animated-number {
   display: inline-block;

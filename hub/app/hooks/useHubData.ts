@@ -5,6 +5,7 @@ import { getSession, signIn } from 'next-auth/react'
 import { useEffect, useRef } from 'react'
 
 import { swallow } from '@/lib/swallow'
+import { observePartialResponse } from '@/lib/partial-response-client'
 
 /* ── Auth error recovery ── */
 
@@ -98,6 +99,7 @@ export function useAuthErrorRecovery(error: Error | undefined | null): boolean {
 
 async function fetcher<T>(url: string): Promise<T> {
   const res = await fetch(url)
+  observePartialResponse(res)
 
   if (res.status === 401) {
     // Read the route's reauth signal so `{ reauth: false }` can suppress the

@@ -34,6 +34,7 @@ import { CLIENT_ABORT_MS } from '@/lib/timeout-config'
 import { getAdminContactEmail } from '@/lib/access-request'
 import { executeAction, MISSING_SCOPE_MARKER } from '@/lib/actions/executeAction'
 import { swallow } from '@/lib/swallow'
+import { observePartialResponse } from '@/lib/partial-response-client'
 import type { InterviewState, ActionSpec, ChatAttachment, ActiveSkill, Company } from '@/types'
 
 /**
@@ -364,6 +365,7 @@ export function useChatEngine(options: UseChatEngineOptions) {
           exaMode: exaMode || undefined,
         }),
       })
+      observePartialResponse(res)
 
       if (!res.ok) {
         // Surface the server's structured error instead of discarding it.
@@ -786,6 +788,7 @@ Respond with EXACTLY one of:
                   useCase: 'execute',
                 }),
               }).then(async (res) => {
+                observePartialResponse(res)
                 // A 429/5xx yields an empty/opaque stream — never let that be
                 // misread as an insufficient verdict. Fail open instead.
                 if (!res.ok) { proceedFallback(); return }
