@@ -14,7 +14,16 @@ export const PARTIAL_RESPONSE_ASSISTANT_PROMPT =
   'The Hub is showing a partial-data warning because at least one request returned incomplete data. Explain what that means for the values currently displayed and help me verify the affected data before I act on it.'
 
 function emit(): void {
-  for (const listener of listeners) listener()
+  for (const listener of listeners) {
+    try {
+      listener()
+    } catch {
+      // A subscriber that throws (a component mid-unmount, a bad test spy)
+      // must not turn the fetch that armed the notice into a failed query:
+      // markPartialResponseNotice() runs INSIDE queryFns, and TanStack would
+      // treat the throw as the read failing — the opposite of the point.
+    }
+  }
 }
 
 /**

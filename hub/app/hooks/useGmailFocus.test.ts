@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { renderQueryHook, settleQueries } from './query-test-utils'
+import { renderQueryHook, settleQueries, settleUntil } from './query-test-utils'
 import {
   __resetPartialResponseNoticeForTests,
   getPartialResponseNotice,
@@ -48,11 +48,17 @@ describe('useGmailFocus', () => {
     )) as unknown as typeof fetch
 
     const { result, unmount } = renderQueryHook(() => useGmailFocus())
-    await settleQueries()
+    // Two observable conditions, waited on in the order they happen. The
+    // notice is armed synchronously inside the queryFn, before it returns —
+    // so if this first wait times out the queryFn never reached the
+    // parse-failure branch. The hook's render lands later and outside act
+    // (react-query notifies on its own timer), so it gets a wide budget.
+    await settleUntil(() => getPartialResponseNotice())
+    expect(getPartialResponseNotice()).toBe(true)
+    await settleUntil(() => result.current.focusDegraded === true, 100)
 
     expect(result.current.focusItems).toEqual([])
     expect(result.current.focusDegraded).toBe(true)
-    expect(getPartialResponseNotice()).toBe(true)
 
     unmount()
   })
