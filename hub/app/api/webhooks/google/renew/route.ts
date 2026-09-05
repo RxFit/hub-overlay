@@ -13,6 +13,8 @@ import {
   RENEWAL_WINDOW_MS,
 } from '@/lib/google/watch-channels'
 import { getChannel, saveChannel, DRIVE_CHANGES_KIND } from '@/lib/google/webhook-channels-db'
+import { AppError } from '@/lib/errors'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
@@ -34,7 +36,7 @@ export const runtime = 'nodejs'
  * GET (admin-only) reports the channel's live state, so "is the index still
  * being fed?" has an answer that isn't "wait and see if search goes stale".
  */
-export async function POST(req: NextRequest) {
+export const POST = withFault('webhooks/google/renew', async (req: NextRequest) => {
   const secret = process.env.CRON_SECRET
   if (!secret) {
     return NextResponse.json({ error: 'CRON_SECRET is not configured' }, { status: 503 })
@@ -116,14 +118,22 @@ export async function POST(req: NextRequest) {
       expiration: channel.expiration.toISOString(),
     })
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'unknown error'
-    console.error('[webhook-renew] failed:', message)
-    return NextResponse.json({ ok: false, error: message }, { status: 502 })
+    // Renewal talks to Google; a failure here is upstream's, so keep the 502.
+    // AppError names the code (statusForCode maps upstream_5xx → 502) and
+    // `cause` preserves the original error. The caller is Cloud Scheduler,
+    // which reads the status, not the body — and the body used to echo the raw
+    // Google error text.
+    console.error('[webhook-renew] failed:', err instanceof Error ? err.message : 'unknown error')
+    throw new AppError('Drive channel renewal failed', {
+      code: 'upstream_5xx',
+      cause: err,
+      context: { route: 'webhooks/google/renew' },
+    })
   }
-}
+})
 
 /** Admin diagnostic: is the channel alive, and how long does it have left? */
-export async function GET() {
+export const GET = withFault('webhooks/google/renew', async () => {
   const session = await getServerSession(authOptions)
   const user = session?.user as { email?: string | null; role?: string | null } | undefined
   if (!user?.email) {
@@ -160,4 +170,4 @@ export async function GET() {
     const message = err instanceof Error ? err.message : 'unknown error'
     return NextResponse.json({ configured: false, healthy: false, error: message }, { status: 503 })
   }
-}
+})

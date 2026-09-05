@@ -21,13 +21,13 @@ import { extractSuggestedToolsJson, sanitizeAssistantHistoryContent } from '@/li
 import { buildGoogleWorkspaceContext, type GoogleWorkspaceContext } from '@/lib/google-context'
 import { getChatSpacePreferences } from '@/lib/chat-space-preferences-db'
 import { withTimeout } from '@/lib/timeout'
-import { chatErrorBody } from '@/lib/chat-error'
 import { breaker, CircuitOpenError } from '@/lib/circuit-breaker'
 import { checkRateLimit } from '@/lib/rate-limit'
 import { persistUserTurn, persistAssistantTurn } from '@/lib/chat-store'
 import { emit, newRequestId } from '@/lib/observability'
 import type { ChatMessage, ChatAttachment } from '@/types'
 import '@/lib/validate-keys'  // Side-effect import: validates API keys on cold start
+import { withFault } from '@/lib/route-fault'
 
 const log = createLogger('chat')
 
@@ -862,15 +862,26 @@ async function handleChat(req: NextRequest): Promise<Response> {
   return streamModelResponse(boundedMessages, systemPrompt, effectiveUseCase, Boolean(activeSkill), req, persistCtx)
 }
 
-export async function POST(req: NextRequest) {
-  try {
-    return await handleChat(req)
-  } catch (err) {
-    log.error({ err }, 'Chat request failed before streaming started')
-    // Raw error text is dev-only diagnostics — production bodies must stay generic.
-    return NextResponse.json(
-      chatErrorBody(err, process.env.NODE_ENV === 'production'),
-      { status: 500 },
-    )
-  }
-}
+/**
+ * The route boundary. handleChat throws on any pre-stream failure and withFault
+ * turns that into the fault response: a HUB- id in `x-hub-fault-id` and in the
+ * body's `instance`, a record in Error Reporting, and — the part a hand-rolled
+ * catch could not get right — the SAME requestId in the record and on the
+ * response.
+ *
+ * That last point is why this delegates rather than catching. /api/chat is
+ * middleware-EXCLUDED, so no inbound x-hub-request-id exists; a catch calling
+ * safeRequestId() mints a SECOND id, and the fault is then recorded under an id
+ * that appears nowhere in the response. Measured before this was written: the
+ * record read 44b6abe7-… while the response header read d8dd8c23-…, so a user
+ * quoting the id they were given found nothing in the logs. One derivation,
+ * withFault's, is the only way that stays true.
+ *
+ * lib/chat-error.ts is deleted with this. faultResponse generalizes it (§5
+ * called it "the repo's only NODE_ENV-gated error body") and emits both keys
+ * useChatEngine reads — it takes `details`, falling back to `error`. Once stream
+ * frames are flushed the wrapper can no longer change the response; that
+ * terminal-frame contract is Phase 5, and the in-stream error frame still
+ * handles it.
+ */
+export const POST = withFault('chat', handleChat)

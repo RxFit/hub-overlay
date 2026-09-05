@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { isGeminiConfigured } from '@/lib/gemini'
 import { isClaudeConfigured } from '@/lib/claude'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 // Never cache/prerender — the probe must reflect live provider + DB state on
@@ -60,7 +61,7 @@ async function isDbHealthy(): Promise<boolean> {
   }
 }
 
-export async function GET() {
+export const GET = withFault('healthz', async () => {
   // Presence-only probes (booleans, never key material) — same non-throwing
   // probes the /admin/ai-health badges use (#79).
   const gemini = isGeminiConfigured()
@@ -79,4 +80,4 @@ export async function GET() {
     },
     { status: healthy ? 200 : 503 },
   )
-}
+})

@@ -21,6 +21,7 @@ export function ProjectHealthSection({
   userRole,
   isLoading,
   error,
+  degraded,
   onRetry,
 }: {
   projects?: ProjectKPI[]
@@ -28,6 +29,7 @@ export function ProjectHealthSection({
   userRole?: string
   isLoading?: boolean
   error?: unknown
+  degraded?: boolean
   onRetry?: () => void
 }) {
   if (isLoading) {
@@ -53,6 +55,17 @@ export function ProjectHealthSection({
   }
 
   if (!projects || projects.length === 0) {
+    if (degraded) {
+      return (
+        <CollapsibleSection title="Project Health" protocolNum="05" defaultOpen={false}>
+          <SectionMessage
+            message="Operational project data is temporarily unavailable; business KPIs are still available."
+            type="info"
+          />
+        </CollapsibleSection>
+      )
+    }
+
     const isStaff = userRole === 'staff'
     const emptyMsg =
       userRole === 'superadmin' || userRole === 'admin'
@@ -74,6 +87,12 @@ export function ProjectHealthSection({
 
   return (
     <CollapsibleSection title="Project Health" protocolNum="05" defaultOpen={false}>
+      {degraded && (
+        <SectionMessage
+          message="Some operational project data is temporarily unavailable."
+          type="info"
+        />
+      )}
       <div className={styles.projectHealthList} role="list" aria-label="Project health status">
         {projects.map((p) => {
           const statusColor = HEALTH_COLORS[p.health] ?? 'var(--text-muted)'

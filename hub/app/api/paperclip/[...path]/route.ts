@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { AppError } from '@/lib/errors'
+import { withFault } from '@/lib/route-fault'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { createLogger } from '@/lib/logger'
@@ -58,38 +60,52 @@ const ALLOWED_PREFIXES = [
   '/api/goals',             // goal detail + mutations (Phase 3)
 ]
 
-export async function GET(
-  req: NextRequest,
-  { params }: { params: { path: string[] } }
-) {
-  return proxyRequest(req, params.path, 'GET')
-}
+/**
+ * The four verbs are thin delegations to proxyRequest below.
+ *
+ * inspect2xx is OFF for all of them: this route hands back Paperclip's response
+ * body verbatim (`new Response(data, { status: upstream.status })`), so an
+ * upstream 200 carrying `{ error: … }` is upstream's shape, not a contract
+ * violation this route committed. Today the check cannot fire either way —
+ * detectErrorIn2xx bails without a content-length and nothing here sets one —
+ * so this is a statement of intent for when that check is made to arm on
+ * unsized bodies, not a live fix.
+ */
+const PROXY_OPTS = { inspect2xx: false } as const
 
-export async function POST(
-  req: NextRequest,
-  { params }: { params: { path: string[] } }
-) {
-  return proxyRequest(req, params.path, 'POST')
-}
+export const GET = withFault(
+  'paperclip/[...path]',
+  async (req: NextRequest, { params }: { params: { path: string[] } }) =>
+    proxyRequest(req, params.path, 'GET'),
+  PROXY_OPTS,
+)
 
-export async function PATCH(
-  req: NextRequest,
-  { params }: { params: { path: string[] } }
-) {
-  return proxyRequest(req, params.path, 'PATCH')
-}
+export const POST = withFault(
+  'paperclip/[...path]',
+  async (req: NextRequest, { params }: { params: { path: string[] } }) =>
+    proxyRequest(req, params.path, 'POST'),
+  PROXY_OPTS,
+)
 
-export async function DELETE(
-  req: NextRequest,
-  { params }: { params: { path: string[] } }
-) {
-  // Destructive operations are role-gated inside proxyRequest via
-  // requiredWriteRank() — the real security boundary (client-side Interview Mode
-  // name-matching is just UX). Pre-fetch the session here only to avoid a second
-  // getServerSession call in proxyRequest.
-  const session = await getServerSession(authOptions)
-  return proxyRequest(req, params.path, 'DELETE', session)
-}
+export const PATCH = withFault(
+  'paperclip/[...path]',
+  async (req: NextRequest, { params }: { params: { path: string[] } }) =>
+    proxyRequest(req, params.path, 'PATCH'),
+  PROXY_OPTS,
+)
+
+export const DELETE = withFault(
+  'paperclip/[...path]',
+  async (req: NextRequest, { params }: { params: { path: string[] } }) => {
+    // Destructive operations are role-gated inside proxyRequest via
+    // requiredWriteRank() — the real security boundary (client-side Interview Mode
+    // name-matching is just UX). Pre-fetch the session here only to avoid a second
+    // getServerSession call in proxyRequest.
+    const session = await getServerSession(authOptions)
+    return proxyRequest(req, params.path, 'DELETE', session)
+  },
+  PROXY_OPTS,
+)
 
 async function proxyRequest(
   req: NextRequest,
@@ -446,8 +462,16 @@ async function proxyRequest(
       headers: { 'Content-Type': upstream.headers.get('Content-Type') || 'application/json' },
     })
   } catch (err) {
+    // 502 is the right answer — the proxy failed to reach or read Paperclip,
+    // which is upstream's failure, not ours. Naming the code preserves that
+    // status through withFault (statusForCode maps upstream_5xx → 502) where a
+    // bare `throw` would flatten it to 500, and `cause` keeps the original in
+    // the fault's causeChain. The response used to echo err.message verbatim.
     log.error({ err, path: apiPath, method }, 'Proxy request failed')
-    const message = err instanceof Error ? err.message : 'Paperclip API unreachable'
-    return NextResponse.json({ error: message }, { status: 502 })
+    throw new AppError('Paperclip proxy request failed', {
+      code: 'upstream_5xx',
+      cause: err,
+      context: { route: 'paperclip/[...path]', method },
+    })
   }
 }

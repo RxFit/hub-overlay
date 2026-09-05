@@ -53,6 +53,14 @@ vi.mock('@/lib/ai-audit', async (importOriginal) => {
 })
 
 import { GET } from '@/app/api/feed/route'
+import { NextRequest } from 'next/server'
+
+// withFault-wrapped now, so the handler takes a request even though the
+// route body ignores it — the wrapper reads x-hub-request-id off it.
+function faultReq() {
+  return new NextRequest('http://localhost/api/feed')
+}
+
 
 const SELF = 'danny@rxfitatx.com'
 const OTHER = 'staffer@rxfitatx.com'
@@ -111,7 +119,7 @@ describeDb('GET /api/feed — AI-action provenance (DB-backed)', () => {
     // Another user's action must NOT appear — the feed is caller-scoped.
     await seedAiAction({ userEmail: OTHER, createdAt: at(1) })
 
-    const res = await GET()
+    const res = await GET(faultReq())
     expect(res.status).toBe(200)
     const { feed } = await res.json()
 
@@ -143,7 +151,7 @@ describeDb('GET /api/feed — AI-action provenance (DB-backed)', () => {
       user: { email: 'Danny@RxFitATX.com', role: 'staff', assignedProjects: ['c1'] },
     }
 
-    const { feed } = await (await GET()).json()
+    const { feed } = await (await GET(faultReq())).json()
     expect(feed.filter((f: { source: string }) => f.source === 'ai_action')).toHaveLength(1)
   })
 
@@ -151,7 +159,7 @@ describeDb('GET /api/feed — AI-action provenance (DB-backed)', () => {
     await seedAiAction({ userEmail: SELF, createdAt: at(1) })
     state.aiDbDown = true
 
-    const res = await GET()
+    const res = await GET(faultReq())
     expect(res.status).toBe(200)
     const { feed } = await res.json()
 
@@ -164,7 +172,7 @@ describeDb('GET /api/feed — AI-action provenance (DB-backed)', () => {
     await seedAiAction({ userEmail: SELF, createdAt: at(1) })
     state.session = { user: { email: SELF, role: 'onboarding' } }
 
-    const res = await GET()
+    const res = await GET(faultReq())
     expect(res.status).toBe(200)
     const { feed } = await res.json()
     expect(feed).toEqual([])

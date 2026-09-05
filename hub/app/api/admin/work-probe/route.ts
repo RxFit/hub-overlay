@@ -12,6 +12,7 @@ import {
 import { dispatchFreshMs, isDispatchConfigured, isDispatchEnabled } from '@/lib/agy-dispatch'
 import { buildFileProbePrompt, buildProbePrompt, containsFreshTimestamp, DEFAULT_PROBE_URL } from '@/lib/work-probe'
 import { emit } from '@/lib/observability'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -56,7 +57,7 @@ async function requireAdmin(): Promise<NextResponse | null> {
   return null
 }
 
-export async function POST(req: NextRequest) {
+export const POST = withFault('admin/work-probe', async (req: NextRequest) => {
   const denied = await requireAdmin()
   if (denied) return denied
 
@@ -117,92 +118,106 @@ export async function POST(req: NextRequest) {
     if (isMissingTableError(err)) {
       return NextResponse.json({ error: 'dispatch tables missing — run migrations' }, { status: 503 })
     }
-    console.error('[work-probe] enqueue failed:', err instanceof Error ? err.message : err)
-    return NextResponse.json({ error: 'enqueue failed' }, { status: 500 })
+    // The guard above is the only classification this catch makes. Everything
+    // else is withFault's to record and answer — it used to become an opaque
+    // 500 with nothing written down.
+    throw err
   }
-}
+})
 
-export async function GET(req: NextRequest) {
-  const denied = await requireAdmin()
-  if (denied) return denied
+export const GET = withFault(
+  'admin/work-probe',
+  async (req: NextRequest) => {
+    const denied = await requireAdmin()
+    if (denied) return denied
 
-  const jobId = req.nextUrl.searchParams.get('jobId')
-  if (!jobId) return NextResponse.json({ error: 'jobId query param required' }, { status: 400 })
+    const jobId = req.nextUrl.searchParams.get('jobId')
+    if (!jobId) return NextResponse.json({ error: 'jobId query param required' }, { status: 400 })
 
-  try {
-    const job = await getJobDetail(jobId)
-    if (!job) return NextResponse.json({ error: 'job not found' }, { status: 404 })
-    if (job.payloadMeta?.probe !== true) {
-      // deliverResult is read-once; delivering a non-probe job here would
-      // steal its waiting reader's answer. Probe jobs only.
-      return NextResponse.json({ error: 'not a probe job' }, { status: 400 })
-    }
+    try {
+      const job = await getJobDetail(jobId)
+      if (!job) return NextResponse.json({ error: 'job not found' }, { status: 404 })
+      if (job.payloadMeta?.probe !== true) {
+        // deliverResult is read-once; delivering a non-probe job here would
+        // steal its waiting reader's answer. Probe jobs only.
+        return NextResponse.json({ error: 'not a probe job' }, { status: 400 })
+      }
 
-    const base = {
-      state: job.state,
-      attempt: job.attempt,
-      maxAttempts: job.maxAttempts,
-      errorClass: job.errorClass,
-      error: job.error,
-    }
-    if (job.state === 'queued') {
-      return NextResponse.json({ ...base, deadlineAt: job.deadlineAt.toISOString() })
-    }
-    if (job.state === 'leased') {
+      const base = {
+        state: job.state,
+        attempt: job.attempt,
+        maxAttempts: job.maxAttempts,
+        errorClass: job.errorClass,
+        error: job.error,
+      }
+      if (job.state === 'queued') {
+        return NextResponse.json({ ...base, deadlineAt: job.deadlineAt.toISOString() })
+      }
+      if (job.state === 'leased') {
+        return NextResponse.json({
+          ...base,
+          state: 'running',
+          leaseFresh: job.leaseExpiresAt !== null && job.leaseExpiresAt.getTime() > Date.now(),
+        })
+      }
+      if (job.state !== 'succeeded') {
+        // failed | expired | cancelled — the typed error class IS the verdict.
+        return NextResponse.json({ ...base, verdict: 'FAIL' })
+      }
+
+      const delivered = await deliverResult(jobId)
+      if (!delivered) {
+        return NextResponse.json({
+          ...base,
+          delivered: true,
+          note: 'result already delivered (verdict printed on the first successful poll) or scrubbed by the content TTL',
+        })
+      }
+      const marker = typeof job.payloadMeta?.marker === 'string' ? job.payloadMeta.marker : null
+      const mode = job.payloadMeta?.mode === 'file' ? 'file' : 'url'
+      const markerVerified = marker !== null && delivered.text.includes(marker)
+      const noTools = delivered.text.includes('NO_TOOLS')
+    
+      let freshnessVerified = false
+      let fileVerified = false
+      let verdict = 'FAIL'
+    
+      if (mode === 'file') {
+        fileVerified = delivered.text.includes('casatrejo-hub')
+        verdict = markerVerified && fileVerified && !noTools ? 'PASS' : 'FAIL'
+      } else {
+        freshnessVerified = containsFreshTimestamp(delivered.text, Date.now(), FRESHNESS_WINDOW_MS)
+        verdict = markerVerified && freshnessVerified && !noTools ? 'PASS' : 'FAIL'
+      }
+    
+      const meta = delivered.resultMeta as { model?: string; latencyMs?: number; usage?: Record<string, number> } | null
       return NextResponse.json({
         ...base,
-        state: 'running',
-        leaseFresh: job.leaseExpiresAt !== null && job.leaseExpiresAt.getTime() > Date.now(),
+        verdict,
+        mode,
+        markerVerified,
+        ...(mode === 'file' ? { fileVerified } : { freshnessVerified }),
+        noToolsReported: noTools,
+        sample: delivered.text.slice(0, 400),
+        model: meta?.model ?? null,
+        latencyMs: meta?.latencyMs ?? null,
+        usage: meta?.usage ?? null,
       })
+    } catch (err) {
+      if (isMissingTableError(err)) {
+        return NextResponse.json({ error: 'dispatch tables missing — run migrations' }, { status: 503 })
+      }
+      // The guard above is the only classification this catch makes. Everything
+      // else is withFault's to record and answer — it used to become an opaque
+      // 500 with nothing written down.
+      throw err
     }
-    if (job.state !== 'succeeded') {
-      // failed | expired | cancelled — the typed error class IS the verdict.
-      return NextResponse.json({ ...base, verdict: 'FAIL' })
-    }
-
-    const delivered = await deliverResult(jobId)
-    if (!delivered) {
-      return NextResponse.json({
-        ...base,
-        delivered: true,
-        note: 'result already delivered (verdict printed on the first successful poll) or scrubbed by the content TTL',
-      })
-    }
-    const marker = typeof job.payloadMeta?.marker === 'string' ? job.payloadMeta.marker : null
-    const mode = job.payloadMeta?.mode === 'file' ? 'file' : 'url'
-    const markerVerified = marker !== null && delivered.text.includes(marker)
-    const noTools = delivered.text.includes('NO_TOOLS')
-    
-    let freshnessVerified = false
-    let fileVerified = false
-    let verdict = 'FAIL'
-    
-    if (mode === 'file') {
-      fileVerified = delivered.text.includes('casatrejo-hub')
-      verdict = markerVerified && fileVerified && !noTools ? 'PASS' : 'FAIL'
-    } else {
-      freshnessVerified = containsFreshTimestamp(delivered.text, Date.now(), FRESHNESS_WINDOW_MS)
-      verdict = markerVerified && freshnessVerified && !noTools ? 'PASS' : 'FAIL'
-    }
-    
-    const meta = delivered.resultMeta as { model?: string; latencyMs?: number; usage?: Record<string, number> } | null
-    return NextResponse.json({
-      ...base,
-      verdict,
-      mode,
-      markerVerified,
-      ...(mode === 'file' ? { fileVerified } : { freshnessVerified }),
-      noToolsReported: noTools,
-      sample: delivered.text.slice(0, 400),
-      model: meta?.model ?? null,
-      latencyMs: meta?.latencyMs ?? null,
-      usage: meta?.usage ?? null,
-    })
-  } catch (err) {
-    if (isMissingTableError(err)) {
-      return NextResponse.json({ error: 'dispatch tables missing — run migrations' }, { status: 503 })
-    }
-    console.error('[work-probe] read failed:', err instanceof Error ? err.message : err)
-    return NextResponse.json({ error: 'probe read failed' }, { status: 500 })
-  }
-}
+  },
+  // The probe VERDICT carries the probe job's own `error` inside a 200: a job
+  // that failed is a successful read of a failed job, not a failed read. Every
+  // 200 here spreads `base`, which holds `errorClass` and `error` straight off
+  // the dispatch row. (Inert today: detectErrorIn2xx needs a content-length
+  // NextResponse.json does not set, so this is intent for when that check is
+  // made to arm on unsized bodies.)
+  { inspect2xx: false },
+)

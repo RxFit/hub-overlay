@@ -127,6 +127,7 @@ function RightPanel({
   userRole,
   kpiLoading,
   kpiError,
+  kpiDegraded,
   onKpiRetry,
 }: {
   isOpen?: boolean
@@ -139,6 +140,7 @@ function RightPanel({
   userRole?: string
   kpiLoading?: boolean
   kpiError?: unknown
+  kpiDegraded?: boolean
   onKpiRetry?: () => void
 }) {
   // Phase 3 PR 2 (docs/architecture/PHASE3_EXECUTION_PANEL_2026-08-22.md §4):
@@ -169,7 +171,7 @@ function RightPanel({
         {activeTab === 'runs' ? (
           <ExecutionFeed onInjectChat={onInjectChat} canViewRuns={canViewRuns} />
         ) : (
-          <ProjectHealthSection projects={projects} onInjectChat={onInjectChat} userRole={userRole} isLoading={kpiLoading} error={kpiError} onRetry={onKpiRetry} />
+          <ProjectHealthSection projects={projects} onInjectChat={onInjectChat} userRole={userRole} isLoading={kpiLoading} error={kpiError} degraded={kpiDegraded} onRetry={onKpiRetry} />
         )}
       </div>
     </aside>
@@ -260,7 +262,7 @@ export default function HubPage() {
   const { data: session } = useSession()
   const router = useRouter()
   const [activeProject, setActiveProject] = useState('all')
-  const { projects, kpis, isLoading: kpiLoading, error: kpiError, refetch: kpiRefetch } = useKPIData(activeProject)
+  const { projects, kpis, degraded: kpiDegraded, isLoading: kpiLoading, error: kpiError, refetch: kpiRefetch } = useKPIData(activeProject)
   const { companies: allCompanies } = useCompanies()
 
   // Resolve the active workspace company for issue creation and deep links
@@ -1149,6 +1151,7 @@ export default function HubPage() {
             userRole={userRole}
             kpiLoading={kpiLoading}
             kpiError={kpiError}
+            kpiDegraded={kpiDegraded}
             onKpiRetry={kpiRefetch}
           />
         )}

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getServiceAccountAccessToken } from '@/lib/google-auth';
 import { fetchDriveDocContent } from '@/lib/content-fetch';
 import { buildChunkDeleteLikePattern } from '@/lib/chunk-delete-pattern';
+import { withFault } from '@/lib/route-fault'
 
 /**
  * Google Workspace Webhook Receiver
@@ -14,72 +15,67 @@ import { buildChunkDeleteLikePattern } from '@/lib/chunk-delete-pattern';
  * 3. Store the chunk in the `documentChunks` pgvector table.
  * 4. Create explicit Graph edges in `entityLinks` connecting the new data to existing KPIs/Nodes.
  */
-export async function POST(req: Request) {
-  try {
-    // 1. Verify Google Webhook headers (X-Goog-Channel-Token, X-Goog-Resource-State)
-    const channelToken = req.headers.get('x-goog-channel-token');
-    const resourceState = req.headers.get('x-goog-resource-state');
-    
-    // Check channel token validity
-    const expectedToken = process.env.GOOGLE_WEBHOOK_CHANNEL_TOKEN;
-    if (!expectedToken) {
-      console.error('[Google Webhook] GOOGLE_WEBHOOK_CHANNEL_TOKEN is not configured.');
-      return NextResponse.json({ error: 'Internal configuration error' }, { status: 500 });
-    }
-    if (!channelToken || channelToken !== expectedToken) {
-      console.warn('[Google Webhook] Unauthorized request or channel token mismatch');
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+export const POST = withFault('webhooks/google', async (req: Request) => {
+  // 1. Verify Google Webhook headers (X-Goog-Channel-Token, X-Goog-Resource-State)
+  const channelToken = req.headers.get('x-goog-channel-token');
+  const resourceState = req.headers.get('x-goog-resource-state');
 
-    // 2. Acknowledge sync event immediately
-    if (resourceState === 'sync') {
-      return NextResponse.json({ status: 'Acknowledged Sync' }, { status: 200 });
-    }
+  // Check channel token validity
+  const expectedToken = process.env.GOOGLE_WEBHOOK_CHANNEL_TOKEN;
+  if (!expectedToken) {
+    console.error('[Google Webhook] GOOGLE_WEBHOOK_CHANNEL_TOKEN is not configured.');
+    return NextResponse.json({ error: 'Internal configuration error' }, { status: 500 });
+  }
+  if (!channelToken || channelToken !== expectedToken) {
+    console.warn('[Google Webhook] Unauthorized request or channel token mismatch');
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
 
-    const resourceId = req.headers.get('x-goog-resource-id') || 'unknown';
-    const resourceUri = req.headers.get('x-goog-resource-uri') || '';
+  // 2. Acknowledge sync event immediately
+  if (resourceState === 'sync') {
+    return NextResponse.json({ status: 'Acknowledged Sync' }, { status: 200 });
+  }
 
-    // 3a. A changes.watch channel (registered by /api/webhooks/google/renew)
-    // does not name a file — it says "something changed, come list it". The
-    // notification's only job is to trigger a changes.list from the stored
-    // cursor; per-file add/update/trash/delete all fall out of that listing.
-    if (resourceUri.includes('/changes')) {
-      processChangesQueue().catch(err => {
-        console.error('[Google Webhook] Changes processing error:', err);
-      });
-      return NextResponse.json({ status: 'Processing changes' }, { status: 200 });
-    }
+  const resourceId = req.headers.get('x-goog-resource-id') || 'unknown';
+  const resourceUri = req.headers.get('x-goog-resource-uri') || '';
 
-    // 3b. Handle document deletion or trashing (legacy per-file channels)
-    if (resourceState === 'trash' || resourceState === 'delete') {
-      let fileId = resourceId;
-      if (resourceUri) {
-        const match = resourceUri.match(/\/files\/([a-zA-Z0-9-_]+)/);
-        if (match) {
-          fileId = match[1];
-        }
+  // 3a. A changes.watch channel (registered by /api/webhooks/google/renew)
+  // does not name a file — it says "something changed, come list it". The
+  // notification's only job is to trigger a changes.list from the stored
+  // cursor; per-file add/update/trash/delete all fall out of that listing.
+  if (resourceUri.includes('/changes')) {
+    processChangesQueue().catch(err => {
+      console.error('[Google Webhook] Changes processing error:', err);
+    });
+    return NextResponse.json({ status: 'Processing changes' }, { status: 200 });
+  }
+
+  // 3b. Handle document deletion or trashing (legacy per-file channels)
+  if (resourceState === 'trash' || resourceState === 'delete') {
+    let fileId = resourceId;
+    if (resourceUri) {
+      const match = resourceUri.match(/\/files\/([a-zA-Z0-9-_]+)/);
+      if (match) {
+        fileId = match[1];
       }
-
-      console.log(`[Google Webhook] File deleted or trashed. Cleaning up chunks for: ${fileId}`);
-      deleteChunksForFile(fileId).catch(err => {
-        console.error('[Google Webhook Deletion Error]', err);
-      });
-
-      return NextResponse.json({ status: 'Processing deletion' }, { status: 200 });
     }
 
-    // 4. Process the delta asynchronously for add/update events
-    processGoogleDelta(resourceId, resourceUri).catch(err => {
-      console.error('[Google Webhook Error in Background]', err);
+    console.log(`[Google Webhook] File deleted or trashed. Cleaning up chunks for: ${fileId}`);
+    deleteChunksForFile(fileId).catch(err => {
+      console.error('[Google Webhook Deletion Error]', err);
     });
 
-    // 5. Always return 200 quickly so Google doesn't retry
-    return NextResponse.json({ status: 'Processing delta' }, { status: 200 });
-  } catch (error) {
-    console.error('[Google Webhook Error]', error);
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    return NextResponse.json({ status: 'Processing deletion' }, { status: 200 });
   }
-}
+
+  // 4. Process the delta asynchronously for add/update events
+  processGoogleDelta(resourceId, resourceUri).catch(err => {
+    console.error('[Google Webhook Error in Background]', err);
+  });
+
+  // 5. Always return 200 quickly so Google doesn't retry
+  return NextResponse.json({ status: 'Processing delta' }, { status: 200 });
+})
 
 async function processGoogleDelta(resourceId: string, resourceUri: string) {
   console.log(`[Google Webhook] Processing delta for resource: ${resourceId}, URI: ${resourceUri}`);

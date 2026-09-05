@@ -36,6 +36,14 @@ vi.mock('@/lib/db', () => ({
 vi.mock('next-auth/jwt', () => ({ getToken: vi.fn() }))
 
 import { GET } from '@/app/api/healthz/route'
+import { NextRequest } from 'next/server'
+
+// withFault-wrapped now, so the handler takes a request even though the
+// route body ignores it — the wrapper reads x-hub-request-id off it.
+function faultReq() {
+  return new NextRequest('http://localhost/api/healthz')
+}
+
 import { config } from '@/middleware'
 
 beforeEach(() => {
@@ -46,7 +54,7 @@ beforeEach(() => {
 
 describe('GET /api/healthz — health contract', () => {
   it('200 {status:ok, db:true} when both providers present and DB ok', async () => {
-    const res = await GET()
+    const res = await GET(faultReq())
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body).toEqual({
@@ -58,7 +66,7 @@ describe('GET /api/healthz — health contract', () => {
 
   it('200 when only Gemini is present (cross-provider fallback → either is enough)', async () => {
     state.anthropic = false
-    const res = await GET()
+    const res = await GET(faultReq())
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.status).toBe('ok')
@@ -67,7 +75,7 @@ describe('GET /api/healthz — health contract', () => {
 
   it('200 when only Claude is present', async () => {
     state.gemini = false
-    const res = await GET()
+    const res = await GET(faultReq())
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.providers).toEqual({ gemini: false, anthropic: true })
@@ -76,7 +84,7 @@ describe('GET /api/healthz — health contract', () => {
   it('503 when BOTH AI providers are missing (DB still ok)', async () => {
     state.gemini = false
     state.anthropic = false
-    const res = await GET()
+    const res = await GET(faultReq())
     expect(res.status).toBe(503)
     const body = await res.json()
     expect(body).toEqual({
@@ -88,7 +96,7 @@ describe('GET /api/healthz — health contract', () => {
 
   it('503 when the DB SELECT 1 throws (providers present)', async () => {
     state.dbOk = false
-    const res = await GET()
+    const res = await GET(faultReq())
     expect(res.status).toBe(503)
     const body = await res.json()
     expect(body.status).toBe('unhealthy')
@@ -100,7 +108,7 @@ describe('GET /api/healthz — health contract', () => {
     state.gemini = false
     state.anthropic = false
     state.dbOk = false
-    const res = await GET()
+    const res = await GET(faultReq())
     expect(res.status).toBe(503)
     const body = await res.json()
     expect(body).toEqual({
@@ -111,7 +119,7 @@ describe('GET /api/healthz — health contract', () => {
   })
 
   it('never leaks key material — body is booleans + a status string only', async () => {
-    const res = await GET()
+    const res = await GET(faultReq())
     const body = await res.json()
     // Exact shape: no extra fields (no key values/lengths/prefixes, no DB creds).
     expect(Object.keys(body).sort()).toEqual(['db', 'providers', 'status'])

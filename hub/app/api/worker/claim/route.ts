@@ -8,6 +8,7 @@ import {
   type DispatchKind,
 } from '@/lib/dispatch-store'
 import { emit } from '@/lib/observability'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -36,7 +37,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-export async function POST(req: NextRequest) {
+export const POST = withFault('worker/claim', async (req: NextRequest) => {
   const secret = process.env.AGY_WORKER_SECRET
   if (!secret) {
     return NextResponse.json({ error: 'dispatch disabled (no worker secret configured)' }, { status: 503 })
@@ -111,7 +112,9 @@ export async function POST(req: NextRequest) {
     if (isMissingTableError(err)) {
       return NextResponse.json({ error: 'dispatch_unavailable' }, { status: 503 })
     }
-    console.error('[worker/claim] failed:', err instanceof Error ? err.message : err)
-    return NextResponse.json({ error: 'claim failed' }, { status: 500 })
+    // The guard above is the only classification this catch makes. Everything
+    // else is withFault's to record and answer — it used to become an opaque
+    // 500 with nothing written down.
+    throw err
   }
-}
+})

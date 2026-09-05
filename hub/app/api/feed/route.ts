@@ -5,10 +5,11 @@ import { getCompanies, getIssues, getAgents } from '@/lib/paperclip'
 import { listAiActions } from '@/lib/ai-audit'
 import { aiActionToFeedItem } from '@/lib/ai-action-feed'
 import type { FeedItem } from '@/types'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
-export async function GET() {
+export const GET = withFault('feed', async () => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -126,4 +127,4 @@ export async function GET() {
   feed.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
 
   return NextResponse.json({ feed })
-}
+})

@@ -1,18 +1,1 @@
-[
-  "app/api/admin/work-probe/route.ts",
-  "app/api/chat/detect-intent/route.ts",
-  "app/api/chat/route.ts",
-  "app/api/chat/score-context/route.ts",
-  "app/api/deep-runs/availability/route.ts",
-  "app/api/deep-runs/route.ts",
-  "app/api/feed/route.ts",
-  "app/api/healthz/route.ts",
-  "app/api/kpis/route.ts",
-  "app/api/kpis/sync/route.ts",
-  "app/api/paperclip/[...path]/route.ts",
-  "app/api/reports/run/route.ts",
-  "app/api/tool-context/route.ts",
-  "app/api/webhooks/google/renew/route.ts",
-  "app/api/webhooks/google/route.ts",
-  "app/api/worker/claim/route.ts"
-]
+[]

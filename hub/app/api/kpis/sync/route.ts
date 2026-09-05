@@ -12,6 +12,7 @@ import { recordEvent } from '@/lib/event-logger'
 import { pruneExpiredMemories, pruneOldEventLogs } from '@/lib/agent-memory'
 import { getTenantId } from '@/lib/tenant-context'
 import { getEffectivePrefs } from '@/lib/google/prefs-db'
+import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
@@ -56,7 +57,7 @@ function verifyCronSecret(header: string | null, secret: string): boolean {
  * - Admin session  (browser-triggered "Sync Now")
  * - CRON_SECRET header  (Railway cron job — constant-time comparison)
  */
-export async function POST(req: NextRequest) {
+export const POST = withFault('kpis/sync', async (req: NextRequest) => {
   // Auth: accept either an admin session OR a valid cron secret (timing-safe)
   const cronSecret = process.env.CRON_SECRET
   const isCron = cronSecret
@@ -235,17 +236,20 @@ export async function POST(req: NextRequest) {
       },
     }).catch(() => {})
 
-    // Do NOT include raw error string in response — may expose env context
-    const message = err instanceof Error ? err.message : 'Internal sync error'
-    return NextResponse.json({ error: message }, { status: 500 })
+    // The comment this replaces said "do NOT include raw error string in
+    // response — may expose env context", and then the next line put
+    // err.message in the body anyway. Rethrowing actually honours it: the
+    // client gets the fixed per-code message and the scrubbed detail lives in
+    // the fault record. The sync.failed event above is why the catch stays.
+    throw err
   }
-}
+})
 
 /**
  * GET /api/kpis/sync
  * Returns last sync timestamps per source for the settings UI.
  */
-export async function GET(req: NextRequest) {
+export const GET = withFault('kpis/sync', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
@@ -269,4 +273,4 @@ export async function GET(req: NextRequest) {
   }
 
   return NextResponse.json({ lastSync: bySource })
-}
+})

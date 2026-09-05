@@ -96,4 +96,16 @@ describe('useKPIData — url mapping + defaults', () => {
     expect(result.current.error).toBe('stripe source failed')
     unmount()
   })
+
+  it('preserves the degraded flag from a partial-success response', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
+      kpis: [{ id: 'mrr' }], projects: [], degraded: true,
+    })))
+    const { result, unmount } = renderQueryHook(() => useKPIData())
+    await settleQueries()
+    expect(result.current.degraded).toBe(true)
+    expect(result.current.kpis).toEqual([{ id: 'mrr' }])
+    expect(result.current.error).toBeUndefined()
+    unmount()
+  })
 })
