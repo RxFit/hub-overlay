@@ -246,7 +246,10 @@ export function FounderLensWizard({
     if (index < ROLE_CONFIGS.length) {
       setStep({ type: 'role', role: ROLE_CONFIGS[index].key, index })
     } else {
-      handleSave()
+      // Fire-and-forget: handleSave owns its own try/catch and surfaces
+      // failures via saveError state, so there is nothing for the caller
+      // to await. `void` keeps the exact pre-lint behaviour.
+      void handleSave()
     }
   }
 

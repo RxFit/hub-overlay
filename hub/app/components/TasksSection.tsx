@@ -99,7 +99,9 @@ function TasksSectionImpl({ onInjectChat, onInjectAction }: { onInjectChat: (msg
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action, taskListId: listId, taskId }),
     })
-    mutate?.()
+    // Fire-and-forget: the refetch result is never read (callers only await the
+    // write above), so the promise is intentionally not awaited.
+    void mutate?.()
   }
 
   async function handleToggleTask(task: TaskItem, listId: string) {

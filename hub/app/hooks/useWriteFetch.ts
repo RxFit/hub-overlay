@@ -18,7 +18,9 @@ export async function writeFetch<T = any>(input: RequestInfo, init?: RequestInit
     // Non-JSON or empty 401 body: fall through to the default reauth message.
     const body = await res.json().catch((err: unknown) => { swallow(err, { module: 'useWriteFetch', op: 'parse401Body' }); return ({}) })
     // Honor the explicit reauth contract; default to reauth on any 401.
-    if (body?.reauth !== false) signIn('google')
+    // `void`: signIn() kicks off a redirect; the throw below must not wait on it, and a rejection
+    // still surfaces exactly as before (unhandled) rather than being silenced here.
+    if (body?.reauth !== false) void signIn('google')
     const err = new Error(body?.error || 'Session expired — please sign in again')
     ;(err as any).status = 401
     throw err

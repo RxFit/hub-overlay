@@ -710,7 +710,7 @@ async function handleChat(req: NextRequest): Promise<Response> {
           getChatSpacePreferences(session.user.email ?? '')
             .then(prefs => buildGoogleWorkspaceContext(googleAccessToken, prefs))
             .then(ctx => ({ ok: true as const, ...ctx }))
-            .catch((err) => {
+            .catch((err: unknown) => {
             log.warn({ err }, 'Google Workspace context fetch failed — proceeding without it')
             return { ok: false as const, reason: 'error' as const }
           }),

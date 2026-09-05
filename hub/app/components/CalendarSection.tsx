@@ -305,7 +305,9 @@ function CalendarSectionImpl({ onInjectChat }: { onInjectChat: (msg: string, att
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ eventId: deleteConfirm.id, calendarId: deleteConfirm.calendarId }),
       })
-      mutate?.()
+      // Revalidation kick-off: the dialog closes on the DELETE succeeding, not
+      // on the refetch settling, so the SWR promise is intentionally not awaited.
+      void mutate?.()
       setDeleteConfirm(null)
     } catch (err) {
       // Keep the dialog open and surface the failure; 401 already triggered reauth.

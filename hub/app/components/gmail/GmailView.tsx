@@ -100,7 +100,8 @@ export function GmailView({
       suppressClickRef.current = false
       return
     }
-    openThread(id)
+    // Fire-and-forget: useGmailInbox surfaces load state/errors via threadLoading/threadError.
+    void openThread(id)
   }
 
   const handleDiscuss = (t: GmailThread) => {
@@ -405,7 +406,7 @@ export function GmailView({
                 className="chat-composer__input"
                 value={reply}
                 onChange={e => setReply(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() } }}
+                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void handleSend() } }}
                 placeholder="Reply…"
                 rows={1}
                 disabled={sending}
@@ -442,8 +443,8 @@ export function GmailView({
         <EmailActionSheet
           thread={actionThread}
           busy={actionBusy}
-          onDelete={() => { const id = actionThread.id; setActionThread(null); trashThread(id) }}
-          onSaveTask={() => { const t = actionThread; setActionThread(null); saveThreadAsTask(t) }}
+          onDelete={() => { const id = actionThread.id; setActionThread(null); void trashThread(id) }}
+          onSaveTask={() => { const t = actionThread; setActionThread(null); void saveThreadAsTask(t) }}
           onDiscuss={onDiscussEmail ? () => handleDiscuss(actionThread) : undefined}
           onClose={() => setActionThread(null)}
         />

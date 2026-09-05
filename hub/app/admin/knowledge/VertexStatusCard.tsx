@@ -61,7 +61,9 @@ export default function VertexStatusCard() {
   }, [])
 
   useEffect(() => {
-    fetchStatus()
+    // void: the effect kick-off cannot be awaited inside a sync effect callback,
+    // and fetchStatus catches its own rejections (silent fail + loading reset).
+    void fetchStatus()
   }, [fetchStatus])
 
   const runTestSearch = async () => {

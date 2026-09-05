@@ -110,7 +110,7 @@ async function paginateStripe(
  * instead of reporting a plausible-looking but wrong number.
  */
 function degradeUnlessCapExceeded<T>(p: Promise<T>, op: string, fallback: T): Promise<T> {
-  return p.catch((err) => {
+  return p.catch((err: unknown) => {
     if (err instanceof StripePageCapExceededError) throw err
     return emptyOn(err, { module: 'kpi-sources/stripe', op }, fallback)
   })

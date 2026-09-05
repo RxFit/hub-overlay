@@ -131,7 +131,7 @@ export function useGmailInbox({ onUnreadCount }: UseGmailInboxOptions) {
       // instead of parsing an error body into an empty inbox + a 0 badge.
       if (r.status === 401) {
         const body = await r.json().catch((err: unknown) => { swallow(err, { module: 'useGmailInbox', op: 'parseInbox401Body' }); return {} })
-        if (body?.reauth !== false) signIn('google')
+        if (body?.reauth !== false) void signIn('google')
         const err = new Error(body?.error || 'Session expired — please sign in again')
         ;(err as any).status = 401
         throw err
@@ -188,7 +188,7 @@ export function useGmailInbox({ onUnreadCount }: UseGmailInboxOptions) {
       observePartialResponse(r)
       if (r.status === 401) {
         const body = await r.json().catch((err: unknown) => { swallow(err, { module: 'useGmailInbox', op: 'parseLoadMore401Body' }); return {} })
-        if (body?.reauth !== false) signIn('google')
+        if (body?.reauth !== false) void signIn('google')
         throw new Error(body?.error || 'Session expired — please sign in again')
       }
       if (!r.ok) {
@@ -218,7 +218,7 @@ export function useGmailInbox({ onUnreadCount }: UseGmailInboxOptions) {
       observePartialResponse(r)
       if (r.status === 401) {
         const body = await r.json().catch((err: unknown) => { swallow(err, { module: 'useGmailInbox', op: 'parseOpenThread401Body' }); return {} })
-        if (body?.reauth !== false) signIn('google')
+        if (body?.reauth !== false) void signIn('google')
         throw new Error(body?.error || 'Session expired — please sign in again')
       }
       if (!r.ok) throw new Error('Unable to open this conversation')
@@ -236,7 +236,7 @@ export function useGmailInbox({ onUnreadCount }: UseGmailInboxOptions) {
 
   // Retry the last attempted thread-open (used by the thread-error block).
   const retryOpenThread = () => {
-    if (lastThreadIdRef.current) openThread(lastThreadIdRef.current)
+    if (lastThreadIdRef.current) void openThread(lastThreadIdRef.current)
   }
 
   /* ── Thread actions (action menu): trash + save-to-Google-Task ──
@@ -282,11 +282,11 @@ export function useGmailInbox({ onUnreadCount }: UseGmailInboxOptions) {
         throw new Error(body?.error || 'Failed to delete')
       }
       flashNotice('Moved to Trash')
-      refetch()
+      void refetch()
     } catch (err) {
       // Resync from the server rather than restoring a possibly-stale local
       // snapshot (a poll may have delivered fresh data mid-request).
-      queryClient.invalidateQueries({ queryKey: ['gmail', 'inbox'] })
+      void queryClient.invalidateQueries({ queryKey: ['gmail', 'inbox'] })
       flashNotice(err instanceof Error ? `⚠️ ${err.message}` : '⚠️ Failed to delete')
     }
     setActionBusy(false)
@@ -350,7 +350,7 @@ export function useGmailInbox({ onUnreadCount }: UseGmailInboxOptions) {
       setReply('')
       setMobileView('list')
       // Optimistically reload threads to see the new message
-      refreshInbox()
+      void refreshInbox()
     } catch (err) {
       setSendError(err instanceof Error ? err.message : 'Failed to send')
     }

@@ -65,7 +65,9 @@ export function UserManagementSettings({ callerRole }: { callerRole: string }) {
   }, [])
 
   useEffect(() => {
-    fetchOnboardingUsers()
+    // void: effect kick-off, nothing here depends on the result — the
+    // callback owns its own state updates and catches its own errors
+    void fetchOnboardingUsers()
   }, [fetchOnboardingUsers])
 
   // Manually register a user by email (admin writes their onboarding row)
@@ -240,7 +242,7 @@ export function UserManagementSettings({ callerRole }: { callerRole: string }) {
             placeholder="colleague@company.com"
             value={registerEmail}
             onChange={e => { setRegisterEmail(e.target.value); setRegisterMsg(null) }}
-            onKeyDown={e => { if (e.key === 'Enter') handleRegisterByEmail() }}
+            onKeyDown={e => { if (e.key === 'Enter') void handleRegisterByEmail() }}
             disabled={registering}
             style={{
               flex: 1,

@@ -2,16 +2,73 @@
   // First-ever lint baseline (W2-#11). Errors are zero; warnings are allowed
   // and tracked here as debt rather than papered over with rule downgrades.
   //
-  // TODO(lint-debt): 6 warnings at baseline —
-  //   react-hooks/exhaustive-deps  x4 (ToolPanel x2, page.tsx x2)
-  //   jsx-a11y/role-has-required-aria-props x1 (ContextAttachMenu)
-  //   jsx-a11y/role-supports-aria-props     x1 (GoogleChatPanel)
-  //   plus 11 pre-existing inline exhaustive-deps disables in app/components/panels/.
+  // TODO(lint-debt): 5 warnings at baseline (was 6; the two jsx-a11y ones are
+  // fixed) —
+  //   react-hooks/exhaustive-deps  x5 (ToolPanel x2, useChatEngine x3)
+  //   plus the pre-existing inline exhaustive-deps disables in app/components/panels/.
   // Fix opportunistically; do not let the count grow.
+  //
+  // Typed linting (ERROR_REPORTING_2026-08-24.md Phase 2, spec lines 1123-1124)
+  // is ON: the three @typescript-eslint rules in the ts/tsx override below run
+  // as ERRORS. The exhaustive-deps warnings above stay warnings — that debt is
+  // unchanged by this switch and is not converted into errors.
   "extends": "next/core-web-vitals",
   // Registers @typescript-eslint rules (bundled with eslint-config-next) so the
   // codebase's inline `@typescript-eslint/no-explicit-any` disable directives
-  // resolve. No @typescript-eslint rules are enabled yet (typed linting is
-  // future debt); the plugin only needs to be loaded for the directives.
-  "plugins": ["@typescript-eslint"]
+  // resolve, and so the typed rules below can be enabled.
+  "plugins": ["@typescript-eslint"],
+  "overrides": [
+    {
+      // Typed rules need type information, and the parser only has it when it
+      // is told where the TS program comes from. `next/core-web-vitals` already
+      // routes *.ts/*.tsx through @typescript-eslint/parser; this override adds
+      // the type-aware program on top.
+      //
+      // Why projectService and not project + tsconfigRootDir: the installed
+      // parser is @typescript-eslint v8 (8.62.1 at the time of writing), where
+      // projectService is the supported default for typed linting. It resolves
+      // tsconfig.json relative to each linted file via the TS language-service
+      // machinery, so it needs no absolute tsconfigRootDir — which is what kept
+      // this a .eslintrc.json: `parserOptions.project` requires an absolute
+      // tsconfigRootDir (a relative one was rejected when tried earlier in this
+      // repo), and JSON cannot express __dirname. `next lint` (14.2.x, ESLint
+      // 8.57) accepts projectService without complaint (verified).
+      //
+      // Measured wall-clock cost of `npm run lint` (app/ + lib/, 474 ts/tsx
+      // files, 2026-09-03, .next/cache/eslint cleared for the cold runs):
+      //   untyped (previous config)  cold  8.3s   warm 2.0s
+      //   typed   (this config)      cold 20.2s   warm 2.0s
+      // i.e. ~+12s cold, which is the TS program build (tsc --noEmit alone is
+      // ~3.5s here; the language service does more per-file work than tsc).
+      // `next lint` caches per-file results in .next/cache/eslint/, so warm
+      // runs — the local pre-push case — are unchanged. CI is always cold.
+      "files": ["**/*.ts", "**/*.tsx"],
+      "parser": "@typescript-eslint/parser",
+      "parserOptions": {
+        "projectService": true
+      },
+      "rules": {
+        // A dropped Promise is an error that never reaches any reporting layer
+        // (Layer 8 only sees unhandled rejections, and a floated promise that
+        // never rejects is silently lost work).
+        "@typescript-eslint/no-floating-promises": "error",
+        // The two allow* options default to true and neuter the rule — an
+        // `any`/`unknown` throw is exactly the case that bypasses the
+        // AppError/fault classification. allowRethrowing keeps `catch (e) {
+        // throw e }` legal, which is the pattern withFault relies on.
+        "@typescript-eslint/only-throw-error": [
+          "error",
+          {
+            "allowThrowingAny": false,
+            "allowThrowingUnknown": false,
+            "allowRethrowing": true
+          }
+        ],
+        // Promise `.catch()` callbacks receive `any` even under `strict`; this
+        // rule forces `unknown` so the 121 swallow sites cannot silently read
+        // fields off an unclassified error.
+        "@typescript-eslint/use-unknown-in-catch-callback-variable": "error"
+      }
+    }
+  ]
 }

@@ -64,7 +64,10 @@ const MESSAGES: ChatMessage[] = [{ id: '1', role: 'user', content: 'hello', time
 async function* claudeYield(chunks: string[]): AsyncGenerator<string> {
   for (const c of chunks) yield c
 }
-async function* claudeYieldThenThrow(chunks: string[], err: unknown): AsyncGenerator<string> {
+// `err` is typed Error (not unknown) so the `throw err` below satisfies
+// only-throw-error without wrapping: every caller already passes an Error
+// instance, so the thrown value is byte-identical to before.
+async function* claudeYieldThenThrow(chunks: string[], err: Error): AsyncGenerator<string> {
   for (const c of chunks) yield c
   throw err
 }
@@ -77,7 +80,7 @@ function geminiStream(chunks: string[]): { stream: AsyncIterable<{ text(): strin
     },
   }
 }
-function geminiStreamThenThrow(chunks: string[], err: unknown): { stream: AsyncIterable<{ text(): string }> } {
+function geminiStreamThenThrow(chunks: string[], err: Error): { stream: AsyncIterable<{ text(): string }> } {
   return {
     stream: {
       async *[Symbol.asyncIterator]() {
@@ -286,7 +289,7 @@ describe('withIdleWatchdog — mid-stream stall protection', () => {
       const out: string[] = []
       let err: unknown
       const onTimeout = vi.fn()
-      const run = (async () => { for await (const v of withIdleWatchdog(it, 30_000, 'test', onTimeout)) out.push(v) })().catch(e => { err = e })
+      const run = (async () => { for await (const v of withIdleWatchdog(it, 30_000, 'test', onTimeout)) out.push(v) })().catch((e: unknown) => { err = e })
 
       await vi.advanceTimersByTimeAsync(1)       // let 'a' flow through
       expect(out).toEqual(['a'])

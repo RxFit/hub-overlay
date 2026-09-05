@@ -54,7 +54,9 @@ export function FocusPreferencesSettings() {
 
   useEffect(() => {
     let live = true
-    ;(async () => {
+    // Fire-and-forget fetch on mount; `live` guards state writes after unmount
+    // and a rejection still surfaces as it did (the inner try/catch owns it).
+    void (async () => {
       try {
         const r = await fetch('/api/google/gmail/focus/preferences')
         const d: FocusPreferences = r.ok ? await r.json() : EMPTY
@@ -212,7 +214,7 @@ export function FocusPreferencesSettings() {
               tabIndex={0}
               className={`settings-toggle ${notifyOn ? 'settings-toggle--on' : ''}`}
               onClick={toggleNotify}
-              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleNotify() } }}
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void toggleNotify() } }}
               aria-label={`${notifyOn ? 'Disable' : 'Enable'} desktop alerts for urgent emails`}
             >
               <span className="settings-toggle__thumb" />
