@@ -5,6 +5,7 @@ import { useRuns } from '@/app/hooks/useHubData'
 import type { FeedItem } from '@/app/hooks/useHubData'
 import type { ChatAttachment } from '@/types'
 import { feedItemToAttachment, buildFeedInjectMessage } from '@/lib/feed-attachment'
+import { NeedsYouQueue } from '@/app/components/NeedsYouQueue'
 
 /* ══════════════════════════════════════════════════════════════════════════════
    TYPE STYLING MAP
@@ -204,11 +205,15 @@ function DateGroupLabel({ label }: { label: string }) {
 
 export function ExecutionFeed({
   onInjectChat,
+  onInjectAction,
   canViewRuns,
 }: {
   // Read-style feed-card taps ("tell me more about: …") — direct, intent-free
   // path, carrying the tapped row as a 'record' attachment.
   onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void
+  // Execute-style inject for the needs-you queue's action Retry — the full
+  // intent → interview → confirm-card pipeline (Phase 4 PR 2).
+  onInjectAction: (msg: string) => void
   // Runs data is admin-gated (§3.4 — chat ledger rows have no attribution yet,
   // so a staff view cannot be scoped). False renders a quiet admin-only state
   // and never fetches.
@@ -267,9 +272,15 @@ export function ExecutionFeed({
     }
   }, [refetch])
 
+  // The needs-you queue is every user's (their own failed actions and deep
+  // runs; admins also see failed model runs + dispatch alerts), so it sits
+  // above the admin gate on the ledger feed.
+  const queue = <NeedsYouQueue onInjectChat={onInjectChat} onInjectAction={onInjectAction} />
+
   if (!canViewRuns) {
     return (
       <div style={{ padding: 'var(--space-4, 16px)' }}>
+        {queue}
         <div className="feed-empty" role="status">
           <div className="feed-empty__icon">🔒</div>
           <div className="feed-empty__text">
@@ -282,6 +293,7 @@ export function ExecutionFeed({
 
   return (
     <div style={{ padding: 'var(--space-4, 16px)' }}>
+      {queue}
 
       {/* Filter bar — rendered once; counts are all-zero while loading (items is empty) */}
       <FeedFilterBar active={activeFilter} onChange={setActiveFilter} counts={counts} />

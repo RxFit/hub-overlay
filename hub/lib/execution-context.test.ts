@@ -152,7 +152,7 @@ describe('summarizeActions / summarizeToolRuns', () => {
     const t = summarizeToolRuns([{
       id: 't1', tool: 'deep-research', status: 'queued', brief: 'x'.repeat(500) + '\n\nmulti  line',
       resultMd: null, errorClass: null, error: null, userEmail: 'd', chatId: null, jobId: null,
-      attempt: 0, model: null, latencyMs: null, usage: null, createdAt: new Date(NOW).toISOString(), finishedAt: null,
+      attempt: 0, model: null, latencyMs: null, usage: null, createdAt: new Date(NOW).toISOString(), finishedAt: null, retryOf: null,
     }], NOW)
     expect(t.active).toBe(1)
     expect(t.recent[0].briefPreview.length).toBeLessThanOrEqual(120)
@@ -176,7 +176,7 @@ describe('summarizeActions / summarizeToolRuns', () => {
     const stale = {
       id: 't2', tool: 'deep-think', status: 'queued' as const, brief: 'old', resultMd: null, errorClass: null,
       error: null, userEmail: 'd', chatId: null, jobId: null, attempt: 0, model: null, latencyMs: null,
-      usage: null, createdAt: new Date(NOW - 2 * 3_600_000).toISOString(), finishedAt: null,
+      usage: null, createdAt: new Date(NOW - 2 * 3_600_000).toISOString(), finishedAt: null, retryOf: null,
     }
     const t = summarizeToolRuns([stale], NOW)
     expect(t.active).toBe(0)

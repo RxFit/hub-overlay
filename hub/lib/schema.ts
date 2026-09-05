@@ -575,6 +575,7 @@ export const toolRuns = pgTable(
     latencyMs:  integer('latency_ms'),
     usage:      jsonb('usage').$type<Record<string, number>>(),     // sanitized numeric counters only
     finishedAt: timestamp('finished_at', { withTimezone: true }),
+    retryOf:    uuid('retry_of'),                                   // the run this one re-ran (needs-you Retry); no FK — history rows may be pruned
   },
   (t) => ({
     userCreatedIdx: index('tool_runs_user_created_idx').on(t.tenantId, t.userEmail, t.createdAt.desc()),
@@ -624,6 +625,28 @@ export const toolRuns = pgTable(
  * The row is written BEFORE generation and deleted if generation fails, so a
  * failure retries on the next tick rather than burning the window.
  */
+/* ── Needs-you queue dismissals (Phase 4 PR 2) ──────────────────────────── */
+/**
+ * A queue item the user dismissed. The queue is DERIVED from the ledgers
+ * (failed runs, failed actions, orphaned deep runs, dispatch alerts), so
+ * "dismissed" cannot live on those rows without mutating provenance; it is
+ * a per-user overlay keyed by the item's stable key ('run:<id>', …). One row
+ * per (tenant, user, key); undo deletes it.
+ */
+export const queueDismissals = pgTable(
+  'queue_dismissals',
+  {
+    id:          text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+    tenantId:    text('tenant_id').notNull().references(() => tenants.id),
+    userEmail:   text('user_email').notNull(),
+    itemKey:     text('item_key').notNull(),
+    dismissedAt: timestamp('dismissed_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    userKeyUniq: uniqueIndex('queue_dismissals_user_key_uniq').on(t.tenantId, t.userEmail, t.itemKey),
+  }),
+)
+
 export const reportRuns = pgTable(
   'report_runs',
   {

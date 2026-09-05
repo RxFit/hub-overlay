@@ -266,6 +266,45 @@ export async function loadAlertSnapshot(now = new Date()): Promise<AlertSnapshot
   }
 }
 
+/** One durable alert row as the needs-you queue reads it (Phase 4 PR 2). */
+export interface DispatchAlertRow {
+  id: string
+  createdAt: Date
+  /** Alert kinds in the set; empty for a recovery row. */
+  kinds: string[]
+  channel: string
+}
+
+/**
+ * Recent dispatch alert state rows, newest first — the "alert/recovery
+ * history" reader Phase 3 §2 named as missing. Content-free by construction
+ * (the rows carry only fingerprint, channel, kinds).
+ */
+export async function listDispatchAlerts(tenantId: string, since: Date, limit: number): Promise<DispatchAlertRow[]> {
+  const rows = await db
+    .select({ id: eventLog.id, payload: eventLog.payload, createdAt: eventLog.createdAt })
+    .from(eventLog)
+    .where(and(
+      eq(eventLog.tenantId, tenantId),
+      eq(eventLog.eventType, DISPATCH_ALERT_EVENT),
+      gte(eventLog.createdAt, since),
+    ))
+    .orderBy(desc(eventLog.createdAt))
+    .limit(limit)
+  return rows.map((row) => {
+    const payload = row.payload as { kinds?: unknown; channel?: unknown } | null
+    const kinds = Array.isArray(payload?.kinds)
+      ? payload!.kinds.filter((k): k is string => typeof k === 'string').map((k) => k.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 32))
+      : []
+    return {
+      id: row.id,
+      createdAt: row.createdAt,
+      kinds,
+      channel: typeof payload?.channel === 'string' ? payload.channel : 'none',
+    }
+  })
+}
+
 async function loadLastAlertState(tenantId: string): Promise<LastAlertState | null> {
   const [row] = await db
     .select({ payload: eventLog.payload, createdAt: eventLog.createdAt })

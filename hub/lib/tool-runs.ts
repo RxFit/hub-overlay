@@ -40,6 +40,8 @@ export interface ToolRunRecord {
   usage: Record<string, number> | null
   createdAt: string
   finishedAt: string | null
+  /** The run this one re-ran (needs-you Retry), else null. */
+  retryOf: string | null
 }
 
 /** Zombie guard for the per-tenant-user cap: a 'queued' row older than this no
@@ -70,6 +72,7 @@ function toRecord(r: typeof toolRuns.$inferSelect): ToolRunRecord {
     usage: (r.usage as Record<string, number> | null) ?? null,
     createdAt: iso(r.createdAt) as string,
     finishedAt: iso(r.finishedAt),
+    retryOf: r.retryOf ?? null,
   }
 }
 
@@ -87,6 +90,8 @@ export interface CreateToolRunInput {
   tenantId: string
   userEmail: string
   chatId?: string | null
+  /** Set when this run is a needs-you Retry of an earlier run. */
+  retryOf?: string | null
   /** Attached after the enqueue via attachToolRunJob. */
   jobId?: string | null
 }
@@ -111,6 +116,7 @@ export async function createToolRun(input: CreateToolRunInput): Promise<void> {
     userEmail: input.userEmail.toLowerCase().trim(),
     chatId: input.chatId ?? null,
     jobId: input.jobId ?? null,
+    retryOf: input.retryOf ?? null,
   })
 }
 
