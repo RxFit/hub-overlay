@@ -8,6 +8,7 @@ import type { ExecutionSnapshot } from './execution-context'
 function snap(over: Partial<ExecutionSnapshot> = {}): ExecutionSnapshot {
   return {
     generatedAt: '2026-09-05T15:00:00Z',
+    isAdmin: true,
     runs: { windowHours: 24, truncated: false, total: 10, ok: 10, error: 0, byEngine: {}, bySource: {}, allotmentSharePercent: 80, p50LatencyMs: 2000, totalTokens: 1, errorClasses: {}, recentFailures: [] },
     dispatch: { enabled: true, freshMs: 45_000, workers: [{ id: 'w', fresh: true, lastSeenAt: 'x', version: null, agyVersion: null }], queue: {} },
     actions: { total: 3, failed: 0, recent: [] },
@@ -43,7 +44,7 @@ describe('derivePulseChips', () => {
   })
 
   it('has no admin-plane chips for a non-admin snapshot', () => {
-    expect(derivePulseChips(snap({ runs: null, dispatch: null })).map((c) => c.key)).toEqual(['summary'])
+    expect(derivePulseChips(snap({ isAdmin: false, runs: null, dispatch: null })).map((c) => c.key)).toEqual(['summary'])
   })
 
   it('raises nothing for planes whose read failed (null), rather than treating them as empty', () => {

@@ -42,7 +42,7 @@ describe('GET /api/execution/pulse', () => {
   it('serves a staff user their own scope with isAdmin=false', async () => {
     sessionMock.mockResolvedValue({ user: { email: 'staff@rxfitatx.com', role: 'staff' } })
     adminMock.mockReturnValue(false)
-    snapshotMock.mockResolvedValue({ runs: null, dispatch: null, actions: { total: 0, failed: 0, recent: [] }, toolRuns: { active: 0, recent: [] }, notices: [], generatedAt: 'x' })
+    snapshotMock.mockResolvedValue({ isAdmin: false, runs: null, dispatch: null, actions: { total: 0, failed: 0, recent: [] }, toolRuns: { active: 0, recent: [] }, notices: [], generatedAt: 'x' })
     const res = await GET(req())
     expect(res.status).toBe(200)
     expect(snapshotMock).toHaveBeenCalledWith({ userEmail: 'staff@rxfitatx.com', isAdmin: false })

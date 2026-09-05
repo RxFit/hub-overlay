@@ -121,6 +121,10 @@ export interface ToolRunsPlane {
 
 export interface ExecutionSnapshot {
   generatedAt: string
+  /** Whether the caller may see the admin planes (ai_runs, dispatch). With
+   *  this, a null admin plane is unambiguous: not admin → withheld by role;
+   *  admin → the read failed (and `notices` says so). */
+  isAdmin: boolean
   /** Admin planes are null for callers without the admin role; ANY plane is
    *  null when its read failed — a failed read must never render as "0". */
   runs: RunsPlane | null
@@ -221,10 +225,15 @@ function clampReason(error: string | null | undefined): string | null {
 }
 
 export function summarizeActions(rows: AiActionRecord[]): ActionsPlane {
+  // The failed-actions chip asks "which ones, why", so EVERY failed row in the
+  // read is projected — not just those inside the newest-N window. Newest N
+  // first, then any older failures, ledger order preserved within each.
+  const newest = rows.slice(0, RECENT_ACTIONS)
+  const olderFailures = rows.slice(RECENT_ACTIONS).filter((r) => r.status === 'failed')
   return {
     total: rows.length,
     failed: rows.filter((r) => r.status === 'failed').length,
-    recent: rows.slice(0, RECENT_ACTIONS).map((r) => ({
+    recent: [...newest, ...olderFailures].map((r) => ({
       id: r.id,
       createdAt: r.createdAt,
       actionType: r.actionType,
@@ -325,7 +334,7 @@ export async function readExecutionSnapshot(scope: SnapshotScope): Promise<Execu
     notices.push('deep-run ledger unreadable')
   }
 
-  return { generatedAt: new Date(now).toISOString(), runs, dispatch, actions, toolRuns, notices }
+  return { generatedAt: new Date(now).toISOString(), isAdmin: scope.isAdmin, runs, dispatch, actions, toolRuns, notices }
 }
 
 async function readDispatchPlane(now: number): Promise<DispatchPlane> {
@@ -408,10 +417,15 @@ export function formatExecutionContext(snap: ExecutionSnapshot, now: number = Da
         lines.push(`  - run ${f.id.slice(0, 8)} · ${f.engine}/${f.source} · ${f.errorClass} · ${latency(f.latencyMs)} · ${ago(f.createdAt, now)}`)
       }
     }
-  } else {
+  } else if (!snap.isAdmin) {
     lines.push('Model-run ledger: not visible to this role (admin-only plane).')
+  } else {
+    lines.push('Model-run ledger: could not be read this turn (not a permissions issue — the read failed).')
   }
 
+  if (!snap.dispatch && snap.isAdmin) {
+    lines.push('Desktop dispatch rail: could not be read this turn.')
+  }
   if (snap.dispatch) {
     const d = snap.dispatch
     if (!d.enabled && d.workers.length === 0) {
@@ -442,7 +456,9 @@ export function formatExecutionContext(snap: ExecutionSnapshot, now: number = Da
   const t = snap.toolRuns
   if (!t) {
     lines.push('Deep-run ledger: could not be read this turn.')
-  } else if (t.recent.length > 0 || t.active > 0) {
+  } else if (t.recent.length === 0 && t.active === 0) {
+    lines.push('Deep runs (Deep Research / Deep Think) for this user: 0 active, no recent runs.')
+  } else {
     lines.push(`Deep runs (Deep Research / Deep Think) for this user: ${t.active} active.`)
     for (const x of t.recent) {
       lines.push(`  - ${whenCT(x.createdAt)} · ${x.tool} · ${x.status}${x.errorClass ? ` (${x.errorClass})` : ''} · "${x.briefPreview}"`)

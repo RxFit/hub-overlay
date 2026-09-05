@@ -159,6 +159,19 @@ describe('summarizeActions / summarizeToolRuns', () => {
     expect(t.recent[0].briefPreview).not.toContain('\n')
   })
 
+  it('projects EVERY failed action, even beyond the newest-8 window, so the chip is answerable', () => {
+    const rows = [
+      ...Array.from({ length: 8 }, (_, i) => action({ id: `ok${i}` })),
+      action({ id: 'ok8' }),
+      action({ id: 'bad9', status: 'failed', error: 'rate_limited' }),
+      action({ id: 'ok10' }),
+    ]
+    const a = summarizeActions(rows)
+    expect(a.failed).toBe(1)
+    expect(a.recent.map((r) => r.id)).toEqual(['ok0', 'ok1', 'ok2', 'ok3', 'ok4', 'ok5', 'ok6', 'ok7', 'bad9'])
+    expect(a.recent.at(-1)?.reason).toBe('rate_limited')
+  })
+
   it('does not count a queued deep run older than the active window (an orphan) as active', () => {
     const stale = {
       id: 't2', tool: 'deep-think', status: 'queued' as const, brief: 'old', resultMd: null, errorClass: null,
@@ -174,6 +187,7 @@ describe('summarizeActions / summarizeToolRuns', () => {
 describe('formatExecutionContext', () => {
   const snap: ExecutionSnapshot = {
     generatedAt: new Date(NOW).toISOString(),
+    isAdmin: true,
     runs: summarizeRuns([run(), run({ id: 'r2', status: 'error', errorClass: 'timeout' })], NOW),
     dispatch: {
       enabled: true,
@@ -216,11 +230,24 @@ describe('formatExecutionContext', () => {
     expect(text).not.toContain('0 recent, 0 failed')
   })
 
-  it('tells a non-admin the runs plane is not theirs, and lists unreadable planes', () => {
-    const text = formatExecutionContext({ ...snap, runs: null, dispatch: null, notices: ['runs ledger unreadable'] }, NOW)
+  it('tells a non-admin the runs plane is not theirs', () => {
+    const text = formatExecutionContext({ ...snap, isAdmin: false, runs: null, dispatch: null }, NOW)
     expect(text).toContain('not visible to this role')
-    expect(text).toContain('Planes not readable this turn: runs ledger unreadable.')
+    expect(text).not.toContain('could not be read')
     expect(text).not.toContain('Dispatch queue')
+  })
+
+  it('tells an ADMIN an unreadable runs ledger is a read failure, never a role gate', () => {
+    const text = formatExecutionContext({ ...snap, runs: null, dispatch: null, notices: ['runs ledger unreadable', 'dispatch rail unreadable'] }, NOW)
+    expect(text).toContain('Model-run ledger: could not be read this turn (not a permissions issue')
+    expect(text).toContain('Desktop dispatch rail: could not be read this turn.')
+    expect(text).not.toContain('not visible to this role')
+    expect(text).toContain('Planes not readable this turn: runs ledger unreadable; dispatch rail unreadable.')
+  })
+
+  it('emits an explicit zero line for a readable-but-empty deep-run ledger', () => {
+    const text = formatExecutionContext({ ...snap, toolRuns: { active: 0, recent: [] } }, NOW)
+    expect(text).toContain('Deep runs (Deep Research / Deep Think) for this user: 0 active, no recent runs.')
   })
 })
 
@@ -256,6 +283,7 @@ describe('readExecutionSnapshot', () => {
     actionsMock.mockResolvedValue([action()])
     toolRunsMock.mockResolvedValue([])
     const snap = await readExecutionSnapshot({ userEmail: 'danny@rxfitatx.com', isAdmin: true, now: NOW })
+    expect(snap.isAdmin).toBe(true)
     expect(snap.runs?.total).toBe(1)
     expect(snap.runs?.truncated).toBe(false)
     expect(snap.dispatch?.workers[0]).toMatchObject({ id: 'w', fresh: true })
@@ -271,6 +299,7 @@ describe('readExecutionSnapshot', () => {
     actionsMock.mockResolvedValue([])
     toolRunsMock.mockResolvedValue([])
     const snap = await readExecutionSnapshot({ userEmail: 'staff@rxfitatx.com', isAdmin: false, now: NOW })
+    expect(snap.isAdmin).toBe(false)
     expect(snap.runs).toBeNull()
     expect(snap.dispatch).toBeNull()
     expect(runsMock).not.toHaveBeenCalled()

@@ -223,6 +223,10 @@ export const ExecutionPulse = memo(function ExecutionPulse({
   const dispatchOff = d ? !d.enabled && d.workers.length === 0 : false
   const backlog = d ? (d.queue.queued ?? 0) + (d.queue.leased ?? 0) : 0
   const chips = derivePulseChips(snapshot)
+  // A null admin plane is "locked" only for non-admins; for an admin it is an
+  // unreadable ledger, and the tile must say so rather than imply a role gate.
+  const locked = !snapshot.isAdmin
+  const unreadable = 'not readable right now'
 
   return (
     <div className="execution-pulse">
@@ -230,33 +234,33 @@ export const ExecutionPulse = memo(function ExecutionPulse({
         <PulseStat
           label="Allotment share"
           value={r ? (r.allotmentSharePercent === null ? '—' : `${r.allotmentSharePercent}%`) : '—'}
-          sub={r ? 'of chat served on agy' : undefined}
-          locked={!r}
+          sub={r ? 'of chat served on agy' : locked ? 'admin only' : unreadable}
+          locked={locked}
         />
         <PulseStat
           label={`Runs · ${r?.windowHours ?? 24}h`}
           value={r ? String(r.total) : '—'}
-          sub={r ? (r.error > 0 ? `${r.error} failed` : `${r.ok} ok`) : undefined}
+          sub={r ? (r.error > 0 ? `${r.error} failed` : `${r.ok} ok`) : locked ? 'admin only' : unreadable}
           alert={Boolean(r && r.error > 0)}
-          locked={!r}
+          locked={locked}
         />
         <PulseStat
           label="p50 latency"
           value={r ? fmtLatency(r.p50LatencyMs) : '—'}
-          sub={r ? `${r.totalTokens.toLocaleString()} tok` : undefined}
-          locked={!r}
+          sub={r ? `${r.totalTokens.toLocaleString()} tok` : locked ? 'admin only' : unreadable}
+          locked={locked}
         />
         <PulseStat
           label="Worker"
           value={!d ? '—' : dispatchOff ? 'off' : liveWorkers.length > 0 ? 'live' : d.workers.length === 0 ? 'none' : 'offline'}
           sub={
-            !d ? undefined
+            !d ? (locked ? 'admin only' : unreadable)
               : dispatchOff ? 'dispatch disabled'
               : newestWorker ? `${newestWorker.id} · ${fmtAgo(newestWorker.lastSeenAt, now)}`
               : 'never registered'
           }
           alert={Boolean(d && !dispatchOff && liveWorkers.length === 0)}
-          locked={!d}
+          locked={locked}
         />
         <PulseStat
           label="Your AI actions"
