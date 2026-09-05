@@ -5,7 +5,7 @@ import { useSession, signIn } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { TasksSection, CalendarSection, DocumentsSection, KPISection, ProjectHealthSection, SectionErrorBoundary } from '@/app/components/LeftPanelSections'
 import { ExecutionFeed } from '@/app/components/RightPanelSections'
-import { RightPanelTabsNav, type RightPanelTab } from '@/app/components/RightPanelWorkspace'
+import { RightPanelTabsNav, ExecutionPulse, type RightPanelTab } from '@/app/components/RightPanelWorkspace'
 import { canAccessAdminRoute } from '@/lib/roles'
 import { InterviewBadge, ActionConfirmCard, SkillBadge, SolutionCard } from '@/app/components/ChatEnhancements'
 import { ToolPanel } from '@/app/components/ToolPanel'
@@ -25,6 +25,7 @@ import { RequestAccessLink } from '@/app/components/RequestAccessLink'
 import { InfoPopover } from '@/app/components/InfoPopover'
 import { useTenant } from '@/app/components/TenantProvider'
 import { useKPIData } from '@/app/hooks/useKPIData'
+import { useExecutionPulse } from '@/app/hooks/useHubData'
 import { useDeepAvailability } from '@/app/hooks/useDeepAvailability'
 import { useSpaces, useUnreadCounts } from '@/app/hooks/useGoogleChat'
 import { useFocusNotifications } from '@/app/hooks/useFocusNotifications'
@@ -133,8 +134,9 @@ function RightPanel({
 }: {
   isOpen?: boolean
   onClose?: () => void
-  // Read-style taps (feed cards, health lookups) — direct, intent-free path.
-  onInjectChat: (msg: string) => void
+  // Read-style taps (feed cards, pulse chips, health lookups) — direct,
+  // intent-free path; feed cards attach the tapped ledger row by reference.
+  onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void
   panelRef?: React.Ref<HTMLElement>
   style?: React.CSSProperties
   projects?: import('@/types').ProjectKPI[]
@@ -152,6 +154,10 @@ function RightPanel({
   // each rendered against a retired engine (§2, §6.4).
   const canViewRuns = canAccessAdminRoute(userRole)
   const [activeTab, setActiveTab] = useState<RightPanelTab>(canViewRuns ? 'runs' : 'pulse')
+  // Phase 4 PR 1: Pulse reads the Hub's own execution snapshot — the same
+  // object the chat route injects each turn — so tiles and answers agree.
+  // Polled only while the Pulse tab is showing.
+  const pulse = useExecutionPulse(activeTab === 'pulse')
 
   return (
     <aside ref={panelRef} className={`panel-right ${isOpen ? 'mobile-open' : ''}`} aria-label="Execution Layer" style={style}>
@@ -172,7 +178,16 @@ function RightPanel({
         {activeTab === 'runs' ? (
           <ExecutionFeed onInjectChat={onInjectChat} canViewRuns={canViewRuns} />
         ) : (
-          <ProjectHealthSection projects={projects} onInjectChat={onInjectChat} userRole={userRole} isLoading={kpiLoading} error={kpiError} degraded={kpiDegraded} onRetry={onKpiRetry} />
+          <>
+            <ExecutionPulse
+              snapshot={pulse.snapshot}
+              isLoading={pulse.isLoading}
+              error={pulse.error}
+              onRetry={() => { void pulse.refetch() }}
+              onInjectChat={onInjectChat}
+            />
+            <ProjectHealthSection projects={projects} onInjectChat={onInjectChat} userRole={userRole} isLoading={kpiLoading} error={kpiError} degraded={kpiDegraded} onRetry={onKpiRetry} />
+          </>
         )}
       </div>
     </aside>

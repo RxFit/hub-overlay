@@ -86,6 +86,8 @@ export function aiActionToFeedItem(row: AiActionRecord): FeedItem {
     timestamp: typeof row.createdAt === 'string' ? row.createdAt : new Date().toISOString(),
     icon: 'sparkles',
     metadata: {
+      // actionId lets a card tap attach the row by reference (lib/feed-attachment.ts).
+      actionId: row.id,
       actionType: row.actionType,
       status: row.status,
       requestId: row.requestId,

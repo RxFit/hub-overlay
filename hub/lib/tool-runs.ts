@@ -44,7 +44,7 @@ export interface ToolRunRecord {
 
 /** Zombie guard for the per-tenant-user cap: a 'queued' row older than this no
  *  longer counts as active (its job long since expired or never existed). */
-const ACTIVE_WINDOW_MS = 60 * 60_000
+export const ACTIVE_WINDOW_MS = 60 * 60_000
 
 function iso(v: Date | string | null): string | null {
   if (v === null) return null

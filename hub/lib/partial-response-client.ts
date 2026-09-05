@@ -28,11 +28,26 @@ export function observePartialResponse(
   response: { headers?: Pick<Headers, 'get'> },
 ): boolean {
   if (response.headers?.get('x-hub-partial') !== '1') return false
-  if (!partialResponseVisible) {
-    partialResponseVisible = true
-    emit()
-  }
+  markPartialResponseNotice()
   return true
+}
+
+/**
+ * Arm the notice from the CLIENT side, for degradations the server never saw.
+ *
+ * A 2xx whose body is truncated or not JSON carries no `x-hub-partial`
+ * header — the server believed it answered in full — and a client-side
+ * `emptyOn()` fallback cannot reach this store either: lib/swallow.ts is
+ * isomorphic and its partial marker is injected only on the server (by
+ * lib/partial-context.ts), so in the browser emptyOn counts and returns the
+ * fallback and nothing else. A fetcher that swallows a parse failure into an
+ * empty result therefore calls this explicitly, or the user sees "nothing
+ * here" for what was a broken response.
+ */
+export function markPartialResponseNotice(): void {
+  if (partialResponseVisible) return
+  partialResponseVisible = true
+  emit()
 }
 
 export function clearPartialResponseNotice(): void {

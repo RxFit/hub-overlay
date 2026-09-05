@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { getSession, signIn } from 'next-auth/react'
 import { useEffect, useRef } from 'react'
+import type { ExecutionSnapshot } from '@/lib/execution-context'
 
 import { swallow } from '@/lib/swallow'
 import { observePartialResponse } from '@/lib/partial-response-client'
@@ -371,6 +372,33 @@ export function useRuns(enabled: boolean) {
 
   return {
     items: data?.feed ?? [],
+    isLoading: enabled ? isLoading : false,
+    error: error ?? undefined,
+    refetch,
+  }
+}
+
+/* ══════════════════════════════════════════
+   Execution Pulse (the Hub's own ledgers — Phase 4 PR 1)
+   ══════════════════════════════════════════ */
+
+/**
+ * Fetch the execution snapshot behind the right panel's Pulse tab
+ * (/api/execution/pulse). Same reader the chat route injects each turn, so
+ * the tiles and the assistant describe identical facts. Admin planes come
+ * back null for staff; the component renders those tiles as locked.
+ */
+export function useExecutionPulse(enabled: boolean = true) {
+  const { data, error, isLoading, refetch } = useQuery<{ snapshot: ExecutionSnapshot }>({
+    queryKey: ['execution-pulse'],
+    queryFn: () => fetcher<{ snapshot: ExecutionSnapshot }>('/api/execution/pulse'),
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: false,
+    enabled,
+  })
+
+  return {
+    snapshot: data?.snapshot ?? null,
     isLoading: enabled ? isLoading : false,
     error: error ?? undefined,
     refetch,

@@ -13,7 +13,7 @@ import { setPartialMarker } from '@/lib/swallow'
  * Import this module from client code and the bundle breaks, which is the
  * intended failure: loud at build time, not silent at runtime.
  *
- * WHY AsyncLocalStorage and not a parameter: the 26 emptyOn sites sit inside
+ * WHY AsyncLocalStorage and not a parameter: the 22 emptyOn sites sit inside
  * library functions several frames below the route handler, and threading a
  * "partial" bag through every signature is exactly the plumbing that makes
  * people fall back to `.catch(() => [])`. ALS gives the handler's whole async

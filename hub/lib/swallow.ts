@@ -5,17 +5,17 @@ import type { FaultCode } from '@/lib/fault-codes'
  * (ERROR_REPORTING_2026-08-24.md §3 Layer 4, §3 Layer 9 #2).
  *
  * The distinction between the two exports is load-bearing and permanent:
- *  - `swallow` is for the ~90 benign guards (localStorage, formatting,
+ *  - `swallow` is for the ~86 benign guards (localStorage, formatting,
  *    best-effort cleanup) where nothing the user asked for is lost.
- *  - `emptyOn` is for the 26 SILENT DATA OMISSION sites — `.catch(() => [])`
+ *  - `emptyOn` is for the 22 SILENT DATA OMISSION sites — `.catch(() => [])`
  *    / `.catch(() => null)` — where the response is shaped like success but
  *    is missing data. It additionally marks the current request partial so
  *    withFault can send `x-hub-partial: 1` and the client can say "some data
  *    could not be loaded" instead of "nothing here". Choosing emptyOn at a
  *    site records that judgment once so nobody has to re-derive it.
  *
- * ISOMORPHISM CONSTRAINT — this module MUST stay dependency-free. 42 of the
- * 117 call sites it serves are client code ('use client' hooks/components).
+ * ISOMORPHISM CONSTRAINT — this module MUST stay dependency-free. 39 of the
+ * 108 call sites it serves are client code ('use client' hooks/components).
  * lib/logger.ts imports pino unguarded, lib/fault.ts imports next/server and
  * node crypto, and anything touching node:async_hooks is server-only; any
  * one of them here breaks every client bundle that swallows a localStorage
@@ -47,6 +47,14 @@ import type { FaultCode } from '@/lib/fault-codes'
  * counting it here would double-count every trip as a swallow). The 6
  * `recordEvent(...).catch(() => {})` sites are likewise NOT candidates:
  * recordEvent already catches and log.errors internally (event-logger.ts).
+ *
+ * DEPRECATED-SURFACE EXCLUSION. lib/paperclip.ts, lib/paperclipSession.ts
+ * and app/hooks/useExecutionPanel.ts (whose fetchers target only the retired
+ * /api/paperclip/* proxy) keep their zero-arg catches untouched. AGENTS.md:
+ * Paperclip is deprecated — do not build on it, reference it, or route work
+ * through it — and coupling a retired surface to new fault infrastructure is
+ * exactly that. Those catches leave with the modules when the surface is
+ * deleted; until then they are not counted here and are not a coverage gap.
  *
  * HARD GUARANTEES: neither export ever throws, for ANY `err` (non-Error,
  * undefined, a throwing getter) and even with a broken console or marker.

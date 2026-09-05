@@ -238,7 +238,7 @@ describe('x-hub-partial — a degraded read is told to the client (Layer 9 #2)',
   })
 
   /** A library function several frames below the handler — the realistic
-   *  shape of the 26 sites: nobody threads a "partial" bag through here. */
+   *  shape of the 22 sites: nobody threads a "partial" bag through here. */
   async function loadLabelsBestEffort(): Promise<string[]> {
     await Promise.resolve()
     return Promise.reject(new Error('gmail 503')).catch((err) => emptyOn(err, { module: 'gmail', op: 'labels' }, []))
