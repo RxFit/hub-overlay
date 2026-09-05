@@ -333,6 +333,26 @@ a:hover {
   overflow: hidden;
 }
 
+/* Own the viewport budget shared by the degraded-data banner and Hub shell.
+   When the banner appears, the shell shrinks instead of being clipped below
+   body's fixed 100dvh boundary. */
+.hub-root-frame {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.hub-root-frame > :not(.partial-response-banner) {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.hub-root-frame > .hub-shell {
+  height: auto;
+}
+
 .panels-container {
   display: flex;
   flex: 1;

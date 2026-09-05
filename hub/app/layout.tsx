@@ -100,8 +100,10 @@ export default function RootLayout({
         <Providers>
           <QueryProvider>
             <TenantProvider>
-              <PartialResponseBanner />
-              {children}
+              <div className="hub-root-frame">
+                <PartialResponseBanner />
+                {children}
+              </div>
             </TenantProvider>
           </QueryProvider>
         </Providers>

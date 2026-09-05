@@ -2,6 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query'
 import type { FocusItem } from '@/lib/gmail-focus'
+import { observePartialResponse } from '@/lib/partial-response-client'
 import { emptyOn } from '@/lib/swallow'
 
 /**
@@ -29,6 +30,7 @@ export function useGmailFocus(enabled: boolean = true, opts: { background?: bool
     enabled,
     queryFn: async (): Promise<{ items: FocusDisplayItem[]; degraded: boolean }> => {
       const r = await fetch('/api/google/gmail/focus')
+      observePartialResponse(r)
       if (!r.ok) return { items: [], degraded: true }
       const d = await r.json().catch((err: unknown) => emptyOn(err, { module: 'useGmailFocus', op: 'parseFocusBody' }, null))
       return {
