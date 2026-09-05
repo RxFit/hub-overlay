@@ -27,6 +27,7 @@ const { sessionMock, staffMock, storeMock, dispatchMock, toolRunsMock, skillsMoc
     isDispatchEnabled: vi.fn(),
   },
   toolRunsMock: {
+    ACTIVE_WINDOW_MS: 60 * 60_000,
     createToolRun: vi.fn(),
     attachToolRunJob: vi.fn(),
     expireStaleToolRuns: vi.fn(),
@@ -286,8 +287,8 @@ describe('POST /api/deep-runs/[id] (cancel)', () => {
     return new NextRequest('http://localhost:3000/api/deep-runs/r1', { method: 'POST', body: JSON.stringify({ action }) })
   }
 
-  it("400s any action other than 'cancel' / 'save_artifact'", async () => {
-    expect((await detailPost(cancelReq('retry'), { params: { id: 'r1' } })).status).toBe(400)
+  it("400s any action other than 'cancel' / 'save_artifact' / 'retry'", async () => {
+    expect((await detailPost(cancelReq('nuke'), { params: { id: 'r1' } })).status).toBe(400)
     expect(toolRunsMock.getToolRunOwned).not.toHaveBeenCalled()
     expect(artifactsMock.ensureDeepRunArtifact).not.toHaveBeenCalled()
   })
@@ -316,6 +317,66 @@ describe('POST /api/deep-runs/[id] (cancel)', () => {
     const body = await (await detailPost(cancelReq(), { params: { id: 'r1' } })).json()
     expect(storeMock.cancelJob).not.toHaveBeenCalled()
     expect(body.run.liveStatus).toBe('succeeded')
+  })
+})
+
+describe('POST /api/deep-runs/[id] (retry) — the needs-you queue\'s Retry (Phase 4 PR 2)', () => {
+  function retryReq(): NextRequest {
+    return new NextRequest('http://localhost:3000/api/deep-runs/r1', { method: 'POST', body: JSON.stringify({ action: 'retry' }) })
+  }
+  const FAILED = { ...QUEUED_RUN, status: 'failed', errorClass: 'timeout', finishedAt: new Date().toISOString(), inputs: [{ id: 'artifact-1', title: 'Prior report', toolId: 'seo-audit' }] }
+
+  it('starts a NEW run with the original brief + context through the same start path, recording retryOf', async () => {
+    toolRunsMock.getToolRunOwned.mockResolvedValue(FAILED)
+    dbWhereMock.mockResolvedValue([{ id: 'artifact-1', title: 'Prior report', toolId: 'seo-audit', content: { sections: [{ title: 'F', content: 'Prior context' }] } }])
+    const res = await detailPost(retryReq(), { params: { id: 'r1' } })
+    expect(res.status).toBe(200)
+    const { run } = await res.json()
+    expect(run.status).toBe('queued')
+    expect(run.id).not.toBe('r1')
+    expect(run.retryOf).toBe('r1')
+    // Same guard sequence as a fresh start: zombie expiry, cap, row first, enqueue, attach.
+    expect(toolRunsMock.expireStaleToolRuns).toHaveBeenCalledWith('rxfit', 'staff@rxfitatx.com')
+    expect(toolRunsMock.createToolRun).toHaveBeenCalledWith(expect.objectContaining({
+      tool: 'deep-research', brief: 'b', retryOf: 'r1',
+      inputs: [{ id: 'artifact-1', title: 'Prior report', toolId: 'seo-audit' }],
+    }))
+    expect(toolRunsMock.createToolRun.mock.invocationCallOrder[0]).toBeLessThan(storeMock.enqueueJob.mock.invocationCallOrder[0])
+    expect(storeMock.enqueueJob.mock.calls[0][0].prompt).toContain('Prior context')
+    expect(toolRunsMock.attachToolRunJob).toHaveBeenCalledWith(run.id, 'j1')
+  })
+
+  it('409s a run that is still in flight — a double-tap never doubles the work', async () => {
+    toolRunsMock.getToolRunOwned.mockResolvedValue(QUEUED_RUN)
+    const res = await detailPost(retryReq(), { params: { id: 'r1' } })
+    expect(res.status).toBe(409)
+    expect((await res.json()).reason).toBe('not_retryable')
+    expect(toolRunsMock.createToolRun).not.toHaveBeenCalled()
+  })
+
+  it('retries an ORPHANED queued run (past the active window) — the start path retires the corpse first', async () => {
+    toolRunsMock.getToolRunOwned.mockResolvedValue({ ...QUEUED_RUN, createdAt: new Date(Date.now() - 2 * 3_600_000).toISOString() })
+    const res = await detailPost(retryReq(), { params: { id: 'r1' } })
+    expect(res.status).toBe(200)
+    expect(toolRunsMock.expireStaleToolRuns).toHaveBeenCalled()
+    expect(toolRunsMock.createToolRun).toHaveBeenCalledWith(expect.objectContaining({ retryOf: 'r1' }))
+  })
+
+  it('409s a succeeded run and 404s a run the caller does not own', async () => {
+    toolRunsMock.getToolRunOwned.mockResolvedValue({ ...QUEUED_RUN, status: 'succeeded', resultMd: '# done' })
+    expect((await detailPost(retryReq(), { params: { id: 'r1' } })).status).toBe(409)
+    toolRunsMock.getToolRunOwned.mockResolvedValue(null)
+    expect((await detailPost(retryReq(), { params: { id: 'r1' } })).status).toBe(404)
+    expect(toolRunsMock.createToolRun).not.toHaveBeenCalled()
+  })
+
+  it('fails honest exactly like a fresh start (worker offline → 503 no_worker, no row written)', async () => {
+    toolRunsMock.getToolRunOwned.mockResolvedValue({ ...FAILED, inputs: undefined })
+    storeMock.workCapableWorkerFresh.mockResolvedValue(false)
+    const res = await detailPost(retryReq(), { params: { id: 'r1' } })
+    expect(res.status).toBe(503)
+    expect((await res.json()).reason).toBe('no_worker')
+    expect(toolRunsMock.createToolRun).not.toHaveBeenCalled()
   })
 })
 

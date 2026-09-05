@@ -6,7 +6,9 @@ import { cancelJob, getJobDetail, isMissingTableError } from '@/lib/dispatch-sto
 import { deriveRunView } from '@/lib/deep-runs'
 import { ensureDeepRunArtifact } from '@/lib/deep-artifacts'
 import { getTenantId } from '@/lib/tenant-context'
-import { cancelToolRun, getToolRunOwned, type ToolRunRecord } from '@/lib/tool-runs'
+import { cancelToolRun, getToolRunOwned, ACTIVE_WINDOW_MS, type ToolRunRecord } from '@/lib/tool-runs'
+import { isDeepToolId } from '@/lib/deep-runs'
+import { resolveContextArtifacts, startDeepRun } from '@/lib/deep-run-start'
 import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
@@ -31,6 +33,13 @@ export const dynamic = 'force-dynamic'
  * the safety net (older runs, a landing whose save failed) and to learn the
  * artifact id it shows as "Saved to Artifacts". 409 while the run has no
  * finished report — a queued/failed run has nothing to save.
+ *
+ * POST { action: 'retry' } → the needs-you queue's Retry (Phase 4 PR 2):
+ * starts a NEW run with the original's brief and context artifacts through
+ * lib/deep-run-start.ts — the same guard sequence as a fresh start — and
+ * records `retryOf` on the new row. Only a terminal (failed/cancelled) or
+ * orphaned (queued past the active window) run can be retried; a live one is
+ * 409 so a double-tap never doubles the work. Returns { run } for the new run.
  */
 
 interface SessionUser {
@@ -82,8 +91,50 @@ export const POST = withFault('deep-runs/[id]', async (req: NextRequest, { param
   } catch {
     return NextResponse.json({ error: 'invalid JSON body' }, { status: 400 })
   }
-  if (body.action !== 'cancel' && body.action !== 'save_artifact') {
-    return NextResponse.json({ error: "action must be 'cancel' or 'save_artifact'" }, { status: 400 })
+  if (body.action !== 'cancel' && body.action !== 'save_artifact' && body.action !== 'retry') {
+    return NextResponse.json({ error: "action must be 'cancel', 'save_artifact' or 'retry'" }, { status: 400 })
+  }
+  if (body.action === 'retry') {
+    try {
+      const run = await getToolRunOwned(params.id, tenantId, auth.email)
+      if (!run) return NextResponse.json({ error: 'run not found' }, { status: 404 })
+      if (!isDeepToolId(run.tool)) {
+        return NextResponse.json({ error: 'this run is not a deep tool run', reason: 'not_retryable' }, { status: 409 })
+      }
+      // A queued run that is still inside the active window is live: retry
+      // would double the work. Past the window it is an orphan; startDeepRun
+      // expires it (expireStaleToolRuns) before the cap check, so the retry
+      // itself is what retires the corpse.
+      const live = run.status === 'queued' && new Date(run.createdAt).getTime() >= Date.now() - ACTIVE_WINDOW_MS
+      if (run.status === 'succeeded' || live) {
+        return NextResponse.json(
+          { error: run.status === 'succeeded' ? 'the run succeeded — nothing to retry' : 'the run is still in flight — cancel it first', reason: 'not_retryable' },
+          { status: 409 },
+        )
+      }
+      const contextIds = (run.inputs ?? []).map((i) => i.id)
+      const context = await resolveContextArtifacts(contextIds, tenantId, auth.email)
+      if (!context.ok) return NextResponse.json({ error: context.error }, { status: context.status })
+      const started = await startDeepRun({
+        tool: run.tool,
+        brief: run.brief,
+        tenantId,
+        userEmail: auth.email,
+        chatId: run.chatId,
+        ownedArtifacts: context.ownedArtifacts,
+        contextPayload: context.contextPayload,
+        retryOf: run.id,
+      })
+      if (!started.ok) {
+        return NextResponse.json({ error: started.error, reason: started.reason }, { status: started.status })
+      }
+      return NextResponse.json({ run: started.run })
+    } catch (err) {
+      if (isMissingTableError(err)) {
+        return NextResponse.json({ error: 'deep-run tables missing — run migrations' }, { status: 503 })
+      }
+      throw err
+    }
   }
   if (body.action === 'save_artifact') {
     try {

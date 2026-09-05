@@ -30,8 +30,29 @@ describe('FeedCard → chat wiring', () => {
   it('forwards attachments on the inject prop, end to end', () => {
     expect(src).toMatch(/onInjectChat: \(msg: string, attachments\?: ChatAttachment\[\]\) => void/)
     const page = source('app/page.tsx')
-    expect(page).toMatch(/onInjectChat: \(msg: string, attachments\?: ChatAttachment\[\]\) => void\s*\n\s*panelRef/)
+    expect(page).toMatch(/onInjectChat: \(msg: string, attachments\?: ChatAttachment\[\]\) => void\s*\n(\s*\/\/.*\n)*\s*onInjectAction: \(msg: string\) => void\s*\n\s*panelRef/)
     expect(page).toMatch(/<ExecutionPulse[\s\S]*onInjectChat=\{onInjectChat\}/)
+  })
+})
+
+describe('NeedsYouQueue → chat wiring (Phase 4 PR 2)', () => {
+  const queue = source('app/components/NeedsYouQueue.tsx')
+  const feed = source('app/components/RightPanelSections.tsx')
+  const page = source('app/page.tsx')
+
+  it('Explain attaches the record by reference and Retry splits by mode', () => {
+    expect(queue).toMatch(/queueItemToAttachment\(item\)/)
+    expect(queue).toMatch(/buildQueueExplainMessage\(item\)/)
+    // A deep-run retry hits the real start path; an action retry re-opens the
+    // app's own confirm-card flow — never a raw re-send.
+    expect(queue).toMatch(/retryDeepRun\(item\.retry\.runId\)/)
+    expect(queue).toMatch(/onInjectAction\(item\.retry\.prompt\)/)
+  })
+
+  it('renders above the admin gate on the Runs tab, and the page threads the execute inject through', () => {
+    expect(feed).toMatch(/from '@\/app\/components\/NeedsYouQueue'/)
+    expect(feed).toMatch(/<NeedsYouQueue onInjectChat=\{onInjectChat\} onInjectAction=\{onInjectAction\} \/>/)
+    expect(page).toMatch(/<RightPanel[\s\S]*onInjectAction=\{injectExecute\}[\s\S]*onInjectChat=\{injectRecall\}/)
   })
 })
 

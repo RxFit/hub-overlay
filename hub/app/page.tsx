@@ -122,6 +122,7 @@ function RightPanel({
   isOpen,
   onClose,
   onInjectChat,
+  onInjectAction,
   panelRef,
   style,
   projects,
@@ -136,6 +137,8 @@ function RightPanel({
   // Read-style taps (feed cards, pulse chips, health lookups) — direct,
   // intent-free path; feed cards attach the tapped ledger row by reference.
   onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void
+  // Execute-style inject (needs-you action Retry) — routed through doSend.
+  onInjectAction: (msg: string) => void
   panelRef?: React.Ref<HTMLElement>
   style?: React.CSSProperties
   projects?: import('@/types').ProjectKPI[]
@@ -175,7 +178,7 @@ function RightPanel({
 
       <div className="panel-content">
         {activeTab === 'runs' ? (
-          <ExecutionFeed onInjectChat={onInjectChat} canViewRuns={canViewRuns} />
+          <ExecutionFeed onInjectChat={onInjectChat} onInjectAction={onInjectAction} canViewRuns={canViewRuns} />
         ) : (
           <>
             <ExecutionPulse
@@ -1160,6 +1163,7 @@ export default function HubPage() {
             onClose={handleClosePanels}
             // Read-style right-panel taps (run cards, health lookups) take the
             // direct, intent-free recall path — acceptance #2.
+            onInjectAction={injectExecute}
             onInjectChat={injectRecall}
             panelRef={rightPanelRef}
             projects={projects}

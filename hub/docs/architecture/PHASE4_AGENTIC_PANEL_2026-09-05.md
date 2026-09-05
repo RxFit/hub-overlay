@@ -1,6 +1,6 @@
 # Phase 4 — The Agentic Panel: context, executables, performance
 
-**Status:** PR 1 shipped with this doc · roadmap approved for execution · **Written:** 2026-09-05
+**Status:** PR 1 shipped with this doc · PR 2 shipped 2026-09-05 (§5) · roadmap approved for execution · **Written:** 2026-09-05
 **Sits under:** `scripts/agy/README.md` (migration blueprint) — this is the Phase 4 row expanded
 for the right panel. `PHASE3_EXECUTION_PANEL_2026-08-22.md` still governs the Phase 3 items
 it names (dispatch rail history reader, ops writes, the rip-out); nothing here contradicts it.
@@ -215,6 +215,26 @@ keeps the Hub's guardrails: role gate → gate token → confirm card → `ai_ac
   Retry writes a new row linked by `retryOf` in `meta`.
 - Item types Notify / Question / Review (LangChain framing) so executables can post "FYI" and
   "I'm stuck" items into the same queue instead of Chat pings.
+
+> **✅ Shipped 2026-09-05** as specified, with recorded deltas:
+> - The queue is **derived, not stored** (`lib/needs-you.ts` reads the same ledgers as the
+>   Execution Layer, in the same scope), so a card and the assistant's context cannot
+>   disagree. Only the dismissal overlay persists (`queue_dismissals`, per user, keyed by
+>   `run:|action:|deep:|alert:<id>`); ledger rows are never mutated.
+> - **Retry for deep runs** re-enters the real start path: POST `/api/deep-runs/:id`
+>   `{action:'retry'}` → `lib/deep-run-start.ts` (extracted from the create route, the ONE
+>   way a run starts) with the original brief + context artifacts, `retryOf` recorded as a
+>   column on `tool_runs` (not `meta`). A run still inside the active window is 409; an
+>   orphan past it is expired by the start path and retried.
+> - **Retry for actions** cannot replay a body the audit log never stored, so it re-opens
+>   the app's own intent → interview → confirm-card flow through an execute-style inject
+>   naming the target ("Send an email to client@example.com"). Never an unreviewed re-send.
+> - **Sources:** failed `ai_runs` (24h, admin), failed actions (owner), failed or orphaned
+>   `tool_runs` (7 days, owner), delivered dispatch alerts from `event_log` via the new
+>   `listDispatchAlerts` reader (admin). A failed run row that belongs to a listed deep run
+>   is dropped (one card per failure). **Pending confirm cards are client state and were not
+>   included**; they surface in chat itself.
+> - The alert/recovery `event_log` reader Phase 3 §2 named as missing now exists.
 
 ### PR 3 — Playbooks: the executables catalog
 - A `playbooks` table: `id, name, description, trigger (schedule|event|manual), cron + tz,

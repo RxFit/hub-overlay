@@ -49,6 +49,7 @@ const RESET_TABLES = [
   'hub_users',
   'agent_memory',
   'hub_secrets',
+  'queue_dismissals',
 ] as const
 
 let _sql: ReturnType<typeof postgres> | null = null

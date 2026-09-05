@@ -341,7 +341,7 @@ export interface ProjectKPI {
 /** A Hub ledger row attached by reference (a right-panel card tap). The
  *  server resolves it with the caller's own scope — the client never carries
  *  the record's content, only its identity. */
-export type ChatRecordKind = 'ai_run' | 'ai_action' | 'tool_run'
+export type ChatRecordKind = 'ai_run' | 'ai_action' | 'tool_run' | 'dispatch_alert'
 
 export interface ChatAttachment {
   id: string

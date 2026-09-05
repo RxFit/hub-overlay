@@ -1,9 +1,10 @@
 'use client'
 
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { getSession, signIn } from 'next-auth/react'
 import { useEffect, useRef } from 'react'
 import type { ExecutionSnapshot } from '@/lib/execution-context'
+import type { NeedsYouQueue } from '@/lib/needs-you'
 
 /* ── Auth error recovery ── */
 
@@ -392,6 +393,87 @@ export function useExecutionPulse(enabled: boolean = true) {
     isLoading: enabled ? isLoading : false,
     error: error ?? undefined,
     refetch,
+  }
+}
+
+/* ══════════════════════════════════════════
+   Needs-you queue (Phase 4 PR 2)
+   ══════════════════════════════════════════ */
+
+/**
+ * The "Needs you" queue at the top of the Runs tab (/api/execution/queue):
+ * failed runs, failed actions, orphaned deep runs, dispatch alerts — derived
+ * from the same ledgers the assistant reads, scoped the same way. Any
+ * signed-in user has a queue (their own actions + deep runs), so this is
+ * not admin-gated. `dismiss`/`retry` return the server's answer and
+ * invalidate the queue (and the runs feed, which shares the ledgers).
+ */
+export function useNeedsYou(enabled: boolean = true) {
+  const qc = useQueryClient()
+  const { data, error, isLoading, refetch } = useQuery<NeedsYouQueue>({
+    queryKey: ['needs-you'],
+    queryFn: () => fetcher<NeedsYouQueue>('/api/execution/queue'),
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: false,
+    enabled,
+  })
+
+  const invalidate = () => {
+    void qc.invalidateQueries({ queryKey: ['needs-you'] })
+    void qc.invalidateQueries({ queryKey: ['runs-feed'] })
+  }
+
+  /** Never throws: a network-layer rejection is an ordinary failed result, and
+   *  the queue is re-read either way so an optimistic removal is undone by
+   *  the truth (the card comes back if the server never saw the dismiss). */
+  async function dismiss(key: string, undo = false): Promise<boolean> {
+    // Optimistic: drop the card now; the refetch below is the truth.
+    if (!undo) {
+      qc.setQueryData<NeedsYouQueue>(['needs-you'], (cur) =>
+        cur ? { ...cur, items: cur.items.filter((i) => i.key !== key), dismissedCount: cur.dismissedCount + 1 } : cur,
+      )
+    }
+    try {
+      const res = await fetch('/api/execution/queue/dismiss', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, undo }),
+      })
+      return res.ok
+    } catch {
+      return false
+    } finally {
+      invalidate()
+    }
+  }
+
+  /** Never throws — see dismiss. */
+  async function retryDeepRun(runId: string): Promise<{ ok: true } | { ok: false; error: string }> {
+    try {
+      const res = await fetch(`/api/deep-runs/${encodeURIComponent(runId)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'retry' }),
+      })
+      const body = await res.json().catch(() => ({} as { error?: string }))
+      if (res.ok) return { ok: true }
+      return { ok: false, error: typeof body?.error === 'string' ? body.error : `Retry failed (${res.status})` }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error && err.message ? `Retry failed: ${err.message}` : 'Retry failed: network error' }
+    } finally {
+      invalidate()
+    }
+  }
+
+  return {
+    items: data?.items ?? [],
+    dismissedCount: data?.dismissedCount ?? 0,
+    notices: data?.notices ?? [],
+    isLoading: enabled ? isLoading : false,
+    error: error ?? undefined,
+    refetch,
+    dismiss,
+    retryDeepRun,
   }
 }
 
