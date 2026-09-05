@@ -135,6 +135,9 @@ describeDb('GET /api/feed — AI-action provenance (DB-backed)', () => {
     expect(failedPost.title).toBe('AI post in spaces/ops failed')
     expect(failedPost.description).toBe('Failed — rate_limited')
     expect(failedPost.metadata).toEqual({
+      // actionId is the row id, minted by the DB — the card tap attaches the
+      // row by this reference (lib/feed-attachment.ts).
+      actionId: failedPost.id.replace(/^ai-/, ''),
       actionType: 'chat_post',
       status: 'failed',
       requestId: 'req-bad',

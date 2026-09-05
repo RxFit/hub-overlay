@@ -25,7 +25,7 @@ describe('write-action catalog vs the shipped intents', () => {
   })
 
   it('groups each action under the role tier interview.ts actually enforces', () => {
-    for (const surface of ['google', 'paperclip'] as const) {
+    for (const surface of ['google', 'execution'] as const) {
       for (const group of writeActionsBySurface(surface)) {
         for (const intent of Object.keys(WRITE_ACTION_CATALOG) as InterviewIntent[]) {
           if (!group.actions.includes(WRITE_ACTION_CATALOG[intent].label)) continue
@@ -37,21 +37,35 @@ describe('write-action catalog vs the shipped intents', () => {
 
   it('puts every action on exactly one surface, and neither surface is empty', () => {
     const google = writeActionsBySurface('google').flatMap(g => g.actions)
-    const paperclip = writeActionsBySurface('paperclip').flatMap(g => g.actions)
+    const execution = writeActionsBySurface('execution').flatMap(g => g.actions)
     expect(google.length).toBeGreaterThan(0)
-    expect(paperclip.length).toBeGreaterThan(0)
-    expect(google.length + paperclip.length).toBe(INTENT_DEFINITIONS.length)
-    expect(google.filter(a => paperclip.includes(a))).toEqual([])
+    expect(execution.length).toBeGreaterThan(0)
+    expect(google.length + execution.length).toBe(INTENT_DEFINITIONS.length)
+    expect(google.filter(a => execution.includes(a))).toEqual([])
   })
 })
 
 describe('the system prompt carries the whole catalog', () => {
   const prompt = buildSystemPrompt({})
 
-  it('names every shipped write action', () => {
+  it('names every shipped Google write action', () => {
     for (const intent of Object.keys(WRITE_ACTION_CATALOG) as InterviewIntent[]) {
+      if (WRITE_ACTION_CATALOG[intent].surface !== 'google') continue
       expect(prompt).toContain(WRITE_ACTION_CATALOG[intent].label)
     }
+  })
+
+  it('does NOT advertise the retired execution-layer actions, and never names Paperclip', () => {
+    // The engine behind routines/agents/goals/issues is retired (AGENTS.md).
+    // Advertising them would promise a flow the app cannot finish — the
+    // phantom-flow bug in its original form. The prompt instead tells the
+    // model they are not available yet and what to offer instead.
+    for (const intent of Object.keys(WRITE_ACTION_CATALOG) as InterviewIntent[]) {
+      if (WRITE_ACTION_CATALOG[intent].surface !== 'execution') continue
+      expect(prompt).not.toContain(WRITE_ACTION_CATALOG[intent].label)
+    }
+    expect(prompt).toContain('NOT AVAILABLE in this release')
+    expect(prompt).not.toMatch(/paperclip(?! *, the orchestration platform)/i)
   })
 
   it('advertises the capabilities that were missing entirely (authoring + sharing)', () => {

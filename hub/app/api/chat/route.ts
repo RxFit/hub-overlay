@@ -8,7 +8,8 @@ import { streamChat, buildSystemPromptParts, friendlyModelError } from '@/lib/ge
 import { resolveReadTools } from '@/lib/ai-tools/resolve'
 import { buildCapabilityManifest } from '@/lib/ai-tools/capabilities'
 import type { SystemPromptParts } from '@/lib/claude'
-import { getCompanies, getIssues, getAgents, getRuns } from '@/lib/paperclip'
+import { readExecutionSnapshot, formatExecutionContext } from '@/lib/execution-context'
+import { canAccessAdminRoute } from '@/lib/roles'
 import { searchSemanticBrain } from '@/lib/vertex'
 import { searchWeb, parseSubQueries, mergeExaResults, type ExaSearchResult } from '@/lib/exa'
 import { resolveAttachmentContext } from '@/lib/attachment-resolver'
@@ -30,6 +31,14 @@ import '@/lib/validate-keys'  // Side-effect import: validates API keys on cold 
 import { withFault } from '@/lib/route-fault'
 
 const log = createLogger('chat')
+
+/* Execution-context failure notices. Both are OUR text (not fenced) and both
+   name the real cause, so the model says "the Hub's execution ledger could
+   not be read" rather than inventing an outage in some other system. */
+const EXECUTION_CONTEXT_FAILED =
+  '[The Hub\'s own execution ledger (model runs, AI actions, deep runs, dispatch worker) could not be read this turn. If the user asks about a run, an action, or the Execution panel, say the ledger read failed and invite them to retry — do NOT claim any other system is down, and do NOT invent run details.]'
+const EXECUTION_CONTEXT_TIMED_OUT =
+  '[The Hub\'s own execution ledger read TIMED OUT this turn, so the "Execution Layer" section is absent. If the user asks about a run, an action, or the Execution panel, say the lookup timed out and invite them to retry — do NOT claim any other system is down, and do NOT invent run details.]'
 
 export const runtime = 'nodejs'
 // Platform request ceiling — the outermost rung of the timeout ladder. Must be a
@@ -81,7 +90,7 @@ async function runSearchPipeline(query: string, effectiveUseCase: string): Promi
                   return `## Internal Knowledge (Vertex AI — Google Drive/Workspace)\n\n${vertexContext}\n\n`
                 }
                 // Vertex returned no results — tell the LLM explicitly so it doesn't fabricate diagnostics
-                return `## Internal Knowledge (Vertex AI)\n\n[No matching documents found in the internal knowledge base for this query. The user can search Google Drive directly from the Documents panel on the left sidebar, or try refining their search terms. Do NOT blame Paperclip or claim Google services are down — they are independent.]\n\n`
+                return `## Internal Knowledge (Vertex AI)\n\n[No matching documents found in the internal knowledge base for this query. The user can search Google Drive directly from the Documents panel on the left sidebar, or try refining their search terms. Do NOT blame any other Hub system or claim Google services are down — they are independent.]\n\n`
               } catch (err) {
                 if (err instanceof CircuitOpenError) {
                   log.warn({ key: 'vertex-ai' }, 'Vertex AI circuit is OPEN — skipping search')
@@ -320,7 +329,7 @@ function streamModelResponse(
   const stream = new ReadableStream({
     async start(controller) {
       // Client abort (CLIENT_ABORT_MS): the browser gives up at 45s but the
-      // rotation would otherwise churn model + Paperclip compute up to
+      // rotation would otherwise churn model compute up to
       // maxDuration (120s). Thread req.signal into the rotation (which checks it
       // between attempts) AND check it in this pump so we stop enqueuing the
       // moment the client is gone. Bailing on abort is a clean stop — it must
@@ -531,7 +540,7 @@ async function handleChat(req: NextRequest): Promise<Response> {
   // ── EXA Search mode — short-circuit before ANY other tool/context runs ──
   // The header EXA toggle turns this chat into a pure Exa.AI web-search
   // summarizer. Per the feature's contract, no other tool may fire while it's
-  // on: skip Vertex, pgvector, Paperclip, Google Workspace context, attachments,
+  // on: skip Vertex, pgvector, execution context, Google Workspace context, attachments,
   // and skills entirely. Run only a forced Exa search, then let the model
   // synthesize + cite from those results.
   if (exaMode) {
@@ -541,7 +550,7 @@ async function handleChat(req: NextRequest): Promise<Response> {
 
     // Hybrid SEMANTIC-ONLY research: Exa (web) + Vertex AI Internal Brain run
     // CONCURRENTLY, each failing open independently — a Vertex outage must not
-    // kill web results and vice versa. Everything else (pgvector, Paperclip,
+    // kill web results and vice versa. Everything else (pgvector, execution context,
     // Workspace context, attachments, skills) stays disabled in this mode —
     // EXCEPT documents the user explicitly linked by URL in their message:
     // those are user-supplied context, not a tool, and refusing to read a link
@@ -624,14 +633,16 @@ async function handleChat(req: NextRequest): Promise<Response> {
   }
 
   // ── Parallel pre-stream context assembly ──
-  // Paperclip context (8s timeout) and Google Workspace context (6s timeout)
-  // were previously sequential (worst case 14s before streaming starts).
-  // Now they run concurrently via Promise.all (worst case 8s).
+  // The Hub's own execution context (ai_runs / actions / deep runs /
+  // dispatch — 4s timeout) and Google Workspace context (6s timeout) run
+  // concurrently via Promise.all. The execution branch replaced the retired
+  // Paperclip fetch (Phase 4 PR 1): that branch spent up to 8s failing
+  // against a dead upstream and then told the model orchestration data was
+  // "warming up", which the model dutifully repeated to the user.
   //
   // The Google OAuth token is resolved first since it's a local JWT decode
   // (sub-ms) that both the Google WS fetch and attachment handling need.
-  let projectContext = ''
-  let agentActivity = ''
+  const chatIsAdmin = canAccessAdminRoute(chatRole)
 
   // Same three token checks every /api/google/* route applies (fatal refresh
   // error, missing token, expired-in-cookie access token) — but soft: chat
@@ -651,13 +662,13 @@ async function handleChat(req: NextRequest): Promise<Response> {
         : '[Google Workspace access is TEMPORARILY unavailable this turn (the Google session token is refreshing). No Drive, Gmail, Calendar, Tasks, or Chat data could be read. If the user asks about their files or email, tell them to retry in a moment — do NOT tell them the data does not exist, and do NOT invent it.]'
   }
 
-  // Search depends only on the query + useCase (not on Paperclip/Google context),
+  // Search depends only on the query + useCase (not on execution/Google context),
   // so kick it off NOW to run CONCURRENTLY with the context fetches below.
   const effectiveUseCase = activeSkill ? 'deep_dive' : useCase
   const lastUserMsg = boundedMessages.filter(m => m.role === 'user').pop()
   const query = lastUserMsg?.content ?? ''
   // Read-tool resolution (analytics + Drive/Chat lookups) is independent of the
-  // Paperclip/Google context fetches, so start it here to run concurrently
+  // execution/Google context fetches, so start it here to run concurrently
   // rather than adding its latency on top. Resolves to an empty result for
   // questions that need no lookup.
   const readToolsPromise = resolveReadTools(query, chatRole, googleAccessToken)
@@ -666,100 +677,21 @@ async function handleChat(req: NextRequest): Promise<Response> {
     ? runSearchPipeline(query, effectiveUseCase)
     : Promise.resolve([])
 
-  const [paperclipContextResult, googleWsResult] = await Promise.all([
-    // Branch 1: Paperclip orchestration context (8s timeout)
+  const [executionContextResult, googleWsResult] = await Promise.all([
+    // Branch 1: Hub-native execution context (4s timeout). Scoped to the
+    // caller: admins see the runs ledger + dispatch rail, everyone sees their
+    // own AI actions and deep runs. readExecutionSnapshot never throws — a
+    // plane that fails reads as a notice inside the snapshot.
     withTimeout(
-      (async () => {
-        try {
-          let companies = await getCompanies()
-
-          // Scope to user's assigned workspaces (admin/superadmin with ['*'] see all)
-          if (chatRole !== 'superadmin' && !chatAssignedProjects.includes('*')) {
-            companies = companies.filter(c => chatAssignedProjects.includes(c.id))
-          }
-
-          const pc = companies
-            .map(c => `- ${c.name} (${c.identifier}): ${c.issueCount ?? '?'} issues, ${c.memberCount ?? '?'} members`)
-            .join('\n')
-
-          // Get recent issues across scoped companies (first 3 for context)
-          const issuePromises = companies.slice(0, 3).map(c =>
-            getIssues(c.id, { limit: 5 }).catch(() => [])
-          )
-          const issueResults = await Promise.all(issuePromises)
-          const allIssues = issueResults.flat()
-          let aa = allIssues
-            .slice(0, 10)
-            .map(i => `- [${i.identifier}] ${i.title} (${i.state?.name ?? 'unknown'})`)
-            .join('\n')
-
-          // Also get agent status for system prompt context — INDIVIDUAL details, not just counts
-          try {
-            const agentPromises = companies.slice(0, 3).map(c =>
-              getAgents(c.id).catch(() => [])
-            )
-            const agentResults = await Promise.all(agentPromises)
-            const allAgents = agentResults.flat()
-            const healthy = allAgents.filter(a => a.status === 'active').length
-            const errored = allAgents.filter(a => a.status === 'error').length
-            const inactive = allAgents.filter(a => a.status === 'inactive').length
-            aa += '\nAgent Fleet Status: ' + allAgents.length + ' total — ' + healthy + ' active, ' + errored + ' errored, ' + inactive + ' inactive'
-
-            // List individual agents so the LLM has real data for audits
-            if (allAgents.length > 0) {
-              aa += '\n\nAgent Details:'
-              for (const agent of allAgents) {
-                const heartbeat = agent.lastHeartbeat
-                  ? ` (last heartbeat: ${new Date(agent.lastHeartbeat).toLocaleString('en-US', { timeZone: 'America/Chicago' })})`
-                  : ' (no heartbeat recorded)'
-                aa += `\n  - ${agent.name}: ${agent.status.toUpperCase()}${heartbeat}`
-              }
-            }
-
-            // Surface errored agents prominently
-            const erroredAgents = allAgents.filter(a => a.status === 'error')
-            if (erroredAgents.length > 0) {
-              aa += '\n\n⚠️ ERRORED AGENTS:'
-              for (const agent of erroredAgents) {
-                aa += `\n  - ${agent.name} (${agent.id}) — status: error, adapter: ${agent.adapter}`
-              }
-            }
-          } catch (agentErr) {
-            log.warn({ err: agentErr }, 'Agent status fetch failed — skipping agent context')
-          }
-
-          // Fetch recent runs to provide actual execution history for audit queries
-          try {
-            const runPromises = companies.slice(0, 3).map(c =>
-              getRuns(c.id, { limit: 5 }).catch(() => [])
-            )
-            const runResults = await Promise.all(runPromises)
-            const allRuns = runResults.flat()
-            if (allRuns.length > 0) {
-              aa += '\n\nRecent Agent Runs:'
-              for (const run of allRuns.slice(0, 10)) {
-                const duration = run.durationMs ? `${(run.durationMs / 1000).toFixed(1)}s` : 'n/a'
-                const started = run.startedAt ? new Date(run.startedAt).toLocaleString('en-US', { timeZone: 'America/Chicago' }) : 'unknown'
-                aa += `\n  - [${run.issueIdentifier}] ${run.agentName}: ${run.status.toUpperCase()} (${duration}, started: ${started})`
-              }
-              const failedRuns = allRuns.filter(r => r.status === 'failed')
-              if (failedRuns.length > 0) {
-                aa += `\n\n⚠️ ${failedRuns.length} FAILED RUNS in recent history`
-              }
-            }
-          } catch (runErr) {
-            log.warn({ err: runErr }, 'Run history fetch failed — skipping run context')
-          }
-
-          return { projectContext: pc, agentActivity: aa }
-        } catch (ctxErr) {
-          log.warn({ err: ctxErr }, 'Paperclip context fetch failed — proceeding without project context')
-          return { projectContext: '[Paperclip orchestration data unavailable — this does NOT affect Google Drive, Calendar, Tasks, Gmail, or Chat. Those services are powered by the user\'s OAuth session and work independently via the left panel.]', agentActivity: '' }
-        }
-      })(),
-      8_000,
-      { projectContext: '[Paperclip project context timed out — Google Workspace features (Drive, Calendar, Tasks, Chat, Gmail) are unaffected and remain available via the left panel.]', agentActivity: '' },
-      'paperclip-context'
+      readExecutionSnapshot({ userEmail: session.user.email ?? '', isAdmin: chatIsAdmin })
+        .then((snap) => ({ executionContext: formatExecutionContext(snap), executionNotice: undefined as string | undefined }))
+        .catch((err: unknown) => {
+          log.warn({ err }, 'Execution context read failed — proceeding without it')
+          return { executionContext: '', executionNotice: EXECUTION_CONTEXT_FAILED }
+        }),
+      4_000,
+      { executionContext: '', executionNotice: EXECUTION_CONTEXT_TIMED_OUT },
+      'execution-context',
     ),
 
     // Branch 2: Google Workspace context (6s timeout) — runs in parallel.
@@ -789,8 +721,7 @@ async function handleChat(req: NextRequest): Promise<Response> {
       : Promise.resolve<WorkspaceContextOutcome>({ ok: false, reason: 'no-session' }),
   ])
 
-  projectContext = paperclipContextResult.projectContext
-  agentActivity = paperclipContextResult.agentActivity
+  const { executionContext, executionNotice } = executionContextResult
 
   let googleWorkspaceDetail: string | undefined
   let googleWorkspaceCounts: { taskCount?: number; upcomingEvents?: number; recentFiles?: number; unreadEmails?: number } = {}
@@ -816,7 +747,12 @@ async function handleChat(req: NextRequest): Promise<Response> {
   // blocks, per-attachment error isolation, and every existing timeout. This cuts
   // worst-case time-to-first-token from serial (~30-40s for 3-5 items) to parallel.
   const [attachmentContext, driveLinks] = await Promise.all([
-    resolveAttachmentContext(attachments, lastUserMsg, googleAccessToken),
+    // Record attachments (right-panel card taps) resolve inside the caller's
+    // own scope — the role decides whether the runs ledger is readable.
+    resolveAttachmentContext(attachments, lastUserMsg, googleAccessToken, {
+      userEmail: session.user.email ?? '',
+      role: chatRole,
+    }),
     // Drive links pasted directly into the message text — read with the
     // user's token, deterministically (no planner in the loop).
     resolveDriveLinkContext(
@@ -841,8 +777,8 @@ async function handleChat(req: NextRequest): Promise<Response> {
   const liveAnalytics = await readToolsPromise
 
   const systemPrompt = buildSystemPromptParts({
-    projects: projectContext,
-    agentActivity,
+    executionContext: executionContext || undefined,
+    executionNotice,
     googleWorkspace: Object.keys(googleWorkspaceCounts).length > 0 ? googleWorkspaceCounts : undefined,
     googleWorkspaceDetail,
     googleAuthNotice,

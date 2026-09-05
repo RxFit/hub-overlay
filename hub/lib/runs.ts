@@ -212,11 +212,8 @@ export async function chatServeCounts(windowMs = 24 * 60 * 60 * 1000): Promise<R
   return Object.fromEntries(rows.map((r) => [r.engine, r.n]))
 }
 
-/** Read recent runs, newest first. `limit` is expected pre-clamped by the
- *  caller (the Phase 3 panel route will clamp, mirroring listAiActions). */
-export async function listAiRuns(opts: { limit: number }): Promise<AiRunRecord[]> {
-  const rows = await db.select().from(aiRuns).orderBy(desc(aiRuns.createdAt)).limit(opts.limit)
-  return rows.map((r) => ({
+function toRecord(r: typeof aiRuns.$inferSelect): AiRunRecord {
+  return {
     id: r.id,
     createdAt: r.createdAt instanceof Date ? r.createdAt.toISOString() : String(r.createdAt),
     engine: r.engine,
@@ -235,5 +232,38 @@ export async function listAiRuns(opts: { limit: number }): Promise<AiRunRecord[]
     requestId: r.requestId ?? null,
     userEmail: r.userEmail ?? null,
     meta: (r.meta as Record<string, unknown> | null) ?? null,
-  }))
+  }
+}
+
+/** Read one run by id (the right-panel card tap → chat "record" attachment).
+ *  Admin-plane data: callers gate on role before calling. */
+export async function getAiRun(id: string): Promise<AiRunRecord | null> {
+  const rows = await db.select().from(aiRuns).where(eq(aiRuns.id, id)).limit(1)
+  const r = rows[0]
+  if (!r) return null
+  return toRecord(r)
+}
+
+/**
+ * Read every run created at or after `since`, newest first, for windowed
+ * aggregation (the Execution Layer's 24h planes). `limit` is a safety cap
+ * against an unexpectedly hot ledger, not a paging size — callers check
+ * `rows.length === limit` and report the window as truncated rather than
+ * present a partial sample as a total.
+ */
+export async function listAiRunsSince(since: Date, limit: number): Promise<AiRunRecord[]> {
+  const rows = await db
+    .select()
+    .from(aiRuns)
+    .where(gt(aiRuns.createdAt, since))
+    .orderBy(desc(aiRuns.createdAt))
+    .limit(limit)
+  return rows.map(toRecord)
+}
+
+/** Read recent runs, newest first. `limit` is expected pre-clamped by the
+ *  caller (the Phase 3 panel route will clamp, mirroring listAiActions). */
+export async function listAiRuns(opts: { limit: number }): Promise<AiRunRecord[]> {
+  const rows = await db.select().from(aiRuns).orderBy(desc(aiRuns.createdAt)).limit(opts.limit)
+  return rows.map(toRecord)
 }

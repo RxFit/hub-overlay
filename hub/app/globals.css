@@ -10636,3 +10636,41 @@ details[open] > .settings-collapsible__trigger .settings-collapsible__arrow {
   justify-content: space-between;
   gap: var(--space-3);
 }
+
+/* ── Execution Pulse (Phase 4 PR 1: the Hub's own execution snapshot) ── */
+.execution-pulse {
+  padding: var(--space-4, 16px) var(--space-4, 16px) var(--space-2, 8px);
+}
+
+.execution-pulse .pulse-strip {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+@media (max-width: 480px) {
+  .execution-pulse .pulse-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.attention-strip--pulse {
+  border-top: none;
+  padding: var(--space-2) 0;
+  flex-wrap: wrap;
+  background: transparent;
+}
+
+.attention-chip--calm {
+  border-color: var(--border);
+  background: var(--bg-elevated, rgba(255, 255, 255, 0.02));
+}
+
+.attention-chip--calm:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.pulse-notice {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+  padding: var(--space-1) 0 var(--space-2);
+}

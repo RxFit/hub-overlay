@@ -33,6 +33,7 @@ describe('aiActionToFeedItem — common envelope', () => {
     expect(item.timestamp).toBe('2026-07-08T12:00:00.000Z')
     expect(item.icon).toBe('sparkles')
     expect(item.metadata).toEqual({
+      actionId: 'abc-123',
       actionType: 'gmail_send',
       status: 'success',
       requestId: 'req-9',
@@ -167,6 +168,7 @@ describe('aiActionToFeedItem — defensive contract', () => {
     expect(serialized).toContain('client@example.com')
     // metadata is a fixed scalar envelope — nothing from target is copied
     expect(Object.keys(item.metadata ?? {}).sort()).toEqual([
+      'actionId',
       'actionType',
       'requestId',
       'status',
