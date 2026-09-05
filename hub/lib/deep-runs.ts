@@ -18,6 +18,7 @@
 import type { JobDetail } from '@/lib/dispatch-store'
 import type { ToolRunRecord } from '@/lib/tool-runs'
 import { DEEP_TOOL_IDS } from '@/lib/skills'
+import { fenceUntrusted, UNTRUSTED_CONTENT_POLICY } from '@/lib/prompt-safety'
 
 export { DEEP_TOOL_IDS }
 export type DeepToolId = (typeof DEEP_TOOL_IDS)[number]
@@ -82,6 +83,10 @@ export function deepToolDeadlineMs(tool: DeepToolId): number {
 
 export const BRIEF_MIN_CHARS = 3
 export const BRIEF_MAX_CHARS = 8_000
+// The desktop worker shell-quotes the composed prompt into a single CLI
+// argument. Keep artifact context comfortably below Windows' command-line
+// ceiling after quote expansion and after adding the protocol + brief.
+export const CONTEXT_MAX_BYTES = 16_000
 
 export function briefError(brief: unknown): string | null {
   if (typeof brief !== 'string' || brief.trim().length < BRIEF_MIN_CHARS) {
@@ -89,6 +94,13 @@ export function briefError(brief: unknown): string | null {
   }
   if (brief.length > BRIEF_MAX_CHARS) {
     return `brief must be at most ${BRIEF_MAX_CHARS} characters`
+  }
+  return null
+}
+
+export function contextPayloadError(contextPayload: string): string | null {
+  if (Buffer.byteLength(contextPayload, 'utf8') > CONTEXT_MAX_BYTES) {
+    return `selected context must be at most ${CONTEXT_MAX_BYTES} bytes`
   }
   return null
 }
@@ -112,13 +124,18 @@ Then end the reply with EXACTLY one fenced code block labeled json, shaped:
  * Compose the single self-contained run prompt. Pure: the caller supplies
  * the SKILL.md body (or null → built-in protocol), so tests never touch fs.
  */
-export function composeRunPrompt(tool: DeepToolId, brief: string, skillContent: string | null): string {
+export function composeRunPrompt(tool: DeepToolId, brief: string, skillContent: string | null, contextPayload?: string): string {
   const protocol = skillContent?.trim() || DEEP_TOOLS[tool].fallbackProtocol
-  return [
+  const parts = [
     protocol,
     REPORT_CONTRACT,
-    `# The brief\n${brief.trim()}`,
-  ].join('\n\n')
+  ]
+  if (contextPayload?.trim()) {
+    parts.push(UNTRUSTED_CONTENT_POLICY)
+    parts.push(`# Inputs\n\n${fenceUntrusted('Selected tool artifacts', contextPayload.trim())}`)
+  }
+  parts.push(`# The brief\n${brief.trim()}`)
+  return parts.join('\n\n')
 }
 
 /* ── Live-state derivation (design §4.5: state, never a percentage) ──────── */

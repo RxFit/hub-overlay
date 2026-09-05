@@ -16,8 +16,8 @@ import { toolRuns } from '@/lib/schema'
  *  - Every terminal transition is a guarded CAS from 'queued'
  *    (WHERE status = 'queued'), so a user cancel racing a worker result
  *    lands exactly one terminal state and the loser no-ops.
- *  - Reads are OWNER-SCOPED by user_email at this layer, not in routes, so
- *    a route cannot forget the scope.
+ *  - Reads are TENANT + OWNER scoped at this layer, not in routes, so a
+ *    route cannot forget either half of the workspace boundary.
  */
 
 export type ToolRunStatus = 'queued' | 'succeeded' | 'failed' | 'cancelled'
@@ -27,6 +27,7 @@ export interface ToolRunRecord {
   tool: string
   status: ToolRunStatus
   brief: string
+  inputs?: { id: string; title: string; toolId: string }[]
   resultMd: string | null
   errorClass: string | null
   error: string | null
@@ -41,7 +42,7 @@ export interface ToolRunRecord {
   finishedAt: string | null
 }
 
-/** Zombie guard for the per-user cap: a 'queued' row older than this no
+/** Zombie guard for the per-tenant-user cap: a 'queued' row older than this no
  *  longer counts as active (its job long since expired or never existed). */
 const ACTIVE_WINDOW_MS = 60 * 60_000
 
@@ -56,6 +57,7 @@ function toRecord(r: typeof toolRuns.$inferSelect): ToolRunRecord {
     tool: r.tool,
     status: r.status as ToolRunStatus,
     brief: r.brief,
+    inputs: (r.inputs as { id: string; title: string; toolId: string }[]) ?? undefined,
     resultMd: r.resultMd ?? null,
     errorClass: r.errorClass ?? null,
     error: r.error ?? null,
@@ -81,13 +83,15 @@ export interface CreateToolRunInput {
   id: string
   tool: string
   brief: string
+  inputs?: { id: string; title: string; toolId: string }[]
+  tenantId: string
   userEmail: string
   chatId?: string | null
   /** Attached after the enqueue via attachToolRunJob. */
   jobId?: string | null
 }
 
-/** Postgres unique-violation on the one-active-run-per-user partial index
+/** Postgres unique-violation on the one-active-run-per-tenant-user partial index
  *  (tool_runs_one_active_per_user, drizzle/migrate.mjs). Drizzle wraps the
  *  PostgresError in a DrizzleQueryError, so the SQLSTATE may sit on the
  *  error itself OR on its `cause` — check both. */
@@ -102,6 +106,8 @@ export async function createToolRun(input: CreateToolRunInput): Promise<void> {
     id: input.id,
     tool: input.tool,
     brief: input.brief,
+    inputs: input.inputs ? input.inputs : null,
+    tenantId: input.tenantId,
     userEmail: input.userEmail.toLowerCase().trim(),
     chatId: input.chatId ?? null,
     jobId: input.jobId ?? null,
@@ -122,7 +128,7 @@ export async function attachToolRunJob(id: string, jobId: string): Promise<void>
  * aging, so the one-active-run unique index can never deadlock a user on a
  * corpse. Called by the POST route before the cap check.
  */
-export async function expireStaleToolRuns(userEmail: string): Promise<number> {
+export async function expireStaleToolRuns(tenantId: string, userEmail: string): Promise<number> {
   const cutoff = new Date(Date.now() - ACTIVE_WINDOW_MS)
   const rows = await db
     .update(toolRuns)
@@ -134,6 +140,7 @@ export async function expireStaleToolRuns(userEmail: string): Promise<number> {
       updatedAt: new Date(),
     })
     .where(and(
+      eq(toolRuns.tenantId, tenantId),
       eq(toolRuns.userEmail, userEmail.toLowerCase().trim()),
       eq(toolRuns.status, 'queued'),
       lt(toolRuns.createdAt, cutoff),
@@ -142,20 +149,28 @@ export async function expireStaleToolRuns(userEmail: string): Promise<number> {
   return rows.length
 }
 
-export async function getToolRunOwned(id: string, userEmail: string): Promise<ToolRunRecord | null> {
+export async function getToolRunOwned(id: string, tenantId: string, userEmail: string): Promise<ToolRunRecord | null> {
   const rows = await db
     .select()
     .from(toolRuns)
-    .where(and(eq(toolRuns.id, id), eq(toolRuns.userEmail, userEmail.toLowerCase().trim())))
+    .where(and(
+      eq(toolRuns.id, id),
+      eq(toolRuns.tenantId, tenantId),
+      eq(toolRuns.userEmail, userEmail.toLowerCase().trim()),
+    ))
     .limit(1)
   return rows[0] ? toRecord(rows[0]) : null
 }
 
 export async function listToolRuns(
+  tenantId: string,
   userEmail: string,
   opts: { tool?: string; limit: number },
 ): Promise<ToolRunRecord[]> {
-  const conds = [eq(toolRuns.userEmail, userEmail.toLowerCase().trim())]
+  const conds = [
+    eq(toolRuns.tenantId, tenantId),
+    eq(toolRuns.userEmail, userEmail.toLowerCase().trim()),
+  ]
   if (opts.tool) conds.push(eq(toolRuns.tool, opts.tool))
   const rows = await db
     .select()
@@ -167,12 +182,13 @@ export async function listToolRuns(
 }
 
 /** Active = still 'queued' AND recent enough that its job could be live. */
-export async function countActiveToolRuns(userEmail: string): Promise<number> {
+export async function countActiveToolRuns(tenantId: string, userEmail: string): Promise<number> {
   const cutoff = new Date(Date.now() - ACTIVE_WINDOW_MS)
   const rows = await db
     .select({ n: sql<number>`count(*)::int` })
     .from(toolRuns)
     .where(and(
+      eq(toolRuns.tenantId, tenantId),
       eq(toolRuns.userEmail, userEmail.toLowerCase().trim()),
       eq(toolRuns.status, 'queued'),
       gt(toolRuns.createdAt, cutoff),
@@ -189,6 +205,7 @@ export type ToolRunTerminal =
 export interface LandedToolRun {
   id: string
   tool: string
+  tenantId: string
   userEmail: string
   chatId: string | null
 }
@@ -224,11 +241,12 @@ export async function finishToolRun(
     .returning({
       id: toolRuns.id,
       tool: toolRuns.tool,
+      tenantId: toolRuns.tenantId,
       userEmail: toolRuns.userEmail,
       chatId: toolRuns.chatId,
     })
   const row = rows[0]
-  return row ? { id: row.id, tool: row.tool, userEmail: row.userEmail, chatId: row.chatId } : null
+  return row ? { id: row.id, tool: row.tool, tenantId: row.tenantId, userEmail: row.userEmail, chatId: row.chatId } : null
 }
 
 /**
@@ -237,16 +255,20 @@ export async function finishToolRun(
  * cancel in the queue, or null when the run wasn't the caller's or had
  * already gone terminal.
  */
-export async function cancelToolRun(id: string, userEmail: string): Promise<string | null> {
+export async function cancelToolRun(id: string, tenantId: string, userEmail: string): Promise<string | null> {
   return withTransaction(async (tx) => {
     const rows = await tx
-      .select({ jobId: toolRuns.jobId, status: toolRuns.status, owner: toolRuns.userEmail })
+      .select({ jobId: toolRuns.jobId, status: toolRuns.status })
       .from(toolRuns)
-      .where(eq(toolRuns.id, id))
+      .where(and(
+        eq(toolRuns.id, id),
+        eq(toolRuns.tenantId, tenantId),
+        eq(toolRuns.userEmail, userEmail.toLowerCase().trim()),
+      ))
       .limit(1)
       .for('update')
     const row = rows[0]
-    if (!row || row.owner !== userEmail.toLowerCase().trim() || row.status !== 'queued') return null
+    if (!row || row.status !== 'queued') return null
     await finishToolRun(tx, id, { status: 'cancelled', errorClass: 'abort', error: 'cancelled by the user' })
     return row.jobId
   })

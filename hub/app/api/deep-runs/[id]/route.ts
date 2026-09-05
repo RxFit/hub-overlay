@@ -58,8 +58,9 @@ async function viewOf(run: ToolRunRecord) {
 export const GET = withFault('deep-runs/[id]', async (_req: NextRequest, { params }: { params: { id: string } }) => {
   const auth = await requireStaff()
   if (auth instanceof NextResponse) return auth
+  const tenantId = getTenantId()
   try {
-    const run = await getToolRunOwned(params.id, auth.email)
+    const run = await getToolRunOwned(params.id, tenantId, auth.email)
     if (!run) return NextResponse.json({ error: 'run not found' }, { status: 404 })
     return NextResponse.json({ run: await viewOf(run) })
   } catch (err) {
@@ -74,6 +75,7 @@ export const GET = withFault('deep-runs/[id]', async (_req: NextRequest, { param
 export const POST = withFault('deep-runs/[id]', async (req: NextRequest, { params }: { params: { id: string } }) => {
   const auth = await requireStaff()
   if (auth instanceof NextResponse) return auth
+  const tenantId = getTenantId()
   let body: { action?: unknown }
   try {
     body = await req.json()
@@ -85,7 +87,7 @@ export const POST = withFault('deep-runs/[id]', async (req: NextRequest, { param
   }
   if (body.action === 'save_artifact') {
     try {
-      const run = await getToolRunOwned(params.id, auth.email)
+      const run = await getToolRunOwned(params.id, tenantId, auth.email)
       if (!run) return NextResponse.json({ error: 'run not found' }, { status: 404 })
       if (run.status !== 'succeeded' || !run.resultMd?.trim()) {
         return NextResponse.json(
@@ -96,7 +98,7 @@ export const POST = withFault('deep-runs/[id]', async (req: NextRequest, { param
       // Owner recorded the way tool_runs records it (lowercased) so the
       // landing-side and panel-side saves are indistinguishable; reads and
       // ownership checks compare case-insensitively (lib/tool-artifacts.ts).
-      const artifact = await ensureDeepRunArtifact(run, { tenantId: getTenantId(), createdBy: run.userEmail })
+      const artifact = await ensureDeepRunArtifact(run, { tenantId, createdBy: run.userEmail })
       return NextResponse.json({ artifact })
     } catch (err) {
       if (isMissingTableError(err)) {
@@ -107,7 +109,7 @@ export const POST = withFault('deep-runs/[id]', async (req: NextRequest, { param
     }
   }
   try {
-    const jobId = await cancelToolRun(params.id, auth.email)
+    const jobId = await cancelToolRun(params.id, tenantId, auth.email)
     if (jobId) {
       // Stand the queue job down; the worker learns via its next heartbeat.
       // AWAITED: an unawaited failure would report "cancelled" while the
@@ -121,7 +123,7 @@ export const POST = withFault('deep-runs/[id]', async (req: NextRequest, { param
         console.warn('[deep-runs cancel] queue cancel failed — worker will run to completion, result will be discarded:', err instanceof Error ? err.message : err)
       }
     }
-    const run = await getToolRunOwned(params.id, auth.email)
+    const run = await getToolRunOwned(params.id, tenantId, auth.email)
     if (!run) return NextResponse.json({ error: 'run not found' }, { status: 404 })
     return NextResponse.json({ run: await viewOf(run) })
   } catch (err) {

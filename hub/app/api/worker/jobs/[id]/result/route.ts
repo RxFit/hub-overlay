@@ -4,7 +4,6 @@ import { persistAssistantTurn } from '@/lib/chat-store'
 import { ensureDeepRunArtifactForRun } from '@/lib/deep-artifacts'
 import { parseDeepReport } from '@/lib/deep-report'
 import { DEEP_TOOLS, isDeepToolId } from '@/lib/deep-runs'
-import { getTenantId } from '@/lib/tenant-context'
 import { isMissingTableError, postResult, toolRunIdFrom, workItemRunSource } from '@/lib/dispatch-store'
 import { emit } from '@/lib/observability'
 import { withFault } from '@/lib/route-fault'
@@ -169,7 +168,7 @@ export const POST = withFault('worker/jobs/[id]/result', async (req: NextRequest
     if (recordedWork && outcome.toolRun && body.status === 'ok' && isDeepToolId(outcome.toolRun.tool)) {
       const landed = outcome.toolRun
       try {
-        await ensureDeepRunArtifactForRun(landed.id, landed.userEmail, getTenantId(), { embedTimeoutMs: 5_000 })
+        await ensureDeepRunArtifactForRun(landed.id, landed.userEmail, landed.tenantId, { embedTimeoutMs: 5_000 })
       } catch (err) {
         console.warn('[worker result] deep-run artifact save deferred to the panel:', err instanceof Error ? err.message : err)
       }
