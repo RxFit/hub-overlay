@@ -244,6 +244,23 @@ export async function getAiRun(id: string): Promise<AiRunRecord | null> {
   return toRecord(r)
 }
 
+/**
+ * Read every run created at or after `since`, newest first, for windowed
+ * aggregation (the Execution Layer's 24h planes). `limit` is a safety cap
+ * against an unexpectedly hot ledger, not a paging size — callers check
+ * `rows.length === limit` and report the window as truncated rather than
+ * present a partial sample as a total.
+ */
+export async function listAiRunsSince(since: Date, limit: number): Promise<AiRunRecord[]> {
+  const rows = await db
+    .select()
+    .from(aiRuns)
+    .where(gt(aiRuns.createdAt, since))
+    .orderBy(desc(aiRuns.createdAt))
+    .limit(limit)
+  return rows.map(toRecord)
+}
+
 /** Read recent runs, newest first. `limit` is expected pre-clamped by the
  *  caller (the Phase 3 panel route will clamp, mirroring listAiActions). */
 export async function listAiRuns(opts: { limit: number }): Promise<AiRunRecord[]> {

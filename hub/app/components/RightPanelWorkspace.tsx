@@ -148,7 +148,7 @@ export function derivePulseChips(snap: ExecutionSnapshot): PulseChip[] {
       })
     }
   }
-  if (snap.actions.failed > 0) {
+  if (snap.actions && snap.actions.failed > 0) {
     chips.push({
       key: 'actions_failed',
       label: 'failed actions',
@@ -157,7 +157,7 @@ export function derivePulseChips(snap: ExecutionSnapshot): PulseChip[] {
       prompt: `${snap.actions.failed} of my recent AI actions failed. Which ones, why, and should I retry them?`,
     })
   }
-  if (snap.toolRuns.active > 0) {
+  if (snap.toolRuns && snap.toolRuns.active > 0) {
     chips.push({
       key: 'deep_active',
       label: 'deep runs active',
@@ -260,17 +260,21 @@ export const ExecutionPulse = memo(function ExecutionPulse({
         />
         <PulseStat
           label="Your AI actions"
-          value={String(snapshot.actions.total)}
-          sub={snapshot.actions.failed > 0 ? `${snapshot.actions.failed} failed` : 'recent, none failed'}
-          alert={snapshot.actions.failed > 0}
+          value={snapshot.actions ? String(snapshot.actions.total) : '—'}
+          sub={
+            !snapshot.actions ? 'not readable right now'
+              : snapshot.actions.failed > 0 ? `${snapshot.actions.failed} failed` : 'recent, none failed'
+          }
+          alert={Boolean(snapshot.actions && snapshot.actions.failed > 0)}
         />
         <PulseStat
           label="Deep runs"
-          value={String(snapshot.toolRuns.active)}
+          value={snapshot.toolRuns ? String(snapshot.toolRuns.active) : '—'}
           sub={
-            snapshot.toolRuns.recent.length > 0
-              ? `active · last ${snapshot.toolRuns.recent[0].status}`
-              : d && backlog > 0 ? `${backlog} queued` : 'active'
+            !snapshot.toolRuns ? 'not readable right now'
+              : snapshot.toolRuns.recent.length > 0
+                ? `active · last ${snapshot.toolRuns.recent[0].status}`
+                : d && backlog > 0 ? `${backlog} queued` : 'active'
           }
         />
       </div>

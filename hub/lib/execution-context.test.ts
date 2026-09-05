@@ -24,9 +24,9 @@ vi.mock('@/lib/logger', () => ({
 vi.mock('./logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
 }))
-vi.mock('./runs', () => ({ listAiRuns: runsMock }))
+vi.mock('./runs', () => ({ listAiRunsSince: runsMock }))
 vi.mock('./ai-audit', () => ({ listAiActions: actionsMock }))
-vi.mock('./tool-runs', () => ({ listToolRuns: toolRunsMock }))
+vi.mock('./tool-runs', () => ({ listToolRuns: toolRunsMock, ACTIVE_WINDOW_MS: 60 * 60_000 }))
 vi.mock('./dispatch-store', () => ({
   listWorkers: workersMock,
   queueDepths: depthsMock,
@@ -142,18 +142,32 @@ describe('summarizeRuns', () => {
 })
 
 describe('summarizeActions / summarizeToolRuns', () => {
-  it('counts failures and previews briefs on one line, clamped', () => {
-    const a = summarizeActions([action(), action({ id: 'a2', status: 'failed', error: 'boom' })])
+  it('counts failures, keeps a clamped one-line reason on failed actions only, and previews briefs', () => {
+    const a = summarizeActions([action(), action({ id: 'a2', status: 'failed', error: 'rate\nlimited ' + 'x'.repeat(300) })])
     expect(a.total).toBe(2)
     expect(a.failed).toBe(1)
+    expect(a.recent[0].reason).toBeNull()
+    expect(a.recent[1].reason?.startsWith('rate limited x')).toBe(true)
+    expect(a.recent[1].reason!.length).toBeLessThanOrEqual(120)
     const t = summarizeToolRuns([{
       id: 't1', tool: 'deep-research', status: 'queued', brief: 'x'.repeat(500) + '\n\nmulti  line',
       resultMd: null, errorClass: null, error: null, userEmail: 'd', chatId: null, jobId: null,
       attempt: 0, model: null, latencyMs: null, usage: null, createdAt: new Date(NOW).toISOString(), finishedAt: null,
-    }])
+    }], NOW)
     expect(t.active).toBe(1)
     expect(t.recent[0].briefPreview.length).toBeLessThanOrEqual(120)
     expect(t.recent[0].briefPreview).not.toContain('\n')
+  })
+
+  it('does not count a queued deep run older than the active window (an orphan) as active', () => {
+    const stale = {
+      id: 't2', tool: 'deep-think', status: 'queued' as const, brief: 'old', resultMd: null, errorClass: null,
+      error: null, userEmail: 'd', chatId: null, jobId: null, attempt: 0, model: null, latencyMs: null,
+      usage: null, createdAt: new Date(NOW - 2 * 3_600_000).toISOString(), finishedAt: null,
+    }
+    const t = summarizeToolRuns([stale], NOW)
+    expect(t.active).toBe(0)
+    expect(t.recent[0].status).toContain('stale')
   })
 })
 
@@ -182,6 +196,24 @@ describe('formatExecutionContext', () => {
     expect(text).toContain('1 offline (danny-desktop last seen 2h ago)')
     expect(text).toContain('Dispatch queue: queued 2.')
     expect(text).toContain('gmail_focus · success · "Prioritized inbox focus queue"')
+  })
+
+  it('renders the failure reason on a failed action and flags a truncated window', () => {
+    const s: ExecutionSnapshot = {
+      ...snap,
+      runs: { ...snap.runs!, truncated: true },
+      actions: summarizeActions([action({ status: 'failed', error: 'rate_limited' })]),
+    }
+    const text = formatExecutionContext(s, NOW)
+    expect(text).toContain('reason: rate_limited')
+    expect(text).toContain('totals are a lower bound')
+  })
+
+  it('says an unreadable action log is UNKNOWN, never "0 actions"', () => {
+    const text = formatExecutionContext({ ...snap, actions: null, toolRuns: null }, NOW)
+    expect(text).toContain('AI action log: could not be read this turn')
+    expect(text).toContain('Deep-run ledger: could not be read this turn')
+    expect(text).not.toContain('0 recent, 0 failed')
   })
 
   it('tells a non-admin the runs plane is not theirs, and lists unreadable planes', () => {
@@ -225,9 +257,12 @@ describe('readExecutionSnapshot', () => {
     toolRunsMock.mockResolvedValue([])
     const snap = await readExecutionSnapshot({ userEmail: 'danny@rxfitatx.com', isAdmin: true, now: NOW })
     expect(snap.runs?.total).toBe(1)
+    expect(snap.runs?.truncated).toBe(false)
     expect(snap.dispatch?.workers[0]).toMatchObject({ id: 'w', fresh: true })
-    expect(snap.actions.total).toBe(1)
+    expect(snap.actions?.total).toBe(1)
     expect(snap.notices).toEqual([])
+    // The whole 24h window is read from the DB, not the newest N rows.
+    expect(runsMock).toHaveBeenCalledWith(new Date(NOW - 24 * 3_600_000), 5_000)
     expect(actionsMock).toHaveBeenCalledWith({ userEmail: 'danny@rxfitatx.com', limit: 25 })
     expect(toolRunsMock).toHaveBeenCalledWith('rxfit', 'danny@rxfitatx.com', { limit: 10 })
   })
@@ -254,6 +289,18 @@ describe('readExecutionSnapshot', () => {
     expect(snap.notices).toContain('deep-run ledger unreadable')
     // A missing dispatch table is "no dispatch", not a failure.
     expect(snap.dispatch).toEqual({ enabled: false, freshMs: 45_000, workers: [], queue: {} })
-    expect(snap.actions.total).toBe(1)
+    expect(snap.actions?.total).toBe(1)
+    // A failed read is null, never a healthy-looking zero.
+    expect(snap.toolRuns).toBeNull()
+  })
+
+  it('reports a window that hit the read cap as truncated', async () => {
+    runsMock.mockResolvedValue(Array.from({ length: 5_000 }, (_, i) => run({ id: `r${i}` })))
+    workersMock.mockResolvedValue([])
+    depthsMock.mockResolvedValue({})
+    actionsMock.mockResolvedValue([])
+    toolRunsMock.mockResolvedValue([])
+    const snap = await readExecutionSnapshot({ userEmail: 'danny@rxfitatx.com', isAdmin: true, now: NOW })
+    expect(snap.runs?.truncated).toBe(true)
   })
 })

@@ -1,6 +1,6 @@
-import { listAiRuns, type AiRunRecord } from './runs'
+import { listAiRunsSince, type AiRunRecord } from './runs'
 import { listAiActions, type AiActionRecord } from './ai-audit'
-import { listToolRuns, type ToolRunRecord } from './tool-runs'
+import { listToolRuns, ACTIVE_WINDOW_MS, type ToolRunRecord } from './tool-runs'
 import { listWorkers, queueDepths, isMissingTableError } from './dispatch-store'
 import { dispatchFreshMs, isDispatchEnabled } from './agy-dispatch'
 import { getTenantId } from './tenant-context'
@@ -41,7 +41,10 @@ const log = createLogger('execution-context')
  */
 
 export const EXECUTION_WINDOW_HOURS = 24
-const LEDGER_SCAN_LIMIT = 200
+/** Safety cap on the windowed ai_runs read — a hot ledger reports the window
+ *  as truncated rather than presenting a partial sample as a total. */
+const LEDGER_WINDOW_CAP = 5_000
+const ACTION_REASON_CHARS = 120
 const RECENT_FAILURES = 5
 const RECENT_ACTIONS = 8
 const RECENT_TOOL_RUNS = 5
@@ -51,6 +54,8 @@ export interface EngineTally { ok: number; error: number }
 
 export interface RunsPlane {
   windowHours: number
+  /** True when the read hit LEDGER_WINDOW_CAP — totals are a lower bound. */
+  truncated: boolean
   total: number
   ok: number
   error: number
@@ -94,6 +99,9 @@ export interface ActionsPlane {
     intent: string | null
     status: string
     actor: string
+    /** Single-line, clamped failure reason (already redacted at write time by
+     *  lib/ai-audit); null unless the action failed. */
+    reason: string | null
   }>
 }
 
@@ -113,11 +121,12 @@ export interface ToolRunsPlane {
 
 export interface ExecutionSnapshot {
   generatedAt: string
-  /** Admin planes are null for callers without the admin role. */
+  /** Admin planes are null for callers without the admin role; ANY plane is
+   *  null when its read failed — a failed read must never render as "0". */
   runs: RunsPlane | null
   dispatch: DispatchPlane | null
-  actions: ActionsPlane
-  toolRuns: ToolRunsPlane
+  actions: ActionsPlane | null
+  toolRuns: ToolRunsPlane | null
   /** Planes that could not be read this time, with a one-line reason class. */
   notices: string[]
 }
@@ -147,12 +156,14 @@ export function summarizeRuns(
   rows: AiRunRecord[],
   now: number = Date.now(),
   windowHours: number = EXECUTION_WINDOW_HOURS,
+  truncated: boolean = false,
 ): RunsPlane {
   const cutoff = now - windowHours * 3_600_000
   const inWindow = rows.filter((r) => new Date(r.createdAt).getTime() >= cutoff)
 
   const plane: RunsPlane = {
     windowHours,
+    truncated,
     total: inWindow.length,
     ok: 0,
     error: 0,
@@ -202,6 +213,13 @@ export function summarizeRuns(
   return plane
 }
 
+function clampReason(error: string | null | undefined): string | null {
+  if (typeof error !== 'string') return null
+  const oneLine = error.replace(/\s+/g, ' ').trim()
+  if (!oneLine) return null
+  return oneLine.length > ACTION_REASON_CHARS ? oneLine.slice(0, ACTION_REASON_CHARS - 1) + '…' : oneLine
+}
+
 export function summarizeActions(rows: AiActionRecord[]): ActionsPlane {
   return {
     total: rows.length,
@@ -213,6 +231,9 @@ export function summarizeActions(rows: AiActionRecord[]): ActionsPlane {
       intent: r.intent,
       status: r.status,
       actor: r.actor,
+      // The failed-actions chip asks "which ones, why" — carry the reason the
+      // feed card already shows (lib/ai-action-feed.ts renders the same field).
+      reason: r.status === 'failed' ? clampReason(r.error) : null,
     })),
   }
 }
@@ -222,15 +243,21 @@ function briefPreview(brief: string): string {
   return oneLine.length > BRIEF_PREVIEW_CHARS ? oneLine.slice(0, BRIEF_PREVIEW_CHARS - 1) + '…' : oneLine
 }
 
-export function summarizeToolRuns(rows: ToolRunRecord[]): ToolRunsPlane {
+/** A queued row older than the active window is an orphan (crash, failed
+ *  reap) — the same rule lib/tool-runs.ts applies to the per-user cap. */
+function isActiveToolRun(r: ToolRunRecord, now: number): boolean {
+  return r.status === 'queued' && new Date(r.createdAt).getTime() >= now - ACTIVE_WINDOW_MS
+}
+
+export function summarizeToolRuns(rows: ToolRunRecord[], now: number = Date.now()): ToolRunsPlane {
   return {
-    active: rows.filter((r) => r.status === 'queued').length,
+    active: rows.filter((r) => isActiveToolRun(r, now)).length,
     recent: rows.slice(0, RECENT_TOOL_RUNS).map((r) => ({
       id: r.id,
       createdAt: r.createdAt,
       finishedAt: r.finishedAt,
       tool: r.tool,
-      status: r.status,
+      status: r.status === 'queued' && !isActiveToolRun(r, now) ? 'queued (stale — likely orphaned)' : r.status,
       errorClass: r.errorClass ? sanitizeClass(r.errorClass) : null,
       briefPreview: briefPreview(r.brief),
       latencyMs: r.latencyMs,
@@ -256,8 +283,9 @@ export async function readExecutionSnapshot(scope: SnapshotScope): Promise<Execu
   const notices: string[] = []
   const tenantId = getTenantId()
 
+  const since = new Date(now - EXECUTION_WINDOW_HOURS * 3_600_000)
   const [runsRes, dispatchRes, actionsRes, toolRunsRes] = await Promise.allSettled([
-    scope.isAdmin ? listAiRuns({ limit: LEDGER_SCAN_LIMIT }) : Promise.resolve(null),
+    scope.isAdmin ? listAiRunsSince(since, LEDGER_WINDOW_CAP) : Promise.resolve(null),
     scope.isAdmin ? readDispatchPlane(now) : Promise.resolve(null),
     listAiActions({ userEmail: scope.userEmail, limit: 25 }),
     listToolRuns(tenantId, scope.userEmail, { limit: 10 }),
@@ -265,7 +293,9 @@ export async function readExecutionSnapshot(scope: SnapshotScope): Promise<Execu
 
   let runs: RunsPlane | null = null
   if (runsRes.status === 'fulfilled') {
-    runs = runsRes.value ? summarizeRuns(runsRes.value, now) : null
+    runs = runsRes.value
+      ? summarizeRuns(runsRes.value, now, EXECUTION_WINDOW_HOURS, runsRes.value.length >= LEDGER_WINDOW_CAP)
+      : null
   } else {
     log.warn({ err: runsRes.reason }, 'ai_runs read failed')
     notices.push('runs ledger unreadable')
@@ -279,7 +309,7 @@ export async function readExecutionSnapshot(scope: SnapshotScope): Promise<Execu
     notices.push('dispatch rail unreadable')
   }
 
-  let actions: ActionsPlane = { total: 0, failed: 0, recent: [] }
+  let actions: ActionsPlane | null = null
   if (actionsRes.status === 'fulfilled') {
     actions = summarizeActions(actionsRes.value)
   } else {
@@ -287,9 +317,9 @@ export async function readExecutionSnapshot(scope: SnapshotScope): Promise<Execu
     notices.push('AI action log unreadable')
   }
 
-  let toolRuns: ToolRunsPlane = { active: 0, recent: [] }
+  let toolRuns: ToolRunsPlane | null = null
   if (toolRunsRes.status === 'fulfilled') {
-    toolRuns = summarizeToolRuns(toolRunsRes.value)
+    toolRuns = summarizeToolRuns(toolRunsRes.value, now)
   } else {
     log.warn({ err: toolRunsRes.reason }, 'tool_runs read failed')
     notices.push('deep-run ledger unreadable')
@@ -357,7 +387,7 @@ export function formatExecutionContext(snap: ExecutionSnapshot, now: number = Da
 
   if (snap.runs) {
     const r = snap.runs
-    lines.push(`Model runs, last ${r.windowHours}h: ${r.total} total — ${r.ok} ok, ${r.error} failed.`)
+    lines.push(`Model runs, last ${r.windowHours}h: ${r.total} total — ${r.ok} ok, ${r.error} failed.${r.truncated ? ' (Window truncated at the read cap; totals are a lower bound.)' : ''}`)
     const engines = Object.entries(r.byEngine)
       .map(([e, t]) => `${e} ${t.ok} ok/${t.error} failed`)
       .join('; ')
@@ -400,13 +430,19 @@ export function formatExecutionContext(snap: ExecutionSnapshot, now: number = Da
   }
 
   const a = snap.actions
-  lines.push(`AI actions on the user's behalf (their own log): ${a.total} recent, ${a.failed} failed.`)
-  for (const x of a.recent) {
-    lines.push(`  - ${whenCT(x.createdAt)} · ${x.actionType} · ${x.status}${x.intent ? ` · "${x.intent}"` : ''}`)
+  if (a) {
+    lines.push(`AI actions on the user's behalf (their own log): ${a.total} recent, ${a.failed} failed.`)
+    for (const x of a.recent) {
+      lines.push(`  - ${whenCT(x.createdAt)} · ${x.actionType} · ${x.status}${x.intent ? ` · "${x.intent}"` : ''}${x.reason ? ` · reason: ${x.reason}` : ''}`)
+    }
+  } else {
+    lines.push('AI action log: could not be read this turn (not "no actions" — unknown).')
   }
 
   const t = snap.toolRuns
-  if (t.recent.length > 0 || t.active > 0) {
+  if (!t) {
+    lines.push('Deep-run ledger: could not be read this turn.')
+  } else if (t.recent.length > 0 || t.active > 0) {
     lines.push(`Deep runs (Deep Research / Deep Think) for this user: ${t.active} active.`)
     for (const x of t.recent) {
       lines.push(`  - ${whenCT(x.createdAt)} · ${x.tool} · ${x.status}${x.errorClass ? ` (${x.errorClass})` : ''} · "${x.briefPreview}"`)
