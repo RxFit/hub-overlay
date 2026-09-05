@@ -3,7 +3,10 @@ import {
   __resetPartialResponseNoticeForTests,
   clearPartialResponseNotice,
   getPartialResponseNotice,
+  injectPartialResponseIntoAssistant,
   observePartialResponse,
+  PARTIAL_RESPONSE_ASSISTANT_PROMPT,
+  registerPartialResponseAssistantInjector,
   subscribeToPartialResponseNotice,
 } from './partial-response-client'
 
@@ -39,5 +42,16 @@ describe('partial-response client state', () => {
 
     expect(getPartialResponseNotice()).toBe(true)
     expect(listener).toHaveBeenCalledTimes(3)
+  })
+
+  it('injects the warning through the registered assistant path', () => {
+    const inject = vi.fn()
+    const unregister = registerPartialResponseAssistantInjector(inject)
+
+    expect(injectPartialResponseIntoAssistant()).toBe(true)
+    expect(inject).toHaveBeenCalledWith(PARTIAL_RESPONSE_ASSISTANT_PROMPT)
+
+    unregister()
+    expect(injectPartialResponseIntoAssistant()).toBe(false)
   })
 })

@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { PartialResponseBanner } from './PartialResponseBanner'
 import {
   __resetPartialResponseNoticeForTests,
   observePartialResponse,
+  PARTIAL_RESPONSE_ASSISTANT_PROMPT,
+  registerPartialResponseAssistantInjector,
 } from '@/lib/partial-response-client'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -23,6 +25,8 @@ afterEach(() => {
 
 describe('PartialResponseBanner', () => {
   it('persists a degraded-read warning until the user dismisses it', () => {
+    const inject = vi.fn()
+    registerPartialResponseAssistantInjector(inject)
     container = document.createElement('div')
     document.body.appendChild(container)
     act(() => {
@@ -40,7 +44,16 @@ describe('PartialResponseBanner', () => {
     expect(banner?.textContent).toContain('Values shown may be incomplete')
 
     act(() => {
-      ;(container!.querySelector('button') as HTMLButtonElement).click()
+      const askButton = Array.from(container!.querySelectorAll('button'))
+        .find(button => button.textContent === 'Ask assistant')
+      askButton?.click()
+    })
+    expect(inject).toHaveBeenCalledWith(PARTIAL_RESPONSE_ASSISTANT_PROMPT)
+
+    act(() => {
+      const dismissButton = Array.from(container!.querySelectorAll('button'))
+        .find(button => button.textContent === 'Dismiss')
+      dismissButton?.click()
     })
     expect(container.querySelector('[role="status"]')).toBeNull()
   })
