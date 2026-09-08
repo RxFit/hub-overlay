@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { withRetry, type RetryAttemptInfo } from './retry'
 import { reportFault } from '@/lib/fault-report'
 import { CircuitOpenError } from '@/lib/circuit-breaker'
+import { AppError } from '@/lib/errors'
 
 // The reporter is the one side effect withRetry has; capture the draft it is
 // handed instead of letting it hit stdout / the DB sink.
@@ -27,7 +28,10 @@ const reportFaultMock = vi.mocked(reportFault)
  *  - `onAttempt` observes every failed attempt and can never break the retry;
  *  - the OTel rule (spec §4): a recovery reports ONE degraded fault with
  *    retryCount:n; an exhaustion reports NOTHING here and instead stamps a
- *    non-enumerable `retryCount` on the thrown error for the boundary.
+ *    non-enumerable `retryCount` on the thrown error for the boundary;
+ *  - the recovered record is filed under the taxonomy code the retry
+ *    decision was made on (upstream_5xx / upstream_unavailable / timeout_*),
+ *    never `internal`; an AppError or an aborted attempt keeps its own verdict.
  *
  * All tests use baseMs: 1 so backoff sleeps are ~1-3ms and the suite stays fast.
  */
@@ -226,6 +230,63 @@ describe('withRetry — the OTel rule (spec §4: one degraded record, never n er
     expect(draft.module).toBe('retry')
     expect(draft.context).toEqual({ op: 'withRetry' })
     expect(draft.retryCount).toBe(1)
+  })
+
+  it('a recovered plain "status 503" error is filed as upstream_5xx (blame upstream, retryable) — never internal', async () => {
+    const fn = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(new Error('GET /v1/things failed with status 503'))
+      .mockResolvedValueOnce('recovered')
+    await expect(withRetry(fn, { baseMs: 1, jitter: false })).resolves.toBe('recovered')
+    expect(reportFaultMock).toHaveBeenCalledTimes(1)
+    const draft = reportFaultMock.mock.calls[0][0]
+    expect(draft.code).toBe('upstream_5xx')
+    expect(draft.blame).toBe('upstream')
+    expect(draft.isRetryable).toBe(true)
+    // The caller's overrides still win where they apply.
+    expect(draft.severity).toBe('degraded')
+    expect(draft.outcome).toBe('degraded')
+    expect(draft.retryCount).toBe(1)
+    expect(draft.context).toEqual({ op: 'withRetry' })
+  })
+
+  it.each([
+    ['fetch failed', 'upstream_unavailable', 'upstream'],
+    ['connect ECONNREFUSED upstream', 'upstream_unavailable', 'upstream'],
+    ['read ECONNRESET', 'upstream_unavailable', 'upstream'],
+    ['network error', 'upstream_unavailable', 'upstream'],
+    ['connect ETIMEDOUT', 'timeout_connect', 'timeout'],
+    ['UND_ERR_CONNECT_TIMEOUT', 'timeout_connect', 'timeout'],
+    ['request timeout waiting for headers', 'timeout_idle', 'timeout'],
+    ['bad gateway 502', 'upstream_5xx', 'upstream'],
+  ])('every shape isRetryable() accepts has a taxonomy code: %s → %s', async (message, code, blame) => {
+    const fn = vi.fn<() => Promise<string>>().mockRejectedValueOnce(new Error(message)).mockResolvedValueOnce('ok')
+    await expect(withRetry(fn, { baseMs: 1, jitter: false })).resolves.toBe('ok')
+    expect(reportFaultMock).toHaveBeenCalledTimes(1)
+    const draft = reportFaultMock.mock.calls[0][0]
+    expect(draft.code).toBe(code)
+    expect(draft.blame).toBe(blame)
+    expect(draft.isRetryable).toBe(true)
+  })
+
+  it('an AppError keeps its own code on the recovered record — the re-filing covers only the unclassified case', async () => {
+    const fn = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(new AppError('provider returned status 503', { code: 'ai_provider_error' }))
+      .mockResolvedValueOnce('ok')
+    await expect(withRetry(fn, { baseMs: 1, jitter: false })).resolves.toBe('ok')
+    const draft = reportFaultMock.mock.calls[0][0]
+    expect(draft.code).toBe('ai_provider_error')
+  })
+
+  it('a recovered AbortError stays cancelled — a user abort is never re-filed as an upstream fault', async () => {
+    const abort = new Error('The operation was aborted')
+    abort.name = 'AbortError'
+    const fn = vi.fn<() => Promise<string>>().mockRejectedValueOnce(abort).mockResolvedValueOnce('ok')
+    await expect(withRetry(fn, { baseMs: 1, jitter: false })).resolves.toBe('ok')
+    const draft = reportFaultMock.mock.calls[0][0]
+    expect(draft.outcome).toBe('cancelled')
+    expect(draft.code).toBe('internal')
   })
 
   it('first-try success → reportFault not called', async () => {
