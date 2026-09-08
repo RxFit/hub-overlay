@@ -98,25 +98,31 @@ describe('fetchStripeKPIs', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('aggregates succeeded charges only and formats cents as dollars', async () => {
+  it('aggregates succeeded charges only and formats cents as dollars (single page, no total_count read)', async () => {
     vi.stubEnv('STRIPE_SECRET_KEY', 'sk_test')
     fetchMock.mockImplementation(async (url: string) => {
-      if (url.includes('/subscriptions')) return jsonResponse({ total_count: 4 })
+      // total_count is intentionally present-but-wrong on every fixture below —
+      // asserting the real values proves the implementation never reads it.
+      if (url.includes('/subscriptions')) {
+        return jsonResponse({ total_count: 999, data: [{ id: 's1' }, { id: 's2' }, { id: 's3' }, { id: 's4' }], has_more: false })
+      }
       if (url.includes('/customers')) {
         // 30d window vs 31–60d window, keyed off the created[lt] clause
-        return url.includes('created%5Blt%5D') || url.includes('created[lt]')
-          ? jsonResponse({ total_count: 5 })
-          : jsonResponse({ total_count: 10 })
+        const isPrior = url.includes('created%5Blt%5D') || url.includes('created[lt]')
+        return isPrior
+          ? jsonResponse({ total_count: 999, data: [{ id: 'c1' }, { id: 'c2' }, { id: 'c3' }, { id: 'c4' }, { id: 'c5' }], has_more: false })
+          : jsonResponse({ total_count: 999, data: Array.from({ length: 10 }, (_, i) => ({ id: `nc${i}` })), has_more: false })
       }
       if (url.includes('/charges')) {
         const isLastMonth = url.includes('created%5Blt%5D') || url.includes('created[lt]')
         return isLastMonth
-          ? jsonResponse({ data: [{ amount: 50_000, status: 'succeeded' }] })
+          ? jsonResponse({ data: [{ id: 'ch1', amount: 50_000, status: 'succeeded' }], has_more: false })
           : jsonResponse({
               data: [
-                { amount: 100_000, status: 'succeeded' },
-                { amount: 999_999, status: 'failed' }, // must be EXCLUDED
+                { id: 'ch2', amount: 100_000, status: 'succeeded' },
+                { id: 'ch3', amount: 999_999, status: 'failed' }, // must be EXCLUDED
               ],
+              has_more: false,
             })
       }
       throw new Error(`unexpected stripe url ${url}`)
@@ -131,15 +137,73 @@ describe('fetchStripeKPIs', () => {
     expect(byId.stripe_revenue_mtd.trend).toBe('+100.0%')
     expect(byId.stripe_revenue_mtd.trendDirection).toBe('up')
 
+    // 4 subscriptions counted from `data.length`, NOT the (wrong) total_count: 999.
     expect(byId.stripe_active_subs.value).toBe('4')
     // MRR estimate: round(100000/4)*4 = 100000 cents.
     expect(byId.stripe_mrr.rawValue).toBe(100_000)
 
+    // 10 new customers counted from `data.length`, NOT total_count: 999.
     expect(byId.stripe_new_customers.value).toBe('10')
-    expect(byId.stripe_new_customers.trend).toBe('+100.0%')
+    expect(byId.stripe_new_customers.trend).toBe('+100.0%') // 10 vs 5 prior
   })
 
-  it('degrades each failing endpoint to 0 instead of failing the whole sync', async () => {
+  /* T-142: total_count was removed/unsupported on these list endpoints, and a
+     single `limit=100` page silently undercounted anything past 100 records.
+     Every affected metric must now walk has_more/starting_after to the end. */
+  it('follows pagination via starting_after across multiple pages for every affected metric', async () => {
+    vi.stubEnv('STRIPE_SECRET_KEY', 'sk_test')
+
+    function twoPageList(prefix: string, firstCount: number, secondCount: number, extra: Record<string, unknown> = {}) {
+      return (url: string) => {
+        const afterMatch = url.match(/starting_after=([^&]+)/)
+        if (!afterMatch) {
+          return jsonResponse({
+            data: Array.from({ length: firstCount }, (_, i) => ({ id: `${prefix}-p1-${i}`, ...extra })),
+            has_more: true,
+          })
+        }
+        return jsonResponse({
+          data: Array.from({ length: secondCount }, (_, i) => ({ id: `${prefix}-p2-${i}`, ...extra })),
+          has_more: false,
+        })
+      }
+    }
+
+    const subsPager = twoPageList('sub', 100, 12)
+    const chargesPager = twoPageList('ch', 100, 5, { amount: 1_000, status: 'succeeded' })
+    const customersPager = twoPageList('cust', 100, 3)
+
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes('/subscriptions')) return subsPager(url)
+      if (url.includes('/charges')) return chargesPager(url)
+      if (url.includes('/customers')) return customersPager(url)
+      throw new Error(`unexpected stripe url ${url}`)
+    })
+
+    const kpis = await fetchStripeKPIs()
+    const byId = Object.fromEntries(kpis.map((k) => [k.id, k]))
+
+    // 112 = 100 (page 1) + 12 (page 2) — proves the second page was followed.
+    expect(byId.stripe_active_subs.value).toBe('112')
+    expect(byId.stripe_new_customers.value).toBe('103')
+    expect(byId.stripe_revenue_mtd.rawValue).toBe(105 * 1_000) // 105 succeeded charges × 1000
+  })
+
+  it('fails the whole Stripe sync explicitly when a metric exceeds the page cap, rather than reporting an undercount', async () => {
+    vi.stubEnv('STRIPE_SECRET_KEY', 'sk_test')
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes('/subscriptions')) {
+        // has_more is ALWAYS true — an account with more active subscriptions
+        // than we are willing to page through indefinitely.
+        return jsonResponse({ data: [{ id: `s-${Math.random()}` }], has_more: true })
+      }
+      return jsonResponse({ data: [], has_more: false })
+    })
+
+    await expect(fetchStripeKPIs()).rejects.toThrow(/page/i)
+  })
+
+  it('degrades each ordinary failing endpoint to 0 instead of failing the whole sync', async () => {
     vi.stubEnv('STRIPE_SECRET_KEY', 'sk_test')
     fetchMock.mockResolvedValue(jsonResponse({ error: 'nope' }, false, 500))
 

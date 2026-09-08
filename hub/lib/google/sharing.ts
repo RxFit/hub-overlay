@@ -26,7 +26,7 @@
 
 import { googleFetch, googleFetchVoid } from './client'
 import { APP_PROP_MARKER, APP_PROP_TENANT, escapeDriveQueryValue } from './drive-workspace'
-import { shareRoleLabel, type ShareRole } from './share-roles'
+import { shareRoleLabel, describeGoogleRole, type ShareRole } from './share-roles'
 
 const DRIVE_FILES = 'https://www.googleapis.com/drive/v3/files'
 
@@ -315,6 +315,6 @@ export function describeAccessEntry(entry: AccessEntry): string {
           ? `${entry.displayName}${entry.emailAddress ? ` (${entry.emailAddress})` : ''}`
           : (entry.emailAddress ?? 'Unknown')
 
-  const role = entry.isOwner ? 'owner' : shareRoleLabel(entry.role as ShareRole)
+  const role = entry.isOwner ? 'owner' : describeGoogleRole(entry.role)
   return `${who} — ${role}${entry.inherited ? ' (inherited from folder)' : ''}`
 }

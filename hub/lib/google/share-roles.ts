@@ -42,6 +42,32 @@ export function shareRoleLabel(role: ShareRole): string {
 }
 
 /**
+ * DISPLAY-only label for an EXISTING Drive permission's raw role string —
+ * distinct from `shareRoleLabel`, which only ever has to speak for the three
+ * roles the Hub itself can GRANT (`ShareRole`).
+ *
+ * `permissions.list` (read-only, `drive.file`/`drive.readonly`) can return
+ * shared-drive-only roles the Hub can never grant: `organizer` and
+ * `fileOrganizer`. Reusing `shareRoleLabel` for those falls through its
+ * "anything else is viewer" default, so a Manager or Content manager on a
+ * shared drive was shown as a plain viewer — actively wrong, not just vague.
+ *
+ * This does NOT widen what `normalizeShareRole`/`grantFileAccess` can grant;
+ * it only fixes what an already-existing grant is described as.
+ */
+export function describeGoogleRole(role: string): string {
+  switch (role) {
+    case 'reader': return 'viewer'
+    case 'commenter': return 'commenter'
+    case 'writer': return 'editor'
+    case 'organizer': return 'Manager'
+    case 'fileOrganizer': return 'Content manager'
+    case 'owner': return 'owner'
+    default: return 'Unknown'
+  }
+}
+
+/**
  * Split a free-text recipient list into individual references.
  *
  * Accepts commas, semicolons, newlines and a trailing " and " — the shapes a

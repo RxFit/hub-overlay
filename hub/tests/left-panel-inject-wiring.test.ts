@@ -48,6 +48,11 @@ describe('CalendarSection → chat wiring', () => {
   it('scopes deletes to the event source calendar', () => {
     expect(src).toMatch(/calendarId:\s*event\.calendarId/)
   })
+
+  it('renders a warning when one or more selected calendars could not be read', () => {
+    expect(src).toMatch(/const\s*\{[^}]*unreadableCalendars[^}]*\}\s*=\s*useCalendar\(\)/)
+    expect(src).toMatch(/unreadableCalendars\.length\s*>\s*0[\s\S]*Events shown may be incomplete/)
+  })
 })
 
 describe('DocumentsSection → chat wiring', () => {

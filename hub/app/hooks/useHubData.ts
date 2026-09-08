@@ -265,6 +265,7 @@ interface CalendarEvent {
 
 interface CalendarResponse {
   events: CalendarEvent[]
+  unreadableCalendars?: string[]
 }
 
 /**
@@ -283,6 +284,7 @@ export function useCalendar(isOpen: boolean = true) {
 
   return {
     events: data?.events ?? [],
+    unreadableCalendars: data?.unreadableCalendars ?? [],
     isLoading,
     error: error ?? undefined,
     mutate: refetch,

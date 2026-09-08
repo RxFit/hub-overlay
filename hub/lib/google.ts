@@ -199,12 +199,57 @@ export interface GoogleCalendarListEntry {
   primary?: boolean
 }
 
+/** Entries per CalendarList page. The API defaults to 100 and caps at 250; ask
+ *  for the maximum so a normal account resolves in a single round trip. */
+const CALENDAR_LIST_PAGE_SIZE = 250
+/** Finite ceiling on how many CalendarList pages we will walk. At 250 entries a
+ *  page this is far past any real account, so reaching it means a looping or
+ *  malformed `nextPageToken`, not a genuinely huge list. */
+const CALENDAR_LIST_MAX_PAGES = 20
+
+/** List every calendar in the user's CalendarList, following pagination.
+ *
+ * Reading only the first page silently truncated discovery: callers that decide
+ * which calendars an availability answer covers would compute it from a subset
+ * they had no way to know was cut — under-reporting busy time, which is the one
+ * direction a calendar answer must never be wrong in. So this fails closed: if
+ * pagination loops or exceeds the page cap it throws rather than returning a
+ * partial list that reads exactly like a complete one.
+ */
 export async function listCalendars(accessToken: string): Promise<GoogleCalendarListEntry[]> {
-  const data = await googleFetch<{ items?: GoogleCalendarListEntry[] }>(
-    `${CALENDAR_BASE}/users/me/calendarList`,
-    accessToken
+  const items: GoogleCalendarListEntry[] = []
+  const seenTokens = new Set<string>()
+  let pageToken: string | undefined
+
+  for (let page = 0; page < CALENDAR_LIST_MAX_PAGES; page++) {
+    // URLSearchParams encodes the token — Google's tokens are opaque and can
+    // contain '/', '+' and '=', all of which corrupt a spliced query string.
+    const params = new URLSearchParams({ maxResults: String(CALENDAR_LIST_PAGE_SIZE) })
+    if (pageToken) params.set('pageToken', pageToken)
+
+    const data = await googleFetch<{ items?: GoogleCalendarListEntry[]; nextPageToken?: string }>(
+      `${CALENDAR_BASE}/users/me/calendarList?${params}`,
+      accessToken
+    )
+    if (data.items?.length) items.push(...data.items)
+
+    // Google omits nextPageToken on the last page; treat an empty string the
+    // same rather than requesting a page-token-less page forever.
+    const next = data.nextPageToken
+    if (!next) return items
+
+    if (seenTokens.has(next)) {
+      throw new Error(
+        'Google calendarList pagination repeated a pageToken — refusing to return a partial calendar list'
+      )
+    }
+    seenTokens.add(next)
+    pageToken = next
+  }
+
+  throw new Error(
+    `Google calendarList exceeded ${CALENDAR_LIST_MAX_PAGES} pages — refusing to return a partial calendar list`
   )
-  return data.items ?? []
 }
 
 /** List calendar events within a time window.

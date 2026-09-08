@@ -7,6 +7,7 @@ import {
   shareRoleLabel,
   type ShareRole,
 } from '@/lib/google/share-roles'
+import { canonicalizeTaskDueDate } from '@/lib/google/task-dates'
 import { tagHubChatPost } from '@/lib/chat-post-tag'
 import { swallow } from '@/lib/swallow'
 
@@ -163,6 +164,11 @@ export async function executeAction(
         taskPrimary ? spec.details.additionalContext : undefined,
       )
 
+      // Send the raw deadline through the audited route. That route owns both
+      // canonicalization and failed-action recording, so even a rejected
+      // natural-language date remains visible in the execution audit trail.
+      const rawDeadline = spec.details.deadline || spec.details.due || undefined
+
       const res = await fetch('/api/google/tasks', {
         method: 'POST',
         // X-AI-Intent marks this as an AI-originated action so the route records
@@ -174,7 +180,7 @@ export async function executeAction(
           taskListId,
           title: taskTitle,
           notes: taskNotes,
-          due: spec.details.deadline || spec.details.due || undefined,
+          due: rawDeadline,
         }),
       })
       if (!res.ok) throw new Error(`Task creation failed: ${res.status}`)
@@ -246,17 +252,27 @@ export async function executeAction(
         if (!res.ok) throw new Error(`Task deletion failed: ${res.status}`)
         resultMsg = `🗑️ **Task deleted.**\n\n"${utFound.title}" has been removed from your Google Tasks.`
       } else if (spec.details.change?.trim()) {
-        // Rename or reschedule. A parseable date → due-date change; otherwise
-        // treat the text as the new title.
+        // Rename or reschedule. A LEADING "due"/"move"/"reschedule" command
+        // token (optionally preceded by "set"/"change", e.g. "set due to ...")
+        // or a bare leading calendar date → due-date change, run
+        // through the same canonicalizer the route enforces so ambiguous
+        // text ("next Friday") rejects here rather than being guessed at or
+        // silently treated as a new title. The keyword must anchor the start
+        // of the command — a substring match (e.g. "due" inside "overdue",
+        // "move" inside "movement") must not trip this, since those occur
+        // naturally in rename titles like "rename it to overdue invoices".
+        // Anything else is treated as the new title.
         const rawChange = spec.details.change.trim()
-        const dueMatch = rawChange.match(/(?:due|move|reschedule)[^a-z0-9]*(?:to|for|on)?\s*(.+)/i)
-        const dateText = dueMatch ? dueMatch[1] : rawChange
-        const parsedDue = Date.parse(dateText)
+        const dueMatch = rawChange.match(/^(?:(?:set|change)\s+)?(?:due|move|reschedule)\b[^a-z0-9]*(?:to|for|on)?\s*(.+)/i)
+        const dateText = dueMatch ? dueMatch[1].trim() : rawChange
+        const looksLikeDateAttempt = Boolean(dueMatch) || /^\d{4}-\d{2}-\d{2}/.test(dateText)
         const payload: Record<string, string> = { action: 'update', ...utBase }
         let changeLabel: string
-        if (!isNaN(parsedDue) && (dueMatch || /^\d{4}-\d{2}-\d{2}/.test(dateText))) {
-          payload.due = new Date(parsedDue).toISOString()
-          changeLabel = `due date moved to ${new Date(parsedDue).toLocaleDateString()}`
+        if (looksLikeDateAttempt) {
+          const canonDue = canonicalizeTaskDueDate(dateText)
+          if (!canonDue.ok) throw new Error(`Could not update the due date: ${canonDue.error}`)
+          payload.due = canonDue.value
+          changeLabel = `due date moved to ${dateText}`
         } else {
           payload.title = rawChange.replace(/^(rename( it)?( to)?|retitle( to)?|call it)\s+/i, '').trim() || rawChange
           changeLabel = `renamed to "${payload.title}"`
