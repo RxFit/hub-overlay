@@ -456,6 +456,25 @@ describe('executeAction: update_task — due-date normalization', () => {
     })
   })
 
+  it('canonicalizes a bare calendar date on "set due to", without sending it as a title rename', async () => {
+    fetchMock
+      .mockResolvedValueOnce(listsOk())
+      .mockResolvedValueOnce(tasksOk())
+      .mockResolvedValueOnce(jsonResponse({ task: { id: 't1' } }))
+
+    await executeAction(
+      specFor('update_task', { taskRef: 'Call vendor', change: 'set due to 2026-07-28' }),
+      deps
+    )
+
+    const [, updateInit] = fetchMock.mock.calls[2]
+    const body = JSON.parse(updateInit.body)
+    expect(body).toMatchObject({
+      action: 'update', taskListId: 'l1', taskId: 't1', due: '2026-07-28T00:00:00.000Z',
+    })
+    expect(body.title).toBeUndefined()
+  })
+
   it('rejects an ambiguous reschedule date rather than guessing or silently renaming', async () => {
     fetchMock
       .mockResolvedValueOnce(listsOk())
