@@ -245,6 +245,12 @@ async function requestTokenRefresh(refreshToken: string): Promise<TokenRefreshRe
  *                behind its own successes. Status and OAuth code are the LAST
  *                failure's.
  *
+ * Every kind carries `retryCount` = the attempts that preceded the outcome
+ * (recovered: the failures before the success; transient/fatal: the retries
+ * spent before the terminal failure) — the quantity lib/retry.ts stamps on an
+ * exhausted error, so exhausted and recovered refreshes count alike and a
+ * three-attempt 503 storm is never filed as a single try.
+ *
  * WHAT IS EMITTED — and, more importantly, what is NOT. The record carries the
  * classification, the HTTP status and the OAuth error CODE (`invalid_grant`,
  * or the synthetic `no_refresh_token`). It NEVER carries the refresh token,
@@ -327,6 +333,10 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
 
   let lastStatus: number | undefined
   let lastBody: Record<string, unknown> | undefined
+  // Retries spent before the terminal failure — the 0-based index of the last
+  // failed attempt, i.e. the same quantity lib/retry.ts stamps on an exhausted
+  // error and the recovered branch below reports for a success.
+  let retriesSpent = 0
 
   // attempt 0 plus one retry per backoff delay.
   for (let attempt = 0; attempt <= REFRESH_RETRY_DELAYS_MS.length; attempt++) {
@@ -377,6 +387,7 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
 
     lastStatus = result.status
     lastBody = result.body
+    retriesSpent = attempt
     if (classifyRefreshFailure(result.status, result.body) === 'fatal') break
   }
 
@@ -384,6 +395,7 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
   reportRefreshFault(kind, email, {
     status: lastStatus,
     oauthError: typeof lastBody?.error === 'string' ? lastBody.error : undefined,
+    retryCount: retriesSpent,
   })
 
   if (kind === 'transient') {

@@ -147,6 +147,8 @@ describe('callbacks.jwt — token refresh faults', () => {
     expect(reportMock).toHaveBeenCalledTimes(1)
     const draft = reportedDraft()
     expect(draft.code).toBe('auth_reauth_required')
+    // One attempt, no retries: the terminal record says so explicitly.
+    expect(draft.retryCount).toBe(0)
     expect(draft.layer).toBe('lib')
     expect(draft.module).toBe('auth')
     expect(draft.userHash).toBe(hashEmail(RAW_EMAIL))
@@ -187,11 +189,34 @@ describe('callbacks.jwt — token refresh faults', () => {
     expect(draft.outcome).toBe('degraded')
     expect(draft.userHash).toBe(hashEmail(RAW_EMAIL))
     expect(draft.context).toMatchObject({ provider: 'google', kind: 'none', status: 503 })
+    // Three attempts → two retries preceded the terminal failure, the same
+    // quantity lib/retry.ts stamps on an exhausted error.
+    expect(draft.retryCount).toBe(2)
 
     const reports = serializedReports()
     expect(reports).not.toContain(REFRESH_TOKEN)
     expect(reports).not.toContain(RAW_EMAIL)
     expect(serializedLogs()).not.toContain(RAW_EMAIL)
+  })
+
+  it('(b4) a transient failure followed by a dead grant is fatal with retryCount 1 — the retry before the terminal answer is counted', async () => {
+    fetchMock
+      .mockResolvedValueOnce(tokenResponse(503, {}))
+      .mockResolvedValueOnce(tokenResponse(400, { error: 'invalid_grant' }))
+    const authOptions = await loadAuth()
+
+    const out = await runJwt(authOptions, expiredToken())
+
+    expect(out.error).toBe(REFRESH_FATAL_ERROR)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(tokenStore.clear).toHaveBeenCalledTimes(1)
+
+    expect(reportMock).toHaveBeenCalledTimes(1)
+    const draft = reportedDraft()
+    expect(draft.code).toBe('auth_reauth_required')
+    expect(draft.retryCount).toBe(1)
+    expect(draft.context).toMatchObject({ kind: 'invalid_grant', status: 400 })
+    expect(serializedReports()).not.toContain(REFRESH_TOKEN)
   })
 
   it('(b2) a 503 that recovers on the next try keeps the session, returns the new token, and reports ONE degraded upstream_unavailable fault with retryCount 1', async () => {
