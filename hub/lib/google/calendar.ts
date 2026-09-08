@@ -181,8 +181,18 @@ export async function queryFreeBusy(
     ids = input.calendarIds.slice(0, FREEBUSY_API_CAP)
   } else {
     const cals = await listCalendars(accessToken)
-    const selected = cals.filter(c => c.selected || c.primary).map(c => c.id)
-    ids = (selected.length ? selected : ['primary']).slice(0, MAX_AUTO_DISCOVERED_CALENDARS)
+    const discovered = cals.filter(c => c.selected || c.primary)
+    // CalendarList order is arrival order, not significance order, and the cap
+    // is a plain slice — so an account whose primary is listed after ten
+    // selected calendars used to lose primary entirely and answer "free" over
+    // the one calendar that matters most. Float primary ahead of the cap, and
+    // de-duplicate first so a repeated id can't spend a slot twice.
+    const ordered = [
+      ...discovered.filter(c => c.primary),
+      ...discovered.filter(c => !c.primary),
+    ].map(c => c.id)
+    const unique = [...new Set(ordered.filter(Boolean))]
+    ids = (unique.length ? unique : ['primary']).slice(0, MAX_AUTO_DISCOVERED_CALENDARS)
   }
 
   const data = await googleFetch<{

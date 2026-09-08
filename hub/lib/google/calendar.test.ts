@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { buildEventPatch, mergeBusyPeriods, updateCalendarEvent, queryFreeBusy } from './calendar'
+import { listCalendars } from '@/lib/google'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -229,6 +230,84 @@ describe('queryFreeBusy', () => {
     expect(result.checked).toEqual(Array.from({ length: 10 }, (_, i) => `cal-${i}`))
   })
 
+  /* T-142 P2: CalendarList order is arrival order, not significance order. A
+     user with a dozen selected calendars listed ahead of their own primary got
+     a `checked` set with NO primary at all — so "am I free at 3?" answered from
+     everything EXCEPT the calendar that matters most, and reported free over a
+     booked primary. Primary must survive the cap. */
+  it('retains primary inside the cap even when more than ten selected calendars precede it', async () => {
+    const items = [
+      ...Array.from({ length: 12 }, (_, i) => ({ id: `cal-${i}`, summary: `Cal ${i}`, selected: true })),
+      { id: 'me@x.test', summary: 'Danny', primary: true, selected: true },
+    ]
+    const calls = stubByUrl([
+      { when: 'calendarList', payload: { items } },
+      { when: 'freeBusy', payload: { calendars: {} } },
+    ])
+
+    const result = await queryFreeBusy('tok', { timeMin: 'a', timeMax: 'b' })
+
+    const freeBusyCall = calls.find(c => c.url.includes('freeBusy'))
+    const requested = (JSON.parse(String(freeBusyCall?.init?.body)).items as { id: string }[]).map(r => r.id)
+    // Bounded exactly, unique, and primary first — never dropped by the slice.
+    expect(requested).toHaveLength(10)
+    expect(new Set(requested).size).toBe(10)
+    expect(requested[0]).toBe('me@x.test')
+    expect(result.checked).toContain('me@x.test')
+    expect(result.checked).toHaveLength(10)
+  })
+
+  it('de-duplicates a calendar repeated across CalendarList pages before applying the cap', async () => {
+    const calls = stubByUrl([
+      {
+        when: 'calendarList',
+        payload: {
+          items: [
+            { id: 'work@x.test', summary: 'Work', selected: true },
+            { id: 'work@x.test', summary: 'Work', selected: true },
+            { id: 'ops@x.test', summary: 'Ops', selected: true },
+          ],
+        },
+      },
+      { when: 'freeBusy', payload: { calendars: {} } },
+    ])
+
+    const result = await queryFreeBusy('tok', { timeMin: 'a', timeMax: 'b' })
+
+    const freeBusyCall = calls.find(c => c.url.includes('freeBusy'))
+    expect(JSON.parse(String(freeBusyCall?.init?.body)).items).toEqual([
+      { id: 'work@x.test' },
+      { id: 'ops@x.test' },
+    ])
+    expect(result.checked).toEqual(['work@x.test', 'ops@x.test'])
+  })
+
+  it('discovers a primary calendar that appears only on a later CalendarList page', async () => {
+    const calls: { url: string; init?: RequestInit }[] = []
+    let listPage = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push({ url, init })
+        if (url.includes('calendarList')) {
+          listPage += 1
+          const payload =
+            listPage === 1
+              ? { items: [{ id: 'work@x.test', summary: 'Work', selected: true }], nextPageToken: 'pg2' }
+              : { items: [{ id: 'me@x.test', summary: 'Danny', primary: true }] }
+          return new Response(JSON.stringify(payload), { status: 200 })
+        }
+        return new Response(JSON.stringify({ calendars: {} }), { status: 200 })
+      }),
+    )
+
+    const result = await queryFreeBusy('tok', { timeMin: 'a', timeMax: 'b' })
+
+    // Page one alone would have answered availability without primary at all.
+    expect(listPage).toBe(2)
+    expect(result.checked).toEqual(['me@x.test', 'work@x.test'])
+  })
+
   it('truncates to the API cap of 50 calendars rather than failing', async () => {
     const calls = stub({ calendars: {} })
     await queryFreeBusy('tok', {
@@ -281,5 +360,86 @@ describe('queryFreeBusy', () => {
     })
     const result = await queryFreeBusy('tok', { timeMin: 'a', timeMax: 'b' })
     expect(result.errors).toHaveLength(2)
+  })
+})
+
+/* T-142 P2: CalendarList is paginated (100 entries per page by default). Reading
+   only the first page silently hid every calendar past it — including, for a
+   heavy account, the primary calendar — and there is no worse answer to "when am
+   I free?" than one computed from a calendar set the user cannot see was cut. */
+describe('listCalendars pagination', () => {
+  /** Answers each successive fetch with the next page; repeats the last. */
+  function stubPages(pages: unknown[]) {
+    const calls: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        const payload = pages[Math.min(calls.length, pages.length - 1)]
+        calls.push(url)
+        return new Response(JSON.stringify(payload), { status: 200 })
+      }),
+    )
+    return calls
+  }
+
+  it('asks for an explicit high maxResults and sends no pageToken on the first page', async () => {
+    const calls = stubPages([{ items: [{ id: 'a', summary: 'A' }] }])
+
+    await listCalendars('tok')
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toContain('maxResults=250')
+    expect(calls[0]).not.toContain('pageToken')
+  })
+
+  it('follows a non-empty nextPageToken with URL encoding and aggregates the pages', async () => {
+    const token = 'tok/2+page=next'
+    const calls = stubPages([
+      { items: [{ id: 'a', summary: 'A' }], nextPageToken: token },
+      { items: [{ id: 'b', summary: 'B' }] },
+    ])
+
+    const cals = await listCalendars('tok')
+
+    expect(calls).toHaveLength(2)
+    expect(calls[1]).toContain(`pageToken=${encodeURIComponent(token)}`)
+    // The raw token would break the query string it is spliced into.
+    expect(calls[1]).not.toContain(token)
+    expect(cals.map(c => c.id)).toEqual(['a', 'b'])
+  })
+
+  it('stops at an empty-string nextPageToken instead of requesting another page', async () => {
+    const calls = stubPages([{ items: [{ id: 'a', summary: 'A' }], nextPageToken: '' }])
+
+    const cals = await listCalendars('tok')
+
+    expect(calls).toHaveLength(1)
+    expect(cals.map(c => c.id)).toEqual(['a'])
+  })
+
+  it('throws rather than returning a partial list when the token repeats', async () => {
+    // A token that hands back itself is an infinite loop, not a long list.
+    stubPages([{ items: [{ id: 'a', summary: 'A' }], nextPageToken: 'same' }])
+
+    await expect(listCalendars('tok')).rejects.toThrow(/partial/i)
+  })
+
+  it('throws at the finite page cap rather than silently truncating discovery', async () => {
+    let n = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        n += 1
+        // Every page advertises a fresh token — unbounded traversal if unguarded.
+        return new Response(
+          JSON.stringify({ items: [{ id: `c${n}`, summary: 'x' }], nextPageToken: `t${n}` }),
+          { status: 200 },
+        )
+      }),
+    )
+
+    await expect(listCalendars('tok')).rejects.toThrow(/partial/i)
+    // Bounded: it gave up at the named cap, it did not keep walking.
+    expect(n).toBe(20)
   })
 })
