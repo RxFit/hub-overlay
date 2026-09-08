@@ -394,3 +394,136 @@ describe('executeAction: create_google_doc', () => {
     expect(JSON.parse(init.body)).toEqual({ title: 'Notes', body: '' })
   })
 })
+
+/* ── create_task / update_task: due-date normalization (T-142) ──
+   Create routes raw deadlines through the audited server choke point. Updates
+   retain their local normalization because that route is not an audited AI
+   create path. */
+
+describe('executeAction: create_task — due-date normalization', () => {
+  it('forwards a bare calendar deadline to the audited route for canonicalization', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ taskLists: [{ id: 'l1', title: 'Ops' }] }))
+      .mockResolvedValueOnce(jsonResponse({ task: { id: 't1', title: 'Call vendor' } }))
+
+    await executeAction(
+      specFor('create_task', { description: 'Call vendor', deadline: '2026-07-28' }),
+      deps
+    )
+
+    const [, createInit] = fetchMock.mock.calls[1]
+    expect(JSON.parse(createInit.body).due).toBe('2026-07-28')
+  })
+
+  it('sends an ambiguous deadline through the audited route so its rejection is recorded', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ taskLists: [{ id: 'l1', title: 'Ops' }] }))
+      .mockResolvedValueOnce(jsonResponse({ error: 'Invalid due date' }, false, 400))
+
+    await expect(
+      executeAction(
+        specFor('create_task', { description: 'Call vendor', deadline: 'next Friday' }),
+        deps
+      )
+    ).rejects.toThrow()
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const [url, init] = fetchMock.mock.calls[1]
+    expect(url).toBe('/api/google/tasks')
+    expect(init.headers['X-AI-Intent']).toBe('create_task')
+    expect(JSON.parse(init.body).due).toBe('next Friday')
+  })
+})
+
+describe('executeAction: update_task — due-date normalization', () => {
+  const listsOk = () => jsonResponse({ taskLists: [{ id: 'l1', title: 'Ops' }] })
+  const tasksOk = () => jsonResponse({ tasks: [{ id: 't1', title: 'Call vendor' }] })
+
+  it('canonicalizes a bare calendar date on reschedule, without local-time drift', async () => {
+    fetchMock
+      .mockResolvedValueOnce(listsOk())
+      .mockResolvedValueOnce(tasksOk())
+      .mockResolvedValueOnce(jsonResponse({ task: { id: 't1' } }))
+
+    await executeAction(
+      specFor('update_task', { taskRef: 'Call vendor', change: 'reschedule to 2026-07-28' }),
+      deps
+    )
+
+    const [, updateInit] = fetchMock.mock.calls[2]
+    expect(JSON.parse(updateInit.body)).toMatchObject({
+      action: 'update', taskListId: 'l1', taskId: 't1', due: '2026-07-28T00:00:00.000Z',
+    })
+  })
+
+  it('canonicalizes a bare calendar date on "set due to", without sending it as a title rename', async () => {
+    fetchMock
+      .mockResolvedValueOnce(listsOk())
+      .mockResolvedValueOnce(tasksOk())
+      .mockResolvedValueOnce(jsonResponse({ task: { id: 't1' } }))
+
+    await executeAction(
+      specFor('update_task', { taskRef: 'Call vendor', change: 'set due to 2026-07-28' }),
+      deps
+    )
+
+    const [, updateInit] = fetchMock.mock.calls[2]
+    const body = JSON.parse(updateInit.body)
+    expect(body).toMatchObject({
+      action: 'update', taskListId: 'l1', taskId: 't1', due: '2026-07-28T00:00:00.000Z',
+    })
+    expect(body.title).toBeUndefined()
+  })
+
+  it('rejects an ambiguous reschedule date rather than guessing or silently renaming', async () => {
+    fetchMock
+      .mockResolvedValueOnce(listsOk())
+      .mockResolvedValueOnce(tasksOk())
+
+    await expect(
+      executeAction(
+        specFor('update_task', { taskRef: 'Call vendor', change: 'reschedule to next Friday' }),
+        deps
+      )
+    ).rejects.toThrow()
+
+    // No update/rename POST was ever sent for the ambiguous date.
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('renames rather than misreading a due-date command out of a substring like "overdue"', async () => {
+    fetchMock
+      .mockResolvedValueOnce(listsOk())
+      .mockResolvedValueOnce(tasksOk())
+      .mockResolvedValueOnce(jsonResponse({ task: { id: 't1' } }))
+
+    await executeAction(
+      specFor('update_task', { taskRef: 'Call vendor', change: 'rename it to overdue invoices' }),
+      deps
+    )
+
+    const [, updateInit] = fetchMock.mock.calls[2]
+    expect(JSON.parse(updateInit.body)).toMatchObject({
+      action: 'update', taskListId: 'l1', taskId: 't1', title: 'overdue invoices',
+    })
+    expect(JSON.parse(updateInit.body).due).toBeUndefined()
+  })
+
+  it('renames rather than misreading a due-date command out of a substring like "movement"', async () => {
+    fetchMock
+      .mockResolvedValueOnce(listsOk())
+      .mockResolvedValueOnce(tasksOk())
+      .mockResolvedValueOnce(jsonResponse({ task: { id: 't1' } }))
+
+    await executeAction(
+      specFor('update_task', { taskRef: 'Call vendor', change: 'retitle to movement prep' }),
+      deps
+    )
+
+    const [, updateInit] = fetchMock.mock.calls[2]
+    expect(JSON.parse(updateInit.body)).toMatchObject({
+      action: 'update', taskListId: 'l1', taskId: 't1', title: 'movement prep',
+    })
+    expect(JSON.parse(updateInit.body).due).toBeUndefined()
+  })
+})
