@@ -228,7 +228,7 @@ function CalendarEventModal({ defaultDate, onClose, onCreated }: CalendarEventMo
    ══════════════════════════════════════════════════════════════════════════════ */
 
 function CalendarSectionImpl({ onInjectChat }: { onInjectChat: (msg: string, attachments?: ChatAttachment[]) => void }) {
-  const { events, isLoading, error, mutate } = useCalendar()
+  const { events, unreadableCalendars, isLoading, error, mutate } = useCalendar()
   const [selectedDate, setSelectedDate] = useState<Date>(() => new Date())
   const [weekStart, setWeekStart] = useState<Date>(() => getMonday(new Date()))
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -328,6 +328,13 @@ function CalendarSectionImpl({ onInjectChat }: { onInjectChat: (msg: string, att
             + Event
           </button>
         </div>
+
+        {unreadableCalendars.length > 0 && (
+          <SectionMessage
+            message={`${unreadableCalendars.length} selected calendar(s) could not be loaded. Events shown may be incomplete.`}
+            type="error"
+          />
+        )}
 
         {/* Week navigation */}
         <div className={styles.calendarWeekNav}>

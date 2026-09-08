@@ -396,13 +396,12 @@ describe('executeAction: create_google_doc', () => {
 })
 
 /* ── create_task / update_task: due-date normalization (T-142) ──
-   executeAction is the chat write path; it must run any deadline through the
-   same canonicalizer the /api/google/tasks route enforces so an ambiguous
-   date never reaches Google as a guessed literal, and never rely on the
-   server round-trip alone to catch it. */
+   Create routes raw deadlines through the audited server choke point. Updates
+   retain their local normalization because that route is not an audited AI
+   create path. */
 
 describe('executeAction: create_task — due-date normalization', () => {
-  it('canonicalizes a bare calendar deadline before creating', async () => {
+  it('forwards a bare calendar deadline to the audited route for canonicalization', async () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse({ taskLists: [{ id: 'l1', title: 'Ops' }] }))
       .mockResolvedValueOnce(jsonResponse({ task: { id: 't1', title: 'Call vendor' } }))
@@ -413,11 +412,13 @@ describe('executeAction: create_task — due-date normalization', () => {
     )
 
     const [, createInit] = fetchMock.mock.calls[1]
-    expect(JSON.parse(createInit.body).due).toBe('2026-07-28T00:00:00.000Z')
+    expect(JSON.parse(createInit.body).due).toBe('2026-07-28')
   })
 
-  it('rejects an ambiguous deadline before it can reach Google', async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse({ taskLists: [{ id: 'l1', title: 'Ops' }] }))
+  it('sends an ambiguous deadline through the audited route so its rejection is recorded', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ taskLists: [{ id: 'l1', title: 'Ops' }] }))
+      .mockResolvedValueOnce(jsonResponse({ error: 'Invalid due date' }, false, 400))
 
     await expect(
       executeAction(
@@ -426,8 +427,11 @@ describe('executeAction: create_task — due-date normalization', () => {
       )
     ).rejects.toThrow()
 
-    // Only the task-list lookup happened — no create POST was ever sent.
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const [url, init] = fetchMock.mock.calls[1]
+    expect(url).toBe('/api/google/tasks')
+    expect(init.headers['X-AI-Intent']).toBe('create_task')
+    expect(JSON.parse(init.body).due).toBe('next Friday')
   })
 })
 

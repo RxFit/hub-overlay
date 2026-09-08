@@ -16,7 +16,8 @@
  *    constructed in the server's local zone — that would roll the day back
  *    for a negative-offset deployment.
  *  - An already-resolved RFC3339 timestamp carrying an explicit zone (Z or
- *    ±HH:MM) → passed through unchanged.
+ *    ±HH:MM) → UTC midnight of its WRITTEN calendar date. Google Tasks stores
+ *    due dates as date-only values and discards the time component.
  * Anything else — natural language ("next Friday", "tomorrow"), a naive
  * datetime with no zone, or malformed input — is rejected. Resolving natural
  * language into a real date is a UI/interview concern; this function's job is
@@ -66,7 +67,7 @@ export function canonicalizeTaskDueDate(input: string): TaskDueCanonicalizeResul
     if (!isValidCalendarDate(y, m, d) || h > 23 || mi > 59 || s > 59 || !offsetValid) {
       return { ok: false, error: `"${trimmed}" is not a valid date-time` }
     }
-    return { ok: true, value: trimmed }
+    return { ok: true, value: `${zoned[1]}-${zoned[2]}-${zoned[3]}T00:00:00.000Z` }
   }
 
   return {

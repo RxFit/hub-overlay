@@ -72,8 +72,27 @@ export const POST = withFault('google/tasks', async (req: NextRequest) => {
 
   try {
     if (action === 'create') {
+      // Establish audit context before validation so rejected AI creates are
+      // recorded too. The target deliberately contains routing metadata only.
+      const aiIntent = req.headers.get(AI_INTENT_HEADER)
+      const isAiAction = aiIntent !== null
+      const email = session.user.email ?? ''
+      const auditBase = {
+        userEmail: email || null,
+        actor: 'ai' as const,
+        actionType: 'task_create' as const,
+        target: { taskListId } as Record<string, unknown>,
+        intent: aiIntent,
+        gateToken: req.headers.get(GATE_TOKEN_HEADER),
+        requestId: newRequestId(),
+      }
+      const auditFailure = async (error: string) => {
+        if (isAiAction) await recordAiAction({ ...auditBase, status: 'failed', error })
+      }
+
       const parsed = GoogleTaskCreateSchema.safeParse({ title, notes, due })
       if (!parsed.success) {
+        await auditFailure('validation_failed')
         return NextResponse.json(
           { error: 'Validation failed', details: parsed.error.issues },
           { status: 400 }
@@ -88,6 +107,7 @@ export const POST = withFault('google/tasks', async (req: NextRequest) => {
       if (parsed.data.due) {
         const canonDue = canonicalizeTaskDueDate(parsed.data.due)
         if (!canonDue.ok) {
+          await auditFailure('invalid_due_date')
           return NextResponse.json({ error: `Invalid due date: ${canonDue.error}` }, { status: 400 })
         }
         parsed.data.due = canonDue.value
@@ -97,19 +117,6 @@ export const POST = withFault('google/tasks', async (req: NextRequest) => {
       // (X-AI-Intent present) are audited + per-action rate-limited. `target`
       // keeps routing metadata only (taskListId / created taskId) — never the
       // title or notes.
-      const aiIntent = req.headers.get(AI_INTENT_HEADER)
-      const isAiAction = aiIntent !== null
-      const email = session.user.email ?? ''
-      const auditBase = {
-        userEmail: email || null,
-        actor: 'ai' as const,
-        actionType: 'task_create' as const,
-        target: { taskListId } as Record<string, unknown>,
-        intent: aiIntent,
-        gateToken: req.headers.get(GATE_TOKEN_HEADER),
-        requestId: newRequestId(),
-      }
-
       if (isAiAction) {
         const limit = checkActionLimit(email, 'task_create')
         if (!limit.allowed) {

@@ -27,17 +27,23 @@ describe('canonicalizeTaskDueDate', () => {
     expect(canonicalizeTaskDueDate('2026-13-01').ok).toBe(false)
   })
 
-  it('passes through an already-resolved RFC3339 timestamp with Z', () => {
+  it('normalizes an already-resolved RFC3339 timestamp with Z to date-only UTC midnight', () => {
     expect(canonicalizeTaskDueDate('2026-07-28T15:00:00.000Z')).toEqual({
       ok: true,
-      value: '2026-07-28T15:00:00.000Z',
+      value: '2026-07-28T00:00:00.000Z',
     })
   })
 
-  it('passes through an already-resolved RFC3339 timestamp with an explicit offset', () => {
+  it('normalizes an explicit-offset timestamp to UTC midnight of its written calendar date', () => {
     expect(canonicalizeTaskDueDate('2026-07-28T10:00:00-05:00')).toEqual({
       ok: true,
-      value: '2026-07-28T10:00:00-05:00',
+      value: '2026-07-28T00:00:00.000Z',
+    })
+    // The instant falls on July 29 in UTC, but Google Tasks due dates are
+    // date-only: preserve the date the caller actually wrote.
+    expect(canonicalizeTaskDueDate('2026-07-28T23:30:00-05:00')).toEqual({
+      ok: true,
+      value: '2026-07-28T00:00:00.000Z',
     })
   })
 

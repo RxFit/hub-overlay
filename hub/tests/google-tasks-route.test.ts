@@ -187,6 +187,24 @@ describe('POST /api/google/tasks — due-date canonicalization (T-142)', () => {
     expect(state.google.createTask).not.toHaveBeenCalled()
   })
 
+  it('audits an AI create rejected for an ambiguous due date', async () => {
+    const res = await POST(postReq(
+      { action: 'create', taskListId: 'l1', title: 'x', due: 'next Friday' },
+      { 'x-ai-intent': 'create_task' },
+    ))
+
+    expect(res.status).toBe(400)
+    expect(state.google.createTask).not.toHaveBeenCalled()
+    expect(state.auditRows).toHaveLength(1)
+    expect(state.auditRows[0]).toMatchObject({
+      actor: 'ai',
+      actionType: 'task_create',
+      status: 'failed',
+      error: 'invalid_due_date',
+      target: { taskListId: 'l1' },
+    })
+  })
+
   it('canonicalizes a bare calendar date on update', async () => {
     state.google.updateTask.mockResolvedValue({ id: 't1' })
     const res = await POST(postReq({ action: 'update', taskListId: 'l1', taskId: 't1', due: '2026-08-01' }))
@@ -202,14 +220,14 @@ describe('POST /api/google/tasks — due-date canonicalization (T-142)', () => {
     expect(state.google.updateTask).not.toHaveBeenCalled()
   })
 
-  it('passes through an already-resolved RFC3339 timestamp unchanged', async () => {
+  it('normalizes a zoned timestamp to UTC midnight of its written calendar date', async () => {
     state.google.createTask.mockResolvedValue({ id: 't1' })
     const res = await POST(postReq({
       action: 'create', taskListId: 'l1', title: 'x', due: '2026-07-28T10:00:00-05:00',
     }))
     expect(res.status).toBe(200)
     expect(state.google.createTask).toHaveBeenCalledWith('goog-token', 'l1', {
-      title: 'x', due: '2026-07-28T10:00:00-05:00',
+      title: 'x', due: '2026-07-28T00:00:00.000Z',
     })
   })
 })

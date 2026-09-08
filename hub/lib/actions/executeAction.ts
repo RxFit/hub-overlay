@@ -163,16 +163,10 @@ export async function executeAction(
         taskPrimary ? spec.details.additionalContext : undefined,
       )
 
-      // Canonicalize the deadline here too — not just at the route — so an
-      // ambiguous date ("next Friday") never reaches Google as a guessed
-      // literal even if this write path ever bypasses the HTTP round trip.
+      // Send the raw deadline through the audited route. That route owns both
+      // canonicalization and failed-action recording, so even a rejected
+      // natural-language date remains visible in the execution audit trail.
       const rawDeadline = spec.details.deadline || spec.details.due || undefined
-      let canonDeadline: string | undefined
-      if (rawDeadline) {
-        const canon = canonicalizeTaskDueDate(rawDeadline)
-        if (!canon.ok) throw new Error(`Could not set the due date: ${canon.error}`)
-        canonDeadline = canon.value
-      }
 
       const res = await fetch('/api/google/tasks', {
         method: 'POST',
@@ -185,7 +179,7 @@ export async function executeAction(
           taskListId,
           title: taskTitle,
           notes: taskNotes,
-          due: canonDeadline,
+          due: rawDeadline,
         }),
       })
       if (!res.ok) throw new Error(`Task creation failed: ${res.status}`)
