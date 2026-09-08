@@ -170,7 +170,7 @@ export function isAgyBinaryReady(): boolean {
  * install clears the memo.
  */
 export function warmAgyBinary(): void {
-  void ensureBinary().catch((err) => {
+  void ensureBinary().catch((err: unknown) => {
     log.warn({ err: truncateAgyError(err) }, 'background agy binary warm-up failed')
   })
 }
@@ -300,7 +300,7 @@ async function ensureBinary(): Promise<string> {
   const found = resolveBinary()
   if (found) return found
   if (!installInFlight) {
-    installInFlight = installBinary().catch((err) => {
+    installInFlight = installBinary().catch((err: unknown) => {
       installInFlight = null // allow retry on the next call
       throw err
     })

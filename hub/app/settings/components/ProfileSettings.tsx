@@ -55,7 +55,9 @@ export function ProfileSettings({ callerRole }: { callerRole: string }) {
     }
   }, [isSuperadmin])
 
-  useEffect(() => { load() }, [load])
+  // Effect kick-off: the promise is intentionally not awaited (effects cannot be async).
+  // load() handles its own errors into state, so a rejection here would only be a bug surfacing.
+  useEffect(() => { void load() }, [load])
 
   const startEdit = (m: TeamMember) => {
     setEditingEmail(m.email)

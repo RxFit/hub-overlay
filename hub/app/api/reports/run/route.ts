@@ -245,7 +245,7 @@ export const POST = withFault('reports/run', async (req: NextRequest) => {
               // metric and publishing the rest is the better failure — and it
               // is disclosed in the notes below, never silent.
               { repair: true },
-            ).catch(err => {
+            ).catch((err: unknown) => {
               notes.push(`Google Analytics data unavailable: ${err instanceof Error ? err.message : 'error'}`)
               return undefined
             })
@@ -270,7 +270,7 @@ export const POST = withFault('reports/run', async (req: NextRequest) => {
               siteUrl: prefs.gscSiteUrl,
               startDate: window.startDate,
               endDate: window.endDate,
-            }).catch(err => {
+            }).catch((err: unknown) => {
               notes.push(`Search Console data unavailable: ${err instanceof Error ? err.message : 'error'}`)
               return undefined
             })

@@ -243,7 +243,9 @@ export function useChatEngine(options: UseChatEngineOptions) {
     if (restoreAttemptedRef.current) return
     restoreAttemptedRef.current = true
     const controller = new AbortController()
-    ;(async () => {
+    // Restore is a fire-and-forget effect kick-off; the try/catch inside
+    // already owns every failure, so nothing awaits the promise.
+    void (async () => {
       try {
         const listRes = await fetch('/api/chats?limit=1', { signal: controller.signal })
         if (!listRes.ok) return // unauthenticated / persistence unavailable — start fresh
@@ -471,7 +473,7 @@ export function useChatEngine(options: UseChatEngineOptions) {
       const { content, reauth } = resolveChatError(err)
       // Route a chat 401 through the same reauth flow as the other hooks so an
       // expired session re-authenticates instead of just showing a dead bubble.
-      if (reauth) signIn('google')
+      if (reauth) void signIn('google')
 
       setMessages(prev => [...prev, {
         id: crypto.randomUUID(),
@@ -515,7 +517,7 @@ export function useChatEngine(options: UseChatEngineOptions) {
       setMessages(prev => [...prev, newMessage])
       setContextScore(undefined)
       setContextWeakDim(null)
-      sendToApi(fullMessage, committedExa, 'deep_dive', msgAttachments)
+      void sendToApi(fullMessage, committedExa, 'deep_dive', msgAttachments)
       return
     }
 
@@ -611,11 +613,11 @@ export function useChatEngine(options: UseChatEngineOptions) {
             }
           } else {
             // No intent detected, just send to normal chat API
-            sendToApi(fullMessage, committed, 'deep_dive', msgAttachments)
+            void sendToApi(fullMessage, committed, 'deep_dive', msgAttachments)
           }
         }).catch((err: unknown) => {
           swallow(err, { module: 'useChatEngine', op: 'detectIntent' })
-          sendToApi(fullMessage, committed, 'deep_dive', msgAttachments)
+          void sendToApi(fullMessage, committed, 'deep_dive', msgAttachments)
         })
       }
     } else if (interviewState?.active && interviewState.intent) {
@@ -885,7 +887,7 @@ Respond with EXACTLY one of:
             fireScoreGate()
             // Run the async gate — it updates state on its own and removes the
             // "Scoring context quality…" bubble when it resolves.
-            runQualityGate(confirmedSpec, thinkingMsg.id)
+            void runQualityGate(confirmedSpec, thinkingMsg.id)
           }
         } else {
           const question = getCurrentQuestionWithDefaults(nextState)
@@ -911,7 +913,7 @@ Respond with EXACTLY one of:
         // Reset context score when not in interview mode
         setContextScore(undefined)
         setContextWeakDim(null)
-        sendToApi(fullMessage, committed, 'deep_dive', msgAttachments)
+        void sendToApi(fullMessage, committed, 'deep_dive', msgAttachments)
       }
     }
 
@@ -988,7 +990,7 @@ Respond with EXACTLY one of:
     // messages — which defer their read to after commit — worked.
     const updatedMessages: ChatMsg[] = [...messagesRef.current, userMsg]
     setMessages(prev => [...prev, userMsg])
-    sendToApi(message, updatedMessages, useCase, cappedAttachments)
+    void sendToApi(message, updatedMessages, useCase, cappedAttachments)
   }, [sendToApi, doSend, setMobileLeftOpen, setMobileRightOpen, setMobileTab])
 
   // Stable per-panel inject handlers — referentially constant across renders so
@@ -1045,7 +1047,7 @@ Respond with EXACTLY one of:
             ? { ...m, content: `🔐 **One-time permission needed.** ${errMsg.slice(MISSING_SCOPE_MARKER.length + 1).trim()}\n\nReopening Google sign-in so you can grant it — then re-run this action.` }
             : m
         ))
-        signIn('google')
+        void signIn('google')
         return
       }
       setMessages(prev => prev.map(m =>

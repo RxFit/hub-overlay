@@ -20,7 +20,9 @@ export async function fetcher(url: string) {
   if (res.status === 401) {
     const body = await res.json().catch((err: unknown) => { swallow(err, { module: 'useKPIData', op: 'parse401Body' }); return ({}) })
     // Honor the explicit reauth contract; default to reauth on any 401.
-    if (body?.reauth !== false) signIn('google')
+    // Fire-and-forget: signIn kicks off the OAuth redirect; the throw below must
+    // not wait on it, and a rejection surfaces exactly as before (unhandled).
+    if (body?.reauth !== false) void signIn('google')
     const err = new Error(body?.error || 'Session expired — please sign in again')
     ;(err as any).status = 401
     throw err

@@ -103,7 +103,9 @@ export function KpiSettings({ isAdmin }: { isAdmin: boolean }) {
     }
   }, [])
 
-  useEffect(() => { load() }, [load])
+  // `void`: mount-time kick-off, nothing awaits it; load() catches its own
+  // fetch/parse errors into `error` state, so no rejection is being dropped here.
+  useEffect(() => { void load() }, [load])
 
   const handleSync = async () => {
     setSyncStatus({ syncing: true, result: null, error: null })
@@ -301,7 +303,7 @@ export function KpiSettings({ isAdmin }: { isAdmin: boolean }) {
                 <div style={{ border: '1px dashed var(--border)', borderRadius: '8px', padding: '12px', marginTop: '4px' }}>
                   <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px' }}>Add Manual KPI</div>
                   <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '6px', marginBottom: '6px' }}>
-                    <input id="kpi-new-label" style={inputStyle} placeholder="Label (e.g. Monthly Revenue)" maxLength={255} value={newDraft.label} onChange={e => setNewDraft(p => ({ ...p, label: e.target.value }))} onKeyDown={e => { if (e.key === 'Enter') handleAdd() }} />
+                    <input id="kpi-new-label" style={inputStyle} placeholder="Label (e.g. Monthly Revenue)" maxLength={255} value={newDraft.label} onChange={e => setNewDraft(p => ({ ...p, label: e.target.value }))} onKeyDown={e => { if (e.key === 'Enter') void handleAdd() }} />
                     <input id="kpi-new-value" style={inputStyle} placeholder="Value (e.g. $42k)" maxLength={255} value={newDraft.value} onChange={e => setNewDraft(p => ({ ...p, value: e.target.value }))} />
                     <input id="kpi-new-trend" style={inputStyle} placeholder="Trend (e.g. +12%)" maxLength={255} value={newDraft.trend} onChange={e => setNewDraft(p => ({ ...p, trend: e.target.value }))} />
                   </div>

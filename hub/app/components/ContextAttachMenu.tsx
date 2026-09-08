@@ -299,6 +299,17 @@ function DocumentSubView({
       ? 'Your Google session has expired — sign out and back in to reconnect Drive.'
       : 'Couldn’t load Google Drive files right now. Try again in a moment.'
 
+  // The catch callbacks below receive `unknown` (typed-ESLint's
+  // use-unknown-in-catch-callback-variable). The only thing they ever read is
+  // the numeric `status` we attach via Object.assign on a !res.ok response, so
+  // narrow to exactly that: an object carrying a numeric `status` yields it,
+  // anything else (network TypeError, JSON SyntaxError) yields undefined — the
+  // same value the old `err?.status` read produced for those inputs.
+  const statusOf = (err: unknown): number | undefined =>
+    typeof err === 'object' && err !== null && 'status' in err && typeof err.status === 'number'
+      ? err.status
+      : undefined
+
   // Fetch 30 recent files on mount
   useEffect(() => {
     let cancelled = false
@@ -316,10 +327,10 @@ function DocumentSubView({
           setIsLoading(false)
         }
       })
-      .catch((err: Error & { status?: number }) => {
+      .catch((err: unknown) => {
         if (!cancelled) {
           setRecentFiles([])
-          setLoadError(errorMessageFor(err?.status))
+          setLoadError(errorMessageFor(statusOf(err)))
           setIsLoading(false)
         }
       })
@@ -359,9 +370,9 @@ function DocumentSubView({
           setLoadError(null)
           setIsSearching(false)
         })
-        .catch((err: Error & { status?: number }) => {
+        .catch((err: unknown) => {
           setSearchResults([])
-          setLoadError(errorMessageFor(err?.status))
+          setLoadError(errorMessageFor(statusOf(err)))
           setIsSearching(false)
         })
     }, 300)

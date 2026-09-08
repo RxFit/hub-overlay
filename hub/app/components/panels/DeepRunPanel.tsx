@@ -184,7 +184,7 @@ export default function DeepRunPanel({
   /* Reattach on mount: a deep run outlives the panel that started it. */
   useEffect(() => {
     let cancelled = false
-    ;(async () => {
+    void (async () => {
       try {
         const res = await fetch(`/api/deep-runs?tool=${toolId}&limit=1`)
         observePartialResponse(res)

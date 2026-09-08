@@ -88,7 +88,10 @@ export function useAuthErrorRecovery(error: Error | undefined | null): boolean {
         // No `prompt` — with the grant already on file Google completes this
         // silently, so a recoverable expiry costs the user nothing. Only a
         // genuinely revoked grant surfaces the consent screen.
-        signIn('google')
+        // `void`: this is a fire-and-forget redirect kick-off — nothing in the
+        // timer callback reads its result, and a rejection surfaces exactly as
+        // before (unhandled), which is what the process-level capture is for.
+        void signIn('google')
       }, 2000)
       return () => clearTimeout(timer)
     }

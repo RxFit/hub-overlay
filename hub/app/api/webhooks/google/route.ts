@@ -44,7 +44,7 @@ export const POST = withFault('webhooks/google', async (req: Request) => {
   // notification's only job is to trigger a changes.list from the stored
   // cursor; per-file add/update/trash/delete all fall out of that listing.
   if (resourceUri.includes('/changes')) {
-    processChangesQueue().catch(err => {
+    processChangesQueue().catch((err: unknown) => {
       console.error('[Google Webhook] Changes processing error:', err);
     });
     return NextResponse.json({ status: 'Processing changes' }, { status: 200 });
@@ -61,7 +61,7 @@ export const POST = withFault('webhooks/google', async (req: Request) => {
     }
 
     console.log(`[Google Webhook] File deleted or trashed. Cleaning up chunks for: ${fileId}`);
-    deleteChunksForFile(fileId).catch(err => {
+    deleteChunksForFile(fileId).catch((err: unknown) => {
       console.error('[Google Webhook Deletion Error]', err);
     });
 
@@ -69,7 +69,7 @@ export const POST = withFault('webhooks/google', async (req: Request) => {
   }
 
   // 4. Process the delta asynchronously for add/update events
-  processGoogleDelta(resourceId, resourceUri).catch(err => {
+  processGoogleDelta(resourceId, resourceUri).catch((err: unknown) => {
     console.error('[Google Webhook Error in Background]', err);
   });
 

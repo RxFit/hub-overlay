@@ -76,7 +76,7 @@ function OnboardingUsersCard({ callerRole }: { callerRole: string }) {
   }, [])
 
   useEffect(() => {
-    fetchOnboardingUsers()
+    void fetchOnboardingUsers()
   }, [fetchOnboardingUsers])
 
   // Manually register a user by email (admin writes their onboarding row)
@@ -251,7 +251,7 @@ function OnboardingUsersCard({ callerRole }: { callerRole: string }) {
             placeholder="colleague@company.com"
             value={registerEmail}
             onChange={e => { setRegisterEmail(e.target.value); setRegisterMsg(null) }}
-            onKeyDown={e => { if (e.key === 'Enter') handleRegisterByEmail() }}
+            onKeyDown={e => { if (e.key === 'Enter') void handleRegisterByEmail() }}
             disabled={registering}
             style={{
               flex: 1,
@@ -587,7 +587,7 @@ function KPIEditorCard({ isAdmin }: { isAdmin: boolean }) {
     }
   }, [])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => { void load() }, [load])
 
   const handleSync = async () => {
     setSyncStatus({ syncing: true, result: null, error: null })
@@ -788,7 +788,7 @@ function KPIEditorCard({ isAdmin }: { isAdmin: boolean }) {
                 <div style={{ border: '1px dashed var(--border)', borderRadius: '8px', padding: '12px', marginTop: '4px' }}>
                   <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px' }}>Add Manual KPI</div>
                   <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '6px', marginBottom: '6px' }}>
-                    <input id="kpi-new-label" style={inputStyle} placeholder="Label (e.g. Monthly Revenue)" maxLength={255} value={newDraft.label} onChange={e => setNewDraft(p => ({ ...p, label: e.target.value }))} onKeyDown={e => { if (e.key === 'Enter') handleAdd() }} />
+                    <input id="kpi-new-label" style={inputStyle} placeholder="Label (e.g. Monthly Revenue)" maxLength={255} value={newDraft.label} onChange={e => setNewDraft(p => ({ ...p, label: e.target.value }))} onKeyDown={e => { if (e.key === 'Enter') void handleAdd() }} />
                     <input id="kpi-new-value" style={inputStyle} placeholder="Value (e.g. $42k)" maxLength={255} value={newDraft.value} onChange={e => setNewDraft(p => ({ ...p, value: e.target.value }))} />
                     <input id="kpi-new-trend" style={inputStyle} placeholder="Trend (e.g. +12%)" maxLength={255} value={newDraft.trend} onChange={e => setNewDraft(p => ({ ...p, trend: e.target.value }))} />
                   </div>
@@ -918,7 +918,7 @@ function ConnectedServicesCard() {
     }
   }, [selectedCompanyId])
 
-  useEffect(() => { loadSecrets() }, [loadSecrets])
+  useEffect(() => { void loadSecrets() }, [loadSecrets])
 
   // Check which bundles are connected (all keys present)
   const isBundleConnected = (bundle: ServiceBundle) =>
@@ -1195,7 +1195,7 @@ function ConnectedServicesCard() {
                                       ✓ Set
                                     </span>
                                     <button
-                                      onClick={(e) => { e.stopPropagation(); handleDelete(existing.id) }}
+                                      onClick={(e) => { e.stopPropagation(); void handleDelete(existing.id) }}
                                       disabled={deleting === existing.id}
                                       style={{
                                         background: 'transparent',
@@ -1244,7 +1244,7 @@ function ConnectedServicesCard() {
                       {bundle.keys.some(k => !secrets.some(s => s.name === k.name)) && (
                         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
                           <button
-                            onClick={(e) => { e.stopPropagation(); handleSaveBundle(bundle) }}
+                            onClick={(e) => { e.stopPropagation(); void handleSaveBundle(bundle) }}
                             disabled={saving}
                             style={{
                               background: 'var(--accent)',
@@ -1577,7 +1577,7 @@ function TeamMembersCard({ callerRole }: { callerRole: string }) {
     }
   }, [isSuperadmin])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => { void load() }, [load])
 
   const startEdit = (m: TeamMember) => {
     setEditingEmail(m.email)

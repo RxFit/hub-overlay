@@ -61,7 +61,9 @@ export default function AuditorDashboardPage() {
 
   useEffect(() => {
     if (status === 'authenticated' && (role === 'admin' || role === 'superadmin')) {
-      runAuditScan();
+      // Effect kick-off: runAuditScan owns its own try/catch/finally, so nothing
+      // here depends on settlement and the promise is intentionally not awaited.
+      void runAuditScan();
     }
   }, [status, role, runAuditScan]);
 

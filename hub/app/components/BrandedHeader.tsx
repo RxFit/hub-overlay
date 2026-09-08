@@ -57,7 +57,10 @@ export function BrandedHeader({
 
   const handleSignOut = useCallback(() => {
     setMenuOpen(false)
-    signOut({ callbackUrl: '/login' })
+    // Fire-and-forget: next-auth's signOut() resolves after it navigates to
+    // callbackUrl, so there is nothing in this handler to sequence after it.
+    // `void` keeps the rejection surfacing exactly as before (unhandled).
+    void signOut({ callbackUrl: '/login' })
   }, [])
 
   // User display info

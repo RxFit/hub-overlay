@@ -22,7 +22,10 @@ export default function LoginPage() {
    */
   const handleSignIn = () => {
     setIsLoading(true)
-    signIn('google', { callbackUrl: '/' }, { prompt: 'consent' })
+    // `void`: the click handler is fire-and-forget by design — signIn navigates
+    // the browser away, so nothing here can (or should) wait on it. A rejection
+    // still surfaces as an unhandled rejection exactly as before.
+    void signIn('google', { callbackUrl: '/' }, { prompt: 'consent' })
   }
 
   return (

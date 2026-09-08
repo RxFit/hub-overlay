@@ -638,7 +638,7 @@ function MessageComposer({
     }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      handleSend()
+      void handleSend()
     }
   }, [handleSend, mention.active, members.length])
 
@@ -759,7 +759,7 @@ function ThreadPanel({
   // Reading the thread reads the space — same contract as the space view.
   useEffect(() => {
     if (!messages.length) return
-    markRead(spaceId, messages[messages.length - 1]?.name)
+    void markRead(spaceId, messages[messages.length - 1]?.name)
   }, [messages, spaceId, markRead])
 
   const root = messages[0] ?? null
@@ -866,7 +866,7 @@ function MessageThread({ space }: { space: ChatSpace }) {
   // the thread is open re-marks, but poll refetches with no new mail don't.
   useEffect(() => {
     if (!messages.length) return
-    markRead(spaceId, messages[messages.length - 1]?.name)
+    void markRead(spaceId, messages[messages.length - 1]?.name)
   }, [messages, spaceId, markRead])
 
   // Scrollback anchoring: capture the scroll geometry when "Show earlier

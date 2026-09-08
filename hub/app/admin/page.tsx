@@ -84,7 +84,9 @@ export default function AdminPage() {
 
   useEffect(() => {
     if (status === 'authenticated' && (callerRole === 'admin' || callerRole === 'superadmin')) {
-      fetchUsers()
+      // Effect kick-off: fetchUsers owns its own error path (sets `error` state),
+      // so nothing here depends on the promise settling — `void` keeps runtime identical.
+      void fetchUsers()
     }
   }, [status, callerRole, fetchUsers])
 
@@ -92,7 +94,7 @@ export default function AdminPage() {
   useEffect(() => {
     if (status !== 'authenticated' || (callerRole !== 'admin' && callerRole !== 'superadmin')) return
     const interval = setInterval(() => {
-      if (!document.hidden) fetchUsers()
+      if (!document.hidden) void fetchUsers()
     }, 60_000)
     return () => clearInterval(interval)
   }, [status, callerRole, fetchUsers])
