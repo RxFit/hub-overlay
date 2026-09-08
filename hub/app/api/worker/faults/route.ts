@@ -6,6 +6,7 @@ import { USER_MESSAGES } from '@/lib/fault-codes'
 import { reportFault } from '@/lib/fault-report'
 import { createLogger } from '@/lib/logger'
 import { withFault } from '@/lib/route-fault'
+import { swallow } from '@/lib/swallow'
 import { claimFaultId } from '@/lib/worker-fault-dedupe'
 
 export const runtime = 'nodejs'
@@ -114,7 +115,7 @@ async function readBodyCapped(req: NextRequest, max: number): Promise<{ text: st
       if (!value) continue
       total += value.byteLength
       if (total > max) {
-        await reader.cancel().catch(() => {})
+        await reader.cancel().catch((err: unknown) => swallow(err, { module: 'worker/faults', op: 'cancelOversizedBody' }))
         return { text: '', tooLarge: true }
       }
       chunks.push(value)

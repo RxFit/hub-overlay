@@ -3,6 +3,7 @@ import { db, withTransaction } from '@/lib/db'
 import { dispatchJobs, dispatchWorkers } from '@/lib/schema'
 import { fingerprintPrompt, recordAiRun } from '@/lib/runs'
 import { finishToolRun, type LandedToolRun } from '@/lib/tool-runs'
+import { swallow } from '@/lib/swallow'
 
 /**
  * lib/dispatch-store.ts — the Postgres data layer of desktop dispatch
@@ -118,7 +119,7 @@ export async function enqueueJob(input: EnqueueInput): Promise<EnqueueOutcome> {
     .returning({ id: dispatchJobs.id })
 
   // Probabilistic safety-net sweep, piggybacked so no cron is needed.
-  if (Math.random() < 0.05) void sweepStale().catch(() => {})
+  if (Math.random() < 0.05) void sweepStale().catch((err: unknown) => swallow(err, { module: 'dispatch-store', op: 'piggybackSweepStale' }))
 
   return { id: rows[0].id }
 }

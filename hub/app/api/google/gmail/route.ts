@@ -18,6 +18,7 @@ import { checkActionLimit } from '@/lib/rate-limit'
 import { newRequestId } from '@/lib/observability'
 import { resolveSubject } from '@/lib/gmail-subject'
 import { withFault } from '@/lib/route-fault'
+import { swallow, emptyOn } from '@/lib/swallow'
 
 export const runtime = 'nodejs'
 
@@ -29,7 +30,7 @@ async function gmailGet<T>(path: string, accessToken: string): Promise<T> {
     signal: AbortSignal.timeout(10_000),
   })
   if (!res.ok) {
-    const text = await res.text().catch(() => 'unknown')
+    const text = await res.text().catch((err: unknown) => { swallow(err, { module: 'google/gmail', op: 'parseErrorBody' }); return 'unknown' })
     throw new Error(`Gmail API ${res.status}: ${text}`)
   }
   return res.json()
@@ -46,7 +47,7 @@ async function gmailPost<T>(path: string, accessToken: string, body: unknown): P
     signal: AbortSignal.timeout(10_000),
   })
   if (!res.ok) {
-    const text = await res.text().catch(() => 'unknown')
+    const text = await res.text().catch((err: unknown) => { swallow(err, { module: 'google/gmail', op: 'parseErrorBody' }); return 'unknown' })
     throw new Error(`Gmail API ${res.status}: ${text}`)
   }
   return res.json()
@@ -93,7 +94,7 @@ export const GET = withFault('google/gmail', async (req: NextRequest) => {
       list.threads.map(t =>
         gmailGet<GmailThread>(`/threads/${t.id}?format=metadata&${GMAIL_TRIAGE_HEADER_QS}`, accessToken)
           .then(parseThreadMeta)
-          .catch(() => null)
+          .catch((err: unknown) => emptyOn(err, { module: 'google/gmail', op: 'getThreadMeta' }, null))
       )
     )
 
@@ -309,7 +310,7 @@ export const POST = withFault('google/gmail', async (req: NextRequest) => {
     if (threadId) {
       await gmailPost(`/threads/${threadId}/modify`, accessToken, {
         removeLabelIds: ['UNREAD'],
-      }).catch(() => {})
+      }).catch((err: unknown) => swallow(err, { module: 'google/gmail', op: 'markThreadRead' }))
     }
 
     if (isAiAction) await recordAiAction({ ...auditBase, status: 'success' })

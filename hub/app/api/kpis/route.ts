@@ -5,6 +5,7 @@ import { getCompanies, getIssues, getRuns, getAgents } from '@/lib/paperclip'
 import { computeOperationalKPIs, computeProjectHealth, filterByRole } from '@/lib/kpi-engine'
 import type { LiveKPI, ProjectKPI } from '@/types'
 import { withFault } from '@/lib/route-fault'
+import { emptyOn } from '@/lib/swallow'
 
 export const runtime = 'nodejs'
 
@@ -69,10 +70,10 @@ export const GET = withFault('kpis', async (req: NextRequest) => {
       // getRuns takes the top-8 updated-desc issues, and the first 8 of the
       // limit-100 list match the first 8 of the old limit-10 list).
       const [issues, agents] = await Promise.all([
-        getIssues(company.id, { limit: 100 }).catch(() => []),
-        getAgents(company.id).catch(() => []),
+        getIssues(company.id, { limit: 100 }).catch((err: unknown) => emptyOn(err, { module: 'api/kpis', op: 'getIssues' }, [])),
+        getAgents(company.id).catch((err: unknown) => emptyOn(err, { module: 'api/kpis', op: 'getAgents' }, [])),
       ])
-      const runs = await getRuns(company.id, { limit: 50, issues, agents }).catch(() => [])
+      const runs = await getRuns(company.id, { limit: 50, issues, agents }).catch((err: unknown) => emptyOn(err, { module: 'api/kpis', op: 'getRuns' }, []))
 
       const kpis = computeOperationalKPIs(issues, runs, agents, company.id, company.name)
       const health = computeProjectHealth(issues, runs, agents, company)

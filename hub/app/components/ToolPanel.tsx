@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, Suspense } from 'react'
 import type { ActiveSkill, ToolArtifactData, ToolContextCard } from '@/types'
+import { swallow } from '@/lib/swallow'
 import { TOOL_PANEL_MAP } from './panels'
 
 /* ══════════════════════════════════════════════════════════════════════════════
@@ -91,8 +92,9 @@ export function ToolPanel({
           setContextCard(data.contextCard)
         }
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         /* Fail silently — fallback prompts will show */
+        swallow(err, { module: 'ToolPanel', op: 'fetchToolContext' })
       })
       .finally(() => {
         if (!cancelled) setContextLoading(false)

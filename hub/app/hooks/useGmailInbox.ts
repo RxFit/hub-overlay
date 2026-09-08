@@ -4,6 +4,8 @@ import { useState, useRef, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { signIn } from 'next-auth/react'
 import { extractEmail, replySubject } from '@/lib/email-address'
+import { swallow } from '@/lib/swallow'
+import { observePartialResponse } from '@/lib/partial-response-client'
 
 /**
  * useGmailInbox — the Gmail inbox data/logic extracted from GoogleChatPanel's
@@ -123,11 +125,12 @@ export function useGmailInbox({ onUnreadCount }: UseGmailInboxOptions) {
     queryKey: ['gmail', 'inbox'],
     queryFn: async () => {
       const r = await fetch('/api/google/gmail?view=inbox&maxResults=20')
+      observePartialResponse(r)
       // Route 401 through reauth like the sibling Google hooks
       // (useKPIData / useWriteFetch) so an expired token re-authenticates
       // instead of parsing an error body into an empty inbox + a 0 badge.
       if (r.status === 401) {
-        const body = await r.json().catch(() => ({}))
+        const body = await r.json().catch((err: unknown) => { swallow(err, { module: 'useGmailInbox', op: 'parseInbox401Body' }); return {} })
         if (body?.reauth !== false) signIn('google')
         const err = new Error(body?.error || 'Session expired — please sign in again')
         ;(err as any).status = 401
@@ -137,7 +140,7 @@ export function useGmailInbox({ onUnreadCount }: UseGmailInboxOptions) {
       // status-tagged error so `isError` is set and the unread badge is not
       // zeroed (the derive-from-`data` effect only runs on success).
       if (!r.ok) {
-        const body = await r.json().catch(() => ({}))
+        const body = await r.json().catch((err: unknown) => { swallow(err, { module: 'useGmailInbox', op: 'parseInboxErrorBody' }); return {} })
         const err = new Error(body?.error || `Failed to load inbox (${r.status})`)
         ;(err as any).status = r.status
         throw err
@@ -182,13 +185,14 @@ export function useGmailInbox({ onUnreadCount }: UseGmailInboxOptions) {
       const r = await fetch(
         `/api/google/gmail?view=inbox&maxResults=50&pageToken=${encodeURIComponent(effectiveNextToken)}`
       )
+      observePartialResponse(r)
       if (r.status === 401) {
-        const body = await r.json().catch(() => ({}))
+        const body = await r.json().catch((err: unknown) => { swallow(err, { module: 'useGmailInbox', op: 'parseLoadMore401Body' }); return {} })
         if (body?.reauth !== false) signIn('google')
         throw new Error(body?.error || 'Session expired — please sign in again')
       }
       if (!r.ok) {
-        const body = await r.json().catch(() => ({}))
+        const body = await r.json().catch((err: unknown) => { swallow(err, { module: 'useGmailInbox', op: 'parseLoadMoreErrorBody' }); return {} })
         throw new Error(body?.error || `Failed to load older emails (${r.status})`)
       }
       const page = parseInboxResponse(await r.json())
@@ -211,8 +215,9 @@ export function useGmailInbox({ onUnreadCount }: UseGmailInboxOptions) {
     setMobileView('thread')
     try {
       const r = await fetch(`/api/google/gmail?threadId=${id}`)
+      observePartialResponse(r)
       if (r.status === 401) {
-        const body = await r.json().catch(() => ({}))
+        const body = await r.json().catch((err: unknown) => { swallow(err, { module: 'useGmailInbox', op: 'parseOpenThread401Body' }); return {} })
         if (body?.reauth !== false) signIn('google')
         throw new Error(body?.error || 'Session expired — please sign in again')
       }
@@ -273,7 +278,7 @@ export function useGmailInbox({ onUnreadCount }: UseGmailInboxOptions) {
         body: JSON.stringify({ action: 'trash', threadId: id }),
       })
       if (!r.ok) {
-        const body = await r.json().catch(() => ({}))
+        const body = await r.json().catch((err: unknown) => { swallow(err, { module: 'useGmailInbox', op: 'parseTrashErrorBody' }); return {} })
         throw new Error(body?.error || 'Failed to delete')
       }
       flashNotice('Moved to Trash')
@@ -302,7 +307,7 @@ export function useGmailInbox({ onUnreadCount }: UseGmailInboxOptions) {
         }),
       })
       if (!r.ok) {
-        const body = await r.json().catch(() => ({}))
+        const body = await r.json().catch((err: unknown) => { swallow(err, { module: 'useGmailInbox', op: 'parseSaveTaskErrorBody' }); return {} })
         throw new Error(body?.error || 'Failed to save task')
       }
       flashNotice('Saved to Google Tasks')

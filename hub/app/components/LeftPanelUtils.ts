@@ -1,3 +1,5 @@
+import { swallow } from '@/lib/swallow'
+
 export function formatTime(isoString: string): string {
   try {
     const d = new Date(isoString)
@@ -100,7 +102,10 @@ export function getWeekDays(monday: Date): Date[] {
 export async function artifactsFetcher(url: string) {
   const r = await fetch(url)
   if (!r.ok) {
-    const body = await r.json().catch(() => ({}))
+    const body = await r.json().catch((err: unknown) => {
+      swallow(err, { module: 'LeftPanelUtils', op: 'parseErrorBody' })
+      return ({})
+    })
     const err = new Error(body.error || `API error ${r.status}`)
     ;(err as any).status = r.status
     throw err

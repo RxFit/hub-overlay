@@ -5,6 +5,8 @@
  * Metrics: MRR, Revenue MTD, Active Subscriptions, New Customers (30d).
  */
 
+import { emptyOn } from '@/lib/swallow'
+
 export interface StripeKPI {
   id: string
   label: string
@@ -56,7 +58,17 @@ export async function fetchStripeKPIs(): Promise<StripeKPI[]> {
   const thirtyDaysAgo = now - 30 * 86400
   const sixtyDaysAgo = now - 60 * 86400
 
-  // Run all Stripe queries in parallel
+  // Run all Stripe queries in parallel.
+  //
+  // Every per-query catch is emptyOn, NOT swallow: a failed query resolves to
+  // 0, which flows straight into the KPI rows below ($0 Revenue MTD, $0 MRR,
+  // 0 Active Members, 0 New Customers) and from there into the kpis table via
+  // the withFault-wrapped POST /api/kpis/sync. Nothing upstream can tell "no
+  // revenue" from "Stripe was down" — the response is shaped like success with
+  // the data missing, which is exactly the silent-data-omission class emptyOn
+  // exists for. emptyOn ticks the partial counter and marks the request so the
+  // sync response carries x-hub-partial: 1, while keeping the original per-
+  // query degrade-to-0 behaviour that lets one bad endpoint not sink the sync.
   const [
     activeSubs,
     revenueThisMonth,
@@ -67,7 +79,7 @@ export async function fetchStripeKPIs(): Promise<StripeKPI[]> {
     // Active subscriptions count
     stripeGet('subscriptions?status=active&limit=1', key)
       .then(d => (d.total_count as number) ?? 0)
-      .catch(() => 0),
+      .catch((err: unknown) => emptyOn(err, { module: 'kpi-sources/stripe', op: 'countActiveSubscriptions' }, 0)),
 
     // Charges succeeded this month
     stripeGet(`charges?created[gte]=${startOfMonth}&limit=100`, key)
@@ -75,7 +87,7 @@ export async function fetchStripeKPIs(): Promise<StripeKPI[]> {
         const data = (d.data as Array<{ amount: number; status: string }>) ?? []
         return data.filter(c => c.status === 'succeeded').reduce((s, c) => s + c.amount, 0)
       })
-      .catch(() => 0),
+      .catch((err: unknown) => emptyOn(err, { module: 'kpi-sources/stripe', op: 'sumChargesThisMonth' }, 0)),
 
     // Charges succeeded last month
     stripeGet(`charges?created[gte]=${startOfLastMonth}&created[lt]=${startOfMonth}&limit=100`, key)
@@ -83,17 +95,17 @@ export async function fetchStripeKPIs(): Promise<StripeKPI[]> {
         const data = (d.data as Array<{ amount: number; status: string }>) ?? []
         return data.filter(c => c.status === 'succeeded').reduce((s, c) => s + c.amount, 0)
       })
-      .catch(() => 0),
+      .catch((err: unknown) => emptyOn(err, { module: 'kpi-sources/stripe', op: 'sumChargesLastMonth' }, 0)),
 
     // New customers last 30 days
     stripeGet(`customers?created[gte]=${thirtyDaysAgo}&limit=1`, key)
       .then(d => (d.total_count as number) ?? 0)
-      .catch(() => 0),
+      .catch((err: unknown) => emptyOn(err, { module: 'kpi-sources/stripe', op: 'countNewCustomers30d' }, 0)),
 
     // New customers 31–60 days ago
     stripeGet(`customers?created[gte]=${sixtyDaysAgo}&created[lt]=${thirtyDaysAgo}&limit=1`, key)
       .then(d => (d.total_count as number) ?? 0)
-      .catch(() => 0),
+      .catch((err: unknown) => emptyOn(err, { module: 'kpi-sources/stripe', op: 'countNewCustomers31to60d' }, 0)),
   ])
 
   // MRR estimate = active subs × avg monthly charge

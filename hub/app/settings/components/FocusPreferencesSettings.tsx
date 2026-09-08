@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import type { FocusPreferences, FocusVip, FocusVipCategory } from '@/lib/focus-preferences'
 import { MAX_VIPS, MAX_GOALS_LENGTH } from '@/lib/focus-preferences'
 import { FOCUS_NOTIFY_KEY, isFocusNotifyEnabled } from '@/app/hooks/useFocusNotifications'
+import { swallow } from '@/lib/swallow'
 
 /**
  * FocusPreferencesSettings — editor for the per-user Gmail Focus personalization
@@ -98,7 +99,8 @@ export function FocusPreferencesSettings() {
         body: JSON.stringify({ vips: vips.filter(v => v.value.trim()), goals }),
       })
       if (!r.ok) {
-        const body = await r.json().catch(() => ({}))
+        // A non-JSON error body is fine — we fall back to a status-code message.
+        const body = await r.json().catch((err: unknown) => { swallow(err, { module: 'FocusPreferencesSettings', op: 'parseErrorBody' }); return {} })
         throw new Error(body?.error || `Save failed (${r.status})`)
       }
       const saved: FocusPreferences = await r.json()

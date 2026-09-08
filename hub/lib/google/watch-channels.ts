@@ -14,6 +14,8 @@
  * what the index can ingest.
  */
 
+import { swallow } from '@/lib/swallow'
+
 const DRIVE_BASE = 'https://www.googleapis.com/drive/v3'
 const TIMEOUT_MS = 15_000
 
@@ -56,7 +58,7 @@ async function driveFetch<T>(url: string, accessToken: string, init?: RequestIni
     signal: AbortSignal.timeout(TIMEOUT_MS),
   })
   if (!res.ok) {
-    const body = await res.text().catch(() => '')
+    const body = await res.text().catch((err: unknown) => { swallow(err, { module: 'google/watch-channels', op: 'readErrorBody' }); return '' })
     throw new Error(`Drive watch API ${res.status}: ${body.slice(0, 300)}`)
   }
   return res.json() as Promise<T>

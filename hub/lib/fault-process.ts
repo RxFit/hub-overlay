@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import { toFault, scrubFreeText, type FaultDraft } from '@/lib/fault'
 import { getFaultReportCounters } from '@/lib/fault-report'
+import { getSwallowCounters } from '@/lib/swallow'
 import { appendFaultToSpool } from '@/lib/fault-spool'
 
 /**
@@ -221,7 +222,10 @@ export function installProcessFaultHandlers(opts: { surface: FaultSurface }): bo
   // 3. Shutdown — the ONLY moment the per-instance drop accounting can be
   //    read, and it is what tells you a ceiling was hit during a deploy. No
   //    process.exit() (rule 3), no Postgres flush: a slow socket would eat the
-  //    whole 10s window and the SIGKILL lands anyway.
+  //    whole 10s window and the SIGKILL lands anyway. The swallow counters
+  //    ride along for the same reason: lib/swallow.ts is dependency-free by
+  //    construction, so this line is the one place its per-instance
+  //    swallowed/partial totals become observable at all.
   const onSignal = (signal: string) => () => {
     try {
       writeSyncLine({
@@ -230,6 +234,7 @@ export function installProcessFaultHandlers(opts: { surface: FaultSurface }): bo
         signal,
         message: `[fault-process] ${surface} received ${signal}`,
         faultCounters: getFaultReportCounters(),
+        swallowCounters: getSwallowCounters(),
       })
     } catch {
       /* never let shutdown accounting break shutdown */

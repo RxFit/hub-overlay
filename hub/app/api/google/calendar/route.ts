@@ -7,6 +7,7 @@ import { authOptions } from '@/lib/auth'
 import { listUpcomingEvents, createCalendarEvent, deleteCalendarEvent, listCalendars, GoogleCalendarEvent } from '@/lib/google'
 import { updateCalendarEvent } from '@/lib/google/calendar'
 import { withFault } from '@/lib/route-fault'
+import { emptyOn } from '@/lib/swallow'
 
 export const runtime = 'nodejs'
 
@@ -45,7 +46,10 @@ export const GET = withFault('google/calendar', async (req: NextRequest) => {
         selectedCals.map(cal =>
           listUpcomingEvents(accessToken, { maxResults: perCalMax, calendarId: cal.id })
             .then(evs => evs.map(e => ({ ...e, calendarId: cal.id })))
-            .catch(() => [])
+            // One calendar failing must not blank the whole merged list, but
+            // the omission is data loss: route it through emptyOn so the
+            // response carries x-hub-partial instead of looking complete.
+            .catch((err: unknown) => emptyOn(err, { module: 'google/calendar', op: 'listUpcomingEvents' }, []))
         )
       )
 

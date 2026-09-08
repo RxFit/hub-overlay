@@ -9,6 +9,7 @@ import { emit, newRequestId, startTimer, type AiProvider } from './observability
 import { recordAiRun } from './runs'
 import { shouldTryAgyChat, tryAgyChat } from './agy-chat'
 import type { SystemPromptParts } from './claude'
+import { swallow } from '@/lib/swallow'
 
 /* Local join for the union prompt form — Gemini's systemInstruction wants one
    string; the Claude path receives the parts intact for prompt caching. Kept
@@ -1078,7 +1079,7 @@ async function* streamGeminiWithFallback(
         // abort propagates); swallow that rejection so it can't surface as an
         // unhandledRejection. This is the safety net regardless of whether the
         // SDK honors the abort in-flight.
-        void Promise.resolve(resultPromise).catch(() => {})
+        void Promise.resolve(resultPromise).catch((err: unknown) => swallow(err, { module: 'gemini', op: 'drainAbandonedConnectPromise' }))
         throw raceErr
       } finally {
         if (connectTimer) clearTimeout(connectTimer)

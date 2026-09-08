@@ -43,6 +43,7 @@ import { useVoiceInput } from '@/app/hooks/useVoiceInput'
 import { useSwipePanels } from '@/app/hooks/useSwipePanels'
 import { resolveRole } from '@/lib/roles'
 import { MessageContent, parseInlineMarkdown } from '@/app/components/MessageContent'
+import { registerPartialResponseAssistantInjector } from '@/lib/partial-response-client'
 
 
 
@@ -452,6 +453,11 @@ export default function HubPage() {
     handleActionApprove,
     startNewChat,
   } = chat
+
+  useEffect(
+    () => registerPartialResponseAssistantInjector(injectRecall),
+    [injectRecall],
+  )
 
   const handleMobileTab = (tab: MobileTab) => {
     haptic()

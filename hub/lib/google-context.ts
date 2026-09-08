@@ -27,6 +27,7 @@ import {
   resolveVisibleSpaces,
   type ChatSpacePreferences,
 } from './chat-spaces'
+import { emptyOn } from '@/lib/swallow'
 
 export interface GoogleWorkspaceContext {
   detail: string
@@ -74,7 +75,7 @@ export async function buildGoogleWorkspaceContext(
         lists.slice(0, 5).map(l =>
           listTasks(accessToken, l.id, { showCompleted: false, maxResults: 25 })
             .then(tasks => ({ list: l, tasks }))
-            .catch(() => ({ list: l, tasks: [] })),
+            .catch((err: unknown) => emptyOn(err, { module: 'google-context', op: 'listTasks' }, { list: l, tasks: [] })),
         ),
       )
       const allPending = perList.flatMap(p => p.tasks.filter(t => t.status === 'needsAction'))
@@ -177,7 +178,7 @@ export async function buildGoogleWorkspaceContext(
       // space just renders as names-only instead of blanking the section.
       const messagesBySpace = await Promise.all(
         spaces.slice(0, 3).map(s =>
-          listChatMessages(accessToken, s.name, 5).catch((): ChatMessage[] => []),
+          listChatMessages(accessToken, s.name, 5).catch((err: unknown) => emptyOn(err, { module: 'google-context', op: 'listChatMessages' }, [] as ChatMessage[])),
         ),
       )
       let msgBudget = CHAT_MESSAGES_CAP
