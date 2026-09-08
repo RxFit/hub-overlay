@@ -14,11 +14,6 @@ const CALENDAR_BASE = 'https://www.googleapis.com/calendar/v3'
 
 /** freeBusy's own hard cap on requested calendars. */
 const FREEBUSY_API_CAP = 50
-/** Bound for an AUTO-DISCOVERED selected-calendar set — distinct from (and
- *  tighter than) the API's own cap, so "when am I free?" with no explicit
- *  calendarIds can't balloon into checking dozens of stale selected calendars
- *  a user forgot were toggled on. */
-const MAX_AUTO_DISCOVERED_CALENDARS = 10
 
 export interface CalendarEventPatch {
   summary?: string
@@ -133,6 +128,9 @@ export interface FreeBusyResult {
    *  and errors' calendarIds. Lets a caller tell the user which calendars an
    *  availability answer covers, even before splitting readable/unreadable. */
   checked: string[]
+  /** Calendars omitted because the requested/discovered set exceeded Google's
+   *  50-calendar freeBusy limit. A non-zero value makes the answer partial. */
+  omittedCalendarCount: number
 }
 
 /**
@@ -169,31 +167,32 @@ export function mergeBusyPeriods(periods: BusyPeriod[]): BusyPeriod[] {
  * set (what they see turned on in the Google Calendar UI) instead of silently
  * checking only `primary` — an availability answer that only ever looked at
  * `primary` under-reports busy time on every other calendar the user actually
- * uses. The discovered set is bounded (`MAX_AUTO_DISCOVERED_CALENDARS`)
- * independent of the API's own 50-calendar cap.
+ * uses. Both explicit and discovered sets honor Google's 50-calendar cap, and
+ * any omitted calendars are reported so callers cannot mistake a partial
+ * result for a complete availability answer.
  */
 export async function queryFreeBusy(
   accessToken: string,
   input: { timeMin: string; timeMax: string; calendarIds?: string[]; timeZone?: string },
 ): Promise<FreeBusyResult> {
-  let ids: string[]
+  let candidateIds: string[]
   if (input.calendarIds?.length) {
-    ids = input.calendarIds.slice(0, FREEBUSY_API_CAP)
+    candidateIds = input.calendarIds
   } else {
     const cals = await listCalendars(accessToken)
     const discovered = cals.filter(c => c.selected || c.primary)
-    // CalendarList order is arrival order, not significance order, and the cap
-    // is a plain slice — so an account whose primary is listed after ten
-    // selected calendars used to lose primary entirely and answer "free" over
-    // the one calendar that matters most. Float primary ahead of the cap, and
-    // de-duplicate first so a repeated id can't spend a slot twice.
+    // CalendarList order is arrival order, not significance order. Float
+    // primary ahead of the API cap, and de-duplicate first so a repeated id
+    // cannot spend a slot twice.
     const ordered = [
       ...discovered.filter(c => c.primary),
       ...discovered.filter(c => !c.primary),
     ].map(c => c.id)
     const unique = [...new Set(ordered.filter(Boolean))]
-    ids = (unique.length ? unique : ['primary']).slice(0, MAX_AUTO_DISCOVERED_CALENDARS)
+    candidateIds = unique.length ? unique : ['primary']
   }
+  const ids = candidateIds.slice(0, FREEBUSY_API_CAP)
+  const omittedCalendarCount = Math.max(0, candidateIds.length - ids.length)
 
   const data = await googleFetch<{
     calendars?: Record<string, { busy?: BusyPeriod[]; errors?: { domain?: string; reason?: string }[] }>
@@ -224,5 +223,5 @@ export async function queryFreeBusy(
     all.push(...busy)
   }
 
-  return { byCalendar, merged: mergeBusyPeriods(all), errors, checked: ids }
+  return { byCalendar, merged: mergeBusyPeriods(all), errors, checked: ids, omittedCalendarCount }
 }

@@ -10,6 +10,8 @@ import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 
+const CALENDAR_EVENT_BATCH_SIZE = 10
+
 export const GET = withFault('google/calendar', async (req: NextRequest) => {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
@@ -30,6 +32,7 @@ export const GET = withFault('google/calendar', async (req: NextRequest) => {
     // Fetch generously per-calendar so we don't miss events after sorting
     const perCalMax = 50
     let events: GoogleCalendarEvent[] = []
+    const unreadableCalendars: string[] = []
 
     if (calendarId) {
       // Tag each event with its source calendar so the client can delete it
@@ -41,13 +44,30 @@ export const GET = withFault('google/calendar', async (req: NextRequest) => {
       // Only fetch from selected/primary calendars
       const selectedCals = cals.filter(c => c.selected || c.primary)
 
-      const allEvents = await Promise.all(
-        selectedCals.map(cal =>
-          listUpcomingEvents(accessToken, { maxResults: perCalMax, calendarId: cal.id })
-            .then(evs => evs.map(e => ({ ...e, calendarId: cal.id })))
-            .catch(() => [])
+      const allEvents: GoogleCalendarEvent[][] = []
+      for (let offset = 0; offset < selectedCals.length; offset += CALENDAR_EVENT_BATCH_SIZE) {
+        const batch = selectedCals.slice(offset, offset + CALENDAR_EVENT_BATCH_SIZE)
+        const batchResults = await Promise.all(
+          batch.map(async cal => {
+            try {
+              const calendarEvents = await listUpcomingEvents(accessToken, {
+                maxResults: perCalMax,
+                calendarId: cal.id,
+              })
+              return {
+                events: calendarEvents.map(event => ({ ...event, calendarId: cal.id })),
+                unreadableCalendar: null,
+              }
+            } catch {
+              return { events: [], unreadableCalendar: cal.id }
+            }
+          })
         )
-      )
+        for (const result of batchResults) {
+          allEvents.push(result.events)
+          if (result.unreadableCalendar) unreadableCalendars.push(result.unreadableCalendar)
+        }
+      }
 
       events = allEvents.flat()
       // Sort merged events by start time
@@ -61,7 +81,7 @@ export const GET = withFault('google/calendar', async (req: NextRequest) => {
         events = events.slice(0, displayMax)
       }
     }
-    return NextResponse.json({ events })
+    return NextResponse.json({ events, unreadableCalendars })
   } catch (error) {
     return googleApiErrorResponse(error, googleRouteCtx(req, '/api/google/calendar'))
   }

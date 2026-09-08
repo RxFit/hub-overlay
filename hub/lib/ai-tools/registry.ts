@@ -545,23 +545,31 @@ const freeBusyTool: ReadTool = {
     // over an unreadable calendar is how the assistant offers a slot the user
     // is already booked in, so unreadable calendars travel with the answer.
     const unreadable = result.errors.map(e => `${e.calendarId} (${e.reason})`)
+    const omitted = result.omittedCalendarCount
+    const partialReasons = [
+      ...(unreadable.length
+        ? [`${unreadable.length} calendar(s) could not be read: ${unreadable.join(', ')}`]
+        : []),
+      ...(omitted ? [`${omitted} calendar(s) were omitted by the API limit`] : []),
+    ]
 
     if (!result.merged.length) {
-      if (unreadable.length) {
+      if (unreadable.length || omitted) {
         return {
           summary:
-            `No busy time found between ${args.timeMin} and ${args.timeMax}, but ` +
-            `${unreadable.length} calendar(s) could not be read: ${unreadable.join(', ')}.`,
+            `No busy time found between ${args.timeMin} and ${args.timeMax}, but the result is partial: ` +
+            `${partialReasons.join(' and ')}.`,
           fenced: fenceUntrusted(
             'Calendar free/busy',
             JSON.stringify({
               range: [args.timeMin, args.timeMax],
               busy: [],
+              checkedCalendars: result.checked,
               unreadableCalendars: unreadable,
+              omittedCalendarCount: omitted,
               caveat:
-                'These calendars returned an error, so their busy time is UNKNOWN — not free. Do not ' +
-                'call the range clear or propose a slot without telling the user which calendars could ' +
-                'not be checked.',
+                'Unreadable and omitted calendars are UNKNOWN — not free. Do not call the ' +
+                'range clear or propose a slot without telling the user that the check was incomplete.',
             }),
           ),
         }
@@ -578,7 +586,9 @@ const freeBusyTool: ReadTool = {
     return {
       summary:
         `Calendar busy blocks between ${args.timeMin} and ${args.timeMax}: ${result.merged.length}` +
-        (unreadable.length ? ` (${unreadable.length} calendar(s) unreadable)` : ''),
+        (unreadable.length || omitted
+          ? ` (${unreadable.length} calendar(s) unreadable, ${omitted} omitted)`
+          : ''),
       // Busy blocks come from invitations other people created, and the merged
       // set is derived from their data.
       fenced: fenceUntrusted(
@@ -586,12 +596,14 @@ const freeBusyTool: ReadTool = {
         JSON.stringify({
           range: [args.timeMin, args.timeMax],
           busy: result.merged,
-          ...(unreadable.length
+          checkedCalendars: result.checked,
+          ...(unreadable.length || omitted
             ? {
                 unreadableCalendars: unreadable,
+                omittedCalendarCount: omitted,
                 caveat:
-                  'These calendars returned an error, so their busy time is UNKNOWN — not free. Say which ' +
-                  'calendars could not be checked before treating any gap as available.',
+                  'Unreadable and omitted calendars are UNKNOWN — not free. Say that the check ' +
+                  'was incomplete before treating any gap as available.',
               }
             : {}),
         }),

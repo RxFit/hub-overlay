@@ -210,7 +210,7 @@ describe('queryFreeBusy', () => {
     expect(JSON.parse(String(freeBusyCall?.init?.body)).items).toEqual([{ id: 'primary' }])
   })
 
-  it('caps the auto-discovered selected-calendar set rather than querying an unbounded list', async () => {
+  it('queries every auto-discovered calendar when the selected set is within the API cap', async () => {
     const manySelected = Array.from({ length: 40 }, (_, i) => ({
       id: `cal-${i}`, summary: `Cal ${i}`, selected: true,
     }))
@@ -223,19 +223,14 @@ describe('queryFreeBusy', () => {
 
     const freeBusyCall = calls.find(c => c.url.includes('freeBusy'))
     const requested = JSON.parse(String(freeBusyCall?.init?.body)).items as { id: string }[]
-    // Exactly the first 10 selected calendars — a regression to any other
-    // number (e.g. 39) must fail this, not just "fewer than 40".
-    expect(requested).toEqual(Array.from({ length: 10 }, (_, i) => ({ id: `cal-${i}` })))
-    expect(requested.some(r => r.id === 'cal-10')).toBe(false)
-    expect(result.checked).toEqual(Array.from({ length: 10 }, (_, i) => `cal-${i}`))
+    expect(requested).toEqual(Array.from({ length: 40 }, (_, i) => ({ id: `cal-${i}` })))
+    expect(result.checked).toEqual(Array.from({ length: 40 }, (_, i) => `cal-${i}`))
+    expect(result.omittedCalendarCount).toBe(0)
   })
 
-  /* T-142 P2: CalendarList order is arrival order, not significance order. A
-     user with a dozen selected calendars listed ahead of their own primary got
-     a `checked` set with NO primary at all — so "am I free at 3?" answered from
-     everything EXCEPT the calendar that matters most, and reported free over a
-     booked primary. Primary must survive the cap. */
-  it('retains primary inside the cap even when more than ten selected calendars precede it', async () => {
+  /* T-142 P2: CalendarList order is arrival order, not significance order.
+     Primary must be first so it survives Google's cap in larger sets. */
+  it('prioritizes primary when selected calendars precede it', async () => {
     const items = [
       ...Array.from({ length: 12 }, (_, i) => ({ id: `cal-${i}`, summary: `Cal ${i}`, selected: true })),
       { id: 'me@x.test', summary: 'Danny', primary: true, selected: true },
@@ -249,12 +244,12 @@ describe('queryFreeBusy', () => {
 
     const freeBusyCall = calls.find(c => c.url.includes('freeBusy'))
     const requested = (JSON.parse(String(freeBusyCall?.init?.body)).items as { id: string }[]).map(r => r.id)
-    // Bounded exactly, unique, and primary first — never dropped by the slice.
-    expect(requested).toHaveLength(10)
-    expect(new Set(requested).size).toBe(10)
+    expect(requested).toHaveLength(13)
+    expect(new Set(requested).size).toBe(13)
     expect(requested[0]).toBe('me@x.test')
     expect(result.checked).toContain('me@x.test')
-    expect(result.checked).toHaveLength(10)
+    expect(result.checked).toHaveLength(13)
+    expect(result.omittedCalendarCount).toBe(0)
   })
 
   it('de-duplicates a calendar repeated across CalendarList pages before applying the cap', async () => {
@@ -310,12 +305,13 @@ describe('queryFreeBusy', () => {
 
   it('truncates to the API cap of 50 calendars rather than failing', async () => {
     const calls = stub({ calendars: {} })
-    await queryFreeBusy('tok', {
+    const result = await queryFreeBusy('tok', {
       timeMin: 'a',
       timeMax: 'b',
       calendarIds: Array.from({ length: 60 }, (_, i) => `cal-${i}`),
     })
     expect(JSON.parse(String(calls[0].init?.body)).items).toHaveLength(50)
+    expect(result.omittedCalendarCount).toBe(10)
   })
 
   it('handles a response with no calendars', async () => {

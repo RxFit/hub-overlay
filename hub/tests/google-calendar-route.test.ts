@@ -119,6 +119,44 @@ describe('GET /api/google/calendar', () => {
     expect(res.status).toBe(401)
     expect((await res.json()).reauth).toBe(true)
   })
+
+  it('batches multi-calendar event reads so Google fan-out stays bounded', async () => {
+    state.listCalendars.mockResolvedValue(
+      Array.from({ length: 25 }, (_, i) => ({ id: `cal-${i}`, selected: true })),
+    )
+    let active = 0
+    let maxActive = 0
+    state.listUpcomingEvents.mockImplementation(async () => {
+      active += 1
+      maxActive = Math.max(maxActive, active)
+      await new Promise(resolve => setTimeout(resolve, 1))
+      active -= 1
+      return []
+    })
+
+    const res = await GET(getReq())
+
+    expect(res.status).toBe(200)
+    expect(state.listUpcomingEvents).toHaveBeenCalledTimes(25)
+    expect(maxActive).toBeLessThanOrEqual(10)
+  })
+
+  it('reports calendars whose event reads failed instead of silently treating them as empty', async () => {
+    state.listCalendars.mockResolvedValue([
+      { id: 'ok-cal', selected: true },
+      { id: 'broken-cal', selected: true },
+    ])
+    state.listUpcomingEvents.mockImplementation(async (_t: string, opts: { calendarId: string }) => {
+      if (opts.calendarId === 'broken-cal') throw new Error('rate limited')
+      return []
+    })
+
+    const res = await GET(getReq())
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body.unreadableCalendars).toEqual(['broken-cal'])
+  })
 })
 
 describe('POST /api/google/calendar', () => {

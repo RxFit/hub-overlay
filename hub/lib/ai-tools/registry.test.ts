@@ -370,6 +370,40 @@ describe('calendar_freebusy', () => {
     expect(result.summary).not.toContain('unreadable')
     expect(result.fenced).not.toContain('unreadableCalendars')
   })
+
+  it('does not call a partially-checked auto-discovered range clear', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url.includes('calendarList')) {
+          return new Response(
+            JSON.stringify({
+              items: Array.from({ length: 60 }, (_, i) => ({
+                id: `cal-${i}`,
+                summary: `Calendar ${i}`,
+                selected: true,
+                primary: i === 59,
+              })),
+            }),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify({ calendars: {} }), { status: 200 })
+      }),
+    )
+
+    const result = await getTool('calendar_freebusy')!.execute(
+      { timeMin: '2026-07-30T00:00:00Z', timeMax: '2026-07-31T00:00:00Z' },
+      ctx(),
+    )
+
+    expect(result.note).not.toBe('NO_RESULTS')
+    expect(result.summary).not.toContain('the calendar is clear')
+    const payload = JSON.parse(result.fenced.split('\n')[1])
+    expect(payload.checkedCalendars).toHaveLength(50)
+    expect(payload.omittedCalendarCount).toBe(10)
+    expect(payload.caveat).toContain('UNKNOWN')
+  })
 })
 
 describe('list_file_access', () => {
