@@ -43,6 +43,19 @@
       // `next lint` caches per-file results in .next/cache/eslint/, so warm
       // runs — the local pre-push case — are unchanged. CI is always cold.
       "files": ["**/*.ts", "**/*.tsx"],
+      // The retired execution surface is NOT under the typed rules. AGENTS.md
+      // forbids building on, referencing, or routing work through it, and
+      // lib/swallow.ts states the measured exclusion rule this list mirrors: a
+      // module is excluded when every network target it has is that engine's
+      // API or client — exactly these four files on this tree. They leave with
+      // the surface, so a rule change must never cost an edit inside them; the
+      // base `next/core-web-vitals` rules still apply to them as before.
+      "excludedFiles": [
+        "lib/paperclip.ts",
+        "lib/paperclipSession.ts",
+        "app/hooks/useExecutionPanel.ts",
+        "app/hooks/useBusinessManager.ts"
+      ],
       "parser": "@typescript-eslint/parser",
       "parserOptions": {
         "projectService": true

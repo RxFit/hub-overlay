@@ -95,8 +95,8 @@ export function useAddComment(orgId?: string) {
     mutationFn: ({ issueId, body }: { issueId: string; body: string }) =>
       writeJson(`/api/paperclip/issues/${encodeURIComponent(issueId)}/comments`, 'POST', { body }),
     onSuccess: (_data, { issueId }) => {
-      void qc.invalidateQueries({ queryKey: ['exec-panel', 'comments', issueId] })
-      void qc.invalidateQueries({ queryKey: ['exec-panel', 'issues', orgId ?? 'none'] })
+      qc.invalidateQueries({ queryKey: ['exec-panel', 'comments', issueId] })
+      qc.invalidateQueries({ queryKey: ['exec-panel', 'issues', orgId ?? 'none'] })
     },
   })
 }
@@ -109,8 +109,8 @@ export function useUpdateIssueStatus(orgId?: string) {
     mutationFn: ({ issueId, status }: { issueId: string; status: string }) =>
       writeJson(`/api/paperclip/issues/${encodeURIComponent(issueId)}`, 'PATCH', { status }),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['exec-panel', 'issues', orgId ?? 'none'] })
-      void qc.invalidateQueries({ queryKey: ['execution-dashboard'] })
+      qc.invalidateQueries({ queryKey: ['exec-panel', 'issues', orgId ?? 'none'] })
+      qc.invalidateQueries({ queryKey: ['execution-dashboard'] })
     },
   })
 }
@@ -185,8 +185,8 @@ export function useRoutineAction(orgId?: string) {
       })
     },
     onSuccess: (_data, { routineId }) => {
-      void qc.invalidateQueries({ queryKey: ['exec-panel', 'routines', orgId ?? 'none'] })
-      void qc.invalidateQueries({ queryKey: ['exec-panel', 'routine-runs', routineId] })
+      qc.invalidateQueries({ queryKey: ['exec-panel', 'routines', orgId ?? 'none'] })
+      qc.invalidateQueries({ queryKey: ['exec-panel', 'routine-runs', routineId] })
     },
   })
 }
@@ -212,7 +212,7 @@ export function useUpdateGoalStatus(orgId?: string) {
     mutationFn: ({ goalId, status }: { goalId: string; status: string }) =>
       writeJson(`/api/paperclip/goals/${encodeURIComponent(goalId)}`, 'PATCH', { status }),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['exec-panel', 'goals', orgId ?? 'none'] })
+      qc.invalidateQueries({ queryKey: ['exec-panel', 'goals', orgId ?? 'none'] })
     },
   })
 }
@@ -256,7 +256,7 @@ export function useWorkspaceRuntimeAction(projectId?: string) {
         'POST'
       ),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['exec-panel', 'workspaces', projectId ?? 'none'] })
+      qc.invalidateQueries({ queryKey: ['exec-panel', 'workspaces', projectId ?? 'none'] })
     },
   })
 }
@@ -267,9 +267,9 @@ export function useAgentAction(orgId?: string) {
     mutationFn: ({ agentId, action }: { agentId: string; action: AgentLifecycleAction }) =>
       writeJson(`/api/paperclip/agents/${encodeURIComponent(agentId)}/${action}`, 'POST', {}),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['exec-panel', 'agents', orgId ?? 'none'] })
-      void qc.invalidateQueries({ queryKey: ['exec-panel', 'runs', orgId ?? 'none'] })
-      void qc.invalidateQueries({ queryKey: ['execution-dashboard'] })
+      qc.invalidateQueries({ queryKey: ['exec-panel', 'agents', orgId ?? 'none'] })
+      qc.invalidateQueries({ queryKey: ['exec-panel', 'runs', orgId ?? 'none'] })
+      qc.invalidateQueries({ queryKey: ['execution-dashboard'] })
     },
   })
 }
