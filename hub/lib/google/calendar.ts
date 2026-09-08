@@ -8,8 +8,17 @@
  */
 
 import { googleFetch } from './client'
+import { listCalendars } from '@/lib/google'
 
 const CALENDAR_BASE = 'https://www.googleapis.com/calendar/v3'
+
+/** freeBusy's own hard cap on requested calendars. */
+const FREEBUSY_API_CAP = 50
+/** Bound for an AUTO-DISCOVERED selected-calendar set — distinct from (and
+ *  tighter than) the API's own cap, so "when am I free?" with no explicit
+ *  calendarIds can't balloon into checking dozens of stale selected calendars
+ *  a user forgot were toggled on. */
+const MAX_AUTO_DISCOVERED_CALENDARS = 10
 
 export interface CalendarEventPatch {
   summary?: string
@@ -119,6 +128,11 @@ export interface FreeBusyResult {
    *  fully-booked calendar the user lacks permission on was reported as FREE —
    *  the worst possible failure mode for an availability answer. */
   errors: CalendarReadError[]
+  /** Every calendar id actually included in the freeBusy request, whether
+   *  explicitly passed in or auto-discovered — the union of byCalendar's keys
+   *  and errors' calendarIds. Lets a caller tell the user which calendars an
+   *  availability answer covers, even before splitting readable/unreadable. */
+  checked: string[]
 }
 
 /**
@@ -151,14 +165,25 @@ export function mergeBusyPeriods(periods: BusyPeriod[]): BusyPeriod[] {
 /**
  * Query free/busy across calendars.
  *
- * The API caps a request at 50 calendars, so the list is truncated rather than
- * allowed to fail the whole lookup.
+ * When `calendarIds` is omitted, this discovers the user's SELECTED calendar
+ * set (what they see turned on in the Google Calendar UI) instead of silently
+ * checking only `primary` — an availability answer that only ever looked at
+ * `primary` under-reports busy time on every other calendar the user actually
+ * uses. The discovered set is bounded (`MAX_AUTO_DISCOVERED_CALENDARS`)
+ * independent of the API's own 50-calendar cap.
  */
 export async function queryFreeBusy(
   accessToken: string,
   input: { timeMin: string; timeMax: string; calendarIds?: string[]; timeZone?: string },
 ): Promise<FreeBusyResult> {
-  const ids = (input.calendarIds?.length ? input.calendarIds : ['primary']).slice(0, 50)
+  let ids: string[]
+  if (input.calendarIds?.length) {
+    ids = input.calendarIds.slice(0, FREEBUSY_API_CAP)
+  } else {
+    const cals = await listCalendars(accessToken)
+    const selected = cals.filter(c => c.selected || c.primary).map(c => c.id)
+    ids = (selected.length ? selected : ['primary']).slice(0, MAX_AUTO_DISCOVERED_CALENDARS)
+  }
 
   const data = await googleFetch<{
     calendars?: Record<string, { busy?: BusyPeriod[]; errors?: { domain?: string; reason?: string }[] }>
@@ -189,5 +214,5 @@ export async function queryFreeBusy(
     all.push(...busy)
   }
 
-  return { byCalendar, merged: mergeBusyPeriods(all), errors }
+  return { byCalendar, merged: mergeBusyPeriods(all), errors, checked: ids }
 }

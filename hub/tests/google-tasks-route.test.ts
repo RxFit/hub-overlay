@@ -21,6 +21,7 @@ const { state } = vi.hoisted(() => ({
       createTask: vi.fn(),
       completeTask: vi.fn(),
       uncompleteTask: vi.fn(),
+      updateTask: vi.fn(),
     },
   },
 }))
@@ -39,6 +40,7 @@ vi.mock('@/lib/google', () => ({
   createTask: (...a: unknown[]) => state.google.createTask(...a),
   completeTask: (...a: unknown[]) => state.google.completeTask(...a),
   uncompleteTask: (...a: unknown[]) => state.google.uncompleteTask(...a),
+  updateTask: (...a: unknown[]) => state.google.updateTask(...a),
 }))
 
 import { GET, POST } from '@/app/api/google/tasks/route'
@@ -161,6 +163,54 @@ describe('POST /api/google/tasks — dispatch + validation', () => {
     state.google.completeTask.mockRejectedValue(new Error('Google API error 429: quota'))
     const res = await POST(postReq({ action: 'complete', taskListId: 'l1', taskId: 't1' }))
     expect(res.status).toBe(502)
+  })
+})
+
+/* ── T-142: `due` must reach Google as RFC3339 UTC midnight, never a raw
+   pass-through string, and ambiguous natural language must 400 rather than
+   reach Google as a literal due date. This route is the single choke point a
+   direct API caller cannot route around — executeAction.ts calls this same
+   endpoint. */
+describe('POST /api/google/tasks — due-date canonicalization (T-142)', () => {
+  it('canonicalizes a bare calendar date to RFC3339 UTC midnight before creating', async () => {
+    state.google.createTask.mockResolvedValue({ id: 't1', title: 'x' })
+    const res = await POST(postReq({ action: 'create', taskListId: 'l1', title: 'x', due: '2026-07-28' }))
+    expect(res.status).toBe(200)
+    expect(state.google.createTask).toHaveBeenCalledWith('goog-token', 'l1', {
+      title: 'x', due: '2026-07-28T00:00:00.000Z',
+    })
+  })
+
+  it('400s a create whose due date is ambiguous natural language, without reaching Google', async () => {
+    const res = await POST(postReq({ action: 'create', taskListId: 'l1', title: 'x', due: 'next Friday' }))
+    expect(res.status).toBe(400)
+    expect(state.google.createTask).not.toHaveBeenCalled()
+  })
+
+  it('canonicalizes a bare calendar date on update', async () => {
+    state.google.updateTask.mockResolvedValue({ id: 't1' })
+    const res = await POST(postReq({ action: 'update', taskListId: 'l1', taskId: 't1', due: '2026-08-01' }))
+    expect(res.status).toBe(200)
+    expect(state.google.updateTask).toHaveBeenCalledWith('goog-token', 'l1', 't1', {
+      due: '2026-08-01T00:00:00.000Z',
+    })
+  })
+
+  it('400s an update whose due date is ambiguous natural language, without reaching Google', async () => {
+    const res = await POST(postReq({ action: 'update', taskListId: 'l1', taskId: 't1', due: 'tomorrow' }))
+    expect(res.status).toBe(400)
+    expect(state.google.updateTask).not.toHaveBeenCalled()
+  })
+
+  it('passes through an already-resolved RFC3339 timestamp unchanged', async () => {
+    state.google.createTask.mockResolvedValue({ id: 't1' })
+    const res = await POST(postReq({
+      action: 'create', taskListId: 'l1', title: 'x', due: '2026-07-28T10:00:00-05:00',
+    }))
+    expect(res.status).toBe(200)
+    expect(state.google.createTask).toHaveBeenCalledWith('goog-token', 'l1', {
+      title: 'x', due: '2026-07-28T10:00:00-05:00',
+    })
   })
 })
 

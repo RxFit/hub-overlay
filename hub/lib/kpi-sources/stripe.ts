@@ -43,6 +43,81 @@ async function stripeGet(path: string, key: string): Promise<Record<string, unkn
   return res.json()
 }
 
+interface StripeListItem {
+  id: string
+  amount?: number
+  status?: string
+}
+
+interface StripeListPage {
+  data?: StripeListItem[]
+  has_more?: boolean
+}
+
+const PAGE_LIMIT = 100
+/** Hard bound on pages followed per metric (100 records/page). Stripe removed
+ *  `total_count` from list responses, so counts/sums MUST be built by walking
+ *  every page via `has_more` + `starting_after` — never by reading a single
+ *  page's length as the whole answer, which silently undercounts past 100
+ *  records. This cap exists so an account with more history than we're
+ *  willing to page through fails LOUDLY instead of reporting that undercount
+ *  as if it were correct. */
+const MAX_PAGES = 20
+
+/** Thrown when a metric's pagination hits `MAX_PAGES` while Stripe still
+ *  reports `has_more`. Deliberately NOT caught by the per-metric degrade-to-0
+ *  fallback below — an unknown-but-large count is not the same failure as an
+ *  upstream 500, and reporting either as a plain 0 would be a silent lie. */
+export class StripePageCapExceededError extends Error {}
+
+/**
+ * Walk every page of a Stripe list endpoint via `starting_after`, never
+ * reading `total_count` (removed/unsupported on these list endpoints).
+ */
+async function paginateStripe(
+  path: string,
+  params: string,
+  key: string,
+): Promise<StripeListItem[]> {
+  const results: StripeListItem[] = []
+  let startingAfter: string | undefined
+
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const qp = startingAfter
+      ? `${params}&starting_after=${encodeURIComponent(startingAfter)}`
+      : params
+    const d = (await stripeGet(`${path}?${qp}`, key)) as StripeListPage
+    const data = d.data ?? []
+    results.push(...data)
+
+    if (!d.has_more || data.length === 0) return results
+    startingAfter = data[data.length - 1].id
+  }
+
+  throw new StripePageCapExceededError(
+    `Stripe ${path}: exceeded ${MAX_PAGES} pages (${MAX_PAGES * PAGE_LIMIT} records) while ` +
+    'more remained — refusing to report an undercounted total',
+  )
+}
+
+/**
+ * Ordinary upstream failures (network blip, 5xx, bad key) degrade this ONE
+ * metric to `fallback` so one dead endpoint doesn't fail the whole sync — the
+ * existing behavior. A page-cap failure is different in kind: the true count
+ * is unknown, not zero, so it is rethrown and fails the whole Stripe source
+ * instead of reporting a plausible-looking but wrong number.
+ */
+function degradeUnlessCapExceeded<T>(p: Promise<T>, fallback: T): Promise<T> {
+  return p.catch((err) => {
+    if (err instanceof StripePageCapExceededError) throw err
+    return fallback
+  })
+}
+
+function sumSucceeded(rows: StripeListItem[]): number {
+  return rows.filter((r) => r.status === 'succeeded').reduce((s, r) => s + (r.amount ?? 0), 0)
+}
+
 export async function fetchStripeKPIs(): Promise<StripeKPI[]> {
   const key = process.env.STRIPE_SECRET_KEY
   if (!key) {
@@ -56,7 +131,10 @@ export async function fetchStripeKPIs(): Promise<StripeKPI[]> {
   const thirtyDaysAgo = now - 30 * 86400
   const sixtyDaysAgo = now - 60 * 86400
 
-  // Run all Stripe queries in parallel
+  // Run all Stripe queries in parallel. Each walks every page via
+  // has_more/starting_after (never total_count) and degrades to 0 on an
+  // ordinary upstream failure — but NOT on a page-cap failure, which
+  // propagates and fails the whole sync (see degradeUnlessCapExceeded).
   const [
     activeSubs,
     revenueThisMonth,
@@ -65,35 +143,42 @@ export async function fetchStripeKPIs(): Promise<StripeKPI[]> {
     newCustomersLastMonth,
   ] = await Promise.all([
     // Active subscriptions count
-    stripeGet('subscriptions?status=active&limit=1', key)
-      .then(d => (d.total_count as number) ?? 0)
-      .catch(() => 0),
+    degradeUnlessCapExceeded(
+      paginateStripe('subscriptions', `status=active&limit=${PAGE_LIMIT}`, key).then((rows) => rows.length),
+      0,
+    ),
 
     // Charges succeeded this month
-    stripeGet(`charges?created[gte]=${startOfMonth}&limit=100`, key)
-      .then(d => {
-        const data = (d.data as Array<{ amount: number; status: string }>) ?? []
-        return data.filter(c => c.status === 'succeeded').reduce((s, c) => s + c.amount, 0)
-      })
-      .catch(() => 0),
+    degradeUnlessCapExceeded(
+      paginateStripe('charges', `created[gte]=${startOfMonth}&limit=${PAGE_LIMIT}`, key).then(sumSucceeded),
+      0,
+    ),
 
     // Charges succeeded last month
-    stripeGet(`charges?created[gte]=${startOfLastMonth}&created[lt]=${startOfMonth}&limit=100`, key)
-      .then(d => {
-        const data = (d.data as Array<{ amount: number; status: string }>) ?? []
-        return data.filter(c => c.status === 'succeeded').reduce((s, c) => s + c.amount, 0)
-      })
-      .catch(() => 0),
+    degradeUnlessCapExceeded(
+      paginateStripe(
+        'charges',
+        `created[gte]=${startOfLastMonth}&created[lt]=${startOfMonth}&limit=${PAGE_LIMIT}`,
+        key,
+      ).then(sumSucceeded),
+      0,
+    ),
 
     // New customers last 30 days
-    stripeGet(`customers?created[gte]=${thirtyDaysAgo}&limit=1`, key)
-      .then(d => (d.total_count as number) ?? 0)
-      .catch(() => 0),
+    degradeUnlessCapExceeded(
+      paginateStripe('customers', `created[gte]=${thirtyDaysAgo}&limit=${PAGE_LIMIT}`, key).then((rows) => rows.length),
+      0,
+    ),
 
     // New customers 31–60 days ago
-    stripeGet(`customers?created[gte]=${sixtyDaysAgo}&created[lt]=${thirtyDaysAgo}&limit=1`, key)
-      .then(d => (d.total_count as number) ?? 0)
-      .catch(() => 0),
+    degradeUnlessCapExceeded(
+      paginateStripe(
+        'customers',
+        `created[gte]=${sixtyDaysAgo}&created[lt]=${thirtyDaysAgo}&limit=${PAGE_LIMIT}`,
+        key,
+      ).then((rows) => rows.length),
+      0,
+    ),
   ])
 
   // MRR estimate = active subs × avg monthly charge

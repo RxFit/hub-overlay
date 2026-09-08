@@ -394,3 +394,77 @@ describe('executeAction: create_google_doc', () => {
     expect(JSON.parse(init.body)).toEqual({ title: 'Notes', body: '' })
   })
 })
+
+/* ── create_task / update_task: due-date normalization (T-142) ──
+   executeAction is the chat write path; it must run any deadline through the
+   same canonicalizer the /api/google/tasks route enforces so an ambiguous
+   date never reaches Google as a guessed literal, and never rely on the
+   server round-trip alone to catch it. */
+
+describe('executeAction: create_task — due-date normalization', () => {
+  it('canonicalizes a bare calendar deadline before creating', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ taskLists: [{ id: 'l1', title: 'Ops' }] }))
+      .mockResolvedValueOnce(jsonResponse({ task: { id: 't1', title: 'Call vendor' } }))
+
+    await executeAction(
+      specFor('create_task', { description: 'Call vendor', deadline: '2026-07-28' }),
+      deps
+    )
+
+    const [, createInit] = fetchMock.mock.calls[1]
+    expect(JSON.parse(createInit.body).due).toBe('2026-07-28T00:00:00.000Z')
+  })
+
+  it('rejects an ambiguous deadline before it can reach Google', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ taskLists: [{ id: 'l1', title: 'Ops' }] }))
+
+    await expect(
+      executeAction(
+        specFor('create_task', { description: 'Call vendor', deadline: 'next Friday' }),
+        deps
+      )
+    ).rejects.toThrow()
+
+    // Only the task-list lookup happened — no create POST was ever sent.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('executeAction: update_task — due-date normalization', () => {
+  const listsOk = () => jsonResponse({ taskLists: [{ id: 'l1', title: 'Ops' }] })
+  const tasksOk = () => jsonResponse({ tasks: [{ id: 't1', title: 'Call vendor' }] })
+
+  it('canonicalizes a bare calendar date on reschedule, without local-time drift', async () => {
+    fetchMock
+      .mockResolvedValueOnce(listsOk())
+      .mockResolvedValueOnce(tasksOk())
+      .mockResolvedValueOnce(jsonResponse({ task: { id: 't1' } }))
+
+    await executeAction(
+      specFor('update_task', { taskRef: 'Call vendor', change: 'reschedule to 2026-07-28' }),
+      deps
+    )
+
+    const [, updateInit] = fetchMock.mock.calls[2]
+    expect(JSON.parse(updateInit.body)).toMatchObject({
+      action: 'update', taskListId: 'l1', taskId: 't1', due: '2026-07-28T00:00:00.000Z',
+    })
+  })
+
+  it('rejects an ambiguous reschedule date rather than guessing or silently renaming', async () => {
+    fetchMock
+      .mockResolvedValueOnce(listsOk())
+      .mockResolvedValueOnce(tasksOk())
+
+    await expect(
+      executeAction(
+        specFor('update_task', { taskRef: 'Call vendor', change: 'reschedule to next Friday' }),
+        deps
+      )
+    ).rejects.toThrow()
+
+    // No update/rename POST was ever sent for the ambiguous date.
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+})

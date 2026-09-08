@@ -5,6 +5,7 @@ import { resolveGoogleAuth, googleApiErrorResponse, googleRouteCtx } from '@/lib
 import { clampInt } from '@/lib/num'
 import { GoogleTaskCreateSchema } from '@/lib/zod-schemas'
 import { listTaskLists, listTasks, createTask, completeTask, uncompleteTask, updateTask, deleteTask } from '@/lib/google'
+import { canonicalizeTaskDueDate } from '@/lib/google/task-dates'
 import { AI_INTENT_HEADER, GATE_TOKEN_HEADER } from '@/lib/requireGate'
 import { recordAiAction } from '@/lib/ai-audit'
 import { checkActionLimit } from '@/lib/rate-limit'
@@ -77,6 +78,19 @@ export const POST = withFault('google/tasks', async (req: NextRequest) => {
           { error: 'Validation failed', details: parsed.error.issues },
           { status: 400 }
         )
+      }
+
+      // Canonicalize BEFORE the mutation so a bare calendar date reaches
+      // Google as RFC3339 UTC midnight (not a raw, non-conformant string) and
+      // ambiguous natural language ("next Friday") 400s here rather than
+      // silently becoming a literal, wrong due date. Shared with executeAction
+      // so a caller can't bypass this by going through the chat flow instead.
+      if (parsed.data.due) {
+        const canonDue = canonicalizeTaskDueDate(parsed.data.due)
+        if (!canonDue.ok) {
+          return NextResponse.json({ error: `Invalid due date: ${canonDue.error}` }, { status: 400 })
+        }
+        parsed.data.due = canonDue.value
       }
 
       // AI-action audit trail (NS-2). Only AI-originated task creations
@@ -153,7 +167,13 @@ export const POST = withFault('google/tasks', async (req: NextRequest) => {
       const patch: { title?: string; notes?: string; due?: string } = {}
       if (typeof title === 'string' && title.trim()) patch.title = title.trim()
       if (typeof notes === 'string') patch.notes = notes
-      if (typeof due === 'string' && due.trim()) patch.due = due.trim()
+      if (typeof due === 'string' && due.trim()) {
+        const canonDue = canonicalizeTaskDueDate(due)
+        if (!canonDue.ok) {
+          return NextResponse.json({ error: `Invalid due date: ${canonDue.error}` }, { status: 400 })
+        }
+        patch.due = canonDue.value
+      }
       if (Object.keys(patch).length === 0) {
         return NextResponse.json({ error: 'Nothing to update — provide title, notes, or due' }, { status: 400 })
       }

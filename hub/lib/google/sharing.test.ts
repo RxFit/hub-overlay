@@ -283,4 +283,35 @@ describe('describeAccessEntry', () => {
       }),
     ).toBe('danny@rxfitatx.com — owner')
   })
+
+  /* T-142: `organizer`/`fileOrganizer` are shared-drive-only roles
+     `permissions.list` can return. Reusing shareRoleLabel's "anything else is
+     viewer" default for them displayed a Manager/Content manager as a plain
+     viewer — actively wrong. This does not change what the Hub can GRANT
+     (ShareRole / normalizeShareRole are untouched); it only fixes how an
+     EXISTING grant is described. */
+  it('labels shared-drive-only roles distinctly instead of falling back to viewer', () => {
+    expect(
+      describeAccessEntry({
+        permissionId: 'p5', type: 'user', role: 'organizer',
+        emailAddress: 'sam@acme.com', isOwner: false, inherited: false,
+      }),
+    ).toBe('sam@acme.com — Manager')
+
+    expect(
+      describeAccessEntry({
+        permissionId: 'p6', type: 'user', role: 'fileOrganizer',
+        emailAddress: 'jo@acme.com', isOwner: false, inherited: false,
+      }),
+    ).toBe('jo@acme.com — Content manager')
+  })
+
+  it('labels a role Google might add later as Unknown, never a silent viewer', () => {
+    expect(
+      describeAccessEntry({
+        permissionId: 'p7', type: 'user', role: 'someFutureRole',
+        emailAddress: 'x@acme.com', isOwner: false, inherited: false,
+      }),
+    ).toBe('x@acme.com — Unknown')
+  })
 })

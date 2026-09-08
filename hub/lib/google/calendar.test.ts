@@ -18,6 +18,21 @@ function stub(payload: unknown) {
   return calls
 }
 
+/** Like `stub`, but answers differently per endpoint — needed once a call
+ *  fans out to both `calendarList` (discovery) and `freeBusy` (the query). */
+function stubByUrl(responses: { when: string; payload: unknown }[]) {
+  const calls: { url: string; init?: RequestInit }[] = []
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, init })
+      const hit = responses.find(r => url.includes(r.when))
+      return new Response(JSON.stringify(hit ? hit.payload : {}), { status: 200 })
+    }),
+  )
+  return calls
+}
+
 describe('buildEventPatch', () => {
   it('includes ONLY the fields being changed', () => {
     // events.patch merges — restating a full event would blank whatever the
@@ -122,7 +137,7 @@ describe('mergeBusyPeriods', () => {
 })
 
 describe('queryFreeBusy', () => {
-  it('defaults to the primary calendar and merges across calendars', async () => {
+  it('merges across explicitly-requested calendars', async () => {
     const calls = stub({
       calendars: {
         primary: { busy: [{ start: '2026-07-28T09:00:00Z', end: '2026-07-28T10:00:00Z' }] },
@@ -133,12 +148,85 @@ describe('queryFreeBusy', () => {
     const result = await queryFreeBusy('tok', {
       timeMin: '2026-07-28T00:00:00Z',
       timeMax: '2026-07-29T00:00:00Z',
+      calendarIds: ['primary', 'work'],
     })
 
-    expect(JSON.parse(String(calls[0].init?.body)).items).toEqual([{ id: 'primary' }])
+    expect(JSON.parse(String(calls[0].init?.body)).items).toEqual([{ id: 'primary' }, { id: 'work' }])
     // The same invite on two calendars is one busy block, not two.
     expect(result.merged).toHaveLength(1)
     expect(Object.keys(result.byCalendar)).toEqual(['primary', 'work'])
+    expect(result.checked).toEqual(['primary', 'work'])
+  })
+
+  /* T-142: omitted calendarIds used to silently mean "check only `primary`",
+     under-reporting busy time on every other calendar the user has switched on
+     in the Google Calendar UI. It must instead discover and query the user's
+     selected set. */
+  it('discovers and queries the user-selected calendar set when calendarIds is omitted', async () => {
+    const calls = stubByUrl([
+      {
+        when: 'calendarList',
+        payload: {
+          items: [
+            { id: 'primary', summary: 'Danny', primary: true },
+            { id: 'work@group.calendar.google.com', summary: 'Work', selected: true },
+            { id: 'unselected@group.calendar.google.com', summary: 'Old project', selected: false },
+          ],
+        },
+      },
+      {
+        when: 'freeBusy',
+        payload: {
+          calendars: {
+            primary: { busy: [{ start: '2026-07-28T09:00:00Z', end: '2026-07-28T10:00:00Z' }] },
+            'work@group.calendar.google.com': { busy: [] },
+          },
+        },
+      },
+    ])
+
+    const result = await queryFreeBusy('tok', { timeMin: 'a', timeMax: 'b' })
+
+    const freeBusyCall = calls.find(c => c.url.includes('freeBusy'))
+    expect(JSON.parse(String(freeBusyCall?.init?.body)).items).toEqual([
+      { id: 'primary' },
+      { id: 'work@group.calendar.google.com' },
+    ])
+    // Never the unselected calendar — the user turned it off in their UI.
+    expect(result.checked).not.toContain('unselected@group.calendar.google.com')
+    expect(result.checked).toEqual(['primary', 'work@group.calendar.google.com'])
+  })
+
+  it('falls back to primary when the user has no selected calendars at all', async () => {
+    const calls = stubByUrl([
+      { when: 'calendarList', payload: { items: [{ id: 'primary', summary: 'Danny' }] } },
+      { when: 'freeBusy', payload: { calendars: {} } },
+    ])
+
+    await queryFreeBusy('tok', { timeMin: 'a', timeMax: 'b' })
+
+    const freeBusyCall = calls.find(c => c.url.includes('freeBusy'))
+    expect(JSON.parse(String(freeBusyCall?.init?.body)).items).toEqual([{ id: 'primary' }])
+  })
+
+  it('caps the auto-discovered selected-calendar set rather than querying an unbounded list', async () => {
+    const manySelected = Array.from({ length: 40 }, (_, i) => ({
+      id: `cal-${i}`, summary: `Cal ${i}`, selected: true,
+    }))
+    const calls = stubByUrl([
+      { when: 'calendarList', payload: { items: manySelected } },
+      { when: 'freeBusy', payload: { calendars: {} } },
+    ])
+
+    const result = await queryFreeBusy('tok', { timeMin: 'a', timeMax: 'b' })
+
+    const freeBusyCall = calls.find(c => c.url.includes('freeBusy'))
+    const requested = JSON.parse(String(freeBusyCall?.init?.body)).items as { id: string }[]
+    // Exactly the first 10 selected calendars — a regression to any other
+    // number (e.g. 39) must fail this, not just "fewer than 40".
+    expect(requested).toEqual(Array.from({ length: 10 }, (_, i) => ({ id: `cal-${i}` })))
+    expect(requested.some(r => r.id === 'cal-10')).toBe(false)
+    expect(result.checked).toEqual(Array.from({ length: 10 }, (_, i) => `cal-${i}`))
   })
 
   it('truncates to the API cap of 50 calendars rather than failing', async () => {
