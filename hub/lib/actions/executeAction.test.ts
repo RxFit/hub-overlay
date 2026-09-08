@@ -467,4 +467,40 @@ describe('executeAction: update_task — due-date normalization', () => {
     // No update/rename POST was ever sent for the ambiguous date.
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
+
+  it('renames rather than misreading a due-date command out of a substring like "overdue"', async () => {
+    fetchMock
+      .mockResolvedValueOnce(listsOk())
+      .mockResolvedValueOnce(tasksOk())
+      .mockResolvedValueOnce(jsonResponse({ task: { id: 't1' } }))
+
+    await executeAction(
+      specFor('update_task', { taskRef: 'Call vendor', change: 'rename it to overdue invoices' }),
+      deps
+    )
+
+    const [, updateInit] = fetchMock.mock.calls[2]
+    expect(JSON.parse(updateInit.body)).toMatchObject({
+      action: 'update', taskListId: 'l1', taskId: 't1', title: 'overdue invoices',
+    })
+    expect(JSON.parse(updateInit.body).due).toBeUndefined()
+  })
+
+  it('renames rather than misreading a due-date command out of a substring like "movement"', async () => {
+    fetchMock
+      .mockResolvedValueOnce(listsOk())
+      .mockResolvedValueOnce(tasksOk())
+      .mockResolvedValueOnce(jsonResponse({ task: { id: 't1' } }))
+
+    await executeAction(
+      specFor('update_task', { taskRef: 'Call vendor', change: 'retitle to movement prep' }),
+      deps
+    )
+
+    const [, updateInit] = fetchMock.mock.calls[2]
+    expect(JSON.parse(updateInit.body)).toMatchObject({
+      action: 'update', taskListId: 'l1', taskId: 't1', title: 'movement prep',
+    })
+    expect(JSON.parse(updateInit.body).due).toBeUndefined()
+  })
 })
