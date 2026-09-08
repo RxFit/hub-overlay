@@ -527,7 +527,10 @@ const freeBusyTool: ReadTool = {
       calendarIds: {
         type: 'array',
         items: { type: 'string' },
-        description: 'Calendar ids to check; omit for the primary calendar',
+        description:
+          "Calendar ids to check; omit to check the user's selected calendar set " +
+          '(everything turned on in their Google Calendar UI, not just primary). ' +
+          'Pass ["primary"] to check only the primary calendar.',
       },
     },
     required: ['timeMin', 'timeMax'],

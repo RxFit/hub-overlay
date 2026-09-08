@@ -290,6 +290,20 @@ describe('calendar_freebusy', () => {
     expect(result.summary).toContain('clear')
   })
 
+  /* Codex #2419914010: the calendarIds description claimed omission means
+     "the primary calendar", but queryFreeBusy discovers the full selected/
+     primary set on omission — `["primary"]` is what requests primary-only.
+     The tool contract must say what the runtime actually does. */
+  it('describes calendarIds omission as the selected calendar set, not just primary', () => {
+    const tool = getTool('calendar_freebusy')!
+    const params = tool.parameters as { properties: { calendarIds: { description: string } } }
+    const description = params.properties.calendarIds.description
+    expect(description).toContain('omit')
+    expect(description.toLowerCase()).not.toContain('omit for the primary calendar')
+    expect(description.toLowerCase()).toContain('selected')
+    expect(description).toContain('["primary"]')
+  })
+
   it('fences merged busy blocks — they derive from other people’s invitations', async () => {
     stubFetch({
       calendars: {
