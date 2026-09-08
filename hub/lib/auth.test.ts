@@ -194,6 +194,58 @@ describe('callbacks.jwt — token refresh faults', () => {
     expect(serializedLogs()).not.toContain(RAW_EMAIL)
   })
 
+  it('(b2) a 503 that recovers on the next try keeps the session, returns the new token, and reports ONE degraded upstream_unavailable fault with retryCount 1', async () => {
+    fetchMock
+      .mockResolvedValueOnce(tokenResponse(503, {}))
+      .mockResolvedValueOnce(tokenResponse(200, { access_token: 'ya29.fresh', expires_in: 3600 }))
+    const authOptions = await loadAuth()
+
+    const out = await runJwt(authOptions, expiredToken())
+
+    // The user saw nothing: a working token, no error marker, refresh token kept.
+    expect(out.error).toBeUndefined()
+    expect(out.accessToken).toBe('ya29.fresh')
+    expect(out.refreshToken).toBe(REFRESH_TOKEN)
+    expect(tokenStore.clear).not.toHaveBeenCalled()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+
+    // The telemetry did not: one degraded record carrying the retry count and
+    // the LAST failure's status — the OTel rule lib/retry.ts states, applied
+    // to this hand-rolled loop.
+    expect(reportMock).toHaveBeenCalledTimes(1)
+    const draft = reportedDraft()
+    expect(draft.code).toBe('upstream_unavailable')
+    expect(draft.severity).toBe('degraded')
+    expect(draft.outcome).toBe('degraded')
+    expect(draft.retryCount).toBe(1)
+    expect(draft.userHash).toBe(hashEmail(RAW_EMAIL))
+    expect(draft.context).toMatchObject({ provider: 'google', tag: 'refreshAccessToken', kind: 'none', status: 503 })
+
+    const reports = serializedReports()
+    expect(reports).not.toContain(REFRESH_TOKEN)
+    expect(reports).not.toContain('ya29.fresh')
+    expect(reports).not.toContain(RAW_EMAIL)
+    const logs = serializedLogs()
+    expect(logs).not.toContain(RAW_EMAIL)
+    expect(logs).not.toContain(REFRESH_TOKEN)
+  })
+
+  it('(b3) two transient failures then a 200 → still ONE record, retryCount 2', async () => {
+    fetchMock
+      .mockResolvedValueOnce(tokenResponse(503, {}))
+      .mockResolvedValueOnce(tokenResponse(503, {}))
+      .mockResolvedValueOnce(tokenResponse(200, { access_token: 'ya29.fresh', expires_in: 3600 }))
+    const authOptions = await loadAuth()
+
+    const out = await runJwt(authOptions, expiredToken())
+
+    expect(out.accessToken).toBe('ya29.fresh')
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(reportMock).toHaveBeenCalledTimes(1)
+    expect(reportedDraft().retryCount).toBe(2)
+    expect(reportedDraft().code).toBe('upstream_unavailable')
+  })
+
   it('(c) no refresh token at all is auth_reauth_required tagged no_refresh_token, with no Google call', async () => {
     const authOptions = await loadAuth()
 

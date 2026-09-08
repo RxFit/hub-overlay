@@ -217,7 +217,8 @@ async function requestTokenRefresh(refreshToken: string): Promise<TokenRefreshRe
 }
 
 /**
- * Report ONE fault for a failed refresh (ERROR_REPORTING_2026-08-24.md §
+ * Report ONE fault for a refresh that failed — or that recovered after retry
+ * (ERROR_REPORTING_2026-08-24.md §
  * "NextAuth is uninstrumented and cannot be wrapped", Phase 2 bullet 3).
  *
  * The NextAuth catch-all route re-exports NextAuth(authOptions) directly, so no
@@ -235,6 +236,14 @@ async function requestTokenRefresh(refreshToken: string): Promise<TokenRefreshRe
  *  - transient → `upstream_unavailable`, severity `degraded`. The session
  *                survives (routes answer 503-retryable); this is a Google
  *                token-endpoint blip, worth counting but never an ERROR page.
+ *  - recovered → `upstream_unavailable`, severity `degraded`, `retryCount` =
+ *                the failed attempts that preceded the success. The refresh
+ *                WORKED and the user saw nothing — but lib/retry.ts's OTel
+ *                rule holds for this hand-rolled loop too: ONE degraded record
+ *                per recovered operation, never silence, so a flapping token
+ *                endpoint shows in the degraded-auth rate instead of hiding
+ *                behind its own successes. Status and OAuth code are the LAST
+ *                failure's.
  *
  * WHAT IS EMITTED — and, more importantly, what is NOT. The record carries the
  * classification, the HTTP status and the OAuth error CODE (`invalid_grant`,
@@ -249,9 +258,9 @@ async function requestTokenRefresh(refreshToken: string): Promise<TokenRefreshRe
  * `status` = the HTTP status, `provider` = 'google'.
  */
 function reportRefreshFault(
-  kind: 'fatal' | 'transient',
+  kind: 'fatal' | 'transient' | 'recovered',
   email: string,
-  detail: { status?: number; oauthError?: string },
+  detail: { status?: number; oauthError?: string; retryCount?: number },
 ): void {
   const oauthError = detail.oauthError ?? 'none'
   const err = new Error(`token refresh ${kind}: ${oauthError}`)
@@ -259,7 +268,8 @@ function reportRefreshFault(
     layer: 'lib',
     module: 'auth',
     code: kind === 'fatal' ? 'auth_reauth_required' : 'upstream_unavailable',
-    ...(kind === 'transient' ? { severity: 'degraded' as const } : {}),
+    ...(kind !== 'fatal' ? { severity: 'degraded' as const } : {}),
+    ...(detail.retryCount !== undefined ? { retryCount: detail.retryCount } : {}),
     userHash: email ? hashEmail(email) : null,
     context: {
       provider: 'google',
@@ -271,8 +281,9 @@ function reportRefreshFault(
   // A structured line beside the report so the refresh shows up in the
   // module='auth' log stream too (the fault line is module-less JSON).
   // Same fields, same PII contract: classification + code only.
-  const fields = { code: fault.code, faultId: fault.faultId, kind, status: detail.status ?? null, oauthError, userHash: fault.userHash }
-  if (kind === 'transient') log.warn(fields, 'token refresh transient (session preserved)')
+  const fields = { code: fault.code, faultId: fault.faultId, kind, status: detail.status ?? null, oauthError, retryCount: fault.retryCount, userHash: fault.userHash }
+  if (kind === 'recovered') log.warn(fields, 'token refresh recovered after retry (session unaffected)')
+  else if (kind === 'transient') log.warn(fields, 'token refresh transient (session preserved)')
   else log.warn(fields, 'token refresh fatal (re-auth required)')
   reportFault(fault, { rawStack: err.stack ?? null })
 }
@@ -289,8 +300,11 @@ function reportRefreshFault(
  *
  * Now the failure is classified (see lib/auth-refresh.ts):
  *
- *  - transient (429/5xx/network) → retry a couple of times inside the request,
- *    and if it still fails, KEEP the refresh token and mark the session with
+ *  - transient (429/5xx/network) → retry a couple of times inside the request
+ *    (a success on a later attempt reports ONE degraded `upstream_unavailable`
+ *    record carrying `retryCount` — the OTel rule lib/retry.ts states; the
+ *    user sees nothing, the degraded-auth rate does), and if it still fails,
+ *    KEEP the refresh token and mark the session with
  *    `RefreshTransientError`. Routes map that to a retryable 503 rather than a
  *    401, and the next request retries after a short backoff. The user notices
  *    a brief "reconnecting", not a logout.
@@ -321,6 +335,19 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
     const result = await requestTokenRefresh(refreshToken)
 
     if (result.ok && result.body?.access_token) {
+      if (attempt > 0) {
+        // Recovered after `attempt` transient failures. lib/retry.ts's OTel
+        // rule applies to this hand-rolled loop too: ONE degraded record for
+        // the whole refresh, carrying the count — never silence (a recovered
+        // refresh would otherwise look exactly like a first-try success and a
+        // flapping token endpoint would never show), never n error rows.
+        // Status and OAuth code are the last failure's.
+        reportRefreshFault('recovered', email, {
+          status: lastStatus,
+          oauthError: typeof lastBody?.error === 'string' ? lastBody.error : undefined,
+          retryCount: attempt,
+        })
+      }
       const rotated = result.body.refresh_token as string | undefined
       // Persist the working token on EVERY successful refresh — not only when
       // Google rotates it.
