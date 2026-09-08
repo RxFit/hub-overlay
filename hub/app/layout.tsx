@@ -35,6 +35,7 @@ const jetBrainsMono = JetBrains_Mono({
 import { getTenantConfig } from '@/lib/tenant'
 import { TenantProvider } from './components/TenantProvider'
 import { Providers } from './components/Providers'
+import { PartialResponseBanner } from './components/PartialResponseBanner'
 import { QueryProvider } from './providers'
 
 /* ── Dynamic rendering is REQUIRED by the CSP nonce (do not remove) ──
@@ -98,7 +99,12 @@ export default function RootLayout({
       <body>
         <Providers>
           <QueryProvider>
-            <TenantProvider>{children}</TenantProvider>
+            <TenantProvider>
+              <div className="hub-root-frame">
+                <PartialResponseBanner />
+                {children}
+              </div>
+            </TenantProvider>
           </QueryProvider>
         </Providers>
       </body>

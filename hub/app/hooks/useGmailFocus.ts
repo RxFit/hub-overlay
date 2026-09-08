@@ -2,6 +2,8 @@
 
 import { useQuery } from '@tanstack/react-query'
 import type { FocusItem } from '@/lib/gmail-focus'
+import { markPartialResponseNotice, observePartialResponse } from '@/lib/partial-response-client'
+import { emptyOn } from '@/lib/swallow'
 
 /**
  * useGmailFocus — client read of the AI-ranked Focus queue
@@ -28,8 +30,20 @@ export function useGmailFocus(enabled: boolean = true, opts: { background?: bool
     enabled,
     queryFn: async (): Promise<{ items: FocusDisplayItem[]; degraded: boolean }> => {
       const r = await fetch('/api/google/gmail/focus')
+      observePartialResponse(r)
       if (!r.ok) return { items: [], degraded: true }
-      const d = await r.json().catch(() => null)
+      const d = await r.json().catch((err: unknown) => emptyOn(err, { module: 'useGmailFocus', op: 'parseFocusBody' }, null))
+      if (d === null) {
+        // A 2xx whose body would not parse (truncated, not JSON) is a
+        // degraded read the server never knew about, so it carries no
+        // x-hub-partial header — and the client-side emptyOn above only
+        // counts: lib/swallow's partial marker is server-injected and is a
+        // no-op in the browser. Without this the strip would show an empty
+        // list as "nothing to focus on" and the global notice would stay
+        // dark. Arm both explicitly.
+        markPartialResponseNotice()
+        return { items: [], degraded: true }
+      }
       return {
         items: Array.isArray(d?.items) ? (d.items as FocusDisplayItem[]) : [],
         // The server sets this when the AI ranking stage failed and the items

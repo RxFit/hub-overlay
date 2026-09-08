@@ -9,6 +9,7 @@ import {
 } from '@/lib/google/share-roles'
 import { canonicalizeTaskDueDate } from '@/lib/google/task-dates'
 import { tagHubChatPost } from '@/lib/chat-post-tag'
+import { swallow } from '@/lib/swallow'
 
 interface ExecuteActionDeps {
   activeCompany: { id: string; name: string; identifier: string } | null
@@ -601,7 +602,10 @@ export async function executeAction(
       })
       if (!sendRes.ok) {
         // Surface the server's message, which names the surviving draft.
-        const errBody = await sendRes.json().catch(() => ({} as { error?: string }))
+        const errBody = await sendRes.json().catch((err: unknown) => {
+          swallow(err, { module: 'executeAction', op: 'parseGmailSendErrorBody' })
+          return {} as { error?: string }
+        })
         throw new Error(
           errBody?.error ??
             `Email send failed (${sendRes.status}) — the draft is saved in your Gmail drafts.`,
@@ -1122,7 +1126,10 @@ export async function executeAction(
         }),
       })
       if (!crRes.ok) {
-        const errText = await crRes.text().catch(() => '')
+        const errText = await crRes.text().catch((err: unknown) => {
+          swallow(err, { module: 'executeAction', op: 'readRoutineCreateErrorBody' })
+          return ''
+        })
         throw new Error(`Routine creation failed: ${crRes.status}${errText ? ` — ${errText.slice(0, 200)}` : ''}`)
       }
       const crData = await crRes.json()
@@ -1234,7 +1241,10 @@ export async function executeAction(
         }),
       })
       if (!cgRes.ok) {
-        const errText = await cgRes.text().catch(() => '')
+        const errText = await cgRes.text().catch((err: unknown) => {
+          swallow(err, { module: 'executeAction', op: 'readGoalCreateErrorBody' })
+          return ''
+        })
         throw new Error(`Goal creation failed: ${cgRes.status}${errText ? ` — ${errText.slice(0, 200)}` : ''}`)
       }
       const cgData = await cgRes.json()

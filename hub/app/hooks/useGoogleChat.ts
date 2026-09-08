@@ -13,13 +13,14 @@ import {
   type ChatSpacePreferences,
 } from '@/lib/chat-spaces'
 import type { AttachmentLike } from '@/lib/chat-attachments'
+import { swallow } from '@/lib/swallow'
 
 /* ── Shared fetcher (reuses the same error contract as useHubData) ── */
 
 async function fetcher<T>(url: string): Promise<T> {
   const res = await fetch(url)
   if (res.status === 401) {
-    const body = await res.json().catch(() => ({} as Record<string, unknown>))
+    const body = await res.json().catch((err: unknown) => { swallow(err, { module: 'useGoogleChat', op: 'parse401Body' }); return ({} as Record<string, unknown>) })
     // A merely-stale access token is repairable: rotate the session cookie so
     // the query's retry succeeds, rather than surfacing an auth error that
     // ends in a forced sign-in. See refreshSessionCookie.
@@ -30,7 +31,7 @@ async function fetcher<T>(url: string): Promise<T> {
     throw err
   }
   if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: 'Unknown error' }))
+    const body = await res.json().catch((err: unknown) => { swallow(err, { module: 'useGoogleChat', op: 'parseErrorBody' }); return ({ error: 'Unknown error' }) })
     const err = new Error(body?.error ?? `API error ${res.status}`)
     ;(err as any).status = res.status
     ;(err as any).code = body?.code
@@ -186,7 +187,7 @@ export function useSaveChatSpacePreferences() {
         body: JSON.stringify(prefs),
       })
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}))
+        const body = await res.json().catch((err: unknown) => { swallow(err, { module: 'useGoogleChat', op: 'parseSavePreferencesErrorBody' }); return ({}) })
         throw new Error(body?.error ?? `Save failed (${res.status})`)
       }
       const saved: ChatSpacePreferences = await res.json()
@@ -395,7 +396,7 @@ export function useSendMessage() {
       })
 
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}))
+        const body = await res.json().catch((err: unknown) => { swallow(err, { module: 'useGoogleChat', op: 'parseSendErrorBody' }); return ({}) })
         throw new Error(body?.error ?? `Send failed (${res.status})`)
       }
 
@@ -465,7 +466,7 @@ export function useOwnMessageActions() {
         body: JSON.stringify({ messageName, text: text.trim() }),
       })
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}))
+        const body = await res.json().catch((err: unknown) => { swallow(err, { module: 'useGoogleChat', op: 'parseEditErrorBody' }); return ({}) })
         throw new Error(body?.error ?? `Edit failed (${res.status})`)
       }
       await invalidateSpaceOf(messageName)
@@ -488,7 +489,7 @@ export function useOwnMessageActions() {
         { method: 'DELETE' }
       )
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}))
+        const body = await res.json().catch((err: unknown) => { swallow(err, { module: 'useGoogleChat', op: 'parseDeleteErrorBody' }); return ({}) })
         throw new Error(body?.error ?? `Delete failed (${res.status})`)
       }
       await invalidateSpaceOf(messageName)

@@ -12,6 +12,7 @@
  */
 
 import { getGoogleRefreshTokenRecord } from '../google-token-store'
+import { swallow } from '@/lib/swallow'
 
 export interface MintedToken {
   accessToken: string
@@ -39,7 +40,12 @@ export async function mintAccessToken(refreshToken: string): Promise<string | nu
       console.warn(`[reports] token refresh failed with ${res.status}`)
       return null
     }
-    const body = (await res.json().catch(() => ({}))) as { access_token?: string }
+    // A 2xx with an unparseable body is treated as "no token" rather than a
+    // thrown error, so the caller's null-return contract holds either way.
+    const body = (await res.json().catch((err: unknown) => {
+      swallow(err, { module: 'reports/access-token', op: 'parseTokenResponse' })
+      return {}
+    })) as { access_token?: string }
     return body.access_token ?? null
   } catch (err) {
     console.warn('[reports] token refresh threw:', err)

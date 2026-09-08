@@ -155,6 +155,7 @@ describe('GET /api/google/calendar', () => {
     const body = await res.json()
 
     expect(res.status).toBe(200)
+    expect(res.headers.get('x-hub-partial')).toBe('1')
     expect(body.unreadableCalendars).toEqual(['broken-cal'])
   })
 })

@@ -7,6 +7,7 @@ import { authOptions } from '@/lib/auth'
 import { listUpcomingEvents, createCalendarEvent, deleteCalendarEvent, listCalendars, GoogleCalendarEvent } from '@/lib/google'
 import { updateCalendarEvent } from '@/lib/google/calendar'
 import { withFault } from '@/lib/route-fault'
+import { emptyOn } from '@/lib/swallow'
 
 export const runtime = 'nodejs'
 
@@ -58,8 +59,17 @@ export const GET = withFault('google/calendar', async (req: NextRequest) => {
                 events: calendarEvents.map(event => ({ ...event, calendarId: cal.id })),
                 unreadableCalendar: null,
               }
-            } catch {
-              return { events: [], unreadableCalendar: cal.id }
+            } catch (err: unknown) {
+              // Preserve the T-142 per-calendar warning while also carrying
+              // master's request-level partial marker for shared UI handling.
+              return {
+                events: emptyOn(
+                  err,
+                  { module: 'google/calendar', op: 'listUpcomingEvents' },
+                  [] as GoogleCalendarEvent[],
+                ),
+                unreadableCalendar: cal.id,
+              }
             }
           })
         )

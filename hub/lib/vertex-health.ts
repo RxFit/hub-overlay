@@ -27,6 +27,7 @@
  */
 
 import { buildSearchBody } from './vertex'
+import { swallow } from '@/lib/swallow'
 
 export type VertexHealthStage =
   | 'config'      // env vars present and parseable
@@ -153,7 +154,7 @@ async function mintAccessToken(
     })
 
     if (!res.ok) {
-      const body = await res.text().catch(() => '')
+      const body = await res.text().catch((err: unknown) => { swallow(err, { module: 'vertex-health', op: 'readTokenErrorBody' }); return '' })
       return {
         httpStatus: res.status,
         detail: `token exchange rejected: ${res.status} ${summarizeGoogleError(body)}`,
@@ -299,7 +300,7 @@ export async function checkSemanticBrainHealth(
     })
 
     if (!res.ok) {
-      const detail = summarizeGoogleError(await res.text().catch(() => ''))
+      const detail = summarizeGoogleError(await res.text().catch((err: unknown) => { swallow(err, { module: 'vertex-health', op: 'readSearchErrorBody' }); return '' }))
       stages.push({ stage: 'query', status: 'fail', detail, httpStatus: res.status })
       return {
         healthy: false,

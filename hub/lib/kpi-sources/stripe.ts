@@ -5,6 +5,8 @@
  * Metrics: MRR, Revenue MTD, Active Subscriptions, New Customers (30d).
  */
 
+import { emptyOn } from '@/lib/swallow'
+
 export interface StripeKPI {
   id: string
   label: string
@@ -107,10 +109,10 @@ async function paginateStripe(
  * is unknown, not zero, so it is rethrown and fails the whole Stripe source
  * instead of reporting a plausible-looking but wrong number.
  */
-function degradeUnlessCapExceeded<T>(p: Promise<T>, fallback: T): Promise<T> {
+function degradeUnlessCapExceeded<T>(p: Promise<T>, op: string, fallback: T): Promise<T> {
   return p.catch((err) => {
     if (err instanceof StripePageCapExceededError) throw err
-    return fallback
+    return emptyOn(err, { module: 'kpi-sources/stripe', op }, fallback)
   })
 }
 
@@ -134,7 +136,10 @@ export async function fetchStripeKPIs(): Promise<StripeKPI[]> {
   // Run all Stripe queries in parallel. Each walks every page via
   // has_more/starting_after (never total_count) and degrades to 0 on an
   // ordinary upstream failure — but NOT on a page-cap failure, which
-  // propagates and fails the whole sync (see degradeUnlessCapExceeded).
+  // propagates and fails the whole sync (see degradeUnlessCapExceeded). Each
+  // ordinary fallback passes through emptyOn so the request carries master's
+  // x-hub-partial signal instead of presenting a plausible-looking zero as
+  // complete data.
   const [
     activeSubs,
     revenueThisMonth,
@@ -145,12 +150,14 @@ export async function fetchStripeKPIs(): Promise<StripeKPI[]> {
     // Active subscriptions count
     degradeUnlessCapExceeded(
       paginateStripe('subscriptions', `status=active&limit=${PAGE_LIMIT}`, key).then((rows) => rows.length),
+      'countActiveSubscriptions',
       0,
     ),
 
     // Charges succeeded this month
     degradeUnlessCapExceeded(
       paginateStripe('charges', `created[gte]=${startOfMonth}&limit=${PAGE_LIMIT}`, key).then(sumSucceeded),
+      'sumChargesThisMonth',
       0,
     ),
 
@@ -161,12 +168,14 @@ export async function fetchStripeKPIs(): Promise<StripeKPI[]> {
         `created[gte]=${startOfLastMonth}&created[lt]=${startOfMonth}&limit=${PAGE_LIMIT}`,
         key,
       ).then(sumSucceeded),
+      'sumChargesLastMonth',
       0,
     ),
 
     // New customers last 30 days
     degradeUnlessCapExceeded(
       paginateStripe('customers', `created[gte]=${thirtyDaysAgo}&limit=${PAGE_LIMIT}`, key).then((rows) => rows.length),
+      'countNewCustomers30d',
       0,
     ),
 
@@ -177,6 +186,7 @@ export async function fetchStripeKPIs(): Promise<StripeKPI[]> {
         `created[gte]=${sixtyDaysAgo}&created[lt]=${thirtyDaysAgo}&limit=${PAGE_LIMIT}`,
         key,
       ).then((rows) => rows.length),
+      'countNewCustomers31to60d',
       0,
     ),
   ])

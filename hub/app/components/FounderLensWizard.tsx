@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from 'react'
 import type { FounderLensCustomSection, AgentRoleKey } from '@/types'
+import { swallow } from '@/lib/swallow'
 
 /* ══════════════════════════════════════════════════════════════════════════════
    FOUNDER LENS WIZARD
@@ -265,7 +266,10 @@ export function FounderLensWizard({
       })
 
       if (!res.ok) {
-        const d = await res.json().catch(() => ({}))
+        const d = await res.json().catch((err: unknown) => {
+          swallow(err, { module: 'FounderLensWizard', op: 'parseSaveErrorBody' })
+          return {}
+        })
         throw new Error(d.error ?? `Save failed (${res.status})`)
       }
 

@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation'
 import { useQuery } from '@tanstack/react-query'
 import { getTenantConfig } from '@/lib/tenant'
 import type { AiHealth, ProviderConfig } from '@/lib/ai-health'
+import { swallow } from '@/lib/swallow'
 import './ai-health.css'
 
 const tenant = getTenantConfig()
@@ -33,7 +34,14 @@ function ProviderBadge({ name, configured }: { name: string; configured: boolean
 async function fetchAiHealth(window: Window): Promise<AiHealthResponse> {
   const res = await fetch(`/api/admin/ai-health?window=${window}`)
   if (!res.ok) {
-    const data = await res.json().catch(() => ({}))
+    // A non-JSON error body (HTML 502 page, empty body) must not mask the
+    // real HTTP status — fall back to {} so the status-based message is thrown.
+    const data = await res
+      .json()
+      .catch((err: unknown) => {
+        swallow(err, { module: 'admin/ai-health', op: 'parseErrorBody' })
+        return {}
+      })
     throw new Error(data.error || `API error ${res.status}`)
   }
   return res.json()

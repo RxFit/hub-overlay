@@ -26,6 +26,7 @@ import { dbWorkspaceStore } from '@/lib/google/drive-workspace-db'
 import { recordAiAction } from '@/lib/ai-audit'
 import { newRequestId } from '@/lib/observability'
 import { withFault } from '@/lib/route-fault'
+import { swallow } from '@/lib/swallow'
 
 export const runtime = 'nodejs'
 
@@ -259,7 +260,10 @@ export const POST = withFault('reports/run', async (req: NextRequest) => {
                 metrics: DIGEST_METRICS,
               },
               { repair: true },
-            ).catch(() => undefined)
+            ).catch((err: unknown) => {
+              swallow(err, { module: 'reports/run', op: 'ga4PreviousWindow' })
+              return undefined
+            })
           : Promise.resolve(undefined),
         prefs.gscSiteUrl
           ? querySearchConsole(token.accessToken, {
@@ -278,7 +282,10 @@ export const POST = withFault('reports/run', async (req: NextRequest) => {
               endDate: window.endDate,
               dimensions: ['page'],
               rowLimit: 10,
-            }).catch(() => undefined)
+            }).catch((err: unknown) => {
+              swallow(err, { module: 'reports/run', op: 'gscTopPages' })
+              return undefined
+            })
           : Promise.resolve(undefined),
       ])
 
@@ -370,7 +377,7 @@ export const POST = withFault('reports/run', async (req: NextRequest) => {
         gateToken: null,
         requestId,
         status: 'success',
-      }).catch(() => {})
+      }).catch((err: unknown) => swallow(err, { module: 'reports/run', op: 'recordAiActionSuccess' }))
 
       // The claim row becomes the run's durable record once the artifact
       // exists; best-effort, since the claim already prevents regeneration.
@@ -395,7 +402,7 @@ export const POST = withFault('reports/run', async (req: NextRequest) => {
         requestId,
         status: 'failed',
         error: reason,
-      }).catch(() => {})
+      }).catch((err: unknown) => swallow(err, { module: 'reports/run', op: 'recordAiActionFailed' }))
       // Release the window so the next tick retries it, rather than letting
       // one transient Google error burn the report for the whole day.
       await releaseReportWindow(claim)

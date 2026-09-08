@@ -6,6 +6,7 @@
  */
 
 import { GOOGLE_API_TIMEOUT_MS } from './timeout-config'
+import { swallow, emptyOn } from '@/lib/swallow'
 
 /* ── Base helpers ── */
 
@@ -27,7 +28,7 @@ async function googleFetch<T>(
   })
 
   if (!res.ok) {
-    const body = await res.text().catch(() => 'Unknown error')
+    const body = await res.text().catch((err: unknown) => { swallow(err, { module: 'google/fetch', op: 'readErrorBody' }); return 'Unknown error' })
     throw new Error(`Google API error ${res.status}: ${body}`)
   }
 
@@ -146,7 +147,7 @@ export async function deleteTask(
     headers: { Authorization: `Bearer ${accessToken}` },
   })
   if (!res.ok) {
-    const body = await res.text().catch(() => 'Unknown error')
+    const body = await res.text().catch((err: unknown) => { swallow(err, { module: 'google/tasks', op: 'deleteTask.readErrorBody' }); return 'Unknown error' })
     throw new Error(`Google API error ${res.status}: ${body}`)
   }
 }
@@ -370,7 +371,7 @@ export async function deleteCalendarEvent(
     }
   )
   if (!res.ok && res.status !== 204 && res.status !== 410) {
-    const msg = await res.text().catch(() => 'Unknown error')
+    const msg = await res.text().catch((err: unknown) => { swallow(err, { module: 'google/calendar', op: 'deleteCalendarEvent.readErrorBody' }); return 'Unknown error' })
     throw new Error(`deleteCalendarEvent ${res.status}: ${msg}`)
   }
 }
@@ -567,7 +568,7 @@ export async function readDriveFileText(
     headers: { Authorization: `Bearer ${accessToken}` },
   })
   if (!res.ok) {
-    const body = await res.text().catch(() => '')
+    const body = await res.text().catch((err: unknown) => { swallow(err, { module: 'google/drive', op: 'readDriveFileText.readErrorBody' }); return '' })
     throw new Error(`Google API error ${res.status}: ${body.slice(0, 200)}`)
   }
 
@@ -786,7 +787,7 @@ export async function listRecentGmailThreads(
         accessToken
       )
         .then(thread => parseGmailThreadMeta(thread, { userEmail: opts?.userEmail }))
-        .catch(() => null)
+        .catch((err: unknown) => emptyOn(err, { module: 'google/gmail', op: 'listRecentGmailThreads.threadMeta' }, null))
     )
   )
   return threads.filter((t): t is GmailThreadSummary => t !== null)
@@ -818,7 +819,7 @@ export async function searchGmailThreads(
         accessToken
       )
         .then(thread => parseGmailThreadMeta(thread, { userEmail: opts?.userEmail }))
-        .catch(() => null)
+        .catch((err: unknown) => emptyOn(err, { module: 'google/gmail', op: 'searchGmailThreads.threadMeta' }, null))
     )
   )
   return threads.filter((t): t is GmailThreadSummary => t !== null)

@@ -10,6 +10,7 @@ import { cancelToolRun, getToolRunOwned, ACTIVE_WINDOW_MS, type ToolRunRecord } 
 import { isDeepToolId } from '@/lib/deep-runs'
 import { resolveContextArtifacts, startDeepRun } from '@/lib/deep-run-start'
 import { withFault } from '@/lib/route-fault'
+import { emptyOn } from '@/lib/swallow'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -59,7 +60,10 @@ async function requireStaff(): Promise<{ email: string } | NextResponse> {
 
 async function viewOf(run: ToolRunRecord) {
   const job = run.status === 'queued' && run.jobId
-    ? await getJobDetail(run.jobId).catch(() => null)
+    // Lossy read: a failed job-detail lookup degrades the view to "no live
+    // state" rather than failing the whole request — emptyOn flags the
+    // response partial (x-hub-partial) so the omission is visible.
+    ? await getJobDetail(run.jobId).catch((err: unknown) => emptyOn(err, { module: 'deep-runs/[id]', op: 'getJobDetail' }, null))
     : null
   return deriveRunView(run, job, Date.now())
 }

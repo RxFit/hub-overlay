@@ -15,6 +15,7 @@ import {
   getGoogleRefreshToken,
   storeGoogleRefreshToken,
 } from '@/lib/google-token-store'
+import { swallow } from '@/lib/swallow'
 
 /* ── Admin email lists (comma-separated env vars) ── */
 const SUPERADMIN_EMAILS = (process.env.SUPERADMIN_EMAILS || '')
@@ -167,7 +168,12 @@ async function requestTokenRefreshUncached(refreshToken: string): Promise<TokenR
         refresh_token: refreshToken,
       }),
     })
-    const body = await res.json().catch(() => ({}))
+    const body = await res.json().catch((err: unknown) => {
+      // A non-JSON (or empty) token response is not itself a failure — the
+      // status is what the caller classifies on, so fall back to an empty body.
+      swallow(err, { module: 'auth', op: 'parseTokenRefreshBody' })
+      return ({})
+    })
     return { ok: res.ok, status: res.status, body }
   } catch {
     // Thrown fetch = DNS/TLS/socket/abort — no HTTP status at all.

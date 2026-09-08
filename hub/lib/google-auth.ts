@@ -1,4 +1,5 @@
 import crypto from 'crypto'
+import { swallow } from '@/lib/swallow'
 
 interface ServiceAccountKey {
   client_email: string
@@ -54,7 +55,7 @@ export async function getServiceAccountAccessToken(scope: string): Promise<strin
     })
 
     if (!res.ok) {
-      const body = await res.text().catch(() => '')
+      const body = await res.text().catch((err: unknown) => { swallow(err, { module: 'google-auth', op: 'readTokenErrorBody' }); return '' })
       console.error('[google-auth] Token exchange failed:', res.status, body)
       return null
     }
