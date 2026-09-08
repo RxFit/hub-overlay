@@ -148,7 +148,7 @@ describeDb('lib/agent-memory — DB-backed', () => {
         (${TENANT}, 'issue.created', 'system:cron', now())
     `
 
-    await pruneOldEventLogs(TENANT)
+    await pruneOldEventLogs()
 
     const rows = await sql<{ event_type: string }[]>`
       SELECT event_type FROM event_log WHERE tenant_id = ${TENANT}

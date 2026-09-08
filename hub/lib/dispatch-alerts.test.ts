@@ -25,11 +25,15 @@ vi.mock('./agy-dispatch', () => ({
   isDispatchEnabled: vi.fn(),
   isDispatchConfigured: vi.fn(),
 }))
+vi.mock('./retention', () => ({ runRetention: vi.fn() }))
 
+import { reapExpired, sweepStale } from './dispatch-store'
+import { runRetention } from './retention'
 import {
   alertFingerprint,
   decideAlerts,
   decidePosting,
+  defaultAlertTickDeps,
   formatAlertMessage,
   runDispatchAlertTick,
   REALERT_MS,
@@ -367,6 +371,40 @@ describe('runDispatchAlertTick — orchestration', () => {
     // the tick still evaluates when housekeep resolves after internal catches.
     const result = await runDispatchAlertTick(NOW, d)
     expect(result.delivery).toBe('posted')
+  })
+})
+
+describe('defaultAlertTickDeps.housekeep — the hourly housekeeping home', () => {
+  const order: string[] = []
+
+  beforeEach(() => {
+    order.length = 0
+    vi.mocked(reapExpired).mockReset().mockImplementation(async () => {
+      order.push('reap')
+      return { cancelled: 0, requeued: 0, leaseExpired: 0, deadlineExpired: 0 }
+    })
+    vi.mocked(sweepStale).mockReset().mockImplementation(async () => {
+      order.push('sweep')
+    })
+    vi.mocked(runRetention).mockReset().mockImplementation(async () => {
+      order.push('retention')
+      return { eventLog: 0, aiRuns: { aiRuns: 0, aiActionLog: 0, toolRuns: 0 }, expiredMemories: true, failed: [] }
+    })
+  })
+
+  it('runs retention AFTER reap and sweep, once each', async () => {
+    await defaultAlertTickDeps.housekeep()
+    expect(order).toEqual(['reap', 'sweep', 'retention'])
+    expect(runRetention).toHaveBeenCalledTimes(1)
+  })
+
+  it('a failing reap or sweep is swallowed and retention still runs', async () => {
+    vi.mocked(reapExpired).mockRejectedValue(new Error('reap boom'))
+    vi.mocked(sweepStale).mockRejectedValue(new Error('sweep boom'))
+    const debug = vi.spyOn(console, 'debug').mockImplementation(() => {})
+    await expect(defaultAlertTickDeps.housekeep()).resolves.toBeUndefined()
+    expect(runRetention).toHaveBeenCalledTimes(1)
+    debug.mockRestore()
   })
 })
 

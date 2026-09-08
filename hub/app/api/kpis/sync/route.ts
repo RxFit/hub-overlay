@@ -9,7 +9,6 @@ import { timingSafeEqual } from 'crypto'
 import { runAllSources } from '@/lib/kpi-sources'
 import { createLogger } from '@/lib/logger'
 import { recordEvent } from '@/lib/event-logger'
-import { pruneExpiredMemories, pruneOldEventLogs } from '@/lib/agent-memory'
 import { getTenantId } from '@/lib/tenant-context'
 import { getEffectivePrefs } from '@/lib/google/prefs-db'
 import { withFault } from '@/lib/route-fault'
@@ -201,23 +200,9 @@ export const POST = withFault('kpis/sync', async (req: NextRequest) => {
       },
     })
 
-    // Run retention pruning to completion BEFORE responding. These are bounded
-    // deletes and the sync route isn't latency-critical; a fire-and-forget
-    // launch can be frozen by scale-to-zero serverless (Cloud Run) after the
-    // response returns, so the prune may never run. allSettled ensures a prune
-    // failure is logged but never fails the sync.
-    const pruneResults = await Promise.allSettled([
-      pruneExpiredMemories(TENANT_ID),
-      pruneOldEventLogs(TENANT_ID),
-    ])
-    pruneResults.forEach((r, i) => {
-      if (r.status === 'rejected') {
-        log.error(
-          { err: r.reason },
-          i === 0 ? 'Failed to prune expired memories' : 'Failed to prune old event logs',
-        )
-      }
-    })
+    // Retention (pruneExpiredMemories / pruneOldEventLogs) used to run here,
+    // so a user clicking "sync KPIs" silently ran a 30-day delete (spec §2.3).
+    // It now runs from the hourly cron tick via lib/retention.ts runRetention().
 
     return NextResponse.json({
       synced: upserted,

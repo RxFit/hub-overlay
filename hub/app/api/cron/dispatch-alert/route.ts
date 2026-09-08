@@ -5,7 +5,14 @@ import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-export const maxDuration = 60
+// 300, not 60: the tick now runs retention (lib/retention.ts — four bounded
+// deletes, three of which scan) BEFORE alert evaluation, and
+// ERROR_REPORTING_2026-08-24.md :291-292 requires the budget be raised before
+// housekeeping is added to it, because a tick that times out takes the alert
+// path down with it. 300 is the Cloud Run platform ceiling
+// (deploy.yml --timeout=300 / service.yaml timeoutSeconds: 300), so this is
+// the whole budget the platform allows; the workflow's curl --max-time matches.
+export const maxDuration = 300
 
 /**
  * POST /api/cron/dispatch-alert — the hourly push-alerting tick (hardening

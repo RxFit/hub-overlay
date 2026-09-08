@@ -144,6 +144,49 @@ describe('toFault — recognition order', () => {
   })
 })
 
+describe('toFault — retryCount from the lib/retry.ts annotation', () => {
+  // lib/retry.ts stamps `retryCount` NON-enumerable on an exhausted error so
+  // the terminal record made here carries the attempts (spec §4).
+  const annotated = (retries: unknown) =>
+    Object.defineProperty(new Error('upstream 503'), 'retryCount', {
+      value: retries,
+      enumerable: false,
+      configurable: true,
+    })
+
+  it('an annotated error puts its retryCount on the draft', () => {
+    expect(toFault(annotated(2), CTX).retryCount).toBe(2)
+  })
+
+  it('ctx.retryCount wins over the annotation — the boundary knows best', () => {
+    expect(toFault(annotated(2), { ...CTX, retryCount: 5 }).retryCount).toBe(5)
+  })
+
+  it('an unannotated error reads as 0', () => {
+    expect(toFault(new Error('plain'), CTX).retryCount).toBe(0)
+    expect(toFault('a string throw', CTX).retryCount).toBe(0)
+  })
+
+  it('a non-integer annotation reads as 0', () => {
+    expect(toFault(annotated(1.5), CTX).retryCount).toBe(0)
+    expect(toFault(annotated('3'), CTX).retryCount).toBe(0)
+    expect(toFault(annotated(-1), CTX).retryCount).toBe(0)
+  })
+
+  it('context.op survives the allowlist so the recovered record names the operation', () => {
+    // lib/retry.ts passes `context: { op }` on the recovered-after-retry
+    // degraded fault; without 'op' on ALLOWED_CONTEXT_KEYS that attribution
+    // was dead code (context === null).
+    const fault = toFault(annotated(1), {
+      ...CTX,
+      layer: 'lib',
+      module: 'gmail-client',
+      context: { op: 'listLabels', nope: 'dropped' },
+    })
+    expect(fault.context).toEqual({ op: 'listLabels' })
+  })
+})
+
 describe('causeChain', () => {
   it('walks a 3-deep chain explicitly and stops at depth 3', () => {
     const d4 = new Error('level four')
