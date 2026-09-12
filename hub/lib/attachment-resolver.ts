@@ -2,6 +2,7 @@ import { fetchUrlContent, fetchDriveDocContent } from '@/lib/content-fetch'
 import { searchSemanticBrain } from '@/lib/vertex'
 import { fetchUrlWithExa } from '@/lib/exa'
 import { withTimeout } from '@/lib/timeout'
+import { ATTACHMENT_VERTEX_MS } from '@/lib/timeout-config'
 import { createLogger } from '@/lib/logger'
 import { getAiRun } from '@/lib/runs'
 import { getAiAction } from '@/lib/ai-audit'
@@ -144,12 +145,23 @@ async function resolveAttachment(
       // Datastore is env-configurable (P0-4); should become tenant-derived
       // with the per-tenant work (P0-3) rather than a single shared store.
       if (lastUserMsg) {
+        // searchSemanticBrain THROWS on unavailability (lib/vertex.ts) so the
+        // chat path's circuit breaker can see failures. withTimeout only races —
+        // it does not catch — so the rejection is absorbed here, where an
+        // unresolved document is not an error: the Drive API fallback below
+        // handles it. The explicit signal matters: this bound (6s) is TIGHTER
+        // than searchSemanticBrain's 8s default, and without passing it the inner
+        // abort would fire two seconds after we had already given up.
         const vertexResults = await withTimeout(
           searchSemanticBrain(
             `${lastUserMsg.content} ${att.label}`,
-            process.env.VERTEX_DATA_STORE_ID || 'rxfit-gdrive'
-          ),
-          6_000,
+            process.env.VERTEX_DATA_STORE_ID || 'rxfit-gdrive',
+            AbortSignal.timeout(ATTACHMENT_VERTEX_MS),
+          ).catch((err: unknown) => {
+            log.warn({ err, label: att.label }, 'Semantic Brain unavailable for attachment — falling back to Drive API')
+            return null
+          }),
+          ATTACHMENT_VERTEX_MS,
           null,
           'attachment-vertex',
         )

@@ -396,6 +396,11 @@ export function useChatEngine(options: UseChatEngineOptions) {
 
       const decoder = new TextDecoder()
       let fullText = ''
+      // True while the bubble holds only a server progress line (no model text
+      // yet). The final empty-answer guard below tests this: a status line makes
+      // `m.content` truthy, so without it a stream that ended after the status
+      // frame would leave "Searching the web…" on screen forever.
+      let statusOnly = false
 
       // Add an empty assistant message that we'll stream into
       const assistantId = crypto.randomUUID()
@@ -419,8 +424,26 @@ export function useChatEngine(options: UseChatEngineOptions) {
             if (data === '[DONE]') break
             try {
               const parsed = JSON.parse(data)
+              // Progress narration while the server assembles context (EXA mode
+              // queries two backends before the model is dialled). The server now
+              // returns the SSE Response BEFORE that work starts, so without this
+              // the bubble would sit visibly empty for the whole window — which
+              // reads worse than the typing dot it replaced. Rendered as the
+              // bubble's provisional content and overwritten wholesale by the
+              // first real text frame below, so it can never survive into
+              // `fullText`, into the persisted turn, or into history.
+              if (parsed.status && typeof parsed.status === 'string' && !fullText) {
+                // *...* — parseInlineMarkdown renders asterisk italics; it has no
+                // underscore rule, so `_x_` would show the underscores literally.
+                const status = parsed.status
+                statusOnly = true
+                setMessages(prev =>
+                  prev.map(m => m.id === assistantId ? { ...m, content: `*${status}*` } : m)
+                )
+              }
               if (parsed.text) {
                 fullText += parsed.text
+                statusOnly = false
                 setMessages(prev =>
                   prev.map(m => m.id === assistantId ? { ...m, content: fullText } : m)
                 )
@@ -428,10 +451,16 @@ export function useChatEngine(options: UseChatEngineOptions) {
               if (parsed.error) {
                 // Server sent an error event — APPEND it so any text already
                 // streamed into this bubble (e.g. a model that failed mid-stream)
-                // is preserved rather than discarded.
+                // is preserved rather than discarded. A provisional status line is
+                // NOT such text: when no real token has arrived, `fullText` is
+                // empty and the status is replaced rather than left sitting above
+                // the error ("Searching the web…" then a failure reads as though
+                // the search itself is still running).
+                const priorText = fullText ? fullText + '\n\n' : ''
+                statusOnly = false
                 setMessages(prev =>
                   prev.map(m => m.id === assistantId
-                    ? { ...m, content: (m.content ? m.content + '\n\n' : '') + `⚠️ ${parsed.error}` }
+                    ? { ...m, content: priorText + `⚠️ ${parsed.error}` }
                     : m)
                 )
               }
@@ -455,9 +484,14 @@ export function useChatEngine(options: UseChatEngineOptions) {
       // text, no error frame), replace the empty bubble with an actionable
       // message instead of leaving a blank forever. The server-side zero-text
       // rotation should make this unreachable — this guard is the last line.
+      //
+      // `statusOnly` is part of the emptiness test, not a separate case: a server
+      // progress line is content as far as React is concerned, so a stream that
+      // died after the status frame would otherwise sit on "Searching the web…"
+      // permanently — the exact silent-blank failure this guard exists to stop.
       if (!fullText) {
         setMessages(prev =>
-          prev.map(m => m.id === assistantId && !m.content
+          prev.map(m => m.id === assistantId && (!m.content || statusOnly)
             ? { ...m, content: "I couldn't generate an answer for that one — please try asking again." }
             : m)
         )

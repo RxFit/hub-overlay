@@ -5,6 +5,13 @@ import {
   CONNECT_TIMEOUT_MS,
   CLIENT_ABORT_MS,
   ROUTE_MAX_DURATION_MS,
+  VERTEX_SEARCH_MS,
+  EXA_VERTEX_BRANCH_MS,
+  ATTACHMENT_VERTEX_MS,
+  EXA_QUERY_PLANNER_MS,
+  EXA_SEARCH_BRANCH_MS,
+  DRIVE_LINKS_BRANCH_MS,
+  PRE_STREAM_MAX_MS,
 } from './timeout-config'
 
 /**
@@ -43,6 +50,60 @@ describe('timeout ladder ordering invariant', () => {
 
   it('uses positive, finite millisecond values', () => {
     for (const v of [GOOGLE_API_TIMEOUT_MS, IDLE_TIMEOUT_MS, CONNECT_TIMEOUT_MS, CLIENT_ABORT_MS, ROUTE_MAX_DURATION_MS]) {
+      expect(Number.isFinite(v)).toBe(true)
+      expect(v).toBeGreaterThan(0)
+    }
+  })
+})
+
+/**
+ * Locks the PRE-STREAM rung (context assembly before the model is dialled).
+ *
+ * These bounds lived as inline literals in app/api/chat/route.ts and
+ * lib/vertex.ts, so no invariant covered them — which is how the Vertex branch
+ * came to hold a 10s inner bound beneath an 8s outer bound. The first assertion
+ * below is the one that would have caught it.
+ */
+describe('pre-stream context assembly invariant', () => {
+  it('keeps every inner search bound at or under its caller bound', () => {
+    // THE regression guard: a per-call Discovery Engine bound above its caller's
+    // branch bound is unreachable by construction — withTimeout resolves the
+    // fallback first and the fetch keeps running unobserved.
+    expect(VERTEX_SEARCH_MS).toBeLessThanOrEqual(EXA_VERTEX_BRANCH_MS)
+
+    // Attachment resolution bounds Vertex tighter than the chat path, so it must
+    // pass an explicit signal rather than inherit the (larger) default.
+    expect(ATTACHMENT_VERTEX_MS).toBeLessThanOrEqual(VERTEX_SEARCH_MS)
+
+    // The planner is serial head latency INSIDE the Exa branch, so it has to fit
+    // strictly within that branch with room left for the search itself.
+    expect(EXA_QUERY_PLANNER_MS).toBeLessThan(EXA_SEARCH_BRANCH_MS)
+  })
+
+  it('derives the pre-stream worst case from the slowest concurrent branch', () => {
+    // Promise.all settles on the slowest branch — the bound is a max, not a sum.
+    expect(PRE_STREAM_MAX_MS).toBe(
+      Math.max(EXA_SEARCH_BRANCH_MS, EXA_VERTEX_BRANCH_MS, DRIVE_LINKS_BRANCH_MS),
+    )
+  })
+
+  it('cannot consume the client budget on assembly alone, even before a provider is dialled', () => {
+    // Assembly then a provider connect must both fit inside the user's patience,
+    // otherwise the browser aborts a request the server is still setting up.
+    expect(PRE_STREAM_MAX_MS).toBeLessThan(CLIENT_ABORT_MS)
+    expect(PRE_STREAM_MAX_MS + CONNECT_TIMEOUT_MS).toBeLessThan(CLIENT_ABORT_MS)
+  })
+
+  it('uses positive, finite millisecond values', () => {
+    for (const v of [
+      VERTEX_SEARCH_MS,
+      EXA_VERTEX_BRANCH_MS,
+      ATTACHMENT_VERTEX_MS,
+      EXA_QUERY_PLANNER_MS,
+      EXA_SEARCH_BRANCH_MS,
+      DRIVE_LINKS_BRANCH_MS,
+      PRE_STREAM_MAX_MS,
+    ]) {
       expect(Number.isFinite(v)).toBe(true)
       expect(v).toBeGreaterThan(0)
     }

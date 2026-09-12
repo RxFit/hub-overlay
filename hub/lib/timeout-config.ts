@@ -38,6 +38,25 @@
  *    stream down) long before the hard platform cap, so we never rely on the
  *    platform killing a runaway request.
  *
+ * ── The pre-stream rung (context assembly, /api/chat) ──
+ * Before the model is even contacted, the EXA path assembles context from three
+ * independent backends. Those bounds used to live as inline literals in
+ * app/api/chat/route.ts and lib/vertex.ts, OUTSIDE this module — which is exactly
+ * how the Vertex branch came to hold an INNER bound of 10s under an OUTER bound
+ * of 8s. The inner abort could never fire before its caller had already given up,
+ * so a timed-out search left an orphaned request running. Pulling these in puts
+ * them under the same invariant test as the rest of the ladder:
+ *
+ *   VERTEX_SEARCH_MS (8s)          per Discovery Engine :search call (lib/vertex.ts)
+ *        <= EXA_VERTEX_BRANCH_MS (8s)   caller bound on the Vertex branch
+ *   ATTACHMENT_VERTEX_MS (6s)      attachment-resolver's own, tighter bound
+ *   EXA_QUERY_PLANNER_MS (2.5s)    serial head latency inside the Exa branch
+ *        <  EXA_SEARCH_BRANCH_MS (30s)  caller bound on the whole Exa branch
+ *
+ * PRE_STREAM_MAX_MS is the worst case of the three branches run concurrently.
+ * It is held strictly under CLIENT_ABORT_MS so that assembly cannot, on its own,
+ * consume the user's entire patience before a provider is ever dialled.
+ *
  * If you change any value, keep the chain monotonic — the invariant test will
  * fail otherwise. NOTE: route.ts declares `export const maxDuration = 120` as a
  * literal because Next.js reads it via static analysis (an imported constant is
@@ -65,3 +84,50 @@ export const CLIENT_ABORT_MS = 110_000
 
 /** Platform request cap; mirrors `export const maxDuration = 120` in route.ts. */
 export const ROUTE_MAX_DURATION_MS = 120_000
+
+/* ── Pre-stream context assembly (EXA path, app/api/chat/route.ts) ── */
+
+/**
+ * Per Discovery Engine `:search` call (AbortSignal in lib/vertex.ts).
+ *
+ * MUST stay <= EXA_VERTEX_BRANCH_MS. When this was 10s against an 8s caller
+ * bound the inner abort was unreachable by construction: `withTimeout` resolved
+ * its fallback at 8s and the fetch kept running, unobserved, for 2s more.
+ */
+export const VERTEX_SEARCH_MS = 8_000
+
+/** Caller bound on the Vertex branch of the EXA pre-stream Promise.all. */
+export const EXA_VERTEX_BRANCH_MS = 8_000
+
+/**
+ * Attachment resolution queries Vertex with its own, tighter bound, so it passes
+ * an explicit signal rather than taking the VERTEX_SEARCH_MS default.
+ */
+export const ATTACHMENT_VERTEX_MS = 6_000
+
+/**
+ * The Gemini query-decomposition planner that runs BEFORE the Exa search is
+ * issued. This is strictly serial head latency on the branch that gates the
+ * whole response, and its failure-open path costs the full bound before falling
+ * back to the raw query — so the cap is deliberately tight. Exa's `deep` tier
+ * already runs its own multi-agent fan-out and `useAutoprompt` is already on,
+ * so a slow planner buys little that is worth seconds of dead time.
+ */
+export const EXA_QUERY_PLANNER_MS = 2_500
+
+/** Caller bound on the whole Exa branch (planner + deep tier + fallback fan-out). */
+export const EXA_SEARCH_BRANCH_MS = 30_000
+
+/** Caller bound on the Drive-link branch. Inert in practice: resolveDriveLinkContext
+ * returns before any I/O when the message carries no Drive link. */
+export const DRIVE_LINKS_BRANCH_MS = 12_000
+
+/**
+ * Worst-case pre-stream context assembly: the three EXA branches run
+ * concurrently, so the bound is the slowest of them, not their sum.
+ */
+export const PRE_STREAM_MAX_MS = Math.max(
+  EXA_SEARCH_BRANCH_MS,
+  EXA_VERTEX_BRANCH_MS,
+  DRIVE_LINKS_BRANCH_MS,
+)
