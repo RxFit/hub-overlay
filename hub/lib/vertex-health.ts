@@ -3,17 +3,22 @@
  *
  * WHY THIS EXISTS
  * ---------------
- * `searchSemanticBrain()` is deliberately fail-soft: every failure mode —
- * missing service-account key, malformed JSON, a rejected JWT exchange, a 403
- * on the engine, a wrong engine ID — returns `null` or `[]`. The chat route
- * then renders the SAME "[No matching documents found…]" note for "the index
- * has nothing about Nuvita" and for "this deployment has never been able to
- * reach Vertex at all".
+ * `searchSemanticBrain()` now separates unavailability from emptiness —
+ * a missing service-account key, malformed JSON, a rejected JWT exchange, a 403
+ * on the engine or a wrong engine ID all REJECT with VertexUnavailableError,
+ * while `[]` means the search ran and matched nothing. The chat route turns the
+ * former into an explicit "the Internal Brain was unavailable" disclosure.
  *
- * That is the right behavior for a user-facing chat turn and useless for
- * operating the thing. You cannot tell a working-but-empty Semantic Brain from
- * a dead one, which is precisely the question "is the semantic-brain-desktop
- * connection up?" needs answered.
+ * What it still cannot tell you is WHICH stage broke, or why. One error class
+ * covers a dead credential, a disabled API, a 403 and a typo'd engine ID, and
+ * each has a completely different fix. The chat turn does not need that
+ * distinction; an operator asking "is the semantic-brain-desktop connection up?"
+ * needs nothing else.
+ *
+ * (Before the throwing contract, every one of those modes returned `null`/`[]`
+ * and the chat rendered the SAME "[No matching documents found…]" note for "the
+ * index has nothing about Nuvita" and for "this deployment has never reached
+ * Vertex at all" — which is the confusion this module was written to escape.)
  *
  * So this module walks the SAME auth and query path and reports exactly which
  * stage fails, with the HTTP status and Google's own error message. It is a
@@ -209,7 +214,12 @@ export function remediationFor(httpStatus: number | undefined, detail: string): 
     if (mentionsApi && (lower.includes('has not been used') || lower.includes('is disabled') || lower.includes('accessnotconfigured'))) {
       return 'Enable the Discovery Engine API on the project: gcloud services enable discoveryengine.googleapis.com --project=<project>'
     }
-    return 'Grant the service account the Discovery Engine Viewer role on the project (roles/discoveryengine.viewer). A 403 here is an IAM problem, not a wrong ID.'
+    // roles/discoveryengine.viewer is get/list ONLY — it does NOT carry
+    // discoveryengine.servingConfigs.search, which is the call this probe and
+    // every chat turn actually make. Advising Viewer here sent operators to grant
+    // a role and come back to the same 403. .env.local.example:63 already said
+    // "needs Discovery Engine User role"; this is the line that disagreed.
+    return 'Grant the service account the Discovery Engine User role on the project (roles/discoveryengine.user) — it carries discoveryengine.servingConfigs.search, which this query needs. roles/discoveryengine.viewer is NOT enough: it grants get/list only. A 403 here is an IAM problem, not a wrong ID.'
   }
   if (httpStatus === 404) {
     return 'The engine ID or project does not resolve. Confirm VERTEX_ENGINE_ID against the AI Applications console (it is the App ID, not the datastore ID) and that VERTEX_GCP_PROJECT matches the project that owns it.'
@@ -257,7 +267,7 @@ export async function checkSemanticBrainHealth(
       stages,
       summary: 'Semantic Brain is NOT connected — no usable service-account credential.',
       remediation:
-        'Set GOOGLE_SERVICE_ACCOUNT_KEY on the Cloud Run service to the minified JSON key of a service account holding roles/discoveryengine.viewer on the Vertex project. Until then every semantic search silently returns no results.',
+        'Set GOOGLE_SERVICE_ACCOUNT_KEY on the Cloud Run service to the minified JSON key of a service account holding roles/discoveryengine.user on the Vertex project (Viewer grants get/list only, not servingConfigs.search). Until then every semantic search reports the Brain as unavailable.',
     }
   }
 

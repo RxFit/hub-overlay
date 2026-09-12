@@ -10,7 +10,13 @@ import { buildCapabilityManifest } from '@/lib/ai-tools/capabilities'
 import type { SystemPromptParts } from '@/lib/claude'
 import { readExecutionSnapshot, formatExecutionContext } from '@/lib/execution-context'
 import { canAccessAdminRoute } from '@/lib/roles'
-import { searchSemanticBrain } from '@/lib/vertex'
+import { searchSemanticBrain, VertexUnavailableError } from '@/lib/vertex'
+import {
+  EXA_QUERY_PLANNER_MS,
+  EXA_SEARCH_BRANCH_MS,
+  EXA_VERTEX_BRANCH_MS,
+  DRIVE_LINKS_BRANCH_MS,
+} from '@/lib/timeout-config'
 import { searchWeb, parseSubQueries, mergeExaResults, type ExaSearchResult } from '@/lib/exa'
 import { resolveAttachmentContext } from '@/lib/attachment-resolver'
 import { loadSkillContent } from '@/lib/skills-loader'
@@ -81,9 +87,15 @@ async function runSearchPipeline(query: string, effectiveUseCase: string): Promi
             (async () => {
               try {
                 // Circuit breaker: trips after 3 consecutive Vertex AI failures,
-                // opens for 60s. Prevents repeated 10s timeout hangs during outages.
+                // opens for 60s. Prevents repeated full-timeout hangs during outages.
+                //
+                // This only works because searchSemanticBrain REJECTS on
+                // unavailability. While it returned null, every failure resolved
+                // successfully and reset the breaker's counter to zero, so the
+                // circuit could never open and the handler below was dead code
+                // (see the failure contract in lib/vertex.ts).
                 const vertexResults = await breaker.execute('vertex-ai', () => searchSemanticBrain(query))
-                if (vertexResults && vertexResults.length > 0) {
+                if (vertexResults.length > 0) {
                   const vertexContext = vertexResults
                     .map(r => `**${r.title}** ${r.uri ? `(${r.uri})` : ''}\n${r.snippet}`)
                     .join('\n\n---\n\n')
@@ -211,7 +223,7 @@ async function runExaOnlySearch(query: string): Promise<{ context: string; faile
               'You decompose research questions into web-search queries. Respond with ONLY a JSON array of 3 short, distinct search queries covering complementary angles of the user\'s question (different subtopics, comparisons, or evidence types — not rephrasings). No markdown, no prose.',
               query,
             ),
-            6_000,
+            EXA_QUERY_PLANNER_MS,
             null,
             'exa-query-planner',
           )
@@ -297,21 +309,49 @@ async function runExaOnlySearch(query: string): Promise<{ context: string; faile
         return { context: '', failed: true }
       }
     })(),
-    30_000,
+    EXA_SEARCH_BRANCH_MS,
     { context: '', failed: true },
     'exa-only-search',
   )
 }
 
 /**
+ * Either a prompt that is already assembled, or a thunk that assembles one.
+ *
+ * A thunk is what makes time-to-first-byte independent of context assembly. The
+ * Response is constructed and returned the moment this function is called, so the
+ * browser's `await fetch('/api/chat')` resolves immediately; the thunk then runs
+ * INSIDE the stream, where its progress can be narrated with `status` frames.
+ * SystemPromptParts is a plain `{ staticPrefix, dynamic }` object, so `typeof ===
+ * 'function'` is a sound discriminant.
+ */
+type PromptSource = SystemPromptParts | (() => Promise<SystemPromptParts>)
+
+/**
+ * Shown in the assistant bubble while the EXA path's two backends are queried.
+ * Deliberately names both — lib/gemini.ts's EXA prompt requires the answer to say
+ * which backends it actually used, and the wait should not imply fewer.
+ */
+const EXA_ASSEMBLY_STATUS = 'Searching the web and your RxFit records…'
+
+/**
  * Streams a model response as an SSE Response. Extracted so both the normal chat
  * path and the EXA Search path share the exact same streaming/abort/error and
  * suggestedTools handling. In EXA mode the system prompt does not request
  * suggestedTools, so the extract below simply yields nothing.
+ *
+ * ── Why a deferred prompt matters ──
+ * Response HEADERS cannot be sent until this function returns. When the caller
+ * assembled context first, every millisecond of that assembly was dead air with
+ * no HTTP response in existence: the EXA path awaited a three-branch Promise.all
+ * bounded at 30s (the Exa branch) before streamModelResponse was even CALLED, so
+ * the client sat on a blocked `fetch` and the user watched a typing dot. Passing a
+ * thunk moves that work inside `start()`, after the Response is already on the
+ * wire, and lets us narrate it.
  */
 function streamModelResponse(
   boundedMessages: ChatMessage[],
-  systemPrompt: SystemPromptParts,
+  promptSource: PromptSource,
   effectiveUseCase: string,
   hasActiveSkill: boolean,
   req: NextRequest,
@@ -319,6 +359,10 @@ function streamModelResponse(
   // chatId. The completed answer is persisted fire-and-forget AFTER it is on
   // the wire — persistence can never delay or break the stream.
   persist?: { chatId: string; userEmail: string },
+  // Shown in the assistant bubble while a deferred promptSource assembles, so a
+  // returned-but-not-yet-speaking stream reads as progress rather than a hang.
+  // Ignored when promptSource is already-assembled (nothing to wait for).
+  assemblyStatus?: string,
 ): Response {
   // Correlation id for the whole AI request lifecycle. `ai_request_start` here
   // pairs with the terminal `ai_complete`/`ai_error` emitted inside streamChat.
@@ -336,6 +380,35 @@ function streamModelResponse(
       // never surface a user-visible error into an already-abandoned response.
       const signal = req.signal
       try {
+        // Assemble context (if deferred) now that the Response is already on the
+        // wire. The status frame goes out FIRST so the bubble has something to
+        // show for the duration; the client drops it the instant real text
+        // arrives (see useChatEngine's frame dispatcher).
+        let systemPrompt: SystemPromptParts
+        if (typeof promptSource === 'function') {
+          if (assemblyStatus) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ status: assemblyStatus })}\n\n`))
+          }
+          try {
+            systemPrompt = await promptSource()
+          } catch (err) {
+            // Distinct from a model failure: this is pre-model context assembly.
+            // It is logged separately so operators can tell the two apart, then
+            // rethrown into the shared handler below, which emits the error frame.
+            // NOTE: assembly used to run before the Response existed, so a throw
+            // here became a withFault response carrying a HUB- id. Once headers
+            // are flushed that is no longer possible — the in-stream error frame
+            // is the terminal contract (see the POST docblock).
+            log.error({ err, effectiveUseCase }, 'Pre-stream context assembly failed')
+            throw err
+          }
+          // Assembly can outlast the client's patience; don't dial a provider for
+          // a request nobody is waiting on.
+          if (signal.aborted) return
+        } else {
+          systemPrompt = promptSource
+        }
+
         let fullText = ''
         let servingModel: string | null = null
         for await (const chunk of streamChat(boundedMessages, systemPrompt, effectiveUseCase, hasActiveSkill, requestId, signal)) {
@@ -538,11 +611,18 @@ async function handleChat(req: NextRequest): Promise<Response> {
     .filter(m => m.role !== 'assistant' || m.content.length > 0)
 
   // ── EXA Search mode — short-circuit before ANY other tool/context runs ──
-  // The header EXA toggle turns this chat into a pure Exa.AI web-search
-  // summarizer. Per the feature's contract, no other tool may fire while it's
-  // on: skip Vertex, pgvector, execution context, Google Workspace context, attachments,
-  // and skills entirely. Run only a forced Exa search, then let the model
-  // synthesize + cite from those results.
+  // The header EXA toggle turns this chat into a two-backend research lane:
+  // Exa.AI for the web and the Vertex Semantic Brain for RxFit's own records.
+  // Everything else is skipped — pgvector, execution context, Google Workspace
+  // context, attachments and skills — then the model synthesizes + cites from
+  // whichever backends answered.
+  //
+  // (This comment previously read "skip Vertex ... run only a forced Exa search",
+  // contradicting the Promise.all seven lines below it, which has always run
+  // Vertex. lib/gemini.ts:130-139 describes the two-backend behaviour correctly.
+  // The stale version is the likeliest reason an agent reading this block
+  // concluded Vertex needed "decoupling" from something it was documented as not
+  // being part of.)
   if (exaMode) {
     const exaLastUserMsg = boundedMessages.filter(m => m.role === 'user').pop()
     const exaQuery = exaLastUserMsg?.content ?? ''
@@ -555,81 +635,92 @@ async function handleChat(req: NextRequest): Promise<Response> {
     // EXCEPT documents the user explicitly linked by URL in their message:
     // those are user-supplied context, not a tool, and refusing to read a link
     // the user just pasted is indistinguishable from a bug to them.
-    const [exaSearch, internalSearch, exaDriveLinks] = await Promise.all([
-      exaQuery ? runExaOnlySearch(exaQuery) : Promise.resolve({ context: '', failed: false }),
-      exaQuery
-        ? withTimeout(
-            (async () => {
-              try {
-                const vertexResults = await breaker.execute('vertex-ai', () => searchSemanticBrain(exaQuery))
-                if (vertexResults === null) {
-                  // searchSemanticBrain's null contract: the backend is
-                  // unavailable/misconfigured (no service account, HTTP error).
-                  // Reporting that as "zero matches" made the model tell the
-                  // user their documents don't exist during outages.
-                  log.warn('EXA hybrid: Vertex returned null (unavailable) — disclosing as failed, not empty')
+    // ── Deferred assembly (time-to-first-byte) ──
+    // This entire three-backend gather now runs INSIDE the stream rather than
+    // before it. Response headers cannot exist until streamModelResponse returns,
+    // so awaiting this first meant the browser's `fetch` stayed blocked for the
+    // whole window — up to the 30s Exa bound — with nothing rendered but a typing
+    // dot. Concurrency and every per-branch bound are unchanged; only WHEN this
+    // runs relative to the HTTP response moves. See PromptSource above.
+    const buildExaPrompt = async (): Promise<SystemPromptParts> => {
+      const [exaSearch, internalSearch, exaDriveLinks] = await Promise.all([
+        exaQuery ? runExaOnlySearch(exaQuery) : Promise.resolve({ context: '', failed: false }),
+        exaQuery
+          ? withTimeout(
+              (async () => {
+                try {
+                  const vertexResults = await breaker.execute('vertex-ai', () => searchSemanticBrain(exaQuery))
+                  if (vertexResults.length > 0) {
+                    const ctx = vertexResults
+                      .map(r => `**${r.title}** ${r.uri ? `(${r.uri})` : ''}\n${r.snippet}`)
+                      .join('\n\n---\n\n')
+                    return { context: ctx, failed: false }
+                  }
+                  return { context: '', failed: false } // genuinely zero matches
+                } catch (err) {
+                  // failed:true is the anti-hallucination signal — it becomes a
+                  // prompt instruction telling the model to say the Internal Brain
+                  // was unavailable and NEVER to invent documents. Unavailability
+                  // must never reach the prompt as "zero matches": reporting it that
+                  // way is what made the model tell users their documents
+                  // don't exist. `[]` (genuinely empty) is the only case that
+                  // returns failed:false below.
+                  if (err instanceof CircuitOpenError) {
+                    log.warn({ key: 'vertex-ai' }, 'Vertex circuit OPEN — EXA hybrid runs web-only')
+                  } else if (err instanceof VertexUnavailableError) {
+                    log.warn({ reason: err.reason, status: err.status }, 'EXA hybrid: Vertex unavailable — disclosing as failed, not empty')
+                  } else {
+                    log.warn({ err }, 'EXA hybrid: Vertex internal search failed — web-only')
+                  }
                   return { context: '', failed: true }
                 }
-                if (vertexResults.length > 0) {
-                  const ctx = vertexResults
-                    .map(r => `**${r.title}** ${r.uri ? `(${r.uri})` : ''}\n${r.snippet}`)
-                    .join('\n\n---\n\n')
-                  return { context: ctx, failed: false }
-                }
-                return { context: '', failed: false } // genuinely zero matches
-              } catch (err) {
-                if (err instanceof CircuitOpenError) {
-                  log.warn({ key: 'vertex-ai' }, 'Vertex circuit OPEN — EXA hybrid runs web-only')
-                } else {
-                  log.warn({ err }, 'EXA hybrid: Vertex internal search failed — web-only')
-                }
-                return { context: '', failed: true }
-              }
-            })(),
-            8_000,
-            { context: '', failed: true },
-            'exa-internal-search',
-          )
-        : Promise.resolve({ context: '', failed: false }),
-      withTimeout(
-        (async () => {
-          const tokenState = await resolveGoogleAccessTokenLenient(req)
-          return resolveDriveLinkContext(
-            exaQuery,
-            tokenState.ok ? tokenState.accessToken : undefined,
-            tokenState.ok ? undefined : { unavailableReason: tokenState.reason },
-          )
-        })(),
-        12_000,
-        { content: '', advisory: '' },
-        'exa-drive-links',
-      ),
-    ])
+              })(),
+              EXA_VERTEX_BRANCH_MS,
+              { context: '', failed: true },
+              'exa-internal-search',
+            )
+          : Promise.resolve({ context: '', failed: false }),
+        withTimeout(
+          (async () => {
+            const tokenState = await resolveGoogleAccessTokenLenient(req)
+            return resolveDriveLinkContext(
+              exaQuery,
+              tokenState.ok ? tokenState.accessToken : undefined,
+              tokenState.ok ? undefined : { unavailableReason: tokenState.reason },
+            )
+          })(),
+          DRIVE_LINKS_BRANCH_MS,
+          { content: '', advisory: '' },
+          'exa-drive-links',
+        ),
+      ])
 
-    // Parts form → Claude puts a cache breakpoint on the static prefix
-    // (persona + policy) so repeat EXA turns read it at 0.1x input price.
-    const exaSystemPrompt = buildSystemPromptParts({
-      injectedContext: exaSearch.context || undefined,
-      // The read tools are off in this mode, but they EXIST — the manifest says
-      // so and tells the model to point at the EXA toggle rather than denying
-      // the capability. Built from the registry alone (no prefs read), so it
-      // adds no latency to the EXA path.
-      capabilityManifest: buildCapabilityManifest({
-        role: chatRole,
-        prefsKnown: false,
-        unavailable: 'exa-mode',
-      }),
-      exaMode: true,
-      exaSearchFailed: exaSearch.failed,
-      exaInternalContext: internalSearch.context || undefined,
-      exaInternalFailed: internalSearch.failed,
-      driveLinkContext: exaDriveLinks.content || undefined,
-      driveLinkAdvisory: exaDriveLinks.advisory || undefined,
-    })
+      // Parts form → Claude puts a cache breakpoint on the static prefix
+      // (persona + policy) so repeat EXA turns read it at 0.1x input price.
+      return buildSystemPromptParts({
+        injectedContext: exaSearch.context || undefined,
+        // The read tools are off in this mode, but they EXIST — the manifest says
+        // so and tells the model to point at the EXA toggle rather than denying
+        // the capability. Built from the registry alone (no prefs read), so it
+        // adds no latency to the EXA path.
+        capabilityManifest: buildCapabilityManifest({
+          role: chatRole,
+          prefsKnown: false,
+          unavailable: 'exa-mode',
+        }),
+        exaMode: true,
+        exaSearchFailed: exaSearch.failed,
+        exaInternalContext: internalSearch.context || undefined,
+        exaInternalFailed: internalSearch.failed,
+        driveLinkContext: exaDriveLinks.content || undefined,
+        driveLinkAdvisory: exaDriveLinks.advisory || undefined,
+      })
+    }
+
     // 'exa_search' routes to the Claude chain (Fable 5 → Sonnet 4.6 → Gemini
     // fallbacks) — research synthesis with citations needs the strongest model,
     // not the Gemini Flash default that plain no-skill deep_dive falls to.
-    return streamModelResponse(boundedMessages, exaSystemPrompt, 'exa_search', false, req, persistCtx)
+    return streamModelResponse(boundedMessages, buildExaPrompt, 'exa_search', false, req, persistCtx, EXA_ASSEMBLY_STATUS)
   }
 
   // ── Parallel pre-stream context assembly ──

@@ -14,12 +14,12 @@ export const runtime = 'nodejs'
  * not /api/admin/*, so this route checks the role itself (mirrors
  * /api/admin/ai-health).
  *
- * Answers the question `searchSemanticBrain()` structurally cannot. That
- * function is fail-soft by design — a missing credential, a rejected JWT, a 403
- * on the engine and a genuinely empty index all come back as `null`/`[]`, and
- * the chat turn renders the same "no matching documents" note for all of them.
- * This walks the same path and reports WHICH stage broke, with the upstream
- * status and Google's own message.
+ * Answers the question `searchSemanticBrain()` structurally cannot. That function
+ * distinguishes unavailable (it rejects) from empty (it returns `[]`), but a
+ * missing credential, a rejected JWT, a 403 on the engine and a typo'd engine ID
+ * all arrive as one VertexUnavailableError — and each has a different fix. This
+ * walks the same path and reports WHICH stage broke, with the upstream status and
+ * Google's own message.
  *
  * `?q=` overrides the probe query. Note that a probe matching zero documents is
  * still reported as HEALTHY — reaching the engine is the thing being tested.

@@ -4,8 +4,11 @@ import { summarizeGoogleError, remediationFor, checkSemanticBrainHealth } from '
 
 /**
  * The point of this module is that "not connected" and "connected but nothing
- * indexed" must be DISTINGUISHABLE. searchSemanticBrain() returns null for both,
- * which is why nobody could tell whether semantic-brain-desktop was reachable.
+ * indexed" must be DISTINGUISHABLE — and, among the not-connected cases, that the
+ * operator learns WHICH stage broke. searchSemanticBrain() used to return null for
+ * every failure (so nobody could tell whether semantic-brain-desktop was
+ * reachable); it now rejects on unavailability, but with one error class covering
+ * causes that each need a different fix.
  */
 
 const realFetch = global.fetch
@@ -40,7 +43,16 @@ describe('summarizeGoogleError', () => {
 
 describe('remediationFor — each failure has a genuinely different fix', () => {
   it('403 points at IAM, not at the IDs', () => {
-    expect(remediationFor(403, 'PERMISSION_DENIED: caller lacks permission')).toMatch(/discoveryengine\.viewer|IAM/i)
+    expect(remediationFor(403, 'PERMISSION_DENIED: caller lacks permission')).toMatch(/IAM/i)
+  })
+
+  it('403 names the role that can actually run a search, not the read-only one', () => {
+    // The probe and every chat turn call servingConfigs:search, which needs
+    // roles/discoveryengine.user. Advising roles/discoveryengine.viewer (get/list
+    // only) sent operators to grant a role and hit the identical 403 again.
+    const advice = remediationFor(403, 'PERMISSION_DENIED: caller lacks permission')
+    expect(advice).toMatch(/roles\/discoveryengine\.user/)
+    expect(advice).not.toMatch(/Grant the service account the Discovery Engine Viewer role/)
   })
 
   it('403 for a disabled API points at enabling the API', () => {
