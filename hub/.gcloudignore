@@ -15,6 +15,7 @@ orchestration/
 # excluded — only sibling files matched by `*` can be negated back in.
 scripts/*
 !scripts/assert-dynamic-rendering.mjs
+!scripts/assert-instrumentation.mjs
 
 # Memory (local agent memory, untracked)
 Memory/
