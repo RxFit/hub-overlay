@@ -114,6 +114,7 @@ describeDb('dispatch alerts (Postgres)', () => {
 
   it('durable dedup: alert once, suppress within the window, re-alert after it, recover once', async () => {
     const staleSnapshot: AlertSnapshot = {
+      deploy: null,
       dispatchEnabled: true,
       workerSecretPresent: true,
       tablesReady: true,

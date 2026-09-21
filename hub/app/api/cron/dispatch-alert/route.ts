@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { verifyCronSecret } from '@/lib/cron-auth'
-import { runDispatchAlertTick } from '@/lib/dispatch-alerts'
+import { runDispatchAlertTick, normalizeDeployReport, type DeployReport } from '@/lib/dispatch-alerts'
 import { withFault } from '@/lib/route-fault'
 
 export const runtime = 'nodejs'
@@ -42,7 +42,27 @@ export const POST = withFault('cron/dispatch-alert', async (req: NextRequest) =>
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const result = await runDispatchAlertTick()
+  // Optional body: { deploy: { conclusion, consecutiveFailures, sha, runNumber } }.
+  //
+  // The Hub keeps no ledger of deploy ATTEMPTS — it knows only the GIT_SHA it
+  // is running — so a deploy that never produced a revision is invisible from
+  // in here. The workflow that already ticks hourly reads its own Actions
+  // history with the ambient GITHUB_TOKEN and reports the conclusion, which
+  // keeps the Hub free of any GitHub credential.
+  //
+  // A malformed, empty or absent body is NOT an error: every other condition
+  // this tick evaluates must keep working when the deploy lookup fails, and a
+  // 400 here would take the whole alerting path down with it. It degrades to
+  // "not reported", which never alerts and never announces a recovery.
+  let deploy: DeployReport | null = null
+  try {
+    const body: unknown = await req.json()
+    deploy = normalizeDeployReport((body as { deploy?: unknown } | null)?.deploy)
+  } catch {
+    // No body / not JSON — the pre-report workflow shape. Nothing to do.
+  }
+
+  const result = await runDispatchAlertTick(new Date(), undefined, deploy)
   return NextResponse.json({
     ok: true,
     generatedAt: new Date().toISOString(),

@@ -55,6 +55,7 @@ export type DispatchAlertKind =
   | 'tables_missing'
   | 'agy_error_streak'
   | 'allotment_collapse'
+  | 'deploy_failed'
 
 export interface DispatchAlert {
   kind: DispatchAlertKind
@@ -71,6 +72,82 @@ export const STREAK_N = 3
 /** Metered chat successes in 24h needed before "collapse" can fire. */
 export const COLLAPSE_MIN_METERED = 3
 
+/**
+ * Deploy conclusions that mean the production deploy BROKE.
+ *
+ * Deliberately narrow. GitHub also reports 'cancelled', 'skipped', 'neutral',
+ * 'stale' and 'action_required'; none of those is evidence the pipeline is
+ * broken (a cancelled run is usually a human superseding a deploy), and none is
+ * evidence it works either. They are treated as INDETERMINATE: no alert, and —
+ * critically — no affirmative recovery. Only an observed 'success' clears.
+ */
+export const DEPLOY_FAILING_CONCLUSIONS: readonly string[] = ['failure', 'timed_out']
+
+/**
+ * The production-deploy conclusion, as reported by the hourly workflow.
+ *
+ * The Hub cannot see this on its own: it knows the GIT_SHA it is RUNNING
+ * (lib/logger.ts, /api/admin/dispatch-health) but keeps no ledger of deploy
+ * ATTEMPTS, so a deploy that never produced a revision is invisible from
+ * inside. Rather than give the Hub a GitHub credential, the tick that already
+ * runs hourly in GitHub Actions reads its own Actions history with the ambient
+ * workflow token and hands the conclusion in.
+ *
+ * Absent (`null`) means NOT REPORTED this tick — an older workflow, or a
+ * lookup that failed. It is not "healthy", and it must never read as one; see
+ * the affirmative-clear gate in runDispatchAlertTick.
+ */
+export interface DeployReport {
+  /** Lower-cased GitHub conclusion of the newest COMPLETED production deploy. */
+  conclusion: string
+  /** Consecutive failing runs at the head of the history (>= 1 when failing). */
+  consecutiveFailures: number
+  /** Short head SHA of that run, so the operator can find the commit. */
+  sha: string | null
+  /** Run number, so the operator can find the run. */
+  runNumber: number | null
+}
+
+/**
+ * Validate the reported deploy conclusion. The POST body is authenticated by
+ * CRON_SECRET, but authentication is not validation — this clamps every field
+ * before it can reach a Chat message or a durable row, the same discipline
+ * `sanitizeClass` applies to worker-adjacent error classes.
+ *
+ * Returns null for anything unusable, which the tick treats as "not reported".
+ */
+export function normalizeDeployReport(raw: unknown): DeployReport | null {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as Record<string, unknown>
+
+  const conclusion = typeof r.conclusion === 'string'
+    ? r.conclusion.toLowerCase().replace(/[^a-z_]/g, '').slice(0, 32)
+    : ''
+  if (!conclusion) return null
+
+  // Clamped to a sane band: this number is rendered into an alert, and an
+  // absurd value would be the message's least useful part.
+  const rawCount = typeof r.consecutiveFailures === 'number' && Number.isFinite(r.consecutiveFailures)
+    ? Math.floor(r.consecutiveFailures)
+    : 0
+  const consecutiveFailures = Math.min(Math.max(rawCount, 0), 9999)
+
+  const sha = typeof r.sha === 'string' && /^[0-9a-f]{7,40}$/i.test(r.sha)
+    ? r.sha.toLowerCase().slice(0, 12)
+    : null
+
+  const runNumber = typeof r.runNumber === 'number' && Number.isInteger(r.runNumber) && r.runNumber > 0
+    ? Math.min(r.runNumber, 9_999_999)
+    : null
+
+  return { conclusion, consecutiveFailures, sha, runNumber }
+}
+
+/** Is this reported conclusion a broken production deploy? */
+export function isDeployFailing(report: DeployReport | null): boolean {
+  return report !== null && DEPLOY_FAILING_CONCLUSIONS.includes(report.conclusion)
+}
+
 export const DISPATCH_ALERT_EVENT = 'dispatch.alert'
 
 /** Everything `decideAlerts` needs, gathered by `loadAlertSnapshot`. */
@@ -86,6 +163,9 @@ export interface AlertSnapshot {
   recentAgyRuns: Array<{ status: string; errorClass: string | null }>
   /** Chat-source ledger counts over the last 24h. */
   chat24h: { agyOk: number; agyError: number; meteredOk: number }
+  /** Newest completed production deploy, reported by the caller. null = not
+   *  reported this tick — unknown, never "healthy". */
+  deploy: DeployReport | null
 }
 
 /** Error classes are typed Hub-side but the union is open and worker-adjacent;
@@ -132,6 +212,27 @@ export function decideAlerts(s: AlertSnapshot): DispatchAlert[] {
     alerts.push({
       kind: 'agy_error_streak',
       detail: `the last ${s.recentAgyRuns.length} agy runs all failed (${classes})`,
+    })
+  }
+
+  // A broken production deploy is silent by construction: deploy.yml deploys
+  // the new revision with --no-traffic --tag=candidate and only promotes after
+  // a smoke test, so a failed deploy leaves the LAST-GOOD revision serving.
+  // Nothing degrades, nothing 500s, and the Hub keeps answering from stale
+  // code — which is how 14 consecutive failures (runs 195-208) went unnoticed
+  // for 13 days while every merged fix sat undeployed.
+  if (isDeployFailing(s.deploy)) {
+    const d = s.deploy!
+    const streak = d.consecutiveFailures > 1 ? `${d.consecutiveFailures} consecutive ` : ''
+    const where = [
+      d.runNumber !== null ? `run #${d.runNumber}` : null,
+      d.sha !== null ? `commit ${d.sha}` : null,
+    ].filter(Boolean).join(', ')
+    alerts.push({
+      kind: 'deploy_failed',
+      detail:
+        `production deploy is failing (${streak}${d.conclusion}${where ? ` — ${where}` : ''}) — ` +
+        'master is merging but not shipping; production is still serving the last-good revision',
     })
   }
 
@@ -213,7 +314,10 @@ export function formatRecoveryMessage(): string {
 
 /* ── I/O half: snapshot gathering, durable state, Chat delivery ─────────── */
 
-export async function loadAlertSnapshot(now = new Date()): Promise<AlertSnapshot> {
+export async function loadAlertSnapshot(
+  now = new Date(),
+  deploy: DeployReport | null = null,
+): Promise<AlertSnapshot> {
   let tablesReady = true
   let freshWorkerCount = 0
   let workerLastSeenMsAgo: number | null = null
@@ -265,6 +369,7 @@ export async function loadAlertSnapshot(now = new Date()): Promise<AlertSnapshot
     workerLastSeenMsAgo,
     recentAgyRuns,
     chat24h,
+    deploy,
   }
 }
 
@@ -434,7 +539,7 @@ export interface AlertTickResult {
  *  (same idiom as dispatch-worker's injectable config/fetch). */
 export interface AlertTickDeps {
   housekeep: () => Promise<void>
-  loadSnapshot: (now: Date) => Promise<AlertSnapshot>
+  loadSnapshot: (now: Date, deploy: DeployReport | null) => Promise<AlertSnapshot>
   loadLastState: (tenantId: string) => Promise<LastAlertState | null>
   loadLastPostedAt: (tenantId: string, fingerprint: string) => Promise<Date | null>
   recordState: (tenantId: string, fingerprint: string, channel: string, kinds: string[]) => Promise<void>
@@ -480,12 +585,14 @@ export const defaultAlertTickDeps: AlertTickDeps = {
 export async function runDispatchAlertTick(
   now = new Date(),
   deps: AlertTickDeps = defaultAlertTickDeps,
+  /** Reported by the caller (the hourly workflow); null when not reported. */
+  deploy: DeployReport | null = null,
 ): Promise<AlertTickResult> {
   const tenantId = getTenantId()
 
   await deps.housekeep()
 
-  const snapshot = await deps.loadSnapshot(now)
+  const snapshot = await deps.loadSnapshot(now, deploy)
   const alerts = decideAlerts(snapshot)
   const fingerprint = alertFingerprint(alerts)
   const last = await deps.loadLastState(tenantId)
@@ -511,9 +618,19 @@ export async function runDispatchAlertTick(
     // recovery only when an allotment success actually landed; otherwise
     // record the state change silently. (worker/tables are live checks and
     // the streak is unwindowed, so those clear affirmatively by construction.)
+    //
+    // deploy_failed joins that gate for a sharper reason: its evidence is
+    // REPORTED, not observed. If the workflow stops reporting (rolled back,
+    // the Actions lookup failed, the token lost actions:read) the condition
+    // vanishes from the set and would otherwise announce a fix that never
+    // happened — the worst possible lie from an alerting system. It clears
+    // out loud ONLY on an observed 'success'.
+    const deployStillUnproven =
+      last!.fingerprint.includes('deploy_failed') && snapshot.deploy?.conclusion !== 'success'
     const silently =
       action === 'recovery_silent' ||
-      (last!.fingerprint.includes('allotment_collapse') && snapshot.chat24h.agyOk === 0)
+      (last!.fingerprint.includes('allotment_collapse') && snapshot.chat24h.agyOk === 0) ||
+      deployStillUnproven
     if (!silently) {
       const channel = await deps.resolveSpace(tenantId)
       if (channel) {
