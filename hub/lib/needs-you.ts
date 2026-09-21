@@ -194,6 +194,7 @@ const ALERT_LABEL: Record<string, string> = {
   tables_missing: 'dispatch tables missing',
   agy_error_streak: 'agy failing repeatedly',
   allotment_collapse: 'chat fell back to metered models',
+  deploy_failed: 'production deploy failing',
 }
 
 /** A delivered dispatch alert → notify. Recovery rows (no kinds) are skipped. */

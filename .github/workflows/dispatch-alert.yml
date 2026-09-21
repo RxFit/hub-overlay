@@ -11,6 +11,19 @@ name: Hourly cron tick
 # streaks, and allotment collapse from the Hub's own ledgers, and posts to
 # Google Chat (tagged "— via HUB") when something is wrong.
 #
+# The tick also REPORTS the production deploy's own conclusion. The Hub cannot
+# see this itself: it knows the GIT_SHA it is RUNNING but keeps no ledger of
+# deploy ATTEMPTS, so a deploy that never produced a revision is invisible from
+# inside the app. And a failed deploy is silent by construction — deploy.yml
+# ships the new revision with --no-traffic --tag=candidate and promotes only
+# after a smoke test, so a failure leaves the last-good revision serving. That
+# is how 14 consecutive failures (runs 195-208) went unnoticed for 13 days
+# while every merged fix sat undeployed. Rather than hand the Hub a GitHub
+# credential, this workflow reads its OWN Actions history with the ambient
+# GITHUB_TOKEN and posts the conclusion to the endpoint, which folds it into
+# the same Chat delivery, dedup window and recovery rules as every other
+# condition.
+#
 # THIS WORKFLOW'S FAILURE EMAIL IS PART OF THE DESIGN. The run fails when:
 #   - the endpoint is unreachable / non-200 (the Hub itself may be down), or
 #   - alert conditions exist but no Chat channel could deliver them
@@ -58,14 +71,87 @@ concurrency:
   group: dispatch-alert
   cancel-in-progress: false
 
+# Least privilege for the ambient GITHUB_TOKEN. `actions: read` is the one
+# addition, and it is what lets the tick read the deploy workflow's own run
+# history (below). Everything else this job does is a curl authenticated by
+# CRON_SECRET and needs no token at all.
+permissions:
+  contents: read
+  actions: read
+
 jobs:
   tick:
     name: Evaluate & push
     runs-on: ubuntu-latest
     steps:
+      # Read the newest COMPLETED production deploy and its leading failure
+      # streak. Wholly best-effort: any failure here leaves DEPLOY_BODY as '{}'
+      # so the tick proceeds with every other condition intact. A deploy lookup
+      # must never be able to take the alerting path down — that would be the
+      # detector failing inside the thing it detects.
+      - name: Read the production deploy conclusion
+        id: deploy
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          BODY='{}'
+          RUNS=$(curl -sS --max-time 30 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/deploy.yml/runs?branch=master&status=completed&per_page=30" \
+            2>/dev/null) || RUNS=''
+
+          if [ -n "$RUNS" ]; then
+            # Health is derived from the newest DECISIVE run. Only
+            # success/failure/timed_out/startup_failure say anything about the
+            # pipeline; cancelled, skipped, neutral, stale and action_required
+            # are noise that must not sit at the head.
+            #
+            # This is not hypothetical. deploy.yml triggers on EVERY completed
+            # master CI and gates its job with `if: conclusion == 'success'`, so
+            # a red CI still creates a deploy run that concludes 'skipped'
+            # because the job never ran. Read naively, that run lands at the
+            # head, zeroes the streak and clears a standing deploy_failed while
+            # master still is not shipping — the alert cancelled by the very
+            # thing that stopped the deploy.
+            #
+            # index(false) over the decisive runs is then the position of the
+            # first non-failing one, which is exactly the leading failure
+            # streak; null (every decisive run failing) means the whole page is.
+            # No decisive run at all stays unknown rather than guessing.
+            DEPLOY=$(printf '%s' "$RUNS" | jq -c '
+              ["success", "failure", "timed_out", "startup_failure"] as $decisive
+              | ["failure", "timed_out", "startup_failure"] as $failing
+              | ([(.workflow_runs // [])[]
+                  | select(.conclusion != null and (.conclusion | IN($decisive[])))]) as $r
+              | if ($r | length) == 0 then null
+                else
+                  ([$r[] | (.conclusion | IN($failing[]))]) as $f
+                  | (($f | index(false)) // ($f | length)) as $streak
+                  | {
+                      conclusion: $r[0].conclusion,
+                      consecutiveFailures: $streak,
+                      sha: (($r[0].head_sha // "")[0:12]),
+                      runNumber: ($r[0].run_number // 0)
+                    }
+                end' 2>/dev/null) || DEPLOY='null'
+            if [ -n "$DEPLOY" ] && [ "$DEPLOY" != "null" ]; then
+              BODY=$(jq -cn --argjson d "$DEPLOY" '{deploy: $d}' 2>/dev/null) || BODY='{}'
+            fi
+          fi
+
+          if [ "$BODY" = '{}' ]; then
+            echo "::warning::Could not read the production deploy conclusion — the tick will run without it (no deploy alert, and no false recovery). Check that the workflow token still has actions:read."
+          fi
+          echo "deploy conclusion body: $BODY"
+          echo "body=$BODY" >> "$GITHUB_OUTPUT"
+
       - name: Call the alert endpoint
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DEPLOY_BODY: ${{ steps.deploy.outputs.body }}
         run: |
           set -euo pipefail
           if [ -z "$CRON_SECRET" ]; then
@@ -89,8 +175,16 @@ jobs:
           # alert evaluation, and ERROR_REPORTING_2026-08-24.md :291-292 says
           # raise the tick's budget BEFORE adding to it — a curl that gives up
           # at 90s would report a healthy-but-slow tick as an outage.
+          # The body carries the deploy conclusion read above. An empty '{}'
+          # (lookup failed) is a valid body the route degrades on: it reports
+          # nothing, so no deploy alert fires and — deliberately — no recovery
+          # is announced either, because a missing report is not a fix.
+          BODY="${DEPLOY_BODY:-}"
+          [ -n "$BODY" ] || BODY='{}'
           CODE=$(curl -s -o /tmp/alert.json -w '%{http_code}' --max-time 300 \
             -X POST -H "x-cron-secret: $CRON_SECRET" \
+            -H 'Content-Type: application/json' \
+            --data "$BODY" \
             "https://hub-11747747730.us-central1.run.app/api/cron/dispatch-alert" || echo 000)
           echo "POST /api/cron/dispatch-alert -> HTTP $CODE"
           cat /tmp/alert.json 2>/dev/null || true

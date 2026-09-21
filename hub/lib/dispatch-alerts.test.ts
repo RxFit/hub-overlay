@@ -33,6 +33,8 @@ import {
   alertFingerprint,
   decideAlerts,
   decidePosting,
+  normalizeDeployReport,
+  isDeployFailing,
   defaultAlertTickDeps,
   formatAlertMessage,
   runDispatchAlertTick,
@@ -40,6 +42,7 @@ import {
   STREAK_N,
   type AlertSnapshot,
   type AlertTickDeps,
+  type DeployReport,
   type DispatchAlert,
 } from './dispatch-alerts'
 
@@ -52,6 +55,7 @@ function snapshot(over: Partial<AlertSnapshot> = {}): AlertSnapshot {
     workerLastSeenMsAgo: 5_000,
     recentAgyRuns: [],
     chat24h: { agyOk: 0, agyError: 0, meteredOk: 0 },
+    deploy: null,
     ...over,
   }
 }
@@ -417,5 +421,308 @@ describe('formatAlertMessage', () => {
     expect(msg).toContain('⚠️ Hub dispatch alert')
     expect(msg).toContain('• no desktop worker is fresh')
     expect(msg).toContain('• last 3 agy runs all failed (parse×3)')
+  })
+})
+
+/* ════════════════════════════════════════════════════════════════════════════
+   deploy_failed — alerting on a broken production deploy.
+
+   A failed deploy is silent by construction: deploy.yml ships the revision with
+   --no-traffic --tag=candidate and promotes only after a smoke test, so a
+   failure leaves the last-good revision serving. Nothing degrades and nothing
+   500s — which is how 14 consecutive failures (runs 195-208) went unnoticed for
+   13 days while every merged fix sat undeployed.
+
+   The evidence is REPORTED by the hourly workflow, not observed by the Hub, and
+   that shapes the recovery rule below: an absent report is not a fix.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+const FAILING: DeployReport = { conclusion: 'failure', consecutiveFailures: 14, sha: 'ff6e0ac047eb', runNumber: 208 }
+
+describe('normalizeDeployReport — the body is authenticated, not trusted', () => {
+  it('accepts a well-formed report', () => {
+    expect(normalizeDeployReport({ conclusion: 'failure', consecutiveFailures: 3, sha: 'FF6E0AC047EB15F0', runNumber: 208 }))
+      .toEqual({ conclusion: 'failure', consecutiveFailures: 3, sha: 'ff6e0ac047eb', runNumber: 208 })
+  })
+
+  it('rejects anything that is not an object with a usable conclusion', () => {
+    for (const bad of [null, undefined, 'failure', 42, [], {}, { conclusion: '' }, { conclusion: 123 }]) {
+      expect(normalizeDeployReport(bad)).toBeNull()
+    }
+  })
+
+  it('clamps a hostile conclusion string rather than letting it reach a Chat message', () => {
+    const r = normalizeDeployReport({ conclusion: 'fail<script>ure'.repeat(20) })
+    expect(r!.conclusion).toMatch(/^[a-z_]+$/)
+    expect(r!.conclusion.length).toBeLessThanOrEqual(32)
+  })
+
+  it('drops a sha that is not a hex object name, and truncates a real one', () => {
+    expect(normalizeDeployReport({ conclusion: 'failure', sha: 'not-a-sha' })!.sha).toBeNull()
+    expect(normalizeDeployReport({ conclusion: 'failure', sha: 'zzzzzzz' })!.sha).toBeNull()
+    expect(normalizeDeployReport({ conclusion: 'failure', sha: 'a'.repeat(40) })!.sha).toBe('a'.repeat(12))
+  })
+
+  it('clamps counts and run numbers into a band a message can render', () => {
+    expect(normalizeDeployReport({ conclusion: 'failure', consecutiveFailures: -5 })!.consecutiveFailures).toBe(0)
+    expect(normalizeDeployReport({ conclusion: 'failure', consecutiveFailures: 1e9 })!.consecutiveFailures).toBe(9999)
+    expect(normalizeDeployReport({ conclusion: 'failure', consecutiveFailures: Number.NaN })!.consecutiveFailures).toBe(0)
+    expect(normalizeDeployReport({ conclusion: 'failure', runNumber: 0 })!.runNumber).toBeNull()
+    expect(normalizeDeployReport({ conclusion: 'failure', runNumber: 1.5 })!.runNumber).toBeNull()
+  })
+})
+
+describe('isDeployFailing — only a broken deploy counts', () => {
+  it('treats failure, timed_out and startup_failure as broken', () => {
+    expect(isDeployFailing({ ...FAILING, conclusion: 'failure' })).toBe(true)
+    expect(isDeployFailing({ ...FAILING, conclusion: 'timed_out' })).toBe(true)
+    expect(isDeployFailing({ ...FAILING, conclusion: 'startup_failure' })).toBe(true)
+  })
+
+  it('treats success and every indeterminate conclusion as not-broken', () => {
+    // 'skipped' is filtered out upstream (a red master CI skips deploy.yml's
+    // job), but it must also be inert here if one ever reaches the snapshot.
+    for (const c of ['success', 'cancelled', 'skipped', 'neutral', 'stale', 'action_required', 'unknown']) {
+      expect(isDeployFailing({ ...FAILING, conclusion: c })).toBe(false)
+    }
+  })
+
+  it('an absent report is not a failure (and, elsewhere, not a recovery either)', () => {
+    expect(isDeployFailing(null)).toBe(false)
+  })
+})
+
+describe('decideAlerts — deploy_failed', () => {
+  it('a failing deploy alerts and names the streak, run and commit', () => {
+    const [a] = decideAlerts(snapshot({ deploy: FAILING }))
+    expect(a.kind).toBe('deploy_failed')
+    expect(a.detail).toContain('14 consecutive')
+    expect(a.detail).toContain('run #208')
+    expect(a.detail).toContain('ff6e0ac047eb')
+    // The operator needs to know production is STALE, not down — that
+    // distinction is why nobody chased the original outage.
+    expect(a.detail).toContain('last-good revision')
+  })
+
+  it('a single failure reads naturally, without a "1 consecutive" stutter', () => {
+    const [a] = decideAlerts(snapshot({ deploy: { ...FAILING, consecutiveFailures: 1 } }))
+    expect(a.detail).not.toContain('consecutive')
+    expect(a.detail).toContain('failure')
+  })
+
+  it('a report with no run/commit still produces a usable message', () => {
+    const [a] = decideAlerts(snapshot({ deploy: { conclusion: 'timed_out', consecutiveFailures: 2, sha: null, runNumber: null } }))
+    expect(a.kind).toBe('deploy_failed')
+    expect(a.detail).toContain('timed_out')
+    expect(a.detail).not.toContain('—  ')
+  })
+
+  it('startup_failure alerts — a workflow that cannot start never reports "failure"', () => {
+    // Malformed YAML or an unresolvable `uses:` concludes startup_failure.
+    // Reading it as indeterminate would disable the detector for the case
+    // where the pipeline is most broken.
+    const [a] = decideAlerts(snapshot({ deploy: { ...FAILING, conclusion: 'startup_failure' } }))
+    expect(a.kind).toBe('deploy_failed')
+  })
+
+  it('a successful, indeterminate, or unreported deploy never alerts', () => {
+    expect(decideAlerts(snapshot({ deploy: { ...FAILING, conclusion: 'success' } }))).toEqual([])
+    expect(decideAlerts(snapshot({ deploy: { ...FAILING, conclusion: 'cancelled' } }))).toEqual([])
+    expect(decideAlerts(snapshot({ deploy: null }))).toEqual([])
+  })
+
+  it('stacks with the dispatch conditions instead of masking them', () => {
+    const alerts = decideAlerts(snapshot({ freshWorkerCount: 0, deploy: FAILING }))
+    expect(alerts.map((a) => a.kind).sort()).toEqual(['deploy_failed', 'worker_stale'])
+    expect(alertFingerprint(alerts)).toBe('deploy_failed,worker_stale')
+  })
+})
+
+describe('runDispatchAlertTick — deploy recovery is only announced when PROVEN', () => {
+  const NOW = new Date('2026-09-21T12:00:00Z')
+  const WAS_FAILING = { fingerprint: 'deploy_failed', at: new Date(NOW.getTime() - REALERT_MS), channel: 'chat' }
+
+  function deps(over: Partial<AlertTickDeps> = {}): AlertTickDeps & { post: ReturnType<typeof vi.fn> } {
+    return {
+      housekeep: vi.fn().mockResolvedValue(undefined),
+      loadSnapshot: vi.fn().mockResolvedValue(snapshot({ deploy: FAILING })),
+      loadLastState: vi.fn().mockResolvedValue(null),
+      loadLastPostedAt: vi.fn().mockResolvedValue(null),
+      recordState: vi.fn().mockResolvedValue(undefined),
+      resolveSpace: vi.fn().mockResolvedValue('spaces/AAA'),
+      post: vi.fn().mockResolvedValue(true),
+      ...over,
+    } as AlertTickDeps & { post: ReturnType<typeof vi.fn> }
+  }
+
+  beforeEach(() => vi.restoreAllMocks())
+
+  it('a failing deploy posts once to the existing Chat destination', async () => {
+    const d = deps()
+    const r = await runDispatchAlertTick(NOW, d)
+    expect(r.delivery).toBe('posted')
+    expect(r.alerts.map((a) => a.kind)).toEqual(['deploy_failed'])
+    expect(d.post).toHaveBeenCalledWith(expect.any(String), 'spaces/AAA', expect.stringContaining('production deploy is failing'))
+  })
+
+  it('a still-failing deploy inside the window is suppressed — one alert per window, not one per hour', async () => {
+    const d = deps({
+      loadLastState: vi.fn().mockResolvedValue({ ...WAS_FAILING, at: NOW }),
+      loadLastPostedAt: vi.fn().mockResolvedValue(new Date(NOW.getTime() - 60_000)),
+    })
+    const r = await runDispatchAlertTick(NOW, d)
+    expect(r.delivery).toBe('suppressed')
+    expect(d.post).not.toHaveBeenCalled()
+  })
+
+  it('a still-failing deploy re-alerts once the window has passed', async () => {
+    const d = deps({
+      loadLastState: vi.fn().mockResolvedValue(WAS_FAILING),
+      loadLastPostedAt: vi.fn().mockResolvedValue(new Date(NOW.getTime() - REALERT_MS - 1)),
+    })
+    expect((await runDispatchAlertTick(NOW, d)).delivery).toBe('posted')
+  })
+
+  it('an observed success announces the recovery', async () => {
+    const d = deps({
+      loadSnapshot: vi.fn().mockResolvedValue(snapshot({ deploy: { ...FAILING, conclusion: 'success', consecutiveFailures: 0 } })),
+      loadLastState: vi.fn().mockResolvedValue(WAS_FAILING),
+    })
+    const r = await runDispatchAlertTick(NOW, d)
+    expect(r.delivery).toBe('recovery_posted')
+    expect(d.post).toHaveBeenCalledWith(expect.any(String), 'spaces/AAA', expect.stringContaining('recovered'))
+  })
+
+  it('an UNREPORTED deploy does NOT clear the condition — it carries forward', async () => {
+    // The lookup failed, the token lost actions:read, or the workflow rolled
+    // back. Losing the reporter is not a fix, so the durable state must keep
+    // saying deploy_failed: otherwise the six-hourly nag stops while production
+    // is still not shipping, and a later success has nothing to recover from.
+    const recordState = vi.fn().mockResolvedValue(undefined)
+    const d = deps({
+      loadSnapshot: vi.fn().mockResolvedValue(snapshot({ deploy: null })),
+      loadLastState: vi.fn().mockResolvedValue(WAS_FAILING),
+      loadLastPostedAt: vi.fn().mockResolvedValue(new Date(NOW.getTime() - REALERT_MS - 1)),
+      recordState,
+    })
+    const r = await runDispatchAlertTick(NOW, d)
+    expect(r.alerts.map((a) => a.kind)).toEqual(['deploy_failed'])
+    expect(r.delivery).toBe('posted')
+    // THE regression: the fingerprint must never be recorded empty here.
+    expect(recordState).toHaveBeenCalledWith(expect.any(String), 'deploy_failed', 'chat', ['deploy_failed'])
+    expect(recordState).not.toHaveBeenCalledWith(expect.any(String), '', expect.anything(), expect.anything())
+  })
+
+  it('the carried-forward alert says the report is missing rather than inventing evidence', async () => {
+    const d = deps({
+      loadSnapshot: vi.fn().mockResolvedValue(snapshot({ deploy: null })),
+      loadLastState: vi.fn().mockResolvedValue(WAS_FAILING),
+      loadLastPostedAt: vi.fn().mockResolvedValue(new Date(NOW.getTime() - REALERT_MS - 1)),
+    })
+    const [a] = (await runDispatchAlertTick(NOW, d)).alerts
+    expect(a.detail).toContain('could not be read')
+    expect(a.detail).toContain('last known failure stands')
+  })
+
+  it('an indeterminate conclusion carries forward too, naming the conclusion', async () => {
+    const d = deps({
+      loadSnapshot: vi.fn().mockResolvedValue(snapshot({ deploy: { ...FAILING, conclusion: 'cancelled' } })),
+      loadLastState: vi.fn().mockResolvedValue(WAS_FAILING),
+      loadLastPostedAt: vi.fn().mockResolvedValue(new Date(NOW.getTime() - REALERT_MS - 1)),
+    })
+    const r = await runDispatchAlertTick(NOW, d)
+    expect(r.alerts.map((a) => a.kind)).toEqual(['deploy_failed'])
+    expect(r.alerts[0].detail).toContain('cancelled')
+  })
+
+  it('a carried-forward failure still respects the re-alert window', async () => {
+    // Carrying the condition forward must not turn into hourly nagging.
+    const d = deps({
+      loadSnapshot: vi.fn().mockResolvedValue(snapshot({ deploy: null })),
+      loadLastState: vi.fn().mockResolvedValue({ ...WAS_FAILING, at: NOW }),
+      loadLastPostedAt: vi.fn().mockResolvedValue(new Date(NOW.getTime() - 60_000)),
+    })
+    expect((await runDispatchAlertTick(NOW, d)).delivery).toBe('suppressed')
+    expect(d.post).not.toHaveBeenCalled()
+  })
+
+  it('MULTI-TICK: failure → lost report → success posts exactly one alert and one recovery', async () => {
+    // The full sequence Codex flagged. State is threaded tick to tick the way
+    // the durable row does, so a premature clear anywhere shows up here.
+    let state: { fingerprint: string; at: Date; channel: string } | null = null
+    const posts: string[] = []
+    const tick = async (deploy: DeployReport | null, at: Date) => {
+      const d = deps({
+        loadSnapshot: vi.fn().mockResolvedValue(snapshot({ deploy })),
+        loadLastState: vi.fn().mockImplementation(async () => state),
+        // Nothing of this fingerprint has been delivered recently in this
+        // scenario, so the window never suppresses; each tick decides freely.
+        loadLastPostedAt: vi.fn().mockResolvedValue(null),
+        recordState: vi.fn().mockImplementation(async (_t: string, fingerprint: string, channel: string) => {
+          state = { fingerprint, at, channel }
+        }),
+        post: vi.fn().mockImplementation(async (_t: string, _s: string, text: string) => {
+          posts.push(text)
+          return true
+        }),
+      })
+      return runDispatchAlertTick(at, d)
+    }
+
+    const t0 = new Date(NOW.getTime())
+    expect((await tick(FAILING, t0)).delivery).toBe('posted')
+    expect(state!.fingerprint).toBe('deploy_failed')
+
+    // Reporter goes dark for two ticks — the state must survive both.
+    const t1 = new Date(t0.getTime() + REALERT_MS + 1)
+    expect((await tick(null, t1)).delivery).toBe('posted')
+    expect(state!.fingerprint).toBe('deploy_failed')
+
+    const t2 = new Date(t1.getTime() + REALERT_MS + 1)
+    await tick({ ...FAILING, conclusion: 'cancelled' }, t2)
+    expect(state!.fingerprint).toBe('deploy_failed')
+
+    // The deploy finally succeeds — and only now is a recovery announced.
+    const t3 = new Date(t2.getTime() + REALERT_MS + 1)
+    expect((await tick({ ...FAILING, conclusion: 'success', consecutiveFailures: 0 }, t3)).delivery)
+      .toBe('recovery_posted')
+    expect(state!.fingerprint).toBe('')
+    expect(posts.filter((p) => p.includes('recovered'))).toHaveLength(1)
+  })
+
+  it('a MIXED set keeps alerting on the deploy while the worker half recovers', async () => {
+    // worker_stale clears affirmatively, deploy_failed carries forward, so the
+    // set narrows to the deploy rather than announcing an all-clear.
+    const d = deps({
+      loadSnapshot: vi.fn().mockResolvedValue(snapshot({ deploy: null })),
+      loadLastState: vi.fn().mockResolvedValue({ fingerprint: 'deploy_failed,worker_stale', at: NOW, channel: 'chat' }),
+    })
+    const r = await runDispatchAlertTick(NOW, d)
+    expect(r.alerts.map((a) => a.kind)).toEqual(['deploy_failed'])
+    expect(r.delivery).toBe('posted')
+  })
+
+  it('a MIXED cleared set posts once the deploy success is observed', async () => {
+    const d = deps({
+      loadSnapshot: vi.fn().mockResolvedValue(snapshot({ deploy: { ...FAILING, conclusion: 'success', consecutiveFailures: 0 } })),
+      loadLastState: vi.fn().mockResolvedValue({ fingerprint: 'deploy_failed,worker_stale', at: NOW, channel: 'chat' }),
+    })
+    expect((await runDispatchAlertTick(NOW, d)).delivery).toBe('recovery_posted')
+  })
+
+  it('an unrelated recovery is unaffected by the deploy gate', async () => {
+    // worker_stale clears affirmatively by construction (it is a live check);
+    // the deploy gate must not accidentally silence it.
+    const d = deps({
+      loadSnapshot: vi.fn().mockResolvedValue(snapshot({ deploy: null })),
+      loadLastState: vi.fn().mockResolvedValue({ fingerprint: 'worker_stale', at: NOW, channel: 'chat' }),
+    })
+    expect((await runDispatchAlertTick(NOW, d)).delivery).toBe('recovery_posted')
+  })
+
+  it('the reported conclusion reaches the snapshot loader', async () => {
+    const loadSnapshot = vi.fn().mockResolvedValue(snapshot({ deploy: null }))
+    await runDispatchAlertTick(NOW, deps({ loadSnapshot }), FAILING)
+    expect(loadSnapshot).toHaveBeenCalledWith(NOW, FAILING)
   })
 })
