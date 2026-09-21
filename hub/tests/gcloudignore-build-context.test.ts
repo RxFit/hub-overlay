@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync, readdirSync, existsSync } from 'node:fs'
+import { readFileSync, readdirSync, existsSync, writeFileSync, rmSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -52,13 +52,31 @@ interface Rule {
   dirOnly: boolean
 }
 
-function parseRules(text: string): Rule[] {
-  return text
-    .split('\n')
-    .map(l => l.trim())
-    // `#` comments — which includes gcloud's own `#!include:.gitignore`
-    // directive, inert for our purposes since .gitignore excludes build
-    // OUTPUT (node_modules, .next), never build INPUT.
+/**
+ * `#!include:<file>` is a gcloud DIRECTIVE, not a comment: it splices that
+ * file's patterns in at this point. Treating it as a comment left this guard
+ * blind to half the rules gcloud actually applies.
+ *
+ * The earlier version justified skipping it on the grounds that .gitignore only
+ * excludes build OUTPUT (node_modules, .next), never INPUT. Vendoring the fonts
+ * falsified that: app/fonts/*.woff2 are committed binaries the build READS, and
+ * one plausible `*.woff2` or `app/fonts/` line in .gitignore would drop them
+ * from the upload while this test stayed green — the exact invisible
+ * non-deploy the file exists to prevent.
+ */
+function parseRules(text: string, dir: string = hubRoot): Rule[] {
+  const lines: string[] = []
+  for (const raw of text.split('\n')) {
+    const line = raw.trim()
+    const include = /^#!include:(.+)$/.exec(line)
+    if (include) {
+      const target = join(dir, include[1].trim())
+      if (existsSync(target)) lines.push(...readFileSync(target, 'utf8').split('\n').map(l => l.trim()))
+      continue
+    }
+    lines.push(line)
+  }
+  return lines
     .filter(l => l.length > 0 && !l.startsWith('#'))
     .map(raw => {
       const negated = raw.startsWith('!')
@@ -235,6 +253,19 @@ describe('.gcloudignore keeps every file the container build needs', () => {
  * "not excluded" for everything would pass every test above while catching
  * nothing. These lock the two behaviours the real bugs turned on. */
 describe('gcloudignore evaluator semantics', () => {
+  it('honours #!include:<file> as a directive, not a comment', () => {
+    // gcloud splices the referenced file's patterns in at this point. Read as a
+    // comment, every rule .gitignore contributes becomes invisible to this guard.
+    const tmp = join(hubRoot, '.gcloudignore-include-fixture')
+    writeFileSync(tmp, 'app/fonts/*\n')
+    try {
+      const rules = parseRules('#!include:.gcloudignore-include-fixture\n', hubRoot)
+      expect(evaluate('app/fonts/X.woff2', rules).excluded).toBe(true)
+    } finally {
+      rmSync(tmp, { force: true })
+    }
+  })
+
   it('treats `dir/*` + negation as re-includable (the shape this repo relies on)', () => {
     const rules = parseRules('scripts/*\n!scripts/keep.mjs\n')
     expect(evaluate('scripts/keep.mjs', rules).excluded).toBe(false)

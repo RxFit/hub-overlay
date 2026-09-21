@@ -28,8 +28,9 @@ import { dirname, join, relative, extname } from 'node:path'
 const hubRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const FONT_DIR = join(hubRoot, 'app', 'fonts')
 
-/** Source trees a Next build actually compiles. */
-const SCANNED = ['app', 'lib', 'components', 'providers']
+/** Source trees a Next build actually compiles. Only real ones — naming a
+ *  directory that does not exist is how a scan quietly covers nothing. */
+const SCANNED = ['app', 'lib', 'tests']
 const CODE_EXT = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'])
 
 function sourceFiles(): string[] {
@@ -55,17 +56,24 @@ function sourceFiles(): string[] {
  * own documentation and teach the next person to delete the explanation. These
  * patterns only match a real import/require/dynamic-import of the module.
  */
+const SPECIFIER = String.raw`@?next/font/google`  // @next/font/google is the pre-13.2 name
 const IMPORT_PATTERNS = [
-  /\bfrom\s*['"]next\/font\/google['"]/,
-  /\brequire\(\s*['"]next\/font\/google['"]\s*\)/,
-  /\bimport\(\s*['"]next\/font\/google['"]\s*\)/,
-  /^\s*import\s*['"]next\/font\/google['"]/m,
+  new RegExp(String.raw`\bfrom\s*['"]${SPECIFIER}['"]`),
+  new RegExp(String.raw`\brequire\(\s*['"]${SPECIFIER}['"]\s*\)`),
+  new RegExp(String.raw`\bimport\(\s*['"]${SPECIFIER}['"]\s*\)`),
+  new RegExp(String.raw`^\s*import\s*['"]${SPECIFIER}['"]`, 'm'),
 ]
 
 describe('the production build does not fetch fonts over the network', () => {
   it('no source file imports next/font/google', () => {
+    const files = sourceFiles()
+    // A scan over zero files passes trivially. Its sibling guard in
+    // gcloudignore-build-context.test.ts defends against exactly this; so does
+    // this one now.
+    expect(files.length, 'the source scan matched no files — has the tree moved?').toBeGreaterThan(50)
+
     const offenders: string[] = []
-    for (const file of sourceFiles()) {
+    for (const file of files) {
       const src = readFileSync(file, 'utf8')
       if (IMPORT_PATTERNS.some((re) => re.test(src))) offenders.push(relative(hubRoot, file))
     }
@@ -105,8 +113,24 @@ describe('the production build does not fetch fonts over the network', () => {
     }
   })
 
-  it('the vendored fonts are documented, since redistribution depends on it', () => {
-    // These are OFL-1.1 faces; the licence requires the notice travel with them.
+  it('ships the OFL licence text and every copyright notice beside the fonts', () => {
+    // OFL-1.1 §2 requires the copyright notice AND the licence accompany every
+    // copy, including bundled ones — a link is not compliance. OFL.txt is .txt
+    // rather than .md on purpose: hub/.gcloudignore excludes *.md, so a
+    // Markdown licence would never reach the image that serves these files.
+    const ofl = readFileSync(join(FONT_DIR, 'OFL.txt'), 'utf8')
+    expect(ofl).toMatch(/SIL OPEN FONT LICENSE Version 1\.1/i)
+    expect(ofl).toMatch(/PERMISSION & CONDITIONS/i)
+    for (const f of readdirSync(FONT_DIR).filter((x) => x.endsWith('.woff2'))) {
+      expect(ofl, `${f} has no copyright notice in app/fonts/OFL.txt`).toContain(f)
+    }
+    // One notice per bundled family.
+    expect((ofl.match(/^\s*Copyright /gm) ?? []).length).toBeGreaterThanOrEqual(
+      readdirSync(FONT_DIR).filter((x) => x.endsWith('.woff2')).length,
+    )
+  })
+
+  it('the vendored fonts are documented', () => {
     const readme = readFileSync(join(FONT_DIR, 'README.md'), 'utf8')
     expect(readme).toMatch(/SIL Open Font License/i)
     for (const f of readdirSync(FONT_DIR).filter((x) => x.endsWith('.woff2'))) {
