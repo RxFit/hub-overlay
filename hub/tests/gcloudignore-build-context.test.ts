@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -186,6 +186,28 @@ describe('.gcloudignore keeps every file the container build needs', () => {
           : `\`npm run build\` runs ${path}, but .gcloudignore excludes it via \`${v.decidedBy}\`.\n` +
             `Cloud Build will fail with "Cannot find module '/app/${path}'" while CI stays green, because\n` +
             'only `gcloud run deploy --source` applies this filter. Add `!' + path + '` to hub/.gcloudignore.',
+      ).toBe(false)
+    }
+  })
+
+  it('uploads the vendored fonts that `next build` reads', () => {
+    // A different shape of the same bug. The scans above find files the build
+    // INVOKES; these are files it READS. app/fonts/*.woff2 are inputs to
+    // next/font/local, and they exist precisely so the build stops depending on
+    // fonts.googleapis.com (see app/fonts/README.md). Excluded from the upload,
+    // `next build` fails inside Cloud Build while CI stays green — the exact
+    // invisible-deploy failure this file was written for.
+    const fontDir = join(hubRoot, 'app', 'fonts')
+    const fonts = existsSync(fontDir) ? readdirSync(fontDir).filter(f => f.endsWith('.woff2')) : []
+    expect(fonts.length, 'no vendored fonts found — has the local font setup been removed?').toBeGreaterThan(0)
+
+    for (const font of fonts) {
+      const path = `app/fonts/${font}`
+      const v = evaluate(path, rules)
+      expect(
+        v.excluded,
+        `next/font/local loads ${path}, but .gcloudignore excludes it via \`${v.decidedBy}\`.\n` +
+          'Cloud Build would fail resolving the font while CI stays green. Add `!' + path + '`.',
       ).toBe(false)
     }
   })
