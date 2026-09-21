@@ -1,4 +1,4 @@
-/* Brand fonts are self-hosted via next/font/google (see app/layout.tsx),
+/* Brand fonts are self-hosted via next/font/local (app/fonts) (see app/layout.tsx),
    which injects the --font-syne / --font-space-grotesk / --font-dm-sans /
    --font-jetbrains-mono CSS variables consumed by the --font-* tokens below. */
 
