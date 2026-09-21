@@ -524,6 +524,7 @@ const ALERT_MEANING: Record<string, string> = {
   tables_missing: 'the dispatch tables are not migrated on this deployment — run the migrations',
   agy_error_streak: 'several agy runs failed in a row — usually the OAuth token needs rotation (see the agy-gateway runbook)',
   allotment_collapse: 'chat turns were served mostly by metered models instead of the allotment — check the worker and the agy token',
+  deploy_failed: 'the production deploy is failing, so master is merging but not shipping — the app you are looking at is running older code than the repo. Cloud Run is still serving the last-good revision, so nothing is down; check the Deploy to Cloud Run workflow run named in the alert',
 }
 
 /** One dispatch alert row (event_log) for the needs-you Explain tap. Content-free by construction. */

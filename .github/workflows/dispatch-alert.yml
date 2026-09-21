@@ -104,20 +104,31 @@ jobs:
             2>/dev/null) || RUNS=''
 
           if [ -n "$RUNS" ]; then
-            # index(false) is the position of the first NON-failing run, which
-            # is exactly the length of the leading failure streak; null (no
-            # non-failing run in the page) means the whole page is failing.
+            # SKIPPED runs are dropped before anything is read off the head.
+            # deploy.yml triggers on every CI completion and gates the job with
+            # `if: conclusion == 'success'`, so a RED master CI still creates a
+            # deploy run — one that concludes 'skipped' because the job never
+            # ran. Left in, that run sits at the head, zeroes the streak and
+            # clears a standing deploy_failed while master still is not
+            # shipping. A skipped run is not a deploy attempt, so it is not
+            # evidence either way.
+            #
+            # index(false) is then the position of the first NON-failing run,
+            # which is exactly the length of the leading failure streak; null
+            # (no non-failing run in the page) means the whole page is failing.
             DEPLOY=$(printf '%s' "$RUNS" | jq -c '
-              (.workflow_runs // []) as $r
+              ([(.workflow_runs // [])[]
+                | select(.conclusion != null and .conclusion != "skipped")]) as $r
               | if ($r | length) == 0 then null
                 else
-                  ([$r[] | (.conclusion == "failure" or .conclusion == "timed_out")]) as $f
+                  ([$r[] | (.conclusion == "failure" or .conclusion == "timed_out"
+                            or .conclusion == "startup_failure")]) as $f
                   | (($f | index(false)) // ($f | length)) as $streak
                   | {
                       conclusion: ($r[0].conclusion // "unknown"),
                       consecutiveFailures: $streak,
                       sha: (($r[0].head_sha // "")[0:12]),
-                      runNumber: ($r[0].run_number // 0),
+                      runNumber: ($r[0].run_number // 0)
                     }
                 end' 2>/dev/null) || DEPLOY='null'
             if [ -n "$DEPLOY" ] && [ "$DEPLOY" != "null" ]; then

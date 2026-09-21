@@ -75,13 +75,19 @@ export const COLLAPSE_MIN_METERED = 3
 /**
  * Deploy conclusions that mean the production deploy BROKE.
  *
- * Deliberately narrow. GitHub also reports 'cancelled', 'skipped', 'neutral',
- * 'stale' and 'action_required'; none of those is evidence the pipeline is
- * broken (a cancelled run is usually a human superseding a deploy), and none is
- * evidence it works either. They are treated as INDETERMINATE: no alert, and —
- * critically — no affirmative recovery. Only an observed 'success' clears.
+ * 'startup_failure' belongs here and is easy to miss: a workflow that cannot
+ * start at all (malformed YAML, an unresolvable `uses:`) never reports
+ * 'failure' — it reports this. Treating it as indeterminate would silently
+ * disable the detector for the exact case where the pipeline is most broken.
+ *
+ * Otherwise deliberately narrow. GitHub also reports 'cancelled', 'skipped',
+ * 'neutral', 'stale' and 'action_required'; none of those is evidence the
+ * pipeline is broken (a cancelled run is usually a human superseding a deploy),
+ * and none is evidence it works either. They are treated as INDETERMINATE: no
+ * alert, and — critically — no affirmative recovery. Only an observed
+ * 'success' clears.
  */
-export const DEPLOY_FAILING_CONCLUSIONS: readonly string[] = ['failure', 'timed_out']
+export const DEPLOY_FAILING_CONCLUSIONS: readonly string[] = ['failure', 'timed_out', 'startup_failure']
 
 /**
  * The production-deploy conclusion, as reported by the hourly workflow.
@@ -625,6 +631,17 @@ export async function runDispatchAlertTick(
     // vanishes from the set and would otherwise announce a fix that never
     // happened — the worst possible lie from an alerting system. It clears
     // out loud ONLY on an observed 'success'.
+    //
+    // Note this gates the WHOLE post, not just the deploy half — deliberately,
+    // and exactly as the allotment_collapse gate above already does.
+    // formatRecoveryMessage is one generic "previous alert conditions have
+    // cleared", so posting it while the deploy's state is unknown would assert
+    // something unproven. The cost is real and accepted: a worker_stale that
+    // recovers on the same tick as an unproven deploy clear goes unannounced.
+    // Nothing is lost in the direction that matters — a condition that is still
+    // broken alerts again on the next tick, and an observed 'success' posts the
+    // recovery then. Announcing an unproven all-clear is the one failure this
+    // module cannot afford.
     const deployStillUnproven =
       last!.fingerprint.includes('deploy_failed') && snapshot.deploy?.conclusion !== 'success'
     const silently =

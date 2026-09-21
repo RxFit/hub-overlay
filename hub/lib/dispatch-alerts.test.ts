@@ -473,12 +473,15 @@ describe('normalizeDeployReport — the body is authenticated, not trusted', () 
 })
 
 describe('isDeployFailing — only a broken deploy counts', () => {
-  it('treats failure and timed_out as broken', () => {
+  it('treats failure, timed_out and startup_failure as broken', () => {
     expect(isDeployFailing({ ...FAILING, conclusion: 'failure' })).toBe(true)
     expect(isDeployFailing({ ...FAILING, conclusion: 'timed_out' })).toBe(true)
+    expect(isDeployFailing({ ...FAILING, conclusion: 'startup_failure' })).toBe(true)
   })
 
   it('treats success and every indeterminate conclusion as not-broken', () => {
+    // 'skipped' is filtered out upstream (a red master CI skips deploy.yml's
+    // job), but it must also be inert here if one ever reaches the snapshot.
     for (const c of ['success', 'cancelled', 'skipped', 'neutral', 'stale', 'action_required', 'unknown']) {
       expect(isDeployFailing({ ...FAILING, conclusion: c })).toBe(false)
     }
@@ -512,6 +515,14 @@ describe('decideAlerts — deploy_failed', () => {
     expect(a.kind).toBe('deploy_failed')
     expect(a.detail).toContain('timed_out')
     expect(a.detail).not.toContain('—  ')
+  })
+
+  it('startup_failure alerts — a workflow that cannot start never reports "failure"', () => {
+    // Malformed YAML or an unresolvable `uses:` concludes startup_failure.
+    // Reading it as indeterminate would disable the detector for the case
+    // where the pipeline is most broken.
+    const [a] = decideAlerts(snapshot({ deploy: { ...FAILING, conclusion: 'startup_failure' } }))
+    expect(a.kind).toBe('deploy_failed')
   })
 
   it('a successful, indeterminate, or unreported deploy never alerts', () => {
@@ -613,6 +624,27 @@ describe('runDispatchAlertTick — deploy recovery is only announced when PROVEN
     })
     await runDispatchAlertTick(NOW, d)
     expect(recordState).toHaveBeenCalledWith(expect.any(String), '', 'none', [])
+  })
+
+  it('a MIXED cleared set stays silent while the deploy half is unproven', async () => {
+    // Deliberate, and the cost is accepted: formatRecoveryMessage is one
+    // generic all-clear, so posting it while the deploy's state is unknown
+    // would assert something unproven. The worker recovery goes unannounced;
+    // a condition that is still broken simply alerts again next tick.
+    const d = deps({
+      loadSnapshot: vi.fn().mockResolvedValue(snapshot({ deploy: null })),
+      loadLastState: vi.fn().mockResolvedValue({ fingerprint: 'deploy_failed,worker_stale', at: NOW, channel: 'chat' }),
+    })
+    expect((await runDispatchAlertTick(NOW, d)).delivery).toBe('none')
+    expect(d.post).not.toHaveBeenCalled()
+  })
+
+  it('a MIXED cleared set posts once the deploy success is observed', async () => {
+    const d = deps({
+      loadSnapshot: vi.fn().mockResolvedValue(snapshot({ deploy: { ...FAILING, conclusion: 'success', consecutiveFailures: 0 } })),
+      loadLastState: vi.fn().mockResolvedValue({ fingerprint: 'deploy_failed,worker_stale', at: NOW, channel: 'chat' }),
+    })
+    expect((await runDispatchAlertTick(NOW, d)).delivery).toBe('recovery_posted')
   })
 
   it('an unrelated recovery is unaffected by the deploy gate', async () => {
