@@ -1,55 +1,49 @@
-The fonts in this directory are licensed under the SIL Open Font License,
-Version 1.1, reproduced in full below.
+The fonts bundled in this directory are licensed under the SIL Open Font
+License, Version 1.1, reproduced in full below.
 
-OFL-1.1 clause 2 requires that this notice and the licence accompany every
-copy of the fonts, including when they are bundled into software. That is why
-this file lives beside them and is a .txt rather than a .md — hub/.gcloudignore
-excludes *.md, so a Markdown licence would not reach the container image that
-actually serves these files.
+OFL-1.1 clause 2 requires that the copyright notice and this licence accompany
+every copy of the fonts, including copies bundled into software. That is why
+this file sits beside them -- and why it is a .txt and not a .md: hub/.gcloudignore
+excludes *.md, so a Markdown licence would be stripped out of the build context
+and would never reach the container image that actually serves these files.
 
-Copyright notices, as embedded in each font's own name table:
+Every notice below is reproduced verbatim from nameID 0 (Copyright) of the
+corresponding binary in this directory. To verify, or to regenerate after
+adding or updating a font:
 
-  Copyright 2017 The Syne Project Authors (https://gitlab.com/bonjour-monde/fonderie/syne-typeface)
-
-This Font Software is licensed under the SIL Open Font License, Version 1.1.
-This license is copied below, and is also available with a FAQ at:
-https://scripts.sil.org/OFL
-
-
------------------------------------------------------------
-    (bundled as app/fonts/Syne-Variable.woff2)
-
-  Copyright 2020 The Space Grotesk Project Authors (https://github.com/floriankarsten/space-grotesk)
-
-This Font Software is licensed under the SIL Open Font License, Version 1.1.
-This license is copied below, and is also available with a FAQ at:
-http://scripts.sil.org/OFL
-
+    python3 -c "from fontTools.ttLib import TTFont; import sys; \
+      [print(TTFont(p)['name'].getDebugName(0)) for p in sys.argv[1:]]" \
+      hub/app/fonts/*.woff2
 
 -----------------------------------------------------------
-    (bundled as app/fonts/SpaceGrotesk-Variable.woff2)
-
-  Copyright 2014 The DM Sans Project Authors (https://github.com/googlefonts/dm-fonts)
-
-This Font Software is licensed under the SIL Open Font License, Version 1.1.
-This license is copied below, and is also available with a FAQ at:
-https://scripts.sil.org/OFL
-
-
+COPYRIGHT NOTICES
 -----------------------------------------------------------
-    (bundled as app/fonts/DMSans-Variable.woff2)
 
-  Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)
+Syne -- bundled as app/fonts/Syne-Variable.woff2
+  Version 2.200
 
-This Font Software is licensed under the SIL Open Font License, Version 1.1.
+    Copyright 2019 The Syne Project Authors
+    (https://gitlab.com/bonjour-monde/fonderie/syne-typeface)
 
-This license is copied below, and is also available with a FAQ at: https://scripts.sil.org/OFL
+Space Grotesk -- bundled as app/fonts/SpaceGrotesk-Variable.woff2
+  Version 2.000
 
+    Copyright 2020 The Space Grotesk Project Authors
+    (https://github.com/floriankarsten/space-grotesk)
 
------------------------------------------------------------
-    (bundled as app/fonts/JetBrainsMono-Variable.woff2)
+DM Sans -- bundled as app/fonts/DMSans-Variable.woff2
+  Version 4.004;gftools[0.9.30]
 
-==============================================================================
+    Copyright 2014 The DM Sans Project Authors
+    (https://github.com/googlefonts/dm-fonts)
+
+JetBrains Mono -- bundled as app/fonts/JetBrainsMono-Variable.woff2
+  Version 2.211
+
+    Copyright 2020 The JetBrains Mono Project Authors
+    (https://github.com/JetBrains/JetBrainsMono)
+
+==============================================================
 
 SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
 -----------------------------------------------------------

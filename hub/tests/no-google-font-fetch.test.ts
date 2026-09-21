@@ -121,13 +121,29 @@ describe('the production build does not fetch fonts over the network', () => {
     const ofl = readFileSync(join(FONT_DIR, 'OFL.txt'), 'utf8')
     expect(ofl).toMatch(/SIL OPEN FONT LICENSE Version 1\.1/i)
     expect(ofl).toMatch(/PERMISSION & CONDITIONS/i)
-    for (const f of readdirSync(FONT_DIR).filter((x) => x.endsWith('.woff2'))) {
-      expect(ofl, `${f} has no copyright notice in app/fonts/OFL.txt`).toContain(f)
-    }
-    // One notice per bundled family.
-    expect((ofl.match(/^\s*Copyright /gm) ?? []).length).toBeGreaterThanOrEqual(
-      readdirSync(FONT_DIR).filter((x) => x.endsWith('.woff2')).length,
+
+    const fonts = readdirSync(FONT_DIR).filter((x) => x.endsWith('.woff2'))
+
+    // Count notices in the NOTICES SECTION ONLY. The licence body itself says
+    // "Copyright Holder" in clauses 4 and 5, so counting `^Copyright ` across
+    // the whole file passes with zero actual notices in it.
+    const section = ofl.split(/^={10,}$/m)[0]
+    expect(section, 'OFL.txt has no copyright-notices section above the licence body').toMatch(
+      /COPYRIGHT NOTICES/,
     )
+
+    for (const f of fonts) {
+      expect(section, `${f} is not named in OFL.txt's notices section`).toContain(f)
+    }
+    // Each notice is the font's own nameID 0, reproduced verbatim: a year, the
+    // project authors, and the upstream URL. A bare "Copyright" line is not a
+    // notice, so require the shape.
+    const notices = section.match(/^\s*Copyright \d{4}(?:-\d{4})? .+/gm) ?? []
+    expect(
+      notices.length,
+      `OFL.txt carries ${notices.length} copyright notice(s) for ${fonts.length} bundled font(s) — ` +
+        `every font must ship its own, taken from nameID 0 of the binary`,
+    ).toBeGreaterThanOrEqual(fonts.length)
   })
 
   it('the vendored fonts are documented', () => {
