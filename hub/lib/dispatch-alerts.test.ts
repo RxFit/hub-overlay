@@ -593,50 +593,113 @@ describe('runDispatchAlertTick — deploy recovery is only announced when PROVEN
     expect(d.post).toHaveBeenCalledWith(expect.any(String), 'spaces/AAA', expect.stringContaining('recovered'))
   })
 
-  it('THE ANTI-LIE: an UNREPORTED deploy clears the condition but never claims a fix', async () => {
-    // The workflow rolled back, lost actions:read, or the API call failed. The
-    // condition leaves the set because there is no evidence — announcing
-    // "recovered" here would be the worst thing an alerting system can say.
-    const d = deps({
-      loadSnapshot: vi.fn().mockResolvedValue(snapshot({ deploy: null })),
-      loadLastState: vi.fn().mockResolvedValue(WAS_FAILING),
-    })
-    const r = await runDispatchAlertTick(NOW, d)
-    expect(r.delivery).toBe('none')
-    expect(d.post).not.toHaveBeenCalled()
-  })
-
-  it('an indeterminate conclusion is not a recovery either', async () => {
-    const d = deps({
-      loadSnapshot: vi.fn().mockResolvedValue(snapshot({ deploy: { ...FAILING, conclusion: 'cancelled' } })),
-      loadLastState: vi.fn().mockResolvedValue(WAS_FAILING),
-    })
-    expect((await runDispatchAlertTick(NOW, d)).delivery).toBe('none')
-    expect(d.post).not.toHaveBeenCalled()
-  })
-
-  it('a silent deploy clear still records the state change, so the next failure alerts again', async () => {
+  it('an UNREPORTED deploy does NOT clear the condition — it carries forward', async () => {
+    // The lookup failed, the token lost actions:read, or the workflow rolled
+    // back. Losing the reporter is not a fix, so the durable state must keep
+    // saying deploy_failed: otherwise the six-hourly nag stops while production
+    // is still not shipping, and a later success has nothing to recover from.
     const recordState = vi.fn().mockResolvedValue(undefined)
     const d = deps({
       loadSnapshot: vi.fn().mockResolvedValue(snapshot({ deploy: null })),
       loadLastState: vi.fn().mockResolvedValue(WAS_FAILING),
+      loadLastPostedAt: vi.fn().mockResolvedValue(new Date(NOW.getTime() - REALERT_MS - 1)),
       recordState,
     })
-    await runDispatchAlertTick(NOW, d)
-    expect(recordState).toHaveBeenCalledWith(expect.any(String), '', 'none', [])
+    const r = await runDispatchAlertTick(NOW, d)
+    expect(r.alerts.map((a) => a.kind)).toEqual(['deploy_failed'])
+    expect(r.delivery).toBe('posted')
+    // THE regression: the fingerprint must never be recorded empty here.
+    expect(recordState).toHaveBeenCalledWith(expect.any(String), 'deploy_failed', 'chat', ['deploy_failed'])
+    expect(recordState).not.toHaveBeenCalledWith(expect.any(String), '', expect.anything(), expect.anything())
   })
 
-  it('a MIXED cleared set stays silent while the deploy half is unproven', async () => {
-    // Deliberate, and the cost is accepted: formatRecoveryMessage is one
-    // generic all-clear, so posting it while the deploy's state is unknown
-    // would assert something unproven. The worker recovery goes unannounced;
-    // a condition that is still broken simply alerts again next tick.
+  it('the carried-forward alert says the report is missing rather than inventing evidence', async () => {
+    const d = deps({
+      loadSnapshot: vi.fn().mockResolvedValue(snapshot({ deploy: null })),
+      loadLastState: vi.fn().mockResolvedValue(WAS_FAILING),
+      loadLastPostedAt: vi.fn().mockResolvedValue(new Date(NOW.getTime() - REALERT_MS - 1)),
+    })
+    const [a] = (await runDispatchAlertTick(NOW, d)).alerts
+    expect(a.detail).toContain('could not be read')
+    expect(a.detail).toContain('last known failure stands')
+  })
+
+  it('an indeterminate conclusion carries forward too, naming the conclusion', async () => {
+    const d = deps({
+      loadSnapshot: vi.fn().mockResolvedValue(snapshot({ deploy: { ...FAILING, conclusion: 'cancelled' } })),
+      loadLastState: vi.fn().mockResolvedValue(WAS_FAILING),
+      loadLastPostedAt: vi.fn().mockResolvedValue(new Date(NOW.getTime() - REALERT_MS - 1)),
+    })
+    const r = await runDispatchAlertTick(NOW, d)
+    expect(r.alerts.map((a) => a.kind)).toEqual(['deploy_failed'])
+    expect(r.alerts[0].detail).toContain('cancelled')
+  })
+
+  it('a carried-forward failure still respects the re-alert window', async () => {
+    // Carrying the condition forward must not turn into hourly nagging.
+    const d = deps({
+      loadSnapshot: vi.fn().mockResolvedValue(snapshot({ deploy: null })),
+      loadLastState: vi.fn().mockResolvedValue({ ...WAS_FAILING, at: NOW }),
+      loadLastPostedAt: vi.fn().mockResolvedValue(new Date(NOW.getTime() - 60_000)),
+    })
+    expect((await runDispatchAlertTick(NOW, d)).delivery).toBe('suppressed')
+    expect(d.post).not.toHaveBeenCalled()
+  })
+
+  it('MULTI-TICK: failure → lost report → success posts exactly one alert and one recovery', async () => {
+    // The full sequence Codex flagged. State is threaded tick to tick the way
+    // the durable row does, so a premature clear anywhere shows up here.
+    let state: { fingerprint: string; at: Date; channel: string } | null = null
+    const posts: string[] = []
+    const tick = async (deploy: DeployReport | null, at: Date) => {
+      const d = deps({
+        loadSnapshot: vi.fn().mockResolvedValue(snapshot({ deploy })),
+        loadLastState: vi.fn().mockImplementation(async () => state),
+        // Nothing of this fingerprint has been delivered recently in this
+        // scenario, so the window never suppresses; each tick decides freely.
+        loadLastPostedAt: vi.fn().mockResolvedValue(null),
+        recordState: vi.fn().mockImplementation(async (_t: string, fingerprint: string, channel: string) => {
+          state = { fingerprint, at, channel }
+        }),
+        post: vi.fn().mockImplementation(async (_t: string, _s: string, text: string) => {
+          posts.push(text)
+          return true
+        }),
+      })
+      return runDispatchAlertTick(at, d)
+    }
+
+    const t0 = new Date(NOW.getTime())
+    expect((await tick(FAILING, t0)).delivery).toBe('posted')
+    expect(state!.fingerprint).toBe('deploy_failed')
+
+    // Reporter goes dark for two ticks — the state must survive both.
+    const t1 = new Date(t0.getTime() + REALERT_MS + 1)
+    expect((await tick(null, t1)).delivery).toBe('posted')
+    expect(state!.fingerprint).toBe('deploy_failed')
+
+    const t2 = new Date(t1.getTime() + REALERT_MS + 1)
+    await tick({ ...FAILING, conclusion: 'cancelled' }, t2)
+    expect(state!.fingerprint).toBe('deploy_failed')
+
+    // The deploy finally succeeds — and only now is a recovery announced.
+    const t3 = new Date(t2.getTime() + REALERT_MS + 1)
+    expect((await tick({ ...FAILING, conclusion: 'success', consecutiveFailures: 0 }, t3)).delivery)
+      .toBe('recovery_posted')
+    expect(state!.fingerprint).toBe('')
+    expect(posts.filter((p) => p.includes('recovered'))).toHaveLength(1)
+  })
+
+  it('a MIXED set keeps alerting on the deploy while the worker half recovers', async () => {
+    // worker_stale clears affirmatively, deploy_failed carries forward, so the
+    // set narrows to the deploy rather than announcing an all-clear.
     const d = deps({
       loadSnapshot: vi.fn().mockResolvedValue(snapshot({ deploy: null })),
       loadLastState: vi.fn().mockResolvedValue({ fingerprint: 'deploy_failed,worker_stale', at: NOW, channel: 'chat' }),
     })
-    expect((await runDispatchAlertTick(NOW, d)).delivery).toBe('none')
-    expect(d.post).not.toHaveBeenCalled()
+    const r = await runDispatchAlertTick(NOW, d)
+    expect(r.alerts.map((a) => a.kind)).toEqual(['deploy_failed'])
+    expect(r.delivery).toBe('posted')
   })
 
   it('a MIXED cleared set posts once the deploy success is observed', async () => {

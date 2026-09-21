@@ -254,6 +254,50 @@ export function decideAlerts(s: AlertSnapshot): DispatchAlert[] {
   return alerts
 }
 
+/**
+ * PURE: keep a known deploy failure ACTIVE until a success is actually seen.
+ *
+ * deploy_failed is the only condition here whose evidence is REPORTED rather
+ * than observed, and that asymmetry is a trap. If the report goes missing — the
+ * Actions lookup failed, the token lost actions:read, the run at the head is
+ * indeterminate — decideAlerts sees no failure and the condition simply leaves
+ * the set. Gating the recovery MESSAGE is not enough: the tick would still
+ * record an empty fingerprint, and that erases the durable state. Three things
+ * break at once — the six-hourly re-alert stops while production is still not
+ * shipping, a later success has nothing to recover from so the promised
+ * recovery never posts, and the operator's last signal was an alert that
+ * silently went quiet.
+ *
+ * So an unresolved deploy failure is carried forward instead. This is exactly
+ * the rule agy_error_streak already follows ("a streak clears only when a newer
+ * run SUCCEEDS, never by the evidence aging out"), applied to a condition whose
+ * evidence can vanish for a different reason.
+ */
+export function applyDeployCarryForward(
+  alerts: DispatchAlert[],
+  deploy: DeployReport | null,
+  lastFingerprint: string | null,
+): DispatchAlert[] {
+  const wasFailing = (lastFingerprint ?? '').split(',').includes('deploy_failed')
+  const alreadyPresent = alerts.some((a) => a.kind === 'deploy_failed')
+  // An observed success is the ONE thing that clears it.
+  const cleared = deploy?.conclusion === 'success'
+  if (!wasFailing || alreadyPresent || cleared) return alerts
+
+  const stale = deploy === null
+    ? 'the deploy conclusion could not be read this tick'
+    : `the newest deploy run is inconclusive (${deploy.conclusion})`
+  return [
+    ...alerts,
+    {
+      kind: 'deploy_failed',
+      detail:
+        `production deploy is still failing as far as the Hub can tell — ${stale}, ` +
+        'so the last known failure stands until a successful deploy is observed',
+    },
+  ]
+}
+
 /** Stable identity of a condition set, for dedup across ticks. */
 export function alertFingerprint(alerts: DispatchAlert[]): string {
   return alerts
@@ -599,9 +643,11 @@ export async function runDispatchAlertTick(
   await deps.housekeep()
 
   const snapshot = await deps.loadSnapshot(now, deploy)
-  const alerts = decideAlerts(snapshot)
-  const fingerprint = alertFingerprint(alerts)
+  // `last` is read BEFORE the decision because deploy_failed carries forward
+  // from it: a condition whose reporter went missing has not been fixed.
   const last = await deps.loadLastState(tenantId)
+  const alerts = applyDeployCarryForward(decideAlerts(snapshot), snapshot.deploy, last?.fingerprint ?? null)
+  const fingerprint = alertFingerprint(alerts)
   const lastPostedAt = await deps.loadLastPostedAt(tenantId, fingerprint)
   const action = decidePosting(alerts, last, lastPostedAt, now.getTime())
 
@@ -632,22 +678,14 @@ export async function runDispatchAlertTick(
     // happened — the worst possible lie from an alerting system. It clears
     // out loud ONLY on an observed 'success'.
     //
-    // Note this gates the WHOLE post, not just the deploy half — deliberately,
-    // and exactly as the allotment_collapse gate above already does.
-    // formatRecoveryMessage is one generic "previous alert conditions have
-    // cleared", so posting it while the deploy's state is unknown would assert
-    // something unproven. The cost is real and accepted: a worker_stale that
-    // recovers on the same tick as an unproven deploy clear goes unannounced.
-    // Nothing is lost in the direction that matters — a condition that is still
-    // broken alerts again on the next tick, and an observed 'success' posts the
-    // recovery then. Announcing an unproven all-clear is the one failure this
-    // module cannot afford.
-    const deployStillUnproven =
-      last!.fingerprint.includes('deploy_failed') && snapshot.deploy?.conclusion !== 'success'
+    // deploy_failed needs no gate here: applyDeployCarryForward keeps it in the
+    // set until a success is observed, so reaching this branch with a prior
+    // deploy failure already means the success happened. Gating the message was
+    // the first shape of this fix and it was not enough — it silenced the post
+    // but still recorded an empty fingerprint below, erasing the durable state.
     const silently =
       action === 'recovery_silent' ||
-      (last!.fingerprint.includes('allotment_collapse') && snapshot.chat24h.agyOk === 0) ||
-      deployStillUnproven
+      (last!.fingerprint.includes('allotment_collapse') && snapshot.chat24h.agyOk === 0)
     if (!silently) {
       const channel = await deps.resolveSpace(tenantId)
       if (channel) {
