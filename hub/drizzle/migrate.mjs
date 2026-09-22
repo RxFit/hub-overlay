@@ -67,8 +67,30 @@ const sql = postgres(cleanUrl, {
   ...(explicitHost && { host: explicitHost })
 })
 
+// ── Serialize concurrent migrators (session-level advisory lock) ──
+// `CREATE TABLE / INDEX IF NOT EXISTS` and `CREATE EXTENSION IF NOT EXISTS`
+// are NOT concurrency-safe: two sessions that both pass the "does not exist"
+// check race to insert the same catalog row, and the loser fails with
+// 23505 (duplicate key on pg_class_relname_nsp_index for a table/index,
+// pg_type_typname_nsp_index for the extension's types). This is real, not
+// theoretical: vitest runs this script once per worker against ONE fresh CI
+// database, and on 2026-09-22 CI on master went red exactly this way
+// (tests/feed-ai-db.test.ts, "Command failed: node drizzle/migrate.mjs").
+// Measured on an empty database: 7 of 8 concurrent runs fail without the
+// lock, 0 of 8 with it. Two Cloud Run instances cold-starting together are the
+// same race in production, where the entrypoint would log a spurious
+// migration failure. The lock makes every later migrator wait for the first
+// and then find each object already present (every statement is idempotent).
+// Released explicitly at the end; Postgres also releases it if the session
+// dies. Keyed apart from test/db-harness.ts' suite lock (727272) so a worker
+// holding that lock never blocks another worker's migration.
+const MIGRATE_LOCK_KEY = 727273
+
 async function run() {
   console.log('[migrate] Connecting to Postgres...')
+  await sql`SELECT pg_advisory_lock(${MIGRATE_LOCK_KEY})`
+  console.log('[migrate] ✓ migration lock acquired')
+
 
   // ── pgvector (NON-FATAL) ──
   // CREATE EXTENSION needs superuser-ish privileges (on Cloud SQL:
@@ -818,6 +840,7 @@ async function run() {
   `
   console.log('[migrate] ✓ seeded rxfit tenant')
 
+  await sql`SELECT pg_advisory_unlock(${MIGRATE_LOCK_KEY})`
   await sql.end()
   console.log('[migrate] ✅ Done — all tables created and rxfit tenant seeded')
 }
