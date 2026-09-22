@@ -1,7 +1,7 @@
 import { chunkMarkdownNote, buildEmbeddingInput, type MarkdownChunkerOptions } from '@/lib/markdown-chunker'
 import { swallow } from '@/lib/swallow'
 import { createScopeMatcher, VAULT_CORPUS, type VaultScope } from './config'
-import { describeError, VaultUnavailableError } from './errors'
+import { describeError, VaultUnavailableError, type VaultFailureReason } from './errors'
 import type { EmbedFn } from './embeddings'
 import type { VaultGitHubClient } from './github'
 import type { EmbeddedChunk, FailedPath, VaultStore, VaultSyncRunStatus } from './store'
@@ -35,6 +35,13 @@ import type { EmbeddedChunk, FailedPath, VaultStore, VaultSyncRunStatus } from '
  */
 
 export const MAX_CONSECUTIVE_FAILURES = 5
+
+/**
+ * Embedding failure classes that cannot succeed on the next note either
+ * (lib/vault/embeddings.ts): the provider rejected our key, does not serve the
+ * model id, or there is no key. One such failure ends the run `incomplete`.
+ */
+const DETERMINISTIC_EMBEDDING_REASONS = new Set<VaultFailureReason>(['auth', 'not_found', 'unconfigured'])
 export const DEFAULT_MAX_NOTES_PER_RUN = 200
 
 export interface SyncLogger {
@@ -221,16 +228,24 @@ export async function runVaultSync(input: VaultSyncInput, deps: VaultSyncDeps): 
         consecutiveFailures++
         log.warn({ runId, path: entry.path, message }, 'vault sync: note failed (previous version, if any, kept)')
 
+        // A rejected key, an unknown model id or a missing key fails EVERY note
+        // the same way — stop at the first one instead of burning provider calls
+        // and mis-filing the next notes as individual failures.
+        const unavailable = err instanceof VaultUnavailableError ? err : null
+        const deterministic = unavailable !== null && unavailable.stage === 'embedding' && DETERMINISTIC_EMBEDDING_REASONS.has(unavailable.reason)
         const systemic =
-          (err instanceof VaultUnavailableError && err.reason === 'breaker_open') ||
-          (err instanceof VaultUnavailableError && err.reason === 'timeout' && deps.signal?.aborted) ||
+          deterministic ||
+          unavailable?.reason === 'breaker_open' ||
+          (unavailable?.reason === 'timeout' && deps.signal?.aborted) ||
           consecutiveFailures >= MAX_CONSECUTIVE_FAILURES
         if (systemic) {
-          stoppedEarly = err instanceof VaultUnavailableError && err.reason === 'breaker_open'
-            ? 'embedding circuit open'
-            : deps.signal?.aborted
-              ? 'deadline'
-              : `${MAX_CONSECUTIVE_FAILURES} consecutive note failures`
+          stoppedEarly = deterministic && unavailable
+            ? `embedding ${unavailable.reason} — ${unavailable.message.slice(0, 200)}`
+            : unavailable?.reason === 'breaker_open'
+              ? 'embedding circuit open'
+              : deps.signal?.aborted
+                ? 'deadline'
+                : `${MAX_CONSECUTIVE_FAILURES} consecutive note failures`
           notesRemaining = toIndex.length - i - 1
           break
         }

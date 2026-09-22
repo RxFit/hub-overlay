@@ -97,8 +97,12 @@ One run = one commit:
 
 Budgets: `maxNotesPerRun` (body, default 200) and a 240s wall-clock deadline
 end a run as `incomplete` with `notesRemaining` > 0 — call again; the diff
-resumes by SHA. Systemic failures (embedding circuit open, 5 consecutive note
-failures) stop the run early for the same reason.
+resumes by SHA. Systemic failures stop the run early for the same reason:
+the embedding circuit open, 5 consecutive note failures, or a **deterministic**
+embedding failure — the Gemini API rejected the key (`auth`), does not serve
+`EMBEDDING_MODEL` (`not_found`), or there is no key (`unconfigured`) — which
+stops at the first note, with `stoppedEarly` and `vault_sync_runs.error`
+carrying the provider's status and reason.
 
 Run statuses: `running → noop | completed | completed_with_failures | incomplete | failed`.
 
@@ -212,6 +216,14 @@ A separate `smartConnections` section (`configured`, `reachable`, `latencyMs`,
 only when configured and only alongside the embedding probe, and it is **not a
 stage**: it never changes `healthy`, `readiness` or the HTTP status.
 
+When the probe fails, `embedding.detail` leads with the provider's answer —
+`Gemini embedContent (gemini-embedding-2) answered HTTP 400 API_KEY_INVALID:
+API key not valid. …` — and the report carries `embedding.reason` (the failure
+class below) and `embedding.upstreamStatus` (the Gemini HTTP status). Read those
+before anything else: the request shape and model id are pinned by
+`tests/vector-store-embed-contract.test.ts`, so a `400 API_KEY_INVALID`, `401`
+or `403` is the key, not the code.
+
 ## Failure classes
 
 | `stage` / `reason` | Meaning | Fix |
@@ -223,7 +235,11 @@ stage**: it never changes `healthy`, `readiness` or the HTTP status.
 | `github` / `http` (429) | REST rate limit — a full first index of a big vault does ~2 requests per note | lower `maxNotesPerRun`, space runs out, or set `resolveSourceModified: false` |
 | `github` / `integrity` | truncated tree, or a blob that did not hash to its SHA | the run refuses to guess; re-run, and if it persists the vault exceeds the recursive-tree API (split scope) |
 | `embedding` / `unconfigured` | no Gemini key | `GEMINI_API_KEY` |
-| `embedding` / `breaker_open` | ≥3 embedding failures in 60s | wait for the reset; check the Gemini quota |
+| `embedding` / `auth` (HTTP 400 `API_KEY_INVALID`, 401, 403) | the Gemini API rejected **our** `GEMINI_API_KEY` for `EMBEDDING_MODEL` — wrong/rotated value, API or application restriction on the key, or a project that may not call the Generative Language API. Credential-side: no deploy fixes it. The same key and request serve chat RAG over `document_chunks` and `/api/embeddings/upsert`, so those are down too | fix the key in `hub-gemini-api-key` (value, restrictions, project); re-probe |
+| `embedding` / `not_found` (404) | `EMBEDDING_MODEL` is not a model the API serves for `embedContent` | set `EMBEDDING_MODEL` to an id listed at ai.google.dev/gemini-api/docs/models; a model change requires re-embedding |
+| `embedding` / `http` (other 400, 429, 5xx) | `detail` carries the provider's status + sentence: a 400 `FAILED_PRECONDITION` is billing/location, 429 is quota, 5xx is an upstream outage | act on the sentence; the circuit resets after 60s |
+| `embedding` / `network` / `timeout` | Gemini unreachable or slower than the 5s probe | check egress from the instance; re-probe |
+| `embedding` / `breaker_open` | ≥3 embedding failures in 60s | wait for the reset; the earlier failure's `detail` names the cause |
 | `db` / `internal` | Postgres/pgvector error | `DATABASE_URL`; `drizzle/migrate.mjs` logs at container start (the vault tables sit under the same non-fatal pgvector guard as `document_chunks`) |
 | run `incomplete` | budget/deadline/systemic stop | call sync again; check `stoppedEarly` |
 | `completed_with_failures` | some notes failed | `failed_paths` on the run row names them |

@@ -77,6 +77,12 @@ export function getSql(): ReturnType<typeof postgres> {
  * Run the drizzle migrations against the test DB exactly once per process.
  * Reuses `drizzle/migrate.mjs` verbatim (idempotent `CREATE ... IF NOT EXISTS`)
  * so the test schema is always identical to what the deploy runner applies.
+ *
+ * Every vitest worker process calls this at its own start, so several
+ * migrators run at once against the same DB; migrate.mjs serializes them with
+ * a Postgres advisory lock (see tests/migrate-concurrency.test.ts). stdout is
+ * dropped (the "✓ table" lines), but stderr is inherited so a failing
+ * migration says WHY in the CI log instead of a bare "Command failed".
  */
 export function migrateTestDb(): void {
   if (_migrated) return
@@ -84,7 +90,7 @@ export function migrateTestDb(): void {
   execFileSync('node', ['drizzle/migrate.mjs'], {
     cwd: HUB_DIR,
     env: { ...process.env, DATABASE_URL: url },
-    stdio: 'ignore',
+    stdio: ['ignore', 'ignore', 'inherit'],
   })
   _migrated = true
 }

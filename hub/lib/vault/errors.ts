@@ -24,8 +24,8 @@ export type VaultFailureStage = 'config' | 'github' | 'embedding' | 'db' | 'smar
 
 export type VaultFailureReason =
   | 'unconfigured'   // a required env var is missing
-  | 'auth'           // upstream rejected our credential (401/403)
-  | 'not_found'      // upstream says the ref/tree/blob does not exist (404)
+  | 'auth'           // upstream rejected OUR credential: 401/403, or Gemini's 400 API_KEY_* rejection
+  | 'not_found'      // upstream says the thing does not exist (404): a ref/tree/blob, or the embedding model id
   | 'http'           // any other non-2xx
   | 'network'        // DNS/TLS/socket/abort
   | 'timeout'        // our own deadline expired
@@ -50,6 +50,18 @@ export class VaultUnavailableError extends Error {
 
 export function isVaultUnavailable(err: unknown): err is VaultUnavailableError {
   return err instanceof VaultUnavailableError
+}
+
+/**
+ * The one HTTP-status → reason rule every upstream shares (GitHub, Gemini):
+ * 401/403 is our credential, 404 is a missing thing, anything else is `http`
+ * with the status carried on the error. Upstream-specific cases (Gemini's 400
+ * API_KEY_* rejections) are layered on top by the caller.
+ */
+export function classifyHttpStatus(status: number): Extract<VaultFailureReason, 'auth' | 'not_found' | 'http'> {
+  if (status === 401 || status === 403) return 'auth'
+  if (status === 404) return 'not_found'
+  return 'http'
 }
 
 /** Single-line, bounded, never a stack: safe to store in vault_sync_runs.error. */
