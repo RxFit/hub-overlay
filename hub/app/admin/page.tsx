@@ -186,6 +186,7 @@ export default function AdminPage() {
             { href: '/admin/ai-health', label: '⚡ AI Health' },
             { href: '/admin/auditor', label: '🛡️ Auditor' },
             { href: '/admin/knowledge', label: '📚 Knowledge' },
+            { href: '/admin/vault-search', label: '🗂️ Vault Search' },
           ].map(tool => (
             <button
               key={tool.href}

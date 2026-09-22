@@ -718,6 +718,99 @@ async function run() {
   `
   console.log('[migrate] \u2713 report_runs table')
 
+  // ── AntigravityHQ vault corpus (Lane 1: canonical Git snapshot) ──
+  // Three additive tables for the Obsidian-vault semantic search
+  // (docs/runbooks/vault-search.md). vault_notes and vault_sync_runs carry no
+  // vector column and are created unconditionally; vault_chunks holds the
+  // VECTOR(768) embeddings and therefore shares the NON-FATAL pgvector guard
+  // that document_chunks uses above — without the extension the column type
+  // does not exist and the statement can only fail. Nothing here touches
+  // document_chunks or any existing table.
+  await sql`
+    CREATE TABLE IF NOT EXISTS vault_notes (
+      id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id           TEXT NOT NULL REFERENCES tenants(id),
+      corpus              TEXT NOT NULL DEFAULT 'antigravityhq',
+      vault_path          TEXT NOT NULL,
+      note_title          TEXT,
+      frontmatter         JSONB,
+      content_sha         TEXT NOT NULL,
+      indexed_commit_sha  TEXT,
+      embedding_model     TEXT,
+      source_modified_at  TIMESTAMPTZ,
+      indexed_at          TIMESTAMPTZ DEFAULT now() NOT NULL,
+      deleted_at          TIMESTAMPTZ
+    )
+  `
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS vault_notes_tenant_corpus_path_uniq
+    ON vault_notes (tenant_id, corpus, vault_path)
+  `
+  console.log('[migrate] ✓ vault_notes table')
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS vault_sync_runs (
+      id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id      TEXT NOT NULL REFERENCES tenants(id),
+      corpus         TEXT NOT NULL DEFAULT 'antigravityhq',
+      started_at     TIMESTAMPTZ DEFAULT now() NOT NULL,
+      finished_at    TIMESTAMPTZ,
+      status         TEXT NOT NULL DEFAULT 'running',
+      from_commit    TEXT,
+      to_commit      TEXT,
+      notes_scanned  INTEGER NOT NULL DEFAULT 0,
+      notes_indexed  INTEGER NOT NULL DEFAULT 0,
+      notes_failed   INTEGER NOT NULL DEFAULT 0,
+      failed_paths   JSONB,
+      error          TEXT
+    )
+  `
+  await sql`
+    CREATE INDEX IF NOT EXISTS vault_sync_runs_started_idx
+    ON vault_sync_runs (tenant_id, corpus, started_at DESC)
+  `
+  console.log('[migrate] ✓ vault_sync_runs table')
+
+  if (vectorOk) {
+    try {
+      await sql`
+        CREATE TABLE IF NOT EXISTS vault_chunks (
+          id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          note_id             UUID NOT NULL REFERENCES vault_notes(id) ON DELETE CASCADE,
+          tenant_id           TEXT NOT NULL REFERENCES tenants(id),
+          corpus              TEXT NOT NULL DEFAULT 'antigravityhq',
+          vault_path          TEXT NOT NULL,
+          heading_path        TEXT,
+          char_start          INTEGER NOT NULL,
+          char_end            INTEGER NOT NULL,
+          content             TEXT NOT NULL,
+          embedding           VECTOR(768),
+          embedding_model     TEXT,
+          content_sha         TEXT NOT NULL,
+          indexed_commit_sha  TEXT,
+          indexed_at          TIMESTAMPTZ DEFAULT now() NOT NULL
+        )
+      `
+      await sql`
+        CREATE INDEX IF NOT EXISTS vault_chunks_embedding_hnsw_idx
+        ON vault_chunks USING hnsw (embedding vector_cosine_ops)
+      `
+      await sql`
+        CREATE INDEX IF NOT EXISTS vault_chunks_note_idx
+        ON vault_chunks (note_id)
+      `
+      await sql`
+        CREATE INDEX IF NOT EXISTS vault_chunks_scope_idx
+        ON vault_chunks (tenant_id, corpus, embedding_model)
+      `
+      console.log('[migrate] ✓ vault_chunks table + HNSW index')
+    } catch (err) {
+      console.warn(`[migrate] ⚠️ vault_chunks schema failed (${err.code ?? ''} ${err.message}) — vault search stays unavailable until pgvector is usable; rest of schema continues.`)
+    }
+  } else {
+    console.warn('[migrate] ⚠️ Skipping vault_chunks table/index (vector extension unavailable).')
+  }
+
   await sql`
     INSERT INTO tenants (id, name, domain)
     VALUES ('rxfit', 'RxFit Athletics', 'rxfitatx.com')

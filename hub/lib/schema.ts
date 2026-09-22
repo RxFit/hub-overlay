@@ -688,3 +688,99 @@ export const hubSecrets = pgTable(
     keyIdIdx:      index('hub_secrets_key_id_idx').on(t.keyId),
   }),
 )
+
+/* ── AntigravityHQ vault corpus (Lane 1: canonical Git snapshot) ─────────── */
+/**
+ * A dedicated corpus for Danny's Obsidian vault, indexed from the private
+ * RxFit/antigravityhq-vault repository (hourly sync target). Kept SEPARATE
+ * from document_chunks on purpose: a different source of truth (a git tree,
+ * not ingest calls), different provenance fields (blob SHA, commit SHA,
+ * heading path, char offsets) and a different consumer (AI harnesses over a
+ * narrow read-only API — see docs/runbooks/vault-search.md).
+ *
+ * Contracts (lib/vault/sync.ts owns them):
+ *  - vault_notes is one row per (tenant, corpus, vault_path). `content_sha`
+ *    is the GIT BLOB SHA of the note at `indexed_commit_sha`, which is what
+ *    makes the sync incremental: an unchanged blob is never re-embedded.
+ *    `deleted_at` is a tombstone — a path that vanished from the tree keeps
+ *    its row (with no chunks) so a rename/delete is auditable.
+ *  - vault_chunks rows are replaced atomically per note: every chunk is
+ *    embedded first, then ONE transaction deletes the old set and inserts the
+ *    new one. A mid-note failure leaves the previous version fully queryable.
+ *  - Search only trusts rows on the ACTIVE embedding model (same rule as
+ *    document_chunks / lib/vector-store); `embedding_model` on the note row
+ *    lets the diff re-embed a note when the model changes even though its
+ *    blob did not.
+ *  - vault_sync_runs is the ledger the health route and the search
+ *    response's `sync` block read from: one row per sync invocation, with
+ *    per-note failures in `failed_paths` (paths + messages only, never note
+ *    content).
+ */
+
+export const vaultNotes = pgTable(
+  'vault_notes',
+  {
+    id:               uuid('id').primaryKey().defaultRandom(),
+    tenantId:         text('tenant_id').notNull().references(() => tenants.id),
+    corpus:           text('corpus').notNull().default('antigravityhq'),
+    vaultPath:        text('vault_path').notNull(),                       // vault-relative path, e.g. "Projects/Hub.md"
+    noteTitle:        text('note_title'),                                 // frontmatter title → first H1 → basename
+    frontmatter:      jsonb('frontmatter').$type<Record<string, unknown>>(), // parsed YAML frontmatter (title/aliases/tags at minimum)
+    contentSha:       text('content_sha').notNull(),                      // git blob SHA of the indexed content
+    indexedCommitSha: text('indexed_commit_sha'),                         // commit the tree was read at
+    embeddingModel:   text('embedding_model'),                            // model the note's chunks were embedded with
+    sourceModifiedAt: timestamp('source_modified_at', { withTimezone: true }), // last commit touching the path (best-effort)
+    indexedAt:        timestamp('indexed_at', { withTimezone: true }).defaultNow().notNull(),
+    deletedAt:        timestamp('deleted_at', { withTimezone: true }),    // tombstone: path vanished from the tree
+  },
+  (t) => ({
+    pathUniq: uniqueIndex('vault_notes_tenant_corpus_path_uniq').on(t.tenantId, t.corpus, t.vaultPath),
+  }),
+)
+
+export const vaultChunks = pgTable(
+  'vault_chunks',
+  {
+    id:               uuid('id').primaryKey().defaultRandom(),
+    noteId:           uuid('note_id').notNull().references(() => vaultNotes.id, { onDelete: 'cascade' }),
+    tenantId:         text('tenant_id').notNull().references(() => tenants.id),
+    corpus:           text('corpus').notNull().default('antigravityhq'),
+    vaultPath:        text('vault_path').notNull(),                       // denormalized for prefix filters
+    headingPath:      text('heading_path'),                               // "H1 > H2 > H3" at the chunk start
+    charStart:        integer('char_start').notNull(),                    // offsets into the raw note text
+    charEnd:          integer('char_end').notNull(),
+    content:          text('content').notNull(),                          // the raw slice [charStart, charEnd)
+    embedding:        vector('embedding', { dimensions: 768 }),           // same 768-dim space as document_chunks
+    embeddingModel:   text('embedding_model'),                            // search trusts only the active model
+    contentSha:       text('content_sha').notNull(),                      // note blob SHA this chunk came from
+    indexedCommitSha: text('indexed_commit_sha'),
+    indexedAt:        timestamp('indexed_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    embeddingIdx: index('vault_chunks_embedding_hnsw_idx').using('hnsw', t.embedding.op('vector_cosine_ops')),
+    noteIdx:      index('vault_chunks_note_idx').on(t.noteId),
+    scopeIdx:     index('vault_chunks_scope_idx').on(t.tenantId, t.corpus, t.embeddingModel),
+  }),
+)
+
+export const vaultSyncRuns = pgTable(
+  'vault_sync_runs',
+  {
+    id:           uuid('id').primaryKey().defaultRandom(),
+    tenantId:     text('tenant_id').notNull().references(() => tenants.id),
+    corpus:       text('corpus').notNull().default('antigravityhq'),
+    startedAt:    timestamp('started_at', { withTimezone: true }).defaultNow().notNull(),
+    finishedAt:   timestamp('finished_at', { withTimezone: true }),
+    status:       text('status').notNull().default('running'),           // running | noop | completed | completed_with_failures | incomplete | failed
+    fromCommit:   text('from_commit'),                                    // commit of the previous successful run
+    toCommit:     text('to_commit'),                                      // HEAD read by this run
+    notesScanned: integer('notes_scanned').notNull().default(0),          // in-scope markdown blobs in the tree
+    notesIndexed: integer('notes_indexed').notNull().default(0),          // notes (re)embedded this run
+    notesFailed:  integer('notes_failed').notNull().default(0),
+    failedPaths:  jsonb('failed_paths').$type<Array<{ path: string; message: string }>>(),
+    error:        text('error'),                                          // run-level failure, single line
+  },
+  (t) => ({
+    startedIdx: index('vault_sync_runs_started_idx').on(t.tenantId, t.corpus, t.startedAt.desc()),
+  }),
+)
