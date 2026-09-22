@@ -315,6 +315,29 @@ describe('budgets and systemic failures', () => {
     expect(embed.calls).toHaveLength(1)
   })
 
+  it('a deterministic embedding failure (rejected key, unknown model, no key) stops the run at the first note and names the cause', async () => {
+    embed.failWhen = () => true
+    embed.error = () => new VaultUnavailableError('embedding', 'auth', 'Gemini embedContent (gemini-embedding-2) answered HTTP 400 API_KEY_INVALID: API key not valid. Please pass a valid API key.', 400)
+    const result = await sync()
+    expect(result.status).toBe('incomplete')
+    expect(result.notesFailed).toBe(1)
+    expect(result.notesRemaining).toBe(2)
+    expect(result.stoppedEarly).toMatch(/^embedding auth — Gemini embedContent .*HTTP 400 API_KEY_INVALID/)
+    expect(embed.calls).toHaveLength(1)
+    expect(result.failedPaths[0].message).toContain('API_KEY_INVALID')
+    expect(store.runs[0]).toMatchObject({ status: 'incomplete', error: expect.stringContaining('stopped early: embedding auth') })
+
+    // The same for an unknown model id; a transient `http` failure is NOT deterministic and keeps going.
+    embed.calls = []
+    embed.error = () => new VaultUnavailableError('embedding', 'not_found', 'HTTP 404', 404)
+    expect((await sync()).stoppedEarly).toMatch(/^embedding not_found/)
+    embed.calls = []
+    embed.error = () => new VaultUnavailableError('embedding', 'http', 'HTTP 503', 503)
+    const transient = await sync()
+    expect(transient.stoppedEarly).toBeNull()
+    expect(transient.notesFailed).toBe(3)
+  })
+
   it(`stops after ${MAX_CONSECUTIVE_FAILURES} consecutive note failures`, async () => {
     for (let i = 0; i < 8; i++) vault.write(`Projects/Gen ${i}.md`, `# Gen ${i}\n\nbody ${i}\n`)
     embed.failWhen = () => true

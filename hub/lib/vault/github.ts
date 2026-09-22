@@ -1,6 +1,6 @@
 import { createHash } from 'crypto'
 import { swallow } from '@/lib/swallow'
-import { VaultUnavailableError } from './errors'
+import { VaultUnavailableError, classifyHttpStatus } from './errors'
 
 /**
  * Read-only GitHub client for the vault snapshot (Lane 1).
@@ -80,12 +80,6 @@ function combineSignals(a: AbortSignal | undefined, b: AbortSignal): AbortSignal
   return a.aborted ? a : b
 }
 
-function classifyStatus(status: number): 'auth' | 'not_found' | 'http' {
-  if (status === 401 || status === 403) return 'auth'
-  if (status === 404) return 'not_found'
-  return 'http'
-}
-
 export function createGitHubClient(options: GitHubClientOptions): VaultGitHubClient {
   const fetchImpl = options.fetchImpl ?? fetch
   const apiBase = (options.apiBase ?? DEFAULT_API_BASE).replace(/\/$/, '')
@@ -132,7 +126,7 @@ export function createGitHubClient(options: GitHubClientOptions): VaultGitHubCli
       }
       throw new VaultUnavailableError(
         'github',
-        classifyStatus(res.status),
+        classifyHttpStatus(res.status),
         `GitHub ${what} failed with HTTP ${res.status}${upstreamMessage ? `: ${upstreamMessage.slice(0, 200)}` : ''}`,
         res.status,
       )
