@@ -67,8 +67,32 @@ const sql = postgres(cleanUrl, {
   ...(explicitHost && { host: explicitHost })
 })
 
+// One migrator at a time. Parallel vitest workers in CI each run this script
+// against the same throwaway Postgres, and several Cloud Run instances can
+// cold-start together and each run it from docker-entrypoint.sh. The index
+// rebuilds below (drop-if-exists, then create) — and even `CREATE … IF NOT
+// EXISTS` — are not atomic across sessions: the loser of the race fails with
+// `duplicate key value violates unique constraint "pg_class_relname_nsp_index"`
+// and this script exits 1 (CI run 35677400752 on 2026-09-22, tool_runs_user_created_idx;
+// the identical tree had passed minutes earlier). A session-level advisory lock
+// on our single connection (max: 1) makes the second migrator wait for the first,
+// then find everything already in place and no-op. Postgres releases it when the
+// session ends (sql.end(), or the process dying), so a crashed migrator cannot
+// wedge the next one. Any int64 works as the key; this one is unique to this
+// script. tests/migrate-concurrency.test.ts pins both the lock and the behaviour.
+const MIGRATE_LOCK_KEY = 72609220001
+
+async function acquireMigrationLock() {
+  const [{ acquired }] = await sql`SELECT pg_try_advisory_lock(${MIGRATE_LOCK_KEY}::bigint) AS acquired`
+  if (acquired) return
+  console.log('[migrate] Another migrator holds the lock — waiting for it to finish…')
+  await sql`SELECT pg_advisory_lock(${MIGRATE_LOCK_KEY}::bigint)`
+  console.log('[migrate] Lock acquired — continuing (the schema is likely already in place).')
+}
+
 async function run() {
   console.log('[migrate] Connecting to Postgres...')
+  await acquireMigrationLock()
 
   // ── pgvector (NON-FATAL) ──
   // CREATE EXTENSION needs superuser-ish privileges (on Cloud SQL:
