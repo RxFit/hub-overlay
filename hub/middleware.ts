@@ -144,6 +144,14 @@ export const config = {
     //   session-protected. NOTE it is a prefix match, so a future route whose
     //   path starts with /api/reports/run (e.g. .../runner) would silently
     //   inherit this exclusion — name it something else, or anchor this.)
-    '/((?!login|api/auth|api/chat|api/embeddings|api/webhooks|api/healthz|api/worker|api/reports/run|api/cron/|_next|static|.*\\.(?:png|ico|svg|webmanifest)$).*)',
+    // - /api/knowledge/antigravityhq/ (the vault sync + search machine routes —
+    //   AI harnesses call them with a service bearer key, never a NextAuth
+    //   cookie; each handler enforces its own constant-time bearer check and
+    //   503s `disabled` until the vault credentials/scope are configured. The
+    //   search route ALSO accepts a signed-in session for the admin inspection
+    //   page, checked in-handler via getServerSession. Trailing slash keeps the
+    //   exclusion segment-anchored: /api/knowledge/antigravityhq-x stays
+    //   middlewared, and so does any other /api/knowledge/* route.)
+    '/((?!login|api/auth|api/chat|api/embeddings|api/webhooks|api/healthz|api/worker|api/reports/run|api/cron/|api/knowledge/antigravityhq/|_next|static|.*\\.(?:png|ico|svg|webmanifest)$).*)',
   ],
 }

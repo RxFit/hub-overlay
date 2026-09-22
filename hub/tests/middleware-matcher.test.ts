@@ -73,11 +73,25 @@ describe('middleware matcher — deliberate exclusions', () => {
     ['/api/worker/jobs/abc/result', 'x-worker-secret, 503 when unset'],
     ['/api/cron/dispatch-alert', 'x-cron-secret, 503 when unset'],
     ['/api/reports/run', 'x-cron-secret, 503 when unset — the fix'],
+    ['/api/knowledge/antigravityhq/sync', 'vault sync — VAULT_SYNC_API_KEY bearer, 503 disabled until configured'],
+    ['/api/knowledge/antigravityhq/search', 'vault search — VAULT_SEARCH_KEYS bearer or in-handler session'],
     ['/favicon.ico', 'brand asset fetched without a cookie'],
     ['/apple-touch-icon.png', 'iOS home-screen icon'],
     ['/site.webmanifest', 'PWA manifest'],
   ])('%s is excluded (%s)', (path) => {
     expect(isProtected(path)).toBe(false)
+  })
+
+  // The vault exclusion is segment-anchored to ONE corpus under /api/knowledge.
+  // A sibling corpus, a near-miss slug, or the bare prefix must all stay gated —
+  // widening it to `api/knowledge` would un-gate every future knowledge route.
+  it('excludes only the antigravityhq corpus routes, not the /api/knowledge prefix', () => {
+    expect(isProtected('/api/knowledge/antigravityhq/sync')).toBe(false)
+    expect(isProtected('/api/knowledge/antigravityhq/search')).toBe(false)
+    expect(isProtected('/api/knowledge/antigravityhq')).toBe(true)
+    expect(isProtected('/api/knowledge/antigravityhq-x/search')).toBe(true)
+    expect(isProtected('/api/knowledge/other/search')).toBe(true)
+    expect(isProtected('/api/knowledge')).toBe(true)
   })
 
   // The exclusion is one route, not the /api/reports prefix. If someone

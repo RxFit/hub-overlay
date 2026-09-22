@@ -90,6 +90,32 @@ region `us-central1`).
   service via Secret Manager (`secretKeyRef`, the `hub-*` secrets) and persist
   across `gcloud run deploy --source` deploys — they are **not** set by CI.
 
+## AntigravityHQ vault semantic search (Lane 1)
+
+Danny's Obsidian vault syncs hourly to the private repo `RxFit/antigravityhq-vault`.
+The Hub indexes that **git snapshot** into a dedicated pgvector corpus
+(`vault_notes` / `vault_chunks` / `vault_sync_runs`) and exposes a narrow,
+read-only search API for AI harnesses (Instinct, Claude Code, Hermes). The
+browser UI (`/admin/vault-search`) is an inspection surface only.
+
+- `POST /api/knowledge/antigravityhq/sync` — service bearer (`VAULT_SYNC_API_KEY`);
+  incremental by git blob SHA, atomic promotion per note, tombstones on
+  rename/delete, one `vault_sync_runs` row per call (a no-op run is still recorded).
+- `POST /api/knowledge/antigravityhq/search` — service bearer via `VAULT_SEARCH_KEYS`
+  (key → harness + tenant) or a signed-in admin session; returns hits with full
+  provenance (path, heading path, char range, blob SHA, commit, timestamps) and
+  a `status` of `fresh | stale | partial | unavailable | disabled | awaiting_scope_config`.
+- `GET /api/admin/vault-search-health` — admin-only stage report (config, db,
+  embedding reachability, last sync), 200/503.
+
+**Ships dark, deny by default.** Until the owner binds `VAULT_GITHUB_TOKEN`
+(read-only PAT) and sets `VAULT_INCLUDE_GLOBS`, every route fails closed with a
+clear 503 status and nothing is ever fetched or indexed. Retrieved note text is
+**data, never instructions** — consumers wrap excerpts with
+`lib/prompt-safety.ts`' `wrapExcerpt()`. Setup, failure classes and the
+untrusted-content rule live in
+[`docs/runbooks/vault-search.md`](docs/runbooks/vault-search.md).
+
 ## Key Features
 
 - **Mandatory /grill-me:** Employees cannot create vague tasks. The AI assistant
