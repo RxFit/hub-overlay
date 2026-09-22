@@ -3,6 +3,7 @@ import { describeSearchKeys, isSyncKeyConfigured } from './auth'
 import { getVaultReadiness, getVaultRepo, isVaultTokenConfigured, readVaultScope, VAULT_CORPUS, type VaultReadiness } from './config'
 import { describeError } from './errors'
 import type { EmbedFn } from './embeddings'
+import { createSmartConnectionsClientFromEnv, readSmartConnectionsConfig, type SmartConnectionsProbe } from './smart-connections'
 import type { VaultStore, VaultSyncRunRow } from './store'
 
 /**
@@ -18,8 +19,15 @@ import type { VaultStore, VaultSyncRunRow } from './store'
  *   embedding  the embedding model answers (one live call, bounded)
  *   sync       the last run finished and did not fail
  *
+ * Lane 2 (`smartConnections`) is reported in its own section and is NOT a
+ * stage: the live desktop lane is optional by design, so an unconfigured or
+ * unreachable endpoint never changes `healthy`, `readiness` or `summary`.
+ * It is probed (initialize + tools/list, no search) only when configured and
+ * only when the embedding probe runs too (`?probe=0` skips both).
+ *
  * SECURITY: reports presence booleans and counts only — never a token, a key,
- * a glob's matches, note content, or a query.
+ * a glob's matches, note content, or a query. The Smart Connections section
+ * names the endpoint HOST at most, never the key.
  */
 
 export type VaultHealthStage = 'config' | 'db' | 'embedding' | 'sync'
@@ -50,6 +58,8 @@ export interface VaultHealthReport {
   lastSuccessfulRun: VaultSyncRunRow | null
   coverage: { notesLive: number; notesOnActiveModel: number; chunksOnActiveModel: number; notesFailedLastRun: number }
   embedding: { reachable: boolean | null; latencyMs: number | null; detail: string }
+  /** Lane 2, optional: never affects `healthy`. `reachable` is null unless configured AND probed. */
+  smartConnections: { configured: boolean; reachable: boolean | null; latencyMs: number | null; detail: string }
   summary: string
   remediation?: string
   generatedAt: string
@@ -64,6 +74,18 @@ export interface VaultHealthDeps {
   probeEmbedding?: boolean
   probeTimeoutMs?: number
   tenantId: string
+  /** Run the Smart Connections probe when configured (default: same as probeEmbedding). */
+  probeSmartConnections?: boolean
+  /** Injectable Lane 2 probe (tests); default builds the client from env. Never throws. */
+  liveProbe?: () => Promise<SmartConnectionsProbe>
+}
+
+/** Bounded like the embedding probe: the health page must answer even when the desktop is asleep. */
+async function defaultLiveProbe(env: Record<string, string | undefined>, probeTimeoutMs: number): Promise<SmartConnectionsProbe> {
+  const configuredTimeout = readSmartConnectionsConfig(env).timeoutMs
+  const client = createSmartConnectionsClientFromEnv(env, { timeoutMs: Math.min(configuredTimeout, probeTimeoutMs) })
+  if (!client) return { reachable: false, latencyMs: 0, detail: 'not configured' }
+  return client.probe()
 }
 
 const STUCK_RUN_MS = 60 * 60 * 1000
@@ -146,6 +168,26 @@ export async function checkVaultSearchHealth(deps: VaultHealthDeps): Promise<Vau
     stages.push({ stage: 'embedding', status: 'skipped', detail: 'probe skipped (probe=0)' })
   }
 
+  // Lane 2 — its own section, never a stage (optional by design).
+  const sc = readSmartConnectionsConfig(env)
+  const smartConnections: VaultHealthReport['smartConnections'] = {
+    configured: sc.configured,
+    reachable: null,
+    latencyMs: null,
+    detail: sc.configured ? `configured (${sc.host}); probe skipped` : `${sc.detail ?? 'not configured'} — optional live lane; does not affect readiness`,
+  }
+  if (sc.configured && (deps.probeSmartConnections ?? deps.probeEmbedding ?? true)) {
+    try {
+      const probe = await (deps.liveProbe ?? (() => defaultLiveProbe(env, deps.probeTimeoutMs ?? 5_000)))()
+      smartConnections.reachable = probe.reachable
+      smartConnections.latencyMs = probe.latencyMs
+      smartConnections.detail = `${sc.host}: ${probe.detail}`
+    } catch (err) {
+      smartConnections.reachable = false
+      smartConnections.detail = `${sc.host}: ${describeError(err, 200)}`
+    }
+  }
+
   if (!lastRun) {
     stages.push({ stage: 'sync', status: 'fail', detail: 'no sync run recorded yet' })
     remediation ??= 'Trigger POST /api/knowledge/antigravityhq/sync with the sync bearer key'
@@ -176,6 +218,7 @@ export async function checkVaultSearchHealth(deps: VaultHealthDeps): Promise<Vau
     lastSuccessfulRun,
     coverage,
     embedding,
+    smartConnections,
     summary,
     remediation: healthy ? undefined : remediation,
     generatedAt: now().toISOString(),

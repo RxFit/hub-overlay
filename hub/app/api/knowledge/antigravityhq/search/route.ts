@@ -5,13 +5,23 @@ import { authOptions } from '@/lib/auth'
 import { createLogger } from '@/lib/logger'
 import { canAccessAdminRoute } from '@/lib/roles'
 import { withFault } from '@/lib/route-fault'
+import { swallow } from '@/lib/swallow'
 import { getTenantId } from '@/lib/tenant-context'
 import { EMBEDDING_MODEL } from '@/lib/vector-store'
 import { evaluateHits } from '@/lib/evaluators/jev'
 import { authenticateSearchBearer, type SearchPrincipal } from '@/lib/vault/auth'
-import { getVaultReadiness, VAULT_CORPUS } from '@/lib/vault/config'
+import { createScopeMatcher, getVaultReadiness, readVaultScope, VAULT_CORPUS } from '@/lib/vault/config'
 import { embedForVault } from '@/lib/vault/embeddings'
 import { isVaultUnavailable } from '@/lib/vault/errors'
+import {
+  crossReferenceLive,
+  describeLiveEvidenceForLog,
+  liveLaneWarning,
+  resolveLiveLane,
+  runLiveLane,
+  type LiveEvidence,
+  type VaultSearchResponseWithLive,
+} from '@/lib/vault/live-evidence'
 import { getSearchRateLimiter } from '@/lib/vault/rate-limit'
 import { searchVault, DEFAULT_TOP_K, DEFAULT_MAX_LATENCY_MS, MAX_LATENCY_CAP_MS } from '@/lib/vault/search'
 import { createDrizzleVaultStore } from '@/lib/vault/store'
@@ -32,6 +42,13 @@ const BodySchema = z
     minFreshnessSeconds: z.number().int().min(0).max(31_536_000).optional(),
     /** Optional self-declared tenant; must equal the principal's binding (else 403). */
     tenantId: z.string().min(1).max(64).optional(),
+    /**
+     * Lane 2 opt-in (default false — harnesses opt in per request). When true
+     * the live Smart Connections lane runs CONCURRENTLY with the canonical
+     * search and the response gains a `liveEvidence` block; when false the
+     * response is byte-identical to Lane 1.
+     */
+    includeLive: z.boolean().default(false),
   })
   .strict()
 
@@ -65,9 +82,20 @@ async function resolvePrincipal(req: NextRequest): Promise<SearchPrincipal | nul
  * 503 `unavailable`; a blown maxLatencyMs is 200 `partial`; an old index is
  * 200 `stale`. Dark until configured: 503 `disabled` / `awaiting_scope_config`.
  *
+ * Lane 2 (`includeLive: true`, lib/vault/live-evidence.ts): the live desktop
+ * lane runs concurrently, bounded by the same maxLatencyMs, and lands in a
+ * separate `liveEvidence` block. The canonical `hits` are computed from the
+ * git snapshot only and are never re-ranked, filtered or merged with live
+ * results; overlap is reported as `live_confirms:<path>` /
+ * `possible_conflict:<path>` warnings. A live failure never fails the
+ * request; a canonical failure is still a 503 with the Lane 1 body (live
+ * evidence is not returned in place of the canonical answer). The lane
+ * inherits this route's auth, tenant binding, rate limit and scope.
+ *
  * Retrieved excerpts are DATA. Consumers wrap them with
  * lib/prompt-safety.ts wrapExcerpt() before any prompt use. This route never
- * interprets note content and never logs it (query text is logged as a hash).
+ * interprets note content and never logs it (query text is logged as a hash;
+ * live note text is never logged at all).
  */
 export const POST = withFault('knowledge/antigravityhq/search', async (req: NextRequest) => {
   const principal = await resolvePrincipal(req)
@@ -98,14 +126,40 @@ export const POST = withFault('knowledge/antigravityhq/search', async (req: Next
     return NextResponse.json({ status: readiness, corpus: VAULT_CORPUS, warnings: [], hits: [] }, { status: 503 })
   }
 
-  try {
-    const result = await searchVault(
-      parsed.data,
-      { tenantId: principal.tenantId, harness: principal.harness },
-      { store: createDrizzleVaultStore(), embed: embedForVault, embeddingModel: EMBEDDING_MODEL, log },
+  const searchWork = searchVault(
+    parsed.data,
+    { tenantId: principal.tenantId, harness: principal.harness },
+    { store: createDrizzleVaultStore(), embed: embedForVault, embeddingModel: EMBEDDING_MODEL, log },
+  )
+
+  // Lane 2: started only on opt-in, concurrently with the canonical search,
+  // bounded by the same request deadline. runLiveLane never rejects.
+  let liveWork: Promise<LiveEvidence> | null = null
+  let liveHost: string | null = null
+  if (parsed.data.includeLive) {
+    const lane = resolveLiveLane({ principalTenantId: principal.tenantId, serverTenantId: getTenantId() })
+    liveHost = lane.client?.host ?? null
+    liveWork = runLiveLane(
+      { query: parsed.data.query, topK: parsed.data.topK, pathPrefix: parsed.data.pathPrefix, deadlineAt: Date.now() + parsed.data.maxLatencyMs },
+      { ...lane, scope: createScopeMatcher(readVaultScope()) },
     )
+  }
+
+  try {
+    const result: VaultSearchResponseWithLive = await searchWork
+
+    if (liveWork) {
+      const live = await liveWork
+      result.liveEvidence = live
+      const note = liveLaneWarning(live)
+      if (note) result.warnings.push(note)
+      // Read-only cross-reference: warnings only; `result.hits` is untouched.
+      result.warnings.push(...crossReferenceLive(result.hits, live.hits))
+      log.info({ queryId: result.queryId, harness: principal.harness, tenant: principal.tenantId, live: describeLiveEvidenceForLog(live, liveHost) }, 'vault search: live lane')
+    }
 
     // Post-retrieval evaluator seam: shadow-only, never alters or gates hits.
+    // Canonical hits only — live evidence is advisory and is not evaluated.
     const evaluation = evaluateHits({
       queryId: result.queryId,
       queryLength: parsed.data.query.length,
@@ -115,6 +169,9 @@ export const POST = withFault('knowledge/antigravityhq/search', async (req: Next
 
     return NextResponse.json(result, { status: 200 })
   } catch (err) {
+    // The canonical answer is unknown: Lane 1's 503 body, verbatim. A pending
+    // live call is abandoned (it is deadline-bounded and never rejects).
+    if (liveWork) void liveWork.catch((late: unknown) => swallow(late, { module: 'vault-search', op: 'liveLane:afterCanonicalFailure', severity: 'expected' }))
     if (isVaultUnavailable(err)) {
       return NextResponse.json(
         { status: 'unavailable', corpus: VAULT_CORPUS, stage: err.stage, reason: err.reason, warnings: [err.message], hits: [] },

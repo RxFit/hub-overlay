@@ -1,5 +1,6 @@
 /**
- * Failure contract for the AntigravityHQ vault corpus (Lane 1).
+ * Failure contract for the AntigravityHQ vault corpus (Lane 1) and its
+ * optional live lane (Lane 2, lib/vault/smart-connections.ts).
  *
  * Same rule as lib/vertex.ts: unavailability THROWS, it never resolves to an
  * empty value. `[]` from a search means the index was queried and matched
@@ -11,9 +12,15 @@
  * `stage` says WHICH upstream failed (the operator's question); `reason` says
  * HOW (the classification the route maps to a status). Neither ever carries
  * note content, a query string or a credential.
+ *
+ * Lane 2 uses stage 'smart_connections' with the same reason vocabulary
+ * ('network' is the "unreachable" class; 'protocol' is its own). Its failures
+ * never reach the route as a rejection — lib/vault/live-evidence.ts folds them
+ * into `liveEvidence.status` because the live lane is advisory and must never
+ * fail the canonical request.
  */
 
-export type VaultFailureStage = 'config' | 'github' | 'embedding' | 'db'
+export type VaultFailureStage = 'config' | 'github' | 'embedding' | 'db' | 'smart_connections'
 
 export type VaultFailureReason =
   | 'unconfigured'   // a required env var is missing
@@ -24,6 +31,7 @@ export type VaultFailureReason =
   | 'timeout'        // our own deadline expired
   | 'breaker_open'   // circuit open — upstream not even dialled
   | 'integrity'      // the payload did not verify (blob SHA mismatch, truncated tree)
+  | 'protocol'       // the upstream answered, but not in the protocol we speak (Lane 2: bad JSON-RPC, missing tool, unrecognized result)
   | 'internal'       // unexpected local failure (DB driver error, …)
 
 export class VaultUnavailableError extends Error {
