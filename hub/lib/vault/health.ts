@@ -1,7 +1,7 @@
 import { EMBEDDING_MODEL } from '@/lib/vector-store'
 import { describeSearchKeys, isSyncKeyConfigured } from './auth'
 import { getVaultReadiness, getVaultRepo, isVaultTokenConfigured, readVaultScope, VAULT_CORPUS, type VaultReadiness } from './config'
-import { describeError } from './errors'
+import { describeError, isVaultUnavailable, type VaultFailureReason, type VaultUnavailableError } from './errors'
 import type { EmbedFn } from './embeddings'
 import type { VaultStore, VaultSyncRunRow } from './store'
 
@@ -49,7 +49,18 @@ export interface VaultHealthReport {
   lastRun: VaultSyncRunRow | null
   lastSuccessfulRun: VaultSyncRunRow | null
   coverage: { notesLive: number; notesOnActiveModel: number; chunksOnActiveModel: number; notesFailedLastRun: number }
-  embedding: { reachable: boolean | null; latencyMs: number | null; detail: string }
+  /**
+   * Live probe outcome. On failure `reason` is the vault failure class and
+   * `upstreamStatus` the Gemini HTTP status (when the provider answered at
+   * all), so the cause is machine-readable and not only inside `detail`.
+   */
+  embedding: {
+    reachable: boolean | null
+    latencyMs: number | null
+    detail: string
+    reason?: VaultFailureReason
+    upstreamStatus?: number
+  }
   summary: string
   remediation?: string
   generatedAt: string
@@ -67,6 +78,39 @@ export interface VaultHealthDeps {
 }
 
 const STUCK_RUN_MS = 60 * 60 * 1000
+
+/**
+ * The one concrete next action for a failed embedding probe, by failure class.
+ * An `auth` failure (401/403, or a 400 the provider attributes to the API key)
+ * is CREDENTIAL-SIDE: the request shape and model id are pinned by
+ * tests/vector-store-embed-contract.test.ts, so no code change can clear it —
+ * say so, and point at the secret and the model rather than at the code.
+ */
+const GENERIC_EMBEDDING_REMEDIATION = 'Check GEMINI_API_KEY and the vault-embeddings circuit (it resets after 60s)'
+
+export function embeddingRemediation(err: unknown, probeTimeoutMs: number): string {
+  if (!isVaultUnavailable(err)) return GENERIC_EMBEDDING_REMEDIATION
+  const failure: VaultUnavailableError = err
+  const code = failure.status ? `HTTP ${failure.status}` : 'no HTTP status'
+  switch (failure.reason) {
+    case 'unconfigured':
+      return 'Bind GEMINI_API_KEY (Secret Manager hub-gemini-api-key) — the embedding path has no key'
+    case 'auth':
+      return `The Gemini API rejected GEMINI_API_KEY for ${EMBEDDING_MODEL} (${code}). Credential-side, not code: check the key value in hub-gemini-api-key, its API/application restrictions, and that its project may call the Generative Language API`
+    case 'not_found':
+      return `The Gemini API does not serve ${EMBEDDING_MODEL} for embedContent (${code}) — set EMBEDDING_MODEL to a listed embedding model; a model change requires re-embedding`
+    case 'breaker_open':
+      return 'The vault-embeddings circuit is open after repeated failures — wait 60s and probe again; the earlier failure detail names the cause'
+    case 'timeout':
+      return `The probe did not answer within ${probeTimeoutMs} ms — the Gemini API is slow or unreachable from this instance`
+    case 'network':
+      return 'The Gemini API could not be reached (DNS/TLS/socket) — check egress from the Cloud Run instance'
+    default:
+      return failure.status
+        ? `The Gemini API answered ${code} for ${EMBEDDING_MODEL} — read the detail: a 400 here is a billing/location precondition, 429 is quota, 5xx is an upstream outage`
+        : GENERIC_EMBEDDING_REMEDIATION
+  }
+}
 
 export async function checkVaultSearchHealth(deps: VaultHealthDeps): Promise<VaultHealthReport> {
   const env = deps.env ?? process.env
@@ -125,23 +169,33 @@ export async function checkVaultSearchHealth(deps: VaultHealthDeps): Promise<Vau
 
   const embedding: VaultHealthReport['embedding'] = { reachable: null, latencyMs: null, detail: 'probe skipped' }
   if (deps.probeEmbedding ?? true) {
+    const probeTimeoutMs = deps.probeTimeoutMs ?? 5_000
     const t0 = Date.now()
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), deps.probeTimeoutMs ?? 5_000)
+    const timer = setTimeout(() => controller.abort(), probeTimeoutMs)
+    let probeRemediation: string | null = null
     try {
       const vector = await deps.embed('vault search health probe', { signal: controller.signal })
       embedding.reachable = Array.isArray(vector) && vector.length > 0
       embedding.latencyMs = Date.now() - t0
       embedding.detail = embedding.reachable ? `${EMBEDDING_MODEL} answered (${vector.length} dims)` : 'embedding call returned an empty vector'
+      if (!embedding.reachable) probeRemediation = embeddingRemediation(null, probeTimeoutMs)
     } catch (err) {
       embedding.reachable = false
       embedding.latencyMs = Date.now() - t0
+      // The classifier (lib/vault/embeddings.ts) puts the provider's HTTP status
+      // and reason code at the FRONT of the message, so this bound keeps them.
       embedding.detail = describeError(err, 200)
+      if (isVaultUnavailable(err)) {
+        embedding.reason = err.reason
+        if (typeof err.status === 'number') embedding.upstreamStatus = err.status
+      }
+      probeRemediation = embeddingRemediation(err, probeTimeoutMs)
     } finally {
       clearTimeout(timer)
     }
     stages.push({ stage: 'embedding', status: embedding.reachable ? 'ok' : 'fail', detail: embedding.detail })
-    if (!embedding.reachable) remediation ??= 'Check GEMINI_API_KEY and the vault-embeddings circuit (it resets after 60s)'
+    if (probeRemediation) remediation ??= probeRemediation
   } else {
     stages.push({ stage: 'embedding', status: 'skipped', detail: 'probe skipped (probe=0)' })
   }

@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import { db } from './db'
+import { parseGeminiError } from './gemini-error'
 import { documentChunks } from './schema'
 import { desc, sql, eq, and } from 'drizzle-orm'
 import { createLogger } from './logger'
@@ -23,19 +24,46 @@ const MAX_EMBEDDING_INPUT_CHARS = 8_000
 /**
  * Active embedding model + output dimensionality.
  *
- * gemini-embedding-001 reached end-of-life on 2026-07-14; gemini-embedding-2 is
- * its GA successor. The two produce vectors in INCOMPATIBLE spaces, so a stored
- * vector is only comparable to a query vector from the SAME model. We therefore
- * tag every stored row with the model that produced it
- * (document_chunks.embedding_model) and restrict search to rows on the ACTIVE
- * model — a cross-space comparison can never happen, and rows still on the old
- * model stay invisible until the backfill re-embeds them
+ * gemini-embedding-2 is the GA successor of gemini-embedding-001 (GA
+ * 2026-04-22 per ai.google.dev/gemini-api/docs/changelog). -001 is deprecated
+ * but NOT gone: Google's published shutdown is 2028-05-14
+ * (ai.google.dev/gemini-api/docs/deprecations) — an earlier note here claimed a
+ * 2026-07-14 end-of-life, which was never Google's date. The two models produce
+ * vectors in INCOMPATIBLE spaces, so a stored vector is only comparable to a
+ * query vector from the SAME model. We therefore tag every stored row with the
+ * model that produced it (document_chunks.embedding_model) and restrict search
+ * to rows on the ACTIVE model — a cross-space comparison can never happen, and
+ * rows still on the old model stay invisible until the backfill re-embeds them
  * (scripts/reembed-document-chunks.mjs).
  *
  * EMBEDDING_MODEL is overridable so the exact API id can be corrected without a
  * code change. 768 dims — a supported Matryoshka truncation of the model's 3072
  * default — keeps the existing vector(768) column and HNSW cosine index as-is
  * (cosine is scale-invariant, so a truncated vector needs no re-normalization).
+ *
+ * WIRE CONTRACT (checked 2026-09-22). The installed SDK, @google/generative-ai
+ * 0.24 (deprecated upstream but still the one in package.json), serializes the
+ * params object below verbatim (`JSON.stringify(params)`) and POSTs it to
+ * `https://generativelanguage.googleapis.com/v1beta/models/{EMBEDDING_MODEL}:embedContent`
+ * with the key in the `x-goog-api-key` header, so the body on the wire is exactly
+ * `{ content: { parts: [{ text }] }, outputDimensionality }`. That matches
+ * Google's published shape for gemini-embedding-2 (the REST example at
+ * ai.google.dev/gemini-api/docs/embeddings puts output_dimensionality at the TOP
+ * level, and Google's current SDK, @google/genai 2.23, places it at the top level
+ * of each request too; the nested embedContentConfig form is Vertex's). Never add
+ * `taskType`/`title`: gemini-embedding-2 does not support task_type (task
+ * instructions go in the text itself). tests/vector-store-embed-contract.test.ts
+ * pins this exact request so a drift shows up in CI, not in production.
+ *
+ * A non-2xx from the provider rejects with the SDK's GoogleGenerativeAIFetchError
+ * carrying `status`, `statusText` and `errorDetails` (google.rpc.ErrorInfo
+ * `reason`, e.g. API_KEY_INVALID). Every consumer of this module — chat RAG over
+ * document_chunks (searchSimilarDocuments), ingest (upsertDocumentChunk),
+ * tool-artifact chunks (lib/tool-artifacts.ts) and the vault corpus
+ * (lib/vault/embeddings.ts) — shares this one request, so a provider rejection
+ * of it affects all of them alike. The error log below carries the parsed
+ * `provider` summary (lib/gemini-error.ts) for all of them, and
+ * lib/vault/embeddings.ts turns it into a bounded, cause-first message.
  */
 export const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || 'gemini-embedding-2'
 export const EMBEDDING_DIMENSIONS = 768
@@ -75,7 +103,7 @@ export async function generateEmbedding(text: string): Promise<number[]> {
     } as any)
     return result.embedding.values
   } catch (err) {
-    log.error({ err }, 'Failed to generate embedding')
+    log.error({ err, model: EMBEDDING_MODEL, outputDimensionality: EMBEDDING_DIMENSIONS, provider: parseGeminiError(err) }, 'Failed to generate embedding')
     throw err
   }
 }
