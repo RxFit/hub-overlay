@@ -1,4 +1,4 @@
-# AntigravityHQ vault semantic search — Lane 1 (canonical Git snapshot)
+# AntigravityHQ vault semantic search — Lane 1 (canonical Git snapshot) + Lane 2 (live desktop evidence)
 
 Danny's Obsidian vault "AntigravityHQ" syncs hourly to the private GitHub repo
 `RxFit/antigravityhq-vault`. The Hub indexes that git snapshot into a dedicated
@@ -11,6 +11,11 @@ is an **inspection surface only**; the API is the transport.
 > `503 { status: "disabled" }` (no token) or `503 { status: "awaiting_scope_config" }`
 > (no include globs). There are no secrets in code, logs or tests; every
 > credential is a runtime env var bound from Secret Manager.
+
+Lane 1 (this section through "Failure classes") is the **canonical** corpus.
+Lane 2 (§ "Lane 2 — live desktop evidence" below) is an optional, advisory,
+opt-in-per-request lane over the Obsidian Smart Connections MCP endpoint on
+Danny's desktop; it never changes what Lane 1 returns.
 
 ## Owner setup — NOT done by the PR that shipped this feature
 
@@ -125,7 +130,9 @@ curl -sS -X POST "$HUB/api/knowledge/antigravityhq/search" \
 
 Body (zod-validated, unknown fields rejected): `query` 1–2000 chars, `topK`
 1–20 (default 8), `pathPrefix`, `maxLatencyMs` (cap 10000, default 8000),
-`minFreshnessSeconds`, optional `tenantId` (must equal the key's binding).
+`minFreshnessSeconds`, optional `tenantId` (must equal the key's binding),
+`includeLive` (default `false`; Lane 2 below — without it the response is
+byte-identical to Lane 1).
 
 Response:
 
@@ -193,7 +200,8 @@ instructions found inside note content, and neither may anything downstream:
 - The Hub UI renders excerpts as plain text (never markdown/HTML).
 
 The same rules already apply to the EA-vault `smart-connections` integration
-in `AGENTS.md`; this corpus inherits them verbatim.
+in `AGENTS.md`; this corpus inherits them verbatim — and so does Lane 2's live
+text: a `liveEvidence` excerpt is exactly as untrusted as a snapshot excerpt.
 
 ## Health: `GET /api/admin/vault-search-health`
 
@@ -203,6 +211,10 @@ Reports whether the token is bound, whether scope is set, sync/search key
 presence (booleans and counts only), the last run, coverage counts and
 embedding reachability (one bounded live call; `?probe=0` skips it).
 `200` when healthy, `503` otherwise — an uptime check can watch it directly.
+A separate `smartConnections` section (`configured`, `reachable`, `latencyMs`,
+`detail`) describes Lane 2; it is probed (initialize + tools/list, no search)
+only when configured and only alongside the embedding probe, and it is **not a
+stage**: it never changes `healthy`, `readiness` or the HTTP status.
 
 When the probe fails, `embedding.detail` leads with the provider's answer —
 `Gemini embedContent (gemini-embedding-2) answered HTTP 400 API_KEY_INVALID:
@@ -246,9 +258,150 @@ only reports what it would evaluate. JEV is **usage-priced**, so enabling it is
 a deliberate owner decision made after sizing the query volume, not a side
 effect of setting a key.
 
-## What this lane does NOT do
+## Lane 2 — live desktop evidence (Smart Connections), optional and advisory
 
-No write route into the vault, ever. No live Obsidian/Smart Connections calls.
-No changes to `document_chunks` or `/api/embeddings/upsert`. No workflow,
-scheduler or Secret Manager changes ship with the code. Lane 2 (live desktop
-sync) is a separate design.
+Lane 1 answers from the hourly git snapshot. Danny's desktop also runs the
+Obsidian **Smart Connections** plugin, whose MCP endpoint (streamable HTTP)
+can answer a semantic search against the vault *as it is right now* — fresher
+than the snapshot, but only while the desktop is online and reachable. Lane 2
+adds that endpoint as a **secondary, freshness-oriented evidence source**
+(`lib/vault/smart-connections.ts` is the client; `lib/vault/live-evidence.ts`
+is the lane; the search route wires them in).
+
+> **Ships dark, deny by default, advisory only.** With `SMART_CONNECTIONS_URL`
+> or `SMART_CONNECTIONS_API_KEY` unset the lane reports `disabled` and never
+> makes a call. Even when configured, nothing happens unless a request opts in
+> with `includeLive: true` (default `false`; a request without it is
+> byte-identical to Lane 1). **Live results are advisory evidence only** —
+> never the answer. The canonical snapshot remains authoritative until the
+> next sync.
+
+### Canonical vs live — the precedence rule
+
+- The `hits` array is computed from the git-snapshot corpus **only**, by the
+  same Lane 1 engine, and is never re-ranked, filtered, de-duplicated against
+  or merged with live results. `status`, `sync` and the Lane 1 warnings mean
+  exactly what they meant before.
+- Live results arrive in a **separate** top-level `liveEvidence` block:
+  `status` (`ok | unavailable | disabled | timeout`), `latencyMs`, `hits`, plus
+  `reason` / `detail` on failure and a `dropped` count. Each live hit carries
+  `source: "smart_connections_live"`, `live: true` and **null** for everything
+  the live tool cannot vouch for (`contentSha`, `indexedCommitSha`,
+  `indexedAt`, the char range). Provenance is never fabricated; `similarity`
+  is present only when the tool reports one in 0..1; `noteTitle` is derived
+  from the path.
+- When a live hit's `vaultPath` also appears in the canonical hits the route
+  adds the warning `live_confirms:<path>` (the desktop vault surfaced the same
+  note). When the live text for that path **clearly differs** from the indexed
+  chunk(s) — a conservative token-overlap heuristic that can also fire for a
+  different section of the same note — it also adds
+  `possible_conflict:<path> — live desktop content differs from the indexed
+  snapshot; the canonical snapshot remains authoritative until the next sync`.
+  Treat that as "verify before relying on the snapshot", never as "the live
+  text wins". Nothing is ever silently merged.
+- A live failure (offline desktop, bad key, timeout, protocol error, open
+  circuit) **never fails the request**: the canonical hits come back with
+  `liveEvidence.status` set and one warning naming the outcome. A canonical
+  failure is still a `503` with the Lane 1 body — live evidence is never
+  returned in place of the canonical answer — and the lane does not run at
+  all while Lane 1 is `disabled` / `awaiting_scope_config`.
+- Live hits pass through the **same scope** (`VAULT_INCLUDE_GLOBS` /
+  `VAULT_EXCLUDE_GLOBS`, `.md` only) and the request's `pathPrefix`; anything
+  outside is dropped and counted in `dropped`, never returned. The lane
+  inherits the route's auth, rate limit and tenant binding — it serves only
+  the Hub's own tenant (`NEXT_PUBLIC_TENANT_ID`, default `rxfit`); a key bound
+  to another tenant gets `disabled` — and its redacted logging: the endpoint
+  **host**, status, reason and counts are logged, never the key, never note
+  text, never the query.
+
+### Owner setup — NOT done by the PR that shipped this lane
+
+1. **Expose the Smart Connections MCP endpoint** from the desktop over a
+   private tunnel (Tailscale Serve/Funnel, Cloudflare Tunnel, …) with a bearer
+   key that the plugin or the tunnel checks as `Authorization: Bearer …`.
+   Never expose it without a key; it answers with live note text.
+2. **Bind the two secrets in Secret Manager** (project `rxfit-automation`),
+   same `hub-*` `secretKeyRef` pattern as Lane 1:
+
+   | Env var | Secret Manager name | Value |
+   |---------|---------------------|-------|
+   | `SMART_CONNECTIONS_URL` | `hub-smart-connections-url` | the tunnel URL of the MCP endpoint (http(s)) |
+   | `SMART_CONNECTIONS_API_KEY` | `hub-smart-connections-key` | the endpoint's bearer key |
+
+   ```bash
+   echo -n "https://<tunnel-host>/mcp" | gcloud secrets create hub-smart-connections-url --data-file=- --project=rxfit-automation
+   echo -n "<bearer key>" | gcloud secrets create hub-smart-connections-key --data-file=- --project=rxfit-automation
+   ```
+
+   Optional plain env vars: `SMART_CONNECTIONS_TOOL` (default `search_notes`;
+   endpoint versions name the semantic-search tool differently — the client
+   verifies the name against `tools/list` and falls back to a small candidate
+   list (`semantic_search`, `search`, `lookup`, …), never to a write-capable
+   tool; the health report says which tool answered) and
+   `SMART_CONNECTIONS_TIMEOUT_MS` (default 4000, cap 8000).
+3. **Verify** with `GET /api/admin/vault-search-health`: the `smartConnections`
+   section must show `configured: true, reachable: true` and name the tool
+   (`?probe=0` skips the probe). It is not a health stage — an unreachable
+   desktop never turns the report red.
+4. **Enable per harness** by adding `"includeLive": true` to that harness's
+   search requests (Instinct, Claude Code and Hermes each decide for
+   themselves; the request is otherwise unchanged). The admin page has the
+   equivalent "Include live desktop results (Smart Connections)" checkbox,
+   off by default. There is no server-side switch that turns the lane on for
+   everyone.
+
+### Request / response
+
+```bash
+curl -sS -X POST "$HUB/api/knowledge/antigravityhq/search" \
+  -H "Authorization: Bearer $VAULT_SEARCH_KEY" -H 'content-type: application/json' \
+  -d '{"query":"how is the deploy pipeline gated","topK":8,"maxLatencyMs":5000,"includeLive":true}'
+```
+
+```json
+{
+  "queryId": "…", "status": "fresh", "sync": { "…": "unchanged" },
+  "warnings": [
+    "live_confirms:Projects/Hub Overlay.md",
+    "possible_conflict:Projects/Hub Overlay.md — live desktop content differs from the indexed snapshot; the canonical snapshot remains authoritative until the next sync"
+  ],
+  "hits": [ "…canonical hits, exactly as without includeLive…" ],
+  "liveEvidence": {
+    "status": "ok", "latencyMs": 312, "reason": null, "detail": null, "dropped": 0,
+    "hits": [{ "vaultPath": "Projects/Hub Overlay.md", "noteTitle": "Hub Overlay",
+               "headingPath": "Deploy", "charStart": null, "charEnd": null,
+               "excerpt": "…live block text…", "similarity": 0.81,
+               "contentSha": null, "indexedCommitSha": null, "sourceModifiedAt": null,
+               "indexedAt": null, "source": "smart_connections_live", "live": true }]
+  }
+}
+```
+
+The live call runs **concurrently** with the canonical search and is bounded
+by `min(SMART_CONNECTIONS_TIMEOUT_MS, remaining maxLatencyMs)`; when the request
+deadline is the tighter one the live call is abandoned (`status: "timeout"`,
+detail names the deadline) and the canonical result is returned as usual.
+The MCP handshake (`initialize` → `notifications/initialized` → `tools/list`)
+is cached per instance for five minutes so a search is normally one round
+trip; a `404`/`400` on `tools/call` (session gone) re-handshakes once.
+
+### Lane 2 failure classes (`liveEvidence.status` / `reason`)
+
+| `status` / `reason` | Meaning | Fix |
+|---------------------|---------|-----|
+| `disabled` / `unconfigured` | URL or key unset, URL not http(s), or the key is bound to another tenant | bind both secrets; use a Hub-tenant search key |
+| `unavailable` / `auth` (401/403) | the endpoint rejected the key | rotate: add a secret version and restart the plugin/tunnel with the new key |
+| `unavailable` / `network` | DNS/socket failure — desktop offline or tunnel down | check the desktop and the tunnel; the snapshot still answers |
+| `timeout` / `timeout` | the desktop did not answer within the budget, or the request's `maxLatencyMs` was tighter | raise `SMART_CONNECTIONS_TIMEOUT_MS` (≤ 8000) or the request's `maxLatencyMs` |
+| `unavailable` / `http` | other non-2xx (a 404/400 on `tools/call` is retried once after a fresh handshake) | check the tunnel / plugin logs |
+| `unavailable` / `protocol` | not JSON-RPC, a JSON-RPC error, tool not listed, tool error, unrecognized result shape, or a **non-semantic** result mode (keyword fallback, model unavailable) | set `SMART_CONNECTIONS_TOOL`; check the plugin's embedding model — a non-semantic answer is refused on purpose (the AGENTS.md rule) |
+| `unavailable` / `breaker_open` | ≥3 endpoint failures in 60s on the `vault-smart-connections` circuit | wait for the reset; a caller-deadline abort never counts against the endpoint |
+
+## What these lanes do NOT do
+
+No write route into the vault, ever — Lane 2 only ever calls `initialize`,
+`tools/list` and the one semantic-search tool, and never picks a write-capable
+tool as a fallback. No changes to `document_chunks` or `/api/embeddings/upsert`.
+No workflow, scheduler or Secret Manager changes ship with the code. Lane 2
+never re-ranks, filters, merges or replaces canonical hits, never runs unless
+a request opts in, and never runs while Lane 1 is dark.

@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation'
 import { getTenantConfig } from '@/lib/tenant'
 import { swallow } from '@/lib/swallow'
 import type { VaultHealthReport } from '@/lib/vault/health'
+import type { LiveEvidence, VaultSearchResponseWithLive } from '@/lib/vault/live-evidence'
 import type { VaultSearchResponse } from '@/lib/vault/search'
 
 /**
@@ -20,12 +21,19 @@ import type { VaultSearchResponse } from '@/lib/vault/search'
  *
  * Excerpts are DATA: rendered as plain text, never as markdown/HTML, never
  * interpreted. Nothing here writes anywhere.
+ *
+ * Lane 2: the "Include live desktop results (Smart Connections)" checkbox
+ * (off by default) sends `includeLive: true`; the response's `liveEvidence`
+ * block is rendered in its own clearly-labelled section, never mixed into the
+ * canonical hit list. Live hits are advisory — the git snapshot stays
+ * authoritative, and the route's `live_confirms:` / `possible_conflict:`
+ * warnings show up in the warnings list like any other.
  */
 
 const tenant = getTenantConfig()
 
 type Health = VaultHealthReport
-type SearchResult = VaultSearchResponse | { status: 'disabled' | 'awaiting_scope_config' | 'unavailable'; warnings?: string[]; hits?: never[]; stage?: string; reason?: string }
+type SearchResult = VaultSearchResponseWithLive | { status: 'disabled' | 'awaiting_scope_config' | 'unavailable'; warnings?: string[]; hits?: never[]; stage?: string; reason?: string }
 
 const STATUS_COLORS: Record<string, string> = {
   fresh: '#22c55e',
@@ -37,6 +45,13 @@ const STATUS_COLORS: Record<string, string> = {
   ok: '#22c55e',
   fail: '#ef4444',
   skipped: '#6b7280',
+}
+
+const LIVE_STATUS_COLORS: Record<LiveEvidence['status'], string> = {
+  ok: '#22c55e',
+  timeout: '#eab308',
+  unavailable: '#eab308',
+  disabled: '#6b7280',
 }
 
 async function readJson<T>(res: Response): Promise<T> {
@@ -59,6 +74,7 @@ export default function VaultSearchPage() {
   const [topK, setTopK] = useState(8)
   const [pathPrefix, setPathPrefix] = useState('')
   const [minFreshness, setMinFreshness] = useState('')
+  const [includeLive, setIncludeLive] = useState(false)
   const [searching, setSearching] = useState(false)
   const [result, setResult] = useState<SearchResult | null>(null)
   const [httpStatus, setHttpStatus] = useState<number | null>(null)
@@ -94,6 +110,7 @@ export default function VaultSearchPage() {
       const body: Record<string, unknown> = { query: q, topK }
       if (pathPrefix.trim()) body.pathPrefix = pathPrefix.trim()
       if (minFreshness.trim()) body.minFreshnessSeconds = Number(minFreshness)
+      if (includeLive) body.includeLive = true
       const res = await fetch('/api/knowledge/antigravityhq/search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -122,6 +139,9 @@ export default function VaultSearchPage() {
 
   const hits = result && 'hits' in result && Array.isArray(result.hits) ? (result.hits as VaultSearchResponse['hits']) : []
   const sync = result && 'sync' in result ? result.sync : null
+  const live: LiveEvidence | null = result && 'liveEvidence' in result && result.liveEvidence ? result.liveEvidence : null
+  const canonicalPaths = new Set(hits.map((h) => h.vaultPath))
+  const sc = health?.smartConnections
 
   return (
     <div className="admin-shell">
@@ -159,8 +179,9 @@ export default function VaultSearchPage() {
             </div>
           </div>
           <p className="admin-section__sub">
-            Read-only inspection of the git-snapshot index (Lane 1). Everything ships dark: the owner binds the read-only PAT and
-            the scope globs before anything is indexed — see docs/runbooks/vault-search.md.
+            Read-only inspection of the git-snapshot index (Lane 1) and the optional live desktop lane (Lane 2, Smart Connections).
+            Everything ships dark: the owner binds the read-only PAT and the scope globs before anything is indexed, and the live
+            lane stays disabled until its endpoint URL and key are bound — see docs/runbooks/vault-search.md.
           </p>
 
           {health ? (
@@ -175,6 +196,11 @@ export default function VaultSearchPage() {
               <Field label="Last run" value={health.lastRun ? `${health.lastRun.status} · ${new Date(health.lastRun.finishedAt ?? health.lastRun.startedAt).toLocaleString()}` : 'never'} />
               <Field label="Indexed commit" value={health.lastSuccessfulRun?.toCommit ? health.lastSuccessfulRun.toCommit.slice(0, 12) : '—'} />
               <Field label="Coverage" value={`${health.coverage.notesOnActiveModel}/${health.coverage.notesLive} notes · ${health.coverage.chunksOnActiveModel} chunks · ${health.coverage.notesFailedLastRun} failed`} />
+              <Field
+                label="Smart Connections (live lane, optional)"
+                value={!sc ? 'n/a' : !sc.configured ? 'not configured' : sc.reachable === null ? 'configured · probe skipped' : sc.reachable ? `reachable · ${sc.latencyMs} ms` : 'unreachable'}
+                color={!sc || !sc.configured || sc.reachable === null ? undefined : sc.reachable ? STATUS_COLORS.ok : '#eab308'}
+              />
             </div>
           ) : (
             !loadingHealth && <div className="admin-empty">Health report unavailable.</div>
@@ -189,6 +215,12 @@ export default function VaultSearchPage() {
                 </div>
               ))}
               {health.remediation && <div style={{ color: '#eab308' }}>Next step: {health.remediation}</div>}
+              {sc && (
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <span style={{ color: '#6b7280', minWidth: '90px' }}>live lane</span>
+                  <span style={{ color: 'var(--text-muted)' }}>{sc.detail}</span>
+                </div>
+              )}
             </div>
           )}
         </section>
@@ -224,6 +256,10 @@ export default function VaultSearchPage() {
               {searching ? 'Searching…' : 'Search'}
             </button>
           </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '0.5rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+            <input type="checkbox" checked={includeLive} onChange={(e) => setIncludeLive(e.target.checked)} aria-label="Include live desktop results (Smart Connections)" />
+            Include live desktop results (Smart Connections) — advisory evidence only; the git snapshot stays authoritative
+          </label>
 
           {result && (
             <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
@@ -266,6 +302,44 @@ export default function VaultSearchPage() {
                     <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '0.8rem', lineHeight: 1.5, margin: '6px 0 0', color: '#e5e7eb', fontFamily: 'var(--font-mono)' }}>{h.excerpt}</pre>
                   </article>
                 ))
+              )}
+
+              {live && (
+                <section aria-label="Live desktop evidence (Smart Connections)" style={{ padding: '0.75rem 1rem', border: '1px dashed var(--border)', borderRadius: '8px' }}>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', fontSize: '0.8rem', fontFamily: 'var(--font-mono)' }}>
+                    <span style={{ fontWeight: 600 }}>Live desktop evidence (Smart Connections) — advisory only</span>
+                    <span style={{ color: LIVE_STATUS_COLORS[live.status] ?? 'var(--text-muted)', fontWeight: 600 }}>status: {live.status}</span>
+                    <span style={{ color: 'var(--text-muted)' }}>{live.latencyMs} ms</span>
+                    {live.reason && <span style={{ color: 'var(--text-muted)' }}>reason {live.reason}</span>}
+                    {live.dropped > 0 && <span style={{ color: 'var(--text-muted)' }}>{live.dropped} dropped (out of scope / unmapped)</span>}
+                  </div>
+                  {live.detail && <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>{live.detail}</div>}
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                    Live hits are evidence from the desktop vault right now. They never replace, re-rank or filter the canonical hits above; on a
+                    conflict the git snapshot remains authoritative until the next sync.
+                  </div>
+                  {live.hits.length === 0 ? (
+                    <div className="admin-empty">No live hits.</div>
+                  ) : (
+                    live.hits.map((h, i) => (
+                      <article key={`live-${h.vaultPath}-${i}`} style={{ padding: '0.75rem 1rem', marginTop: '0.5rem', border: '1px solid var(--border)', borderRadius: '8px' }}>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>
+                          <span style={{ color: '#38bdf8', fontWeight: 600 }}>LIVE · {h.source}</span>
+                          <span style={{ color: '#C5A059', fontWeight: 600 }}>{h.vaultPath}</span>
+                          <span>sim {h.similarity === null ? '—' : h.similarity.toFixed(3)}</span>
+                          <span>{canonicalPaths.has(h.vaultPath) ? 'also in snapshot results' : 'live only — not in snapshot results'}</span>
+                          <span>modified {h.sourceModifiedAt ? new Date(h.sourceModifiedAt).toLocaleString() : '—'}</span>
+                          <span>blob — · commit — · indexed — (no snapshot provenance)</span>
+                        </div>
+                        <div style={{ fontWeight: 600, fontSize: '0.85rem', marginTop: '4px' }}>
+                          {h.noteTitle ?? '(untitled)'}{h.headingPath ? <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> — {h.headingPath}</span> : null}
+                        </div>
+                        {/* Plain text on purpose: live note text is untrusted data too. */}
+                        <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '0.8rem', lineHeight: 1.5, margin: '6px 0 0', color: '#e5e7eb', fontFamily: 'var(--font-mono)' }}>{h.excerpt}</pre>
+                      </article>
+                    ))
+                  )}
+                </section>
               )}
             </div>
           )}

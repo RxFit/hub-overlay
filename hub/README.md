@@ -90,7 +90,7 @@ region `us-central1`).
   service via Secret Manager (`secretKeyRef`, the `hub-*` secrets) and persist
   across `gcloud run deploy --source` deploys — they are **not** set by CI.
 
-## AntigravityHQ vault semantic search (Lane 1)
+## AntigravityHQ vault semantic search (Lane 1 + optional Lane 2)
 
 Danny's Obsidian vault syncs hourly to the private repo `RxFit/antigravityhq-vault`.
 The Hub indexes that **git snapshot** into a dedicated pgvector corpus
@@ -106,7 +106,17 @@ browser UI (`/admin/vault-search`) is an inspection surface only.
   provenance (path, heading path, char range, blob SHA, commit, timestamps) and
   a `status` of `fresh | stale | partial | unavailable | disabled | awaiting_scope_config`.
 - `GET /api/admin/vault-search-health` — admin-only stage report (config, db,
-  embedding reachability, last sync), 200/503.
+  embedding reachability, last sync), 200/503, plus a `smartConnections`
+  section for the optional live lane (never part of the health verdict).
+- **Lane 2 (optional, opt-in per request with `includeLive: true`):** the same
+  search route can also ask the Obsidian **Smart Connections** MCP endpoint on
+  the desktop for live results, returned in a separate `liveEvidence` block
+  (`status: ok | unavailable | disabled | timeout`). Live hits are advisory
+  evidence only — never merged with, re-ranked against or substituted for the
+  canonical git-snapshot hits; overlap shows up as `live_confirms:<path>` /
+  `possible_conflict:<path>` warnings, and a live failure never fails the
+  request. Dark until `SMART_CONNECTIONS_URL` and `SMART_CONNECTIONS_API_KEY`
+  are bound.
 
 **Ships dark, deny by default.** Until the owner binds `VAULT_GITHUB_TOKEN`
 (read-only PAT) and sets `VAULT_INCLUDE_GLOBS`, every route fails closed with a

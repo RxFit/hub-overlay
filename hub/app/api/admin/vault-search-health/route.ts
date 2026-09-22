@@ -19,6 +19,9 @@ export const runtime = 'nodejs'
  * whether VAULT_GITHUB_TOKEN is bound, whether scope is configured, the last
  * sync run, coverage counts and embedding reachability (one bounded live
  * call; `?probe=0` skips it). 200 when healthy, 503 otherwise, same body.
+ * The optional Lane 2 endpoint (Smart Connections) is reported in its own
+ * `smartConnections` section — probed only when configured, and never part of
+ * the healthy/readiness computation (`?probe=0` skips that probe too).
  * Presence booleans and counts only — never a token, key or note content.
  */
 export const GET = withFault('admin/vault-search-health', async (req: NextRequest) => {

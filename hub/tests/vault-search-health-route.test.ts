@@ -3,6 +3,8 @@ import { NextRequest } from 'next/server'
 import { createMemoryVaultStore, type MemoryVaultStore } from '../test/vault-memory-store'
 import { createFakeEmbed, type FakeEmbed } from '../test/vault-fake-embed'
 import { _resetSearchKeyCacheForTests } from '@/lib/vault/auth'
+import { _resetSmartConnectionsForTests } from '@/lib/vault/smart-connections'
+import { createFakeMcp, FAKE_MCP_KEY, FAKE_MCP_URL } from '../test/vault-fake-mcp'
 
 /* ════════════════════════════════════════════════════════════════════════════
    GET /api/admin/vault-search-health — admin gate (401/403), 503 with the
@@ -36,7 +38,7 @@ import { GET } from '@/app/api/admin/vault-search-health/route'
 
 const ADMIN = { user: { email: 'danny@rxfitatx.com', role: 'superadmin' } }
 const request = (path = '/api/admin/vault-search-health') => new NextRequest(`http://localhost:3000${path}`)
-const ENV_KEYS = ['VAULT_SYNC_API_KEY', 'VAULT_SEARCH_KEYS', 'VAULT_GITHUB_TOKEN', 'VAULT_INCLUDE_GLOBS', 'VAULT_EXCLUDE_GLOBS']
+const ENV_KEYS = ['VAULT_SYNC_API_KEY', 'VAULT_SEARCH_KEYS', 'VAULT_GITHUB_TOKEN', 'VAULT_INCLUDE_GLOBS', 'VAULT_EXCLUDE_GLOBS', 'SMART_CONNECTIONS_URL', 'SMART_CONNECTIONS_API_KEY']
 
 async function seedRun(status: 'completed' | 'failed', extra: Partial<{ error: string; notesFailed: number }> = {}) {
   const id = await state.store.startRun({ tenantId: 'rxfit', corpus: 'antigravityhq', startedAt: new Date(Date.now() - 5_000), fromCommit: null })
@@ -61,6 +63,8 @@ beforeEach(() => {
 afterEach(() => {
   for (const k of ENV_KEYS) delete process.env[k]
   _resetSearchKeyCacheForTests()
+  _resetSmartConnectionsForTests()
+  vi.unstubAllGlobals()
   vi.clearAllMocks()
 })
 
@@ -127,6 +131,41 @@ describe('GET /api/admin/vault-search-health', () => {
     const body = await skipped.json()
     expect(body.embedding).toEqual({ reachable: null, latencyMs: null, detail: 'probe skipped' })
     expect(state.embed.calls).toHaveLength(0)
+  })
+
+  it('reports the optional Smart Connections lane in its own section, probed only when configured, never affecting health', async () => {
+    configureAll()
+    await seedRun('completed')
+    let body = await (await GET(request())).json()
+    expect(body.healthy).toBe(true)
+    expect(body.smartConnections).toEqual({ configured: false, reachable: null, latencyMs: null, detail: expect.stringContaining('not set') })
+
+    const fake = createFakeMcp()
+    process.env.SMART_CONNECTIONS_URL = FAKE_MCP_URL
+    process.env.SMART_CONNECTIONS_API_KEY = FAKE_MCP_KEY
+    vi.stubGlobal('fetch', fake.fetch)
+    const ok = await GET(request())
+    expect(ok.status).toBe(200)
+    body = await ok.json()
+    expect(body.smartConnections).toMatchObject({ configured: true, reachable: true })
+    expect(body.smartConnections.latencyMs).toBeGreaterThanOrEqual(0)
+    expect(body.smartConnections.detail).toContain('desktop.example.test')
+    expect(body.smartConnections.detail).toContain('tool "search_notes"')
+    expect(fake.methods()).toEqual(['initialize', 'notifications/initialized', 'tools/list']) // never a search
+    expect(JSON.stringify(body)).not.toContain(FAKE_MCP_KEY)
+
+    fake.mode = 'auth'
+    const rejected = await GET(request())
+    expect(rejected.status).toBe(200) // Lane 2 is optional: an unreachable desktop never turns the report red
+    body = await rejected.json()
+    expect(body.healthy).toBe(true)
+    expect(body.smartConnections).toMatchObject({ configured: true, reachable: false, detail: expect.stringContaining('auth:') })
+    expect(body.stages.map((s: { stage: string }) => s.stage)).not.toContain('smart_connections')
+
+    fake.calls.length = 0
+    body = await (await GET(request('/api/admin/vault-search-health?probe=0'))).json()
+    expect(body.smartConnections).toMatchObject({ configured: true, reachable: null, latencyMs: null })
+    expect(fake.calls).toHaveLength(0)
   })
 
   it('503 with the last failed run’s error when the last sync failed', async () => {
