@@ -74,13 +74,26 @@ jobs:
     permissions:
       contents: read
       id-token: write   # needed if you switch to Workload Identity Federation
+    # THE ONE COMMIT THIS RUN DEPLOYS. On workflow_run that is the commit CI
+    # validated (workflow_run.head_sha) — NOT github.sha / $GITHUB_SHA, which
+    # for workflow_run events is "last commit on the default branch" at the
+    # time the event fired. The two differ whenever master moves while a CI
+    # run is still in flight, which a CI re-run makes routine (run 214 skipped
+    # on a red first attempt; the green re-run completed 19 minutes later). The
+    # Checkout step and the GIT_SHA env var both read THIS value, so the
+    # revision can never carry a SHA other than the one it was built from.
+    # (GIT_SHA feeds /api/worker/claim's version-drift check and the
+    # dispatch-health SHA pair; a stamp that lies there reports drift, or
+    # parity, that does not exist.) Manual dispatch: the tip of the dispatched
+    # ref, pinned to a SHA at dispatch time.
+    env:
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # Deploy the EXACT commit CI validated (workflow_run.head_sha); fall
-          # back to the dispatch ref for manual runs.
-          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+          # Deploy the EXACT commit CI validated — see DEPLOY_SHA above.
+          ref: ${{ env.DEPLOY_SHA }}
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -108,7 +121,10 @@ jobs:
           ENV_VARS="$ENV_VARS,VERTEX_GCP_PROJECT=semantic-brain-desktop"
           # Deployed commit, echoed by /api/worker/claim so the desktop worker
           # can detect version drift (dispatch-health shows the SHA pair).
-          ENV_VARS="$ENV_VARS,GIT_SHA=$GITHUB_SHA"
+          # DEPLOY_SHA (the job env above), never $GITHUB_SHA: on workflow_run
+          # events GITHUB_SHA is the default-branch tip, not the commit that
+          # was checked out and built.
+          ENV_VARS="$ENV_VARS,GIT_SHA=$DEPLOY_SHA"
 
           # --add-cloudsql-instances pins the documented DB attachment
           # (service.yaml / scripts/gcp-migrate-hub.ps1) on EVERY deploy.
