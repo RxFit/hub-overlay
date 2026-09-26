@@ -1,0 +1,124 @@
+name: Nightly semantic sync
+
+# Indexes Stripe + Gmail into dedicated Vertex AI Search data stores in project
+# semantic-brain-desktop — never ones connected to the Hub chat engine, which
+# every chat role searches unscoped (the route refuses; see lib/semantic-sync/run.ts).
+# Calls POST /api/cron/semantic-sync, which reads Stripe events and Gmail
+# (domain-wide delegation) since each source's stored cursor, writes one HTML
+# document + a JSONL manifest per run into that source's GCS bucket, and starts
+# an INCREMENTAL Discovery Engine import. Runbook:
+# hub/docs/runbooks/semantic-sync.md.
+#
+# Why a GitHub schedule and not a new Cloud Scheduler job: same reasoning as
+# dispatch-alert.yml — this repo already holds CRON_SECRET, so the trigger is
+# zero new GCP infrastructure and inherits the loud-by-default posture (a
+# failed run emails the repo owner). GitHub may drop a scheduled firing; the
+# route is cursor-driven, so the next firing catches up instead of leaving a
+# hole (bounded by MAX_CATCHUP_HOURS in lib/semantic-sync/run.ts).
+#
+# Targets the .run.app service URL, never hub.casatrejo.com: the custom domain
+# sits behind Cloudflare, which challenges non-browser CI curls even when the
+# app is healthy (see dispatch-alert.yml).
+#
+# THE RUN FAILS (and GitHub emails) when:
+#   - the endpoint is unreachable or answers anything but 200/502,
+#   - any source FAILED (HTTP 502 — the JSON names the stage and upstream
+#     error). That includes a data store connected to the chat engine (refused:
+#     every chat role would see mailbox/billing records) and an earlier import
+#     ABANDONED after its retries (records in GCS but not in the index).
+# It WARNS (no email) while a source is not yet configured — deny by default
+# until the owner steps are done — and when a source writes to GCS without a
+# data store to import into.
+
+on:
+  schedule:
+    # 07:13 UTC = 02:13 America/Chicago in daylight time (01:13 in standard
+    # time). Off the hour: on-the-hour GitHub cron slots are the most delayed.
+    - cron: '13 7 * * *'
+  workflow_dispatch:
+    inputs:
+      sources:
+        description: 'Comma-separated subset (stripe,gmail). Empty = all.'
+        required: false
+        default: ''
+      lookbackHours:
+        description: 'Explicit backfill window in hours (ignores the cursor; max 720). Empty = cursor-driven.'
+        required: false
+        default: ''
+      dryRun:
+        description: 'List and render only — write nothing, import nothing.'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: semantic-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    name: Sync Stripe + Gmail into Vertex AI Search
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call the semantic sync endpoint
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          IN_SOURCES: ${{ github.event.inputs.sources }}
+          IN_LOOKBACK: ${{ github.event.inputs.lookbackHours }}
+          IN_DRY_RUN: ${{ github.event.inputs.dryRun }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::CRON_SECRET repository secret is not set. Add the same value the Cloud Run service uses (Settings → Secrets and variables → Actions)."
+            exit 1
+          fi
+
+          # Scheduled firings send {} (every source, cursor-driven). Manual
+          # dispatches may narrow the sources, backfill, or dry-run.
+          BODY=$(jq -cn \
+            --arg sources "${IN_SOURCES:-}" \
+            --arg lookback "${IN_LOOKBACK:-}" \
+            --arg dry "${IN_DRY_RUN:-false}" '
+            {}
+            + (if $sources != "" then {sources: ($sources | split(",") | map(gsub("\\s"; "")) | map(select(. != "")))} else {} end)
+            + (if $lookback != "" then {lookbackHours: ($lookback | tonumber)} else {} end)
+            + (if $dry == "true" then {dryRun: true} else {} end)')
+          echo "request body: $BODY"
+
+          # --max-time 300 matches the route's maxDuration and the Cloud Run
+          # platform ceiling (deploy.yml --timeout=300).
+          CODE=$(curl -s -o /tmp/sync.json -w '%{http_code}' --max-time 300 \
+            -X POST -H "x-cron-secret: $CRON_SECRET" \
+            -H 'Content-Type: application/json' \
+            --data "$BODY" \
+            "https://hub-11747747730.us-central1.run.app/api/cron/semantic-sync" || echo 000)
+          echo "POST /api/cron/semantic-sync -> HTTP $CODE"
+          jq . /tmp/sync.json 2>/dev/null || cat /tmp/sync.json 2>/dev/null || true
+          echo
+
+          case "$CODE" in
+            200|502) ;;
+            *)
+              echo "::error::semantic-sync returned HTTP $CODE — 000=unreachable, 401=CRON_SECRET mismatch, 403=middleware exclusion regressed, 503=CRON_SECRET unset on the service, 400=bad dispatch inputs, 500=the route threw. This failure email is the alert."
+              exit 1
+              ;;
+          esac
+
+          # One line per source, then annotations.
+          jq -r '.sources[] | "\(.source): \(.status)  docs=\(.documents // 0) scanned=\(.scanned // 0) truncated=\(.truncated // false) import=\(.import.status // "-")"' /tmp/sync.json
+
+          jq -r '.sources[] | select(.status == "not_configured") | "::warning::\(.source) is not configured yet — set: \(.missing | join(", ")) (hub/docs/runbooks/semantic-sync.md)"' /tmp/sync.json
+          jq -r '.sources[] | select(.import.status == "skipped" and (.import.detail // "" | test("no data store"))) | "::warning::\(.source): \(.import.detail)"' /tmp/sync.json
+          jq -r '.sources[] | select(.truncated == true) | "::notice::\(.source) hit maxItems — the next run continues from \(.cursor)"' /tmp/sync.json
+          jq -r '.sources[] | select(.window.clamped == true) | "::warning::\(.source) catch-up window was clamped — records older than \(.window.since) were not synced; backfill with lookbackHours if they matter"' /tmp/sync.json
+          jq -r '.sources[] | .source as $s | (.previousImports // [])[] | select(.status == "retrying" or .status == "unknown") | "::warning::\($s) earlier import \(.operation) \(.status): \((.errors // [.detail // "incomplete"]) | join(" | "))"' /tmp/sync.json
+          jq -r '.sources[] | select((.abandonedManifests // []) | length > 0) | "::error::\(.source) abandoned manifests (in GCS, NOT in the index): \(.abandonedManifests | join(", "))"' /tmp/sync.json
+
+          FAILED=$(jq -r '[.sources[] | select(.status == "failed") | "\(.source) [\(.failure.stage)]: \(.failure.detail)"] | join("; ")' /tmp/sync.json)
+          if [ -n "$FAILED" ]; then
+            echo "::error::semantic sync failed — $FAILED. See hub/docs/runbooks/semantic-sync.md § Failure classes."
+            exit 1
+          fi
