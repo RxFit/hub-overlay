@@ -33,7 +33,8 @@ dynamic Node server on Google Cloud Run.
   AI-key remediation.
 - **Backend proxy:** Paperclip REST API (issues, agent runs, orgs)
 - **Web search:** Exa.AI (external research)
-- **Semantic Brain:** Vertex AI Search (internal Google Workspace search)
+- **Semantic Brain:** Vertex AI Search (internal Google Workspace search).
+  Stripe + Gmail are fed in nightly via GCS — see `docs/runbooks/semantic-sync.md`.
 - **Styling:** Vanilla CSS (Trejo Design System); Outfit + Inter + JetBrains Mono
 
 ## Quick Start
