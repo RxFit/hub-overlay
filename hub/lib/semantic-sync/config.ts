@@ -92,6 +92,16 @@ export function resolveDataStore(
 
 type Env = Record<string, string | undefined>
 
+/**
+ * The engine the Hub chat searches (same env + defaults as lib/vertex.ts).
+ * The sync refuses to import into any data store connected to it.
+ */
+export function chatEnginePath(env: Env = process.env): string {
+  const project = env.VERTEX_GCP_PROJECT || 'semantic-brain-desktop'
+  const engine = env.VERTEX_ENGINE_ID || 'semanticbrain_1779229063037'
+  return `projects/${project}/locations/global/collections/default_collection/engines/${engine}`
+}
+
 export function readSourceConfig(source: SyncSourceId, env: Env = process.env): SourceConfig {
   const missing: string[] = []
   const project = env.VERTEX_GCP_PROJECT || 'semantic-brain-desktop'

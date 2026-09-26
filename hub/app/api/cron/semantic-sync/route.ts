@@ -26,8 +26,9 @@ const BodySchema = z
   .strict()
 
 /**
- * POST /api/cron/semantic-sync — the nightly Stripe + Gmail feed into the
- * Semantic Brain's Cloud Storage data stores (lib/semantic-sync). Fired by
+ * POST /api/cron/semantic-sync — the nightly Stripe + Gmail feed into
+ * dedicated Vertex AI Search data stores that are NOT connected to the chat
+ * engine (lib/semantic-sync; the exposure guard is in run.ts). Fired by
  * .github/workflows/semantic-sync.yml; operated per
  * hub/docs/runbooks/semantic-sync.md.
  *

@@ -1,10 +1,18 @@
 # Semantic sync — Stripe + Gmail → Semantic Brain (Vertex AI Search)
 
-The Hub feeds new Stripe activity and Gmail messages into the Semantic Brain —
-the Vertex AI Search engine `semanticbrain_1779229063037` in project
-`semantic-brain-desktop` that the chat already queries (`lib/vertex.ts`). No
-new servers: it is one route on the existing `hub` Cloud Run service, fired
-nightly by a GitHub Actions schedule.
+The Hub indexes new Stripe activity and Gmail messages into Vertex AI Search
+data stores in project `semantic-brain-desktop` (the Semantic Brain's
+project). No new servers: it is one route on the existing `hub` Cloud Run
+service, fired nightly by a GitHub Actions schedule.
+
+> **These data stores must NOT be connected to the Hub chat engine**
+> (`semanticbrain_1779229063037`, `VERTEX_ENGINE_ID`). The chat searches that
+> engine with no data-store scoping and no per-role authorization, so every
+> chat-enabled role — including the default `onboarding` role — would be able
+> to retrieve mailbox bodies and billing records. The sync enforces this: every
+> run reads the chat engine's connected data stores and **refuses to import**
+> into one of them (and refuses when it cannot check). Surfacing these records
+> in the Hub chat needs role-gated retrieval first — a separate change.
 
 | Piece | Where |
 |-------|-------|
@@ -23,6 +31,9 @@ nightly by a GitHub Actions schedule.
 Per source (Stripe and Gmail run independently — one failing never stops the
 other):
 
+0. **Exposure guard**: if a data store is configured, confirm it is not
+   connected to the chat engine (see the box above). Otherwise stop with
+   `failure.stage: config` before reading or writing anything.
 1. Read the cursor `<GCS URI>/<source>/_state.json`. The window is
    `cursor − 1h` → now (first run: the last 24h). A dropped nightly firing is
    caught up on the next one, up to 14 days back.
@@ -49,10 +60,18 @@ other):
 5. **Advance the cursor** — last, so any earlier failure leaves it in place and
    the next run re-covers the same window (every write is idempotent).
 
-The import finishes asynchronously. The next run reads the operation back and
-reports it as `previousImport`; an import that failed outright is re-imported
-alongside the new manifest, up to three attempts, then reported `abandoned`
-(which fails the workflow).
+The import finishes asynchronously, after the cursor has already moved past
+its records — so every started import is kept in the cursor file's `imports`
+queue until it **succeeds**. Each run checks every queued operation and reports
+it in `previousImports`:
+
+| Report | Meaning |
+|--------|---------|
+| `running` | still importing; stays queued |
+| `succeeded` | no rejected documents; leaves the queue |
+| `retrying` | failed, or finished with some documents rejected — its manifests are re-imported with this run's import (INCREMENTAL, so re-importing is harmless) |
+| `unknown` | the operation could not be read; stays queued, and after 3 runs in a row is treated as failed and retried |
+| `abandoned` | a manifest failed 3 import attempts — recorded in `abandoned`, and the run reports `failed` (the workflow fails) even though its own new records landed |
 
 ## Owner setup
 
@@ -69,19 +88,25 @@ sources may even share one bucket. Keeping the buckets in
 
 ### 2. Data stores
 
-Each source imports into a Vertex AI Search data store of type **Cloud Storage
-→ unstructured documents with metadata (JSONL)**, in `semantic-brain-desktop`,
-location `global`.
+Each source imports into a **dedicated** Vertex AI Search data store of type
+**Cloud Storage → unstructured documents with metadata (JSONL)**, in
+`semantic-brain-desktop`, location `global`.
 
-- The engine already has `stripe` and `email` data stores (per the June
-  investigation). Check each one's type in the AI Applications console → Data
-  stores. If it is **structured**, it cannot take this format — create a new
-  unstructured one instead.
-- The data store must be **connected to the `semanticbrain_1779229063037`
-  app**, or the chat will never see its documents (the chat searches the whole
-  engine).
+- **Do not connect it to the `semanticbrain_1779229063037` app** — the sync
+  refuses to import into any data store that is (see the box at the top). To
+  search it from the Vertex console or other Vertex tooling, connect it to a
+  separate app instead.
+- The June investigation recorded existing `email` and `stripe` data stores.
+  **If those are connected to `semanticbrain_1779229063037`, their contents are
+  already searchable by every chat-enabled Hub role today**, independent of
+  this sync — check the app's connected data stores in the AI Applications
+  console and disconnect them unless that exposure is intended. They also
+  cannot be targets for this sync while connected.
 - Leaving `SEMANTIC_SYNC_<SOURCE>_DATA_STORE` unset is allowed: objects are
   still written, the import is skipped, and the workflow warns every night.
+- `GET /api/admin/semantic-sync` reports `dataStoreChatVisible` per source:
+  `true` means the sync will refuse to run; `null` means the engine could not
+  be read (the sync also refuses).
 
 ### 3. IAM for the service account
 
@@ -92,7 +117,7 @@ the Semantic Brain, not the Cloud Run runtime identity. Grant it:
 | Where | Role | Why |
 |-------|------|-----|
 | each sync bucket | `roles/storage.objectUser` | create **and overwrite** objects, read the cursor (`objectCreator` cannot overwrite) |
-| project `semantic-brain-desktop` | `roles/discoveryengine.editor` | `documents:import` and reading its operation |
+| project `semantic-brain-desktop` | `roles/discoveryengine.editor` | `documents:import`, reading its operation, and reading the chat engine's connected data stores (the exposure guard) |
 
 The import reads the manifest and content files as the **Discovery Engine
 service agent** (`service-962367132064@gcp-sa-discoveryengine.iam.gserviceaccount.com`),
@@ -152,9 +177,11 @@ the service, bind it from Secret Manager like the other `hub-*` secrets
    a document count.
 3. Run it again without dryRun. Each source reports `synced` (or `noop`) and
    `import.status: started`.
-4. The next run (or `GET /api/admin/semantic-sync` after the import finishes)
-   shows `previousImport.status: succeeded`. Then
-   `GET /api/admin/semantic-brain-health?q=<a subject line from today>`.
+4. The next run shows `previousImports[].status: succeeded`, and the data
+   store's Activity tab in the AI Applications console shows the imported
+   documents. (`/api/admin/semantic-brain-health` will NOT find them — it
+   searches the chat engine, which these data stores are deliberately not
+   connected to.)
 
 ## Backfill
 
@@ -173,6 +200,8 @@ upstream's own message; the workflow run fails and GitHub emails.
 |-------|-----------------|-----|
 | `auth` | `unauthorized_client` | Delegation missing or scope mismatch (step 4) — the scope must be exactly `…/auth/gmail.readonly` |
 | `auth` | `invalid_grant` / `unconfigured` | `GOOGLE_SERVICE_ACCOUNT_KEY` unset, deleted or disabled |
+| `config` | `connected to the Hub chat engine` | The data store is connected to `semanticbrain_1779229063037`. Disconnect it, or point the variable at a dedicated data store (step 2) |
+| `config` | `could not verify … refusing to import` | The chat engine could not be read — usually a missing `roles/discoveryengine.editor` (step 3), or a wrong `VERTEX_ENGINE_ID` |
 | `collect` | Gmail 403 `…has not been used…` | Enable the Gmail API (step 4.1) |
 | `collect` | Stripe 401 / 403 | `STRIPE_SECRET_KEY` invalid, or a restricted key lacking Events: read |
 | `collect` | `window holds more than 5000` | Rerun with a smaller `lookbackHours` |
@@ -181,17 +210,21 @@ upstream's own message; the workflow run fails and GitHub emails.
 | any | `run deadline reached during …` | The run hit its 240s budget; the cursor did not move and the next run retries (already-written objects are simply overwritten). Dispatch with a smaller `maxItems` to finish sooner |
 | `import` | 403 `discoveryengine.documents.import` | `roles/discoveryengine.editor` (step 3) |
 | `import` | 404 / 400 | Wrong data-store id, or not in `semantic-brain-desktop`/`global` |
-| `previousImport` failed | `unsupported` / schema errors | Data store is structured, not unstructured-with-metadata (step 2) |
-| `previousImport` failed | permission denied reading `gs://…` | Discovery Engine service agent cannot read the bucket (step 3) |
+| `previousImports` retrying | `unsupported` / schema errors | Data store is structured, not unstructured-with-metadata (step 2) |
+| `previousImports` retrying | permission denied reading `gs://…` | Discovery Engine service agent cannot read the bucket (step 3) |
+| `import` | `manifest(s) … abandoned` | See "Import failures" below |
 
 ## Import failures
 
-`previousImport` is how an asynchronous failure surfaces. `failed` retries
-automatically; `partial` means some documents were rejected (see `errors`) and
-is not retried; `abandoned` means three attempts failed — those records are in
-GCS but not in the index. Fix the cause, then re-import by hand from the
-manifests listed in the cursor file (`lastImport.manifests`), or run a
-`lookbackHours` backfill covering the affected days.
+`previousImports` is how an asynchronous failure surfaces. A failed or
+partially rejected import is retried automatically (per manifest, up to three
+attempts); `errors` carries Google's per-document messages. A manifest that
+fails a third time is **abandoned**: the run fails loudly once, and the
+manifest URI is kept in the cursor file's `abandoned` list (visible through
+`GET /api/admin/semantic-sync`). Those records are in GCS but not in the
+index. Fix the cause, then either run a `lookbackHours` backfill covering the
+affected days, or re-import the listed manifests by hand
+(`documents:import` with `reconciliationMode: INCREMENTAL`).
 
 ## What is and is not indexed
 
@@ -204,5 +237,6 @@ manifests listed in the cursor file (`lastImport.manifests`), or run a
 - **Not propagated:** deletions. A deleted email stays indexed; a deleted
   Stripe customer is re-indexed as "(deleted)". Remove documents by hand in the
   data store if needed.
-- Synced email is **untrusted content**. It reaches the chat through the same
-  Semantic Brain retrieval path as every other indexed document.
+- Synced email is **untrusted content**. Should it ever be surfaced to the
+  chat (through role-gated retrieval), treat it like any other retrieved
+  document: evidence, never instructions.

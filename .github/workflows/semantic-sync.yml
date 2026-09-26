@@ -1,7 +1,9 @@
 name: Nightly semantic sync
 
-# Feeds the Semantic Brain (Vertex AI Search, project semantic-brain-desktop):
-# calls POST /api/cron/semantic-sync, which reads Stripe events and Gmail
+# Indexes Stripe + Gmail into dedicated Vertex AI Search data stores in project
+# semantic-brain-desktop — never ones connected to the Hub chat engine, which
+# every chat role searches unscoped (the route refuses; see lib/semantic-sync/run.ts).
+# Calls POST /api/cron/semantic-sync, which reads Stripe events and Gmail
 # (domain-wide delegation) since each source's stored cursor, writes one HTML
 # document + a JSONL manifest per run into that source's GCS bucket, and starts
 # an INCREMENTAL Discovery Engine import. Runbook:
@@ -20,9 +22,10 @@ name: Nightly semantic sync
 #
 # THE RUN FAILS (and GitHub emails) when:
 #   - the endpoint is unreachable or answers anything but 200/502,
-#   - any source FAILED (HTTP 502 — the JSON names the stage and upstream error),
-#   - a previous import was ABANDONED after its retries (those records are in
-#     GCS but not in the index; see the runbook).
+#   - any source FAILED (HTTP 502 — the JSON names the stage and upstream
+#     error). That includes a data store connected to the chat engine (refused:
+#     every chat role would see mailbox/billing records) and an earlier import
+#     ABANDONED after its retries (records in GCS but not in the index).
 # It WARNS (no email) while a source is not yet configured — deny by default
 # until the owner steps are done — and when a source writes to GCS without a
 # data store to import into.
@@ -57,7 +60,7 @@ permissions:
 
 jobs:
   sync:
-    name: Sync Stripe + Gmail into the Semantic Brain
+    name: Sync Stripe + Gmail into Vertex AI Search
     runs-on: ubuntu-latest
     steps:
       - name: Call the semantic sync endpoint
@@ -111,17 +114,11 @@ jobs:
           jq -r '.sources[] | select(.import.status == "skipped" and (.import.detail // "" | test("no data store"))) | "::warning::\(.source): \(.import.detail)"' /tmp/sync.json
           jq -r '.sources[] | select(.truncated == true) | "::notice::\(.source) hit maxItems — the next run continues from \(.cursor)"' /tmp/sync.json
           jq -r '.sources[] | select(.window.clamped == true) | "::warning::\(.source) catch-up window was clamped — records older than \(.window.since) were not synced; backfill with lookbackHours if they matter"' /tmp/sync.json
-          jq -r '.sources[] | select(.previousImport.status == "failed" or .previousImport.status == "partial" or .previousImport.status == "unknown") | "::warning::\(.source) previous import \(.previousImport.status): \((.previousImport.errors // [.previousImport.detail // ""]) | join(" | "))"' /tmp/sync.json
+          jq -r '.sources[] | .source as $s | (.previousImports // [])[] | select(.status == "retrying" or .status == "unknown") | "::warning::\($s) earlier import \(.operation) \(.status): \((.errors // [.detail // "incomplete"]) | join(" | "))"' /tmp/sync.json
+          jq -r '.sources[] | select((.abandonedManifests // []) | length > 0) | "::error::\(.source) abandoned manifests (in GCS, NOT in the index): \(.abandonedManifests | join(", "))"' /tmp/sync.json
 
           FAILED=$(jq -r '[.sources[] | select(.status == "failed") | "\(.source) [\(.failure.stage)]: \(.failure.detail)"] | join("; ")' /tmp/sync.json)
-          ABANDONED=$(jq -r '[.sources[] | select(.previousImport.status == "abandoned") | "\(.source): \(.previousImport.operation)"] | join("; ")' /tmp/sync.json)
-
           if [ -n "$FAILED" ]; then
-            echo "::error::semantic sync failed — $FAILED. The failed source's cursor did not move; the next run retries the same window."
-          fi
-          if [ -n "$ABANDONED" ]; then
-            echo "::error::a previous import failed three times and was abandoned — $ABANDONED. Those records are in GCS but not in the Semantic Brain index; see the runbook's 'Import failures' section."
-          fi
-          if [ -n "$FAILED" ] || [ -n "$ABANDONED" ]; then
+            echo "::error::semantic sync failed — $FAILED. See hub/docs/runbooks/semantic-sync.md § Failure classes."
             exit 1
           fi

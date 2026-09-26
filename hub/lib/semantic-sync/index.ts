@@ -1,18 +1,19 @@
 /**
- * Semantic sync — the Hub's feed of Stripe and Gmail records into the Semantic
- * Brain's Cloud Storage data stores (Vertex AI Search, project
- * semantic-brain-desktop). Entry point for POST /api/cron/semantic-sync.
+ * Semantic sync — the Hub's feed of Stripe and Gmail records into dedicated
+ * Vertex AI Search Cloud Storage data stores in the Semantic Brain's project
+ * (semantic-brain-desktop) that are NOT connected to the chat engine — see
+ * the exposure guard in ./run.ts. Entry point for POST /api/cron/semantic-sync.
  *
  * Operating it (buckets, data stores, IAM, the domain-wide-delegation grant,
  * env vars): hub/docs/runbooks/semantic-sync.md.
  */
 
 import { mintServiceAccountToken, readServiceAccountKey } from '@/lib/google-auth'
-import { SYNC_SOURCES, readSourceConfig, type SourceConfig, type SyncSourceId } from './config'
+import { SYNC_SOURCES, chatEnginePath, readSourceConfig, type SourceConfig, type SyncSourceId } from './config'
 import { createDiscoveryImporter } from './discovery-import'
 import { createGcsStore } from './gcs'
 import { GMAIL_READONLY_SCOPE, createGmailSource } from './gmail-source'
-import { notConfiguredResult, runSourceSync, type RunOptions, type SourceRunResult, type SyncState } from './run'
+import { isConnectedToEngine, notConfiguredResult, runSourceSync, type RunOptions, type SourceRunResult, type SyncState } from './run'
 import type { SyncSource } from './source'
 import { createStripeSource } from './stripe-source'
 
@@ -49,6 +50,7 @@ export async function runSemanticSync(
           source: buildSource(config),
           store: createGcsStore({ bucket: config.location.bucket, token, signal: opts.signal }),
           importer,
+          chatEngine: chatEnginePath(),
           signal: opts.signal,
         },
         opts,
@@ -73,6 +75,11 @@ export interface SemanticSyncStatus {
     mailbox?: string
     gmailQuery?: string
     delegationScope?: string
+    /**
+     * Whether the data store is connected to the Hub chat engine (the sync
+     * refuses to import while it is); null when it could not be checked.
+     */
+    dataStoreChatVisible?: boolean | null
     /** The source's cursor file, when it is ready and has run at least once. */
     state?: SyncState | null
     stateUnreadable?: string
@@ -87,6 +94,10 @@ export interface SemanticSyncStatus {
 export async function getSemanticSyncStatus(signal?: AbortSignal): Promise<SemanticSyncStatus> {
   const key = readServiceAccountKey()
   const token = () => mintServiceAccountToken({ scope: CLOUD_PLATFORM_SCOPE, signal })
+  const chatEngine = chatEnginePath()
+  let engineIds: Promise<string[] | null> | undefined
+  const readEngineIds = () =>
+    (engineIds ??= createDiscoveryImporter({ token, signal }).engineDataStoreIds(chatEngine).catch(() => null))
 
   const sources = await Promise.all(
     SYNC_SOURCES.map(async (source) => {
@@ -101,6 +112,10 @@ export async function getSemanticSyncStatus(signal?: AbortSignal): Promise<Seman
         ...(source === 'gmail'
           ? { mailbox: c.subject, gmailQuery: c.query, delegationScope: GMAIL_READONLY_SCOPE }
           : {}),
+      }
+      if (c.dataStore && key) {
+        const ids = await readEngineIds()
+        entry.dataStoreChatVisible = ids ? isConnectedToEngine(c.dataStore, chatEngine, ids) : null
       }
       if (c.ready && c.location && base) {
         try {

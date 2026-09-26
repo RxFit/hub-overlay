@@ -63,6 +63,21 @@ describe('createDiscoveryImporter', () => {
   })
 })
 
+describe('engineDataStoreIds', () => {
+  const engine = 'projects/p/locations/global/collections/default_collection/engines/semanticbrain_1'
+
+  it('reads the engine\'s connected data stores', async () => {
+    const fetchImpl = vi.fn(async () => Response.json({ name: engine, dataStoreIds: ['sb-drive', 'sb-email'] }))
+    expect(await createDiscoveryImporter({ token, fetchImpl }).engineDataStoreIds(engine)).toEqual(['sb-drive', 'sb-email'])
+    expect((fetchImpl.mock.calls[0] as unknown as [string])[0]).toBe(`https://discoveryengine.googleapis.com/v1/${engine}`)
+  })
+
+  it('an unreadable engine throws (the caller fails closed)', async () => {
+    const fetchImpl = vi.fn(async () => Response.json({ error: { message: 'not found' } }, { status: 404 }))
+    await expect(createDiscoveryImporter({ token, fetchImpl }).engineDataStoreIds(engine)).rejects.toMatchObject({ httpStatus: 404 })
+  })
+})
+
 describe('parseOperation', () => {
   it('running', () => {
     expect(parseOperation('op', { name: 'op' })).toEqual({ operation: 'op', done: false })

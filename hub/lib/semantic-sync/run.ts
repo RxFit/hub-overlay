@@ -1,6 +1,16 @@
 /**
- * One source's sync run: window → collect → write content → write manifest →
- * start the Discovery Engine import → advance the cursor.
+ * One source's sync run: exposure guard → window → collect → write content →
+ * write manifest → start the Discovery Engine import → advance the cursor.
+ *
+ * ── Exposure guard: never import into the chat engine ──
+ * The Hub chat searches the whole Semantic Brain engine (VERTEX_ENGINE_ID)
+ * with no data-store scoping and no per-role authorization, and every role
+ * that can chat — including `onboarding` — reaches it. Mailbox contents and
+ * Stripe billing records must not land there. So before touching anything,
+ * a run reads the chat engine's connected data stores and REFUSES to import
+ * into one of them (stage `config`), failing closed if the engine cannot be
+ * read. Surfacing these records in chat is a separate, role-gated retrieval
+ * change — not something this pipeline may do by configuration alone.
  *
  * ── Why a cursor, not "the last 24 hours" ──
  * The trigger is a scheduled GitHub Actions workflow, and GitHub drops
@@ -17,12 +27,23 @@
  * window. That is safe because every write is idempotent: content objects are
  * overwritten in place and the import is INCREMENTAL (same id = replace).
  *
- * ── The asynchronous import ──
+ * ── The asynchronous import: a queue, not a slot ──
  * documents:import is a long-running operation that finishes after this
- * request returns. The next run reads it back; if it FAILED outright its
- * manifests are re-imported alongside the new one (up to MAX_IMPORT_ATTEMPTS),
- * because the cursor has already moved past those records and nothing else
- * would ever index them.
+ * request returns, and the cursor has already moved past its records — so an
+ * import that is never confirmed is data silently missing from the index.
+ * Every started import is therefore kept in `state.imports` until it
+ * SUCCEEDS. Each run checks every queued operation:
+ *   - running            → stays queued;
+ *   - succeeded          → dropped;
+ *   - failed or partial  → each of its manifests is re-imported with this
+ *                          run's import (INCREMENTAL, so already-indexed
+ *                          documents are merely replaced), up to
+ *                          MAX_IMPORT_ATTEMPTS per manifest;
+ *   - unreadable         → stays queued, and after MAX_CHECK_FAILURES
+ *                          consecutive misses is treated as failed.
+ * A manifest out of attempts is ABANDONED: recorded in `state.abandoned` and
+ * the run reports `failed` (HTTP 502 → the workflow fails) even though its own
+ * new records were written and the cursor advanced.
  */
 
 import { ServiceAccountTokenError } from '@/lib/google-auth'
@@ -44,8 +65,22 @@ export const MAX_LOOKBACK_HOURS = 24 * 30
 export const OVERLAP_MS = HOUR
 export const DEFAULT_MAX_ITEMS = 300
 export const MAX_ITEMS_CEILING = 1000
-const MAX_IMPORT_ATTEMPTS = 3
+/** Import attempts per manifest before it is abandoned. */
+export const MAX_IMPORT_ATTEMPTS = 3
+/** Consecutive unreadable checks before a queued operation is treated as failed. */
+export const MAX_CHECK_FAILURES = 3
+/** Abandoned manifests kept in state for the admin status route. */
+const MAX_ABANDONED_KEPT = 50
 const UPLOAD_CONCURRENCY = 8
+
+export interface QueuedImport {
+  operation: string
+  /** Each manifest carries its own attempt count (1 = first import). */
+  manifests: Array<{ uri: string; attempts: number }>
+  startedAt: string
+  /** Consecutive runs whose check of this operation failed. */
+  checkFailures?: number
+}
 
 export interface SyncState {
   version: 1
@@ -54,17 +89,20 @@ export interface SyncState {
   /** The last run stopped at maxItems — resume exactly at the cursor. */
   lastRunTruncated?: boolean
   lastSuccessAt?: string
-  lastImport?: {
-    operation: string
-    manifests: string[]
-    attempts: number
-    startedAt: string
-  }
+  /** Every import not yet confirmed successful. */
+  imports?: QueuedImport[]
+  /** Manifests that exhausted MAX_IMPORT_ATTEMPTS — in GCS, NOT in the index. */
+  abandoned?: string[]
 }
 
-export interface PreviousImport {
-  status: 'running' | 'succeeded' | 'partial' | 'failed' | 'abandoned' | 'unknown'
+export interface ImportReport {
   operation: string
+  /**
+   * running / unknown: still queued · succeeded: dropped from the queue ·
+   * retrying: its manifests ride this run's import · abandoned: at least one
+   * of its manifests is out of attempts.
+   */
+  status: 'running' | 'unknown' | 'succeeded' | 'retrying' | 'abandoned'
   successCount?: number
   failureCount?: number
   errors?: string[]
@@ -83,8 +121,11 @@ export interface SourceRunResult {
   truncated?: boolean
   cursor?: string
   manifest?: string
-  import?: { status: 'started' | 'skipped' | 'retrying_previous'; operation?: string; detail?: string }
-  previousImport?: PreviousImport
+  import?: { status: 'started' | 'skipped'; operation?: string; manifests?: number; detail?: string }
+  /** What happened to each import queued by earlier runs. */
+  previousImports?: ImportReport[]
+  /** Manifests abandoned by THIS run (they make the run `failed`). */
+  abandonedManifests?: string[]
   /** dry_run: the document ids that would have been written. */
   sampleIds?: string[]
   failure?: { stage: SyncStage; detail: string; httpStatus?: number }
@@ -103,6 +144,8 @@ export interface SourceRunDeps {
   source: SyncSource
   store: ObjectStore
   importer: Importer
+  /** Full resource path of the engine the Hub chat searches — never import into it. */
+  chatEngine: string
   now?: () => Date
   signal?: AbortSignal
 }
@@ -140,18 +183,114 @@ export function computeWindow(
   return { since, until, clamped }
 }
 
-function classifyPrevious(outcome: ImportOutcome, attempts: number): PreviousImport {
-  const base = {
-    operation: outcome.operation,
-    successCount: outcome.successCount,
-    failureCount: outcome.failureCount,
-    errors: outcome.errors,
+/** `projects/p/…/dataStores/ds` or `…/engines/e` → { project, id }. */
+function resourceParts(path: string): { project: string; id: string } {
+  const segs = path.split('/')
+  return { project: segs[1] ?? '', id: segs[segs.length - 1] ?? '' }
+}
+
+/**
+ * True when `dataStore` is one of the chat engine's connected data stores.
+ * An engine can only connect data stores of its own project, so a store in
+ * another project is never attached. Exported for tests.
+ */
+export function isConnectedToEngine(dataStore: string, engine: string, engineDataStoreIds: string[]): boolean {
+  const ds = resourceParts(dataStore)
+  return ds.project === resourceParts(engine).project && engineDataStoreIds.includes(ds.id)
+}
+
+async function assertNotChatVisible(deps: SourceRunDeps, dataStore: string): Promise<void> {
+  let ids: string[]
+  try {
+    ids = await deps.importer.engineDataStoreIds(deps.chatEngine)
+  } catch (err) {
+    // Fail CLOSED: an unverifiable engine is not permission to import.
+    throw new SemanticSyncError(
+      'config',
+      `could not verify that ${dataStore} is not searchable by the Hub chat (reading ${deps.chatEngine} failed: ${err instanceof Error ? err.message : String(err)}) — refusing to import`,
+      err instanceof SemanticSyncError ? err.httpStatus : undefined,
+    )
   }
-  if (!outcome.done) return { ...base, status: 'running' }
-  const failedOutright = (outcome.successCount ?? 0) === 0 && ((outcome.failureCount ?? 0) > 0 || !!outcome.errors?.length)
-  if (failedOutright) return { ...base, status: attempts >= MAX_IMPORT_ATTEMPTS ? 'abandoned' : 'failed' }
-  if ((outcome.failureCount ?? 0) > 0) return { ...base, status: 'partial' }
-  return { ...base, status: 'succeeded' }
+  if (isConnectedToEngine(dataStore, deps.chatEngine, ids)) {
+    throw new SemanticSyncError(
+      'config',
+      `${dataStore} is connected to the Hub chat engine ${deps.chatEngine}, which every chat-enabled role (including onboarding) searches unscoped — refusing to import ${deps.config.source} records into it. Use a data store that is NOT connected to that engine (hub/docs/runbooks/semantic-sync.md §2).`,
+    )
+  }
+}
+
+function classify(outcome: ImportOutcome): 'running' | 'succeeded' | 'incomplete' {
+  if (!outcome.done) return 'running'
+  const incomplete = (outcome.failureCount ?? 0) > 0 || !!outcome.errors?.length
+  return incomplete ? 'incomplete' : 'succeeded'
+}
+
+/**
+ * Check every queued import. Returns the operations still to watch, the
+ * manifests to re-import this run, and the ones out of attempts.
+ */
+async function reviewQueue(
+  queue: QueuedImport[],
+  importer: Importer,
+): Promise<{
+  pending: QueuedImport[]
+  retry: Array<{ uri: string; attempts: number }>
+  abandoned: string[]
+  reports: ImportReport[]
+}> {
+  const pending: QueuedImport[] = []
+  const retry: Array<{ uri: string; attempts: number }> = []
+  const abandoned: string[] = []
+  const reports: ImportReport[] = []
+
+  for (const queued of queue) {
+    let outcome: ImportOutcome | null = null
+    let detail: string | undefined
+    try {
+      outcome = await importer.check(queued.operation)
+    } catch (err) {
+      detail = err instanceof Error ? err.message : String(err)
+      const checkFailures = (queued.checkFailures ?? 0) + 1
+      if (checkFailures < MAX_CHECK_FAILURES) {
+        pending.push({ ...queued, checkFailures })
+        reports.push({ operation: queued.operation, status: 'unknown', detail })
+        continue
+      }
+      // Unreadable for too long (expired or deleted operation): the only safe
+      // assumption is that it did not land. Re-importing is idempotent.
+    }
+
+    const verdict = outcome ? classify(outcome) : 'incomplete'
+    const counts = outcome
+      ? { successCount: outcome.successCount, failureCount: outcome.failureCount, errors: outcome.errors }
+      : {}
+    if (verdict === 'running') {
+      pending.push({ ...queued, checkFailures: 0 })
+      reports.push({ operation: queued.operation, status: 'running' })
+      continue
+    }
+    if (verdict === 'succeeded') {
+      reports.push({ operation: queued.operation, status: 'succeeded', ...counts })
+      continue
+    }
+
+    let lost = false
+    for (const m of queued.manifests) {
+      if (m.attempts < MAX_IMPORT_ATTEMPTS) retry.push(m)
+      else {
+        abandoned.push(m.uri)
+        lost = true
+      }
+    }
+    reports.push({
+      operation: queued.operation,
+      status: lost ? 'abandoned' : 'retrying',
+      ...counts,
+      ...(detail ? { detail: `operation unreadable ${MAX_CHECK_FAILURES} runs in a row: ${detail}` } : {}),
+    })
+  }
+
+  return { pending, retry, abandoned, reports }
 }
 
 /** Deny by default: a source missing configuration touches nothing. */
@@ -173,25 +312,25 @@ export async function runSourceSync(deps: SourceRunDeps, opts: RunOptions = {}):
 
   // The stage in progress, for failures that do not name their own (an abort
   // at the run deadline, an unexpected throw).
-  let stage: SyncStage = 'state'
+  let stage: SyncStage = 'config'
   try {
+    if (config.dataStore) await assertNotChatVisible(deps, config.dataStore)
+
+    stage = 'state'
     const state = await deps.store.getJson<SyncState>(stateName)
 
-    // Read back the previous run's import before deciding this run's inputs.
-    let carry: string[] = []
-    if (state?.lastImport && config.dataStore) {
-      try {
-        const outcome = await deps.importer.check(state.lastImport.operation)
-        result.previousImport = classifyPrevious(outcome, state.lastImport.attempts)
-        if (result.previousImport.status === 'failed') carry = state.lastImport.manifests
-      } catch (err) {
-        // Diagnostics only — an unreadable operation must not block new data.
-        result.previousImport = {
-          status: 'unknown',
-          operation: state.lastImport.operation,
-          detail: err instanceof Error ? err.message : String(err),
-        }
-      }
+    // Settle what earlier runs started before deciding this run's inputs.
+    let queue = state?.imports ?? []
+    let retry: Array<{ uri: string; attempts: number }> = []
+    let abandoned: string[] = []
+    if (config.dataStore && queue.length) {
+      stage = 'import'
+      const reviewed = await reviewQueue(queue, deps.importer)
+      queue = reviewed.pending
+      retry = reviewed.retry
+      abandoned = reviewed.abandoned
+      result.previousImports = reviewed.reports
+      if (abandoned.length) result.abandonedManifests = abandoned
     }
 
     const window = computeWindow(state, now, opts.lookbackHours)
@@ -229,8 +368,10 @@ export async function runSourceSync(deps: SourceRunDeps, opts: RunOptions = {}):
       result.manifest = manifestUri
     }
 
-    const inputs = [...carry, ...(manifestUri ? [manifestUri] : [])]
-    let lastImport = state?.lastImport
+    const inputs = [
+      ...retry.map((m) => ({ uri: m.uri, attempts: m.attempts + 1 })),
+      ...(manifestUri ? [{ uri: manifestUri, attempts: 1 }] : []),
+    ]
     if (!config.dataStore) {
       result.import = {
         status: 'skipped',
@@ -238,14 +379,9 @@ export async function runSourceSync(deps: SourceRunDeps, opts: RunOptions = {}):
       }
     } else if (inputs.length) {
       stage = 'import'
-      const operation = await deps.importer.start(config.dataStore, inputs)
-      result.import = { status: carry.length ? 'retrying_previous' : 'started', operation }
-      lastImport = {
-        operation,
-        manifests: inputs,
-        attempts: carry.length ? (state?.lastImport?.attempts ?? 1) + 1 : 1,
-        startedAt: now.toISOString(),
-      }
+      const operation = await deps.importer.start(config.dataStore, inputs.map((m) => m.uri))
+      result.import = { status: 'started', operation, manifests: inputs.length }
+      queue = [...queue, { operation, manifests: inputs, startedAt: now.toISOString() }]
     } else {
       result.import = { status: 'skipped', detail: 'nothing new to import' }
     }
@@ -255,11 +391,27 @@ export async function runSourceSync(deps: SourceRunDeps, opts: RunOptions = {}):
       cursor: collected.cursor.toISOString(),
       lastRunTruncated: collected.truncated,
       lastSuccessAt: now.toISOString(),
-      ...(lastImport ? { lastImport } : {}),
+      ...(queue.length ? { imports: queue } : {}),
+      ...(state?.abandoned?.length || abandoned.length
+        ? { abandoned: [...(state?.abandoned ?? []), ...abandoned].slice(-MAX_ABANDONED_KEPT) }
+        : {}),
     }
     stage = 'state'
     await deps.store.put(stateName, JSON.stringify(next, null, 2), 'application/json')
 
+    if (abandoned.length) {
+      // This run's own records landed and the cursor moved; the failure is
+      // about earlier records that will now never be indexed automatically.
+      return {
+        ...result,
+        status: 'failed',
+        failure: {
+          stage: 'import',
+          detail: `${abandoned.length} manifest(s) failed to import ${MAX_IMPORT_ATTEMPTS} times and were abandoned — those records are in GCS but not in the index (runbook: "Import failures")`,
+        },
+        durationMs: Date.now() - started,
+      }
+    }
     return { ...result, status: collected.docs.length ? 'synced' : 'noop', durationMs: Date.now() - started }
   } catch (err) {
     const failedStage: SyncStage =

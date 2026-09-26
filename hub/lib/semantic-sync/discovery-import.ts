@@ -29,6 +29,8 @@ export interface Importer {
   /** Start an import of the manifests into `dataStore`; returns the operation name. */
   start(dataStore: string, manifestUris: string[]): Promise<string>
   check(operation: string): Promise<ImportOutcome>
+  /** The data-store ids connected to `engine` (full engine resource path). */
+  engineDataStoreIds(engine: string): Promise<string[]>
 }
 
 export function createDiscoveryImporter(opts: {
@@ -64,6 +66,16 @@ export function createDiscoveryImporter(opts: {
       })
       if (!res.ok) await failFromResponse('import', `read import operation ${operation}`, res)
       return parseOperation(operation, await res.json())
+    },
+
+    async engineDataStoreIds(engine) {
+      const res = await fetchWithRetry(fetchImpl, `${API}/${engine}`, {
+        headers: { Authorization: `Bearer ${await opts.token()}` },
+        signal: opts.signal,
+      })
+      if (!res.ok) await failFromResponse('config', `read engine ${engine}`, res)
+      const body = (await res.json()) as { dataStoreIds?: unknown }
+      return Array.isArray(body.dataStoreIds) ? body.dataStoreIds.filter((id): id is string => typeof id === 'string') : []
     },
   }
 }

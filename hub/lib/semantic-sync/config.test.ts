@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { DEFAULT_GMAIL_QUERY, parseGcsUri, readSourceConfig, resolveDataStore } from './config'
+import { DEFAULT_GMAIL_QUERY, chatEnginePath, parseGcsUri, readSourceConfig, resolveDataStore } from './config'
 
 const SA = '{"client_email":"x@y.iam.gserviceaccount.com","private_key":"k","token_uri":"https://oauth2.googleapis.com/token"}'
 
@@ -100,5 +100,16 @@ describe('readSourceConfig — deny by default', () => {
       SEMANTIC_SYNC_GMAIL_QUERY: '',
     })
     expect(c.query).toBe('')
+  })
+})
+
+describe('chatEnginePath', () => {
+  it('names the engine the Hub chat searches, with lib/vertex.ts defaults', () => {
+    expect(chatEnginePath({})).toBe(
+      'projects/semantic-brain-desktop/locations/global/collections/default_collection/engines/semanticbrain_1779229063037',
+    )
+    expect(chatEnginePath({ VERTEX_GCP_PROJECT: 'p', VERTEX_ENGINE_ID: 'e' })).toBe(
+      'projects/p/locations/global/collections/default_collection/engines/e',
+    )
   })
 })
